@@ -42,6 +42,52 @@ The important distinction is:
 
 The long-term target is not merely more AI. The target is more useful host-agent capability with stable boundaries: the host agent can help more completely, while deterministic systems remain accountable for every decision that affects guidance.
 
+## AI Contract Layer Design Rationale
+
+The contract-first approach addresses three limitations of pure deterministic heuristics:
+
+1. Engineering heuristics have an accuracy ceiling (lexical token matching cannot detect cross-concept semantic relations)
+2. Signal quality requires contextual judgment (risk level, compatibility requirements, and migration phase are not derivable from syntax alone)
+3. Abstract semantic capability is needed for relating prescriptive rules to observational reality (a directive about "composition over inheritance" and an observation about "heavy inheritance in services/" require semantic understanding to connect)
+
+The AI Contract Layer injects host-agent semantic capability into the deterministic pipeline in a structured, validated, traceable way.
+
+### Design Tradeoffs Against Alternatives
+
+| Approach | Tradeoff |
+|----------|----------|
+| Pure text skills (prompt concatenation) | No quality gates, no intermediate validation, no feedback accumulation |
+| Direct LLM API calls inside Runtime | Loses host agent's conversation context, task understanding, and tool capabilities (file reading, code search) |
+| Unstructured host output (free-form text back to runtime) | Cannot be deterministically validated, normalized, or adjudicated |
+
+The contract approach is chosen because it:
+
+- Preserves runtime decision authority (validation, adjudication, and feedback remain deterministic)
+- Utilizes the host agent's full capabilities (its understanding of the current task context, its access to the codebase via tools, its semantic reasoning)
+- Produces auditable, cacheable, accumulable artifacts (proposals are inspectable, diagnostics are traceable, lockfile signals compound across tasks)
+
+### How Contracts Extend Beyond Heuristics
+
+The deterministic runtime provides a baseline through structural matching (`semanticKeysOverlap`, `categoryRelated`, trait inference). This baseline catches obvious relations but misses nuanced ones.
+
+Contracts upgrade signal quality without abandoning determinism:
+
+- `task-interpretation` contract: host provides contextual understanding of the task (operation type, risk level, scope) that heuristic keyword extraction cannot reliably infer — because the host has access to the full conversation context and user intent
+- `semantic-relation` contract: host proposes explicit relations between directive-observation pairs that lexical matching would miss — because the host can reason about semantic meaning across different terminology
+- `semantic-candidate` contract: host provides lightweight candidate shortlists with lower cognitive overhead — because not every relation needs full justification, but the pipeline benefits from broader coverage
+- `adherence-evaluation` contract (target): host reports which directives were actually followed/ignored — because only the host knows what it did during code generation
+
+In every case, the host's proposal passes through deterministic adjudication (scope gates, verification gates, lifecycle gates, confidence thresholds) before influencing the compiled output. The contract is the structured injection channel; adjudication is the quality guarantee.
+
+### Relationship Between Deterministic Core and Contract Layer
+
+These two layers are complementary:
+
+- Deterministic Core defines the decision space (what execution modes exist, what adjudication rules apply, what feedback signals are valid)
+- AI Contract Layer fills the decision space with higher-quality signals (semantic relations that heuristics miss, contextual interpretations that keywords cannot capture)
+
+Without the Deterministic Core, host output would be unvalidated prose. Without the AI Contract Layer, the system is limited to the accuracy ceiling of lexical matching and hardcoded trait tables.
+
 ## Core Architecture
 
 The product is organized around five cooperating parts:
@@ -414,12 +460,15 @@ Current skill/runtime behavior that already exists:
 
 Current limitations that should be understood before extending:
 
-- intent parse is currently deterministic heuristics, not full structured LLM parse
-- semantic merge is currently conservative and lexical, not embedding-based
+- intent parse is currently deterministic heuristics, not full structured LLM parse — the `task-interpretation` contract exists to close this gap by letting the host provide richer contextual interpretation
+- semantic merge is currently conservative and lexical, not embedding-based — the `semantic-relation` and `semantic-candidate` contracts exist to close this gap by letting the host provide cross-concept semantic judgments that token matching cannot achieve
 - cache keys exist, but full cache storage and invalidation are not complete
 - layer filtering and merge should continue moving toward the full target design above
+- `rccl-observation-generation` contract kind is declared but not yet fully implemented as a contract lifecycle
+- `adherence-evaluation` contract does not yet exist — feedback loop currently relies on host self-reporting or optimistic defaults
 
-These limitations are implementation-stage gaps, not architecture changes.
+These limitations are contract-layer maturation gaps, not architecture changes.
+Each gap above corresponds to a contract lifecycle that needs implementation (issue → fulfill → validate → adjudicate → trace → feedback).
 Do not treat them as the intended final design.
 
 ## Non-Negotiable Quality Constraints
