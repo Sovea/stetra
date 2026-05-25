@@ -4,8 +4,10 @@ import { existsSync, readFileSync, writeFileSync } from "node:fs";
 function evaluateGuidance(input) {
 	const existing = loadLockfile(input.lockfilePath);
 	const trackedDirectiveIds = getTrackedDirectiveIds(input);
-	const followed = new Set(input.followedDirectiveIds ?? trackedDirectiveIds);
-	const ignored = new Set(input.ignoredDirectiveIds ?? []);
+	const adherenceResolved = resolveFromAdherencePayload(input, trackedDirectiveIds);
+	const followed = adherenceResolved?.followed ?? new Set(input.followedDirectiveIds ?? trackedDirectiveIds);
+	const ignored = adherenceResolved?.ignored ?? new Set(input.ignoredDirectiveIds ?? []);
+	const ignoredReasons = adherenceResolved?.ignoredReasons ?? input.ignoredDirectiveReasons;
 	const taskType = input.ego.taskIntent.operation;
 	const taskProfile = taskProfileKey(input);
 	const today = (/* @__PURE__ */ new Date()).toISOString().slice(0, 10);
@@ -37,7 +39,7 @@ function evaluateGuidance(input) {
 			entry.quality_signal.overall.ignored += 1;
 			counts.ignored += 1;
 			profileCounts.ignored += 1;
-			const ignoredReason = validIgnoredReason(input.ignoredDirectiveReasons?.[directiveId]) ? input.ignoredDirectiveReasons[directiveId] : void 0;
+			const ignoredReason = validIgnoredReason(ignoredReasons?.[directiveId]) ? ignoredReasons[directiveId] : void 0;
 			if (ignoredReason) {
 				entry.quality_signal.ignored_reasons[ignoredReason] = (entry.quality_signal.ignored_reasons[ignoredReason] ?? 0) + 1;
 				entry.quality_signal.last_ignored_reason = ignoredReason;
@@ -51,7 +53,7 @@ function evaluateGuidance(input) {
 		entry.quality_signal.by_task_profile[taskProfile] = profileCounts;
 		entry.quality_signal.overall.follow_rate = computeFollowRate(entry);
 		entry.quality_signal.overall.trend = computeTrend(entry);
-		entry.quality_signal.signal_confidence = resolveSignalConfidence(input, ignored.has(directiveId));
+		entry.quality_signal.signal_confidence = adherenceResolved ? "explicit" : resolveSignalConfidence(input, ignored.has(directiveId));
 		entry.quality_signal.last_seen = today;
 		entry.governance = { outcomes: {
 			total_tasks: (entry.governance?.outcomes.total_tasks ?? 0) + 1,
@@ -168,8 +170,9 @@ function getObservedRccl(input) {
 	return counts;
 }
 function summarizeHostFulfillmentFeedback(input) {
-	const source = input.followedDirectiveIds?.length || input.ignoredDirectiveIds?.length ? "explicit-directives" : "default-approximation";
-	const signal = validSignalConfidence(input.signalConfidence) ? input.signalConfidence : source === "explicit-directives" ? "explicit" : "implicit";
+	const hasAdherence = input.adherencePayload?.length;
+	const source = hasAdherence ? "adherence-evaluation" : input.followedDirectiveIds?.length || input.ignoredDirectiveIds?.length ? "explicit-directives" : "default-approximation";
+	const signal = hasAdherence ? "explicit" : validSignalConfidence(input.signalConfidence) ? input.signalConfidence : source === "explicit-directives" ? "explicit" : "implicit";
 	const fulfillment = input.hostFulfillment ?? input.packet.governance.trace.host_fulfillment;
 	return {
 		interpretation_mode: input.packet.interpretation.input_provenance.interpretation_mode,
@@ -178,7 +181,8 @@ function summarizeHostFulfillmentFeedback(input) {
 		artifacts: {
 			"task-interpretation": summarizeArtifactFeedback(fulfillment?.taskInterpretation),
 			"semantic-relation": summarizeArtifactFeedback(fulfillment?.semanticRelation),
-			"semantic-candidate": summarizeArtifactFeedback(fulfillment?.semanticCandidate)
+			"semantic-candidate": summarizeArtifactFeedback(fulfillment?.semanticCandidate),
+			"adherence-evaluation": summarizeArtifactFeedback(fulfillment?.adherenceEvaluation)
 		}
 	};
 }
@@ -310,6 +314,29 @@ function validIgnoredReason(value) {
 }
 function validSignalConfidence(value) {
 	return value === "implicit" || value === "explicit" || value === "review-confirmed" || value === "user-corrected";
+}
+function resolveFromAdherencePayload(input, trackedDirectiveIds) {
+	if (!input.adherencePayload?.length) return null;
+	const followed = /* @__PURE__ */ new Set();
+	const ignored = /* @__PURE__ */ new Set();
+	const ignoredReasons = {};
+	const trackedSet = new Set(trackedDirectiveIds);
+	const evaluated = /* @__PURE__ */ new Set();
+	for (const verdict of input.adherencePayload) {
+		if (!trackedSet.has(verdict.directive_id)) continue;
+		evaluated.add(verdict.directive_id);
+		if (verdict.verdict === "followed") followed.add(verdict.directive_id);
+		else if (verdict.verdict === "ignored") {
+			ignored.add(verdict.directive_id);
+			if (verdict.ignored_reason) ignoredReasons[verdict.directive_id] = verdict.ignored_reason;
+		} else if (verdict.verdict === "partial") followed.add(verdict.directive_id);
+	}
+	for (const id of trackedDirectiveIds) if (!evaluated.has(id)) followed.add(id);
+	return {
+		followed,
+		ignored,
+		ignoredReasons
+	};
 }
 //#endregion
 export { evaluateGuidance };

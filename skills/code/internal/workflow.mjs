@@ -146,6 +146,37 @@ export async function prepareSemanticCandidates(options) {
   };
 }
 
+export async function prepareAdherenceEvaluation(options) {
+  const session = JSON.parse(readFileSync(resolve(options.sessionPath), 'utf-8'));
+  if (session.status !== 'ok' || !session.compileOutput?.packet?.governance?.ego) {
+    return {
+      status: 'skipped',
+      sessionPath: resolve(options.sessionPath),
+      reason: 'Runtime guidance was unavailable during prepare; adherence evaluation contract skipped.',
+    };
+  }
+  const runtime = await loadRuntime(session.paths.runtimeEntry);
+  const ego = session.compileOutput.packet.governance.ego;
+  const directives = ego.guidance.must_follow.map((d) => ({
+    id: d.id,
+    description: d.description,
+    prescription: d.prescription,
+    execution_mode: d.execution_mode ?? 'enforce',
+  }));
+  const taskDescription = session.compileOutput.packet.task.input.description;
+  const artifactPath = buildAdherenceArtifactPath(session.paths.projectRoot, session.compileOutput.packet.task.input);
+  const contractOutput = runtime.prepareAdherenceEvaluationContract({
+    directives,
+    taskDescription,
+    artifactPath,
+  });
+  return {
+    status: 'ok',
+    sessionPath: resolve(options.sessionPath),
+    ...contractOutput,
+  };
+}
+
 export async function prepareCodeTask(options) {
   const paths = resolveRuntimePaths(options.projectRoot, options.pluginRoot);
   const runtime = await loadRuntime(paths.runtimeEntry);
@@ -336,12 +367,16 @@ export async function completeCodeTask(options) {
   try {
     const runtime = await loadRuntime(session.paths.runtimeEntry);
     const packet = session.compileOutput.packet;
+    const adherenceArtifact = loadAdherenceArtifact(options.adherenceFile, runtime, packet);
     const followedDirectiveIds = options.followedDirectiveIds?.length
       ? unique(options.followedDirectiveIds)
       : packet.governance.semantic_merge.directive_modes
           .filter((directive) => directive.execution_mode !== 'suppress')
           .map((directive) => directive.directive_id);
     const ignoredDirectiveIds = unique(options.ignoredDirectiveIds ?? []);
+    const fulfillment = session.fulfillment
+      ? { ...session.fulfillment, adherenceEvaluation: summarizeArtifact(adherenceArtifact) }
+      : undefined;
     runtime.evaluateGuidance({
       ego: packet.governance.ego,
       packet,
@@ -350,7 +385,8 @@ export async function completeCodeTask(options) {
       ignoredDirectiveIds,
       ignoredDirectiveReasons: options.ignoredDirectiveReasons,
       signalConfidence: options.signalConfidence,
-      hostFulfillment: session.fulfillment,
+      hostFulfillment: fulfillment,
+      adherencePayload: adherenceArtifact.verdicts.length ? adherenceArtifact.verdicts : undefined,
     });
     return {
       status: 'updated',
@@ -360,6 +396,12 @@ export async function completeCodeTask(options) {
       ignoredDirectiveIds,
       ignoredDirectiveReasons: options.ignoredDirectiveReasons,
       signalConfidence: options.signalConfidence,
+      adherence: {
+        provided: adherenceArtifact.provided,
+        status: adherenceArtifact.status,
+        verdictCount: adherenceArtifact.verdicts.length,
+        diagnostics: adherenceArtifact.diagnostics,
+      },
     };
   } catch (error) {
     return {
@@ -523,6 +565,24 @@ function loadHostSemanticCandidateArtifact(semanticProposalFile, sourceId, runti
   };
 }
 
+function loadAdherenceArtifact(adherenceFile, runtime, packet) {
+  if (!adherenceFile) return { ...buildAbsentArtifact('adherence-evaluation'), verdicts: [] };
+  const path = resolve(adherenceFile);
+  const payload = JSON.parse(readFileSync(path, 'utf-8'));
+  const allowedDirectiveIds = packet.governance.semantic_merge.directive_modes
+    .filter((d) => d.execution_mode !== 'suppress')
+    .map((d) => d.directive_id);
+  const result = runtime.validateAdherenceEvaluationPayload(payload, allowedDirectiveIds);
+  return {
+    kind: 'adherence-evaluation',
+    provided: true,
+    path,
+    status: summarizeDiagnosticStatus(result.diagnostics),
+    diagnostics: result.diagnostics,
+    verdicts: result.verdicts,
+  };
+}
+
 function artifactProposalList(artifact) {
   return artifact.proposal ? [artifact.proposal] : [];
 }
@@ -641,6 +701,22 @@ function buildSemanticCandidatePath(projectRoot, task) {
     .slice(0, 10);
   const stamp = new Date().toISOString().replace(/[-:.TZ]/g, '').slice(0, 14);
   return join(projectRoot, '.resonant-code', 'context', 'semantic-candidates', 'code', `${stamp}-${digest}.json`);
+}
+
+function buildAdherenceArtifactPath(projectRoot, task) {
+  const digest = createHash('sha1')
+    .update(JSON.stringify({
+      description: task.description,
+      targetFile: task.targetFile ?? '',
+      changedFiles: task.changedFiles,
+      techStack: task.techStack,
+      operation: task.operation ?? '',
+      type: 'adherence-evaluation',
+    }))
+    .digest('hex')
+    .slice(0, 10);
+  const stamp = new Date().toISOString().replace(/[-:.TZ]/g, '').slice(0, 14);
+  return join(projectRoot, '.resonant-code', 'context', 'adherence-evaluations', 'code', `${stamp}-${digest}.json`);
 }
 
 function writeSession(sessionPath, session) {

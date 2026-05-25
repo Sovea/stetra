@@ -2,7 +2,7 @@ import type { CompileInput, CompileTaskInput, ResolvedTaskOutput } from '../type
 import type { HostProposalIR } from '../ir/types.ts';
 
 export type AIContractVersion = 'ai-contract/v1';
-export type AIContractKind = 'task-interpretation' | 'semantic-relation' | 'semantic-candidate' | 'rccl-observation-generation';
+export type AIContractKind = 'task-interpretation' | 'semantic-relation' | 'semantic-candidate' | 'rccl-observation-generation' | 'adherence-evaluation';
 export type AIContractSchemaVersion = '1.0';
 
 export interface AIContractArtifact {
@@ -149,7 +149,7 @@ export interface ContractPayloadDiagnosticEntry {
 }
 
 export interface ContractPayloadDiagnostics {
-  kind: 'task-interpretation' | 'semantic-relation' | 'semantic-candidate';
+  kind: 'task-interpretation' | 'semantic-relation' | 'semantic-candidate' | 'adherence-evaluation';
   source?: HostProposalSourceInput;
   summary: {
     total: number;
@@ -179,3 +179,52 @@ export interface SemanticProposalValidationResult {
 }
 
 export type HostProposalNormalizer = (raw: unknown, source: HostProposalSourceInput) => HostProposalIR;
+
+// --- Adherence Evaluation Contract ---
+
+export type AdherenceVerdict = 'followed' | 'ignored' | 'partial';
+
+export interface AdherenceEvaluationDirectiveSummary {
+  id: string;
+  description: string;
+  prescription: string;
+  execution_mode: string;
+}
+
+export interface AdherenceEvaluationContractInput {
+  directives: AdherenceEvaluationDirectiveSummary[];
+  taskDescription: string;
+  artifactPath: string;
+}
+
+export interface AdherenceEvaluationContractOutput {
+  evaluationPrompt: string;
+  evaluationSchema: string;
+  evaluationArtifact: AIContractArtifact;
+  contract: AIContractEnvelope;
+}
+
+export interface HostAdherenceVerdictEntry {
+  directive_id: string;
+  verdict: AdherenceVerdict;
+  confidence: number;
+  reason: string;
+  ignored_reason?: import('../types.ts').IgnoredReason;
+}
+
+export interface HostAdherenceEvaluationPayload {
+  verdicts: HostAdherenceVerdictEntry[];
+}
+
+export interface ValidatedAdherenceVerdict {
+  directive_id: string;
+  verdict: AdherenceVerdict;
+  confidence: number;
+  reason: string;
+  ignored_reason?: import('../types.ts').IgnoredReason;
+}
+
+export interface AdherenceEvaluationValidationResult {
+  verdicts: ValidatedAdherenceVerdict[];
+  diagnostics: ContractPayloadDiagnostics;
+}

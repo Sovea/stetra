@@ -212,7 +212,7 @@ export interface ResolveTaskInput extends RuntimeResolveTaskInput {}
 export type HostFulfillmentStatus = 'absent' | 'accepted' | 'partially-accepted' | 'rejected' | 'unused';
 
 export interface HostFulfillmentArtifactSummary {
-  kind: 'task-interpretation' | 'semantic-relation' | 'semantic-candidate';
+  kind: 'task-interpretation' | 'semantic-relation' | 'semantic-candidate' | 'adherence-evaluation';
   provided: boolean;
   path: string | null;
   recommendedPath?: string | null;
@@ -225,13 +225,14 @@ export interface HostFulfillmentSummary {
   taskInterpretation: HostFulfillmentArtifactSummary;
   semanticRelation: HostFulfillmentArtifactSummary;
   semanticCandidate: HostFulfillmentArtifactSummary;
+  adherenceEvaluation?: HostFulfillmentArtifactSummary;
 }
 
 export interface HostFulfillmentFeedbackSummary {
   interpretation_mode: InputProvenance['interpretation_mode'];
   completion_signal: FeedbackSignalConfidence;
-  completion_source: 'default-approximation' | 'explicit-directives';
-  artifacts: Record<'task-interpretation' | 'semantic-relation' | 'semantic-candidate', {
+  completion_source: 'default-approximation' | 'explicit-directives' | 'adherence-evaluation';
+  artifacts: Record<'task-interpretation' | 'semantic-relation' | 'semantic-candidate' | 'adherence-evaluation', {
     provided: boolean;
     status: HostFulfillmentStatus;
     accepted: number;
@@ -685,6 +686,7 @@ export interface EvaluateInput {
   ignoredDirectiveReasons?: Partial<Record<string, IgnoredReason>>;
   signalConfidence?: FeedbackSignalConfidence;
   hostFulfillment?: HostFulfillmentSummary;
+  adherencePayload?: import('./ai-contracts/types.ts').ValidatedAdherenceVerdict[];
 }
 
 export interface LockfileSignal {

@@ -16,8 +16,10 @@ import type {
 export function evaluateGuidance(input: EvaluateInput): LockfileDocument {
   const existing = loadLockfile(input.lockfilePath);
   const trackedDirectiveIds = getTrackedDirectiveIds(input);
-  const followed = new Set(input.followedDirectiveIds ?? trackedDirectiveIds);
-  const ignored = new Set(input.ignoredDirectiveIds ?? []);
+  const adherenceResolved = resolveFromAdherencePayload(input, trackedDirectiveIds);
+  const followed = adherenceResolved?.followed ?? new Set(input.followedDirectiveIds ?? trackedDirectiveIds);
+  const ignored = adherenceResolved?.ignored ?? new Set(input.ignoredDirectiveIds ?? []);
+  const ignoredReasons = adherenceResolved?.ignoredReasons ?? input.ignoredDirectiveReasons;
   const taskType = input.ego.taskIntent.operation;
   const taskProfile = taskProfileKey(input);
   const today = new Date().toISOString().slice(0, 10);
@@ -46,8 +48,8 @@ export function evaluateGuidance(input: EvaluateInput): LockfileDocument {
       entry.quality_signal.overall.ignored += 1;
       counts.ignored += 1;
       profileCounts.ignored += 1;
-      const ignoredReason = validIgnoredReason(input.ignoredDirectiveReasons?.[directiveId])
-        ? input.ignoredDirectiveReasons[directiveId]
+      const ignoredReason = validIgnoredReason(ignoredReasons?.[directiveId])
+        ? ignoredReasons[directiveId]
         : undefined;
       if (ignoredReason) {
         entry.quality_signal.ignored_reasons[ignoredReason] = (entry.quality_signal.ignored_reasons[ignoredReason] ?? 0) + 1;
@@ -62,7 +64,9 @@ export function evaluateGuidance(input: EvaluateInput): LockfileDocument {
     entry.quality_signal.by_task_profile[taskProfile] = profileCounts;
     entry.quality_signal.overall.follow_rate = computeFollowRate(entry);
     entry.quality_signal.overall.trend = computeTrend(entry);
-    entry.quality_signal.signal_confidence = resolveSignalConfidence(input, ignored.has(directiveId));
+    entry.quality_signal.signal_confidence = adherenceResolved
+      ? 'explicit'
+      : resolveSignalConfidence(input, ignored.has(directiveId));
     entry.quality_signal.last_seen = today;
     entry.governance = {
       outcomes: {
@@ -204,10 +208,17 @@ function getObservedRccl(input: EvaluateInput): Map<string, number> {
 }
 
 function summarizeHostFulfillmentFeedback(input: EvaluateInput): HostFulfillmentFeedbackSummary {
-  const source = input.followedDirectiveIds?.length || input.ignoredDirectiveIds?.length
-    ? 'explicit-directives'
-    : 'default-approximation';
-  const signal = validSignalConfidence(input.signalConfidence) ? input.signalConfidence : (source === 'explicit-directives' ? 'explicit' : 'implicit');
+  const hasAdherence = input.adherencePayload?.length;
+  const source = hasAdherence
+    ? 'adherence-evaluation' as const
+    : input.followedDirectiveIds?.length || input.ignoredDirectiveIds?.length
+      ? 'explicit-directives' as const
+      : 'default-approximation' as const;
+  const signal = hasAdherence
+    ? 'explicit' as const
+    : validSignalConfidence(input.signalConfidence)
+      ? input.signalConfidence
+      : (source === 'explicit-directives' ? 'explicit' : 'implicit');
   const fulfillment = input.hostFulfillment ?? input.packet.governance.trace.host_fulfillment;
   return {
     interpretation_mode: input.packet.interpretation.input_provenance.interpretation_mode,
@@ -217,6 +228,7 @@ function summarizeHostFulfillmentFeedback(input: EvaluateInput): HostFulfillment
       'task-interpretation': summarizeArtifactFeedback(fulfillment?.taskInterpretation),
       'semantic-relation': summarizeArtifactFeedback(fulfillment?.semanticRelation),
       'semantic-candidate': summarizeArtifactFeedback(fulfillment?.semanticCandidate),
+      'adherence-evaluation': summarizeArtifactFeedback(fulfillment?.adherenceEvaluation),
     },
   };
 }
@@ -378,4 +390,43 @@ function validSignalConfidence(value: unknown): value is FeedbackSignalConfidenc
     || value === 'explicit'
     || value === 'review-confirmed'
     || value === 'user-corrected';
+}
+
+interface AdherenceResolution {
+  followed: Set<string>;
+  ignored: Set<string>;
+  ignoredReasons: Partial<Record<string, IgnoredReason>>;
+}
+
+function resolveFromAdherencePayload(
+  input: EvaluateInput,
+  trackedDirectiveIds: string[],
+): AdherenceResolution | null {
+  if (!input.adherencePayload?.length) return null;
+  const followed = new Set<string>();
+  const ignored = new Set<string>();
+  const ignoredReasons: Partial<Record<string, IgnoredReason>> = {};
+  const trackedSet = new Set(trackedDirectiveIds);
+  const evaluated = new Set<string>();
+
+  for (const verdict of input.adherencePayload) {
+    if (!trackedSet.has(verdict.directive_id)) continue;
+    evaluated.add(verdict.directive_id);
+    if (verdict.verdict === 'followed') {
+      followed.add(verdict.directive_id);
+    } else if (verdict.verdict === 'ignored') {
+      ignored.add(verdict.directive_id);
+      if (verdict.ignored_reason) {
+        ignoredReasons[verdict.directive_id] = verdict.ignored_reason;
+      }
+    } else if (verdict.verdict === 'partial') {
+      followed.add(verdict.directive_id);
+    }
+  }
+
+  for (const id of trackedDirectiveIds) {
+    if (!evaluated.has(id)) followed.add(id);
+  }
+
+  return { followed, ignored, ignoredReasons };
 }

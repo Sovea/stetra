@@ -6,6 +6,10 @@ export {
   prepareTaskInterpretationContract,
 } from './ai-contracts/task-interpretation.ts';
 export {
+  prepareAdherenceEvaluationContract,
+  validateAdherenceEvaluationPayload,
+} from './ai-contracts/adherence-evaluation.ts';
+export {
   loadSemanticCandidateProposalPayload,
   loadSemanticRelationProposalPayload,
   prepareSemanticCandidateContract,
@@ -32,6 +36,10 @@ export {
 } from './intent/schema.ts';
 export type { TaskInterpretationProvider } from './interpret/provider.ts';
 export type {
+  AdherenceEvaluationContractInput,
+  AdherenceEvaluationContractOutput,
+  AdherenceEvaluationValidationResult,
+  AdherenceVerdict,
   AIContractArtifact,
   AIContractEnvelope,
   AIContractKind,
@@ -41,6 +49,8 @@ export type {
   ContractPayloadDiagnosticReason,
   ContractPayloadDiagnostics,
   ContractPayloadDiagnosticStatus,
+  HostAdherenceEvaluationPayload,
+  HostAdherenceVerdictEntry,
   HostProposalNormalizer,
   HostProposalSourceInput,
   SemanticCandidateContractBundleOutput,
@@ -59,6 +69,7 @@ export type {
   TaskInterpretationContractInput,
   TaskInterpretationContractOutput,
   TaskInterpretationRecommendation,
+  ValidatedAdherenceVerdict,
 } from './ai-contracts/types.ts';
 export type {
   ActivationDecisionIR,

@@ -2,6 +2,7 @@ import { fileURLToPath } from 'node:url';
 
 import {
   completeCodeTask,
+  prepareAdherenceEvaluation,
   prepareCodeTask,
   prepareInterpretation,
   prepareRelations,
@@ -10,6 +11,7 @@ import {
 
 export {
   completeCodeTask,
+  prepareAdherenceEvaluation,
   prepareCodeTask,
   prepareInterpretation,
   prepareRelations,
@@ -19,7 +21,7 @@ export {
 function parseCli(argv) {
   const [command, ...rest] = argv;
   if (!command) {
-    throw new Error('Expected a command: prepare-interpretation, prepare-relations, prepare-semantic-candidates, prepare, or complete.');
+    throw new Error('Expected a command: prepare-interpretation, prepare-relations, prepare-semantic-candidates, prepare, prepare-adherence, or complete.');
   }
 
   if (command === 'prepare-interpretation' || command === 'prepare-relations' || command === 'prepare-semantic-candidates' || command === 'prepare') {
@@ -58,6 +60,16 @@ function parseCli(argv) {
     };
   }
 
+  if (command === 'prepare-adherence') {
+    const { flags } = parseFlags(rest);
+    const sessionPath = readSingleFlag(flags, 'session');
+    if (!sessionPath) throw new Error('prepare-adherence requires --session <path>.');
+    return {
+      command,
+      options: { sessionPath },
+    };
+  }
+
   if (command === 'complete') {
     const { flags } = parseFlags(rest);
     const sessionPath = readSingleFlag(flags, 'session');
@@ -70,6 +82,7 @@ function parseCli(argv) {
         ignoredDirectiveIds: readMultiFlag(flags, 'ignored'),
         ignoredDirectiveReasons: readIgnoredReasonMap(readMultiFlag(flags, 'ignored-reason')),
         signalConfidence: readSingleFlag(flags, 'signal-confidence'),
+        adherenceFile: readSingleFlag(flags, 'adherence-file'),
       },
     };
   }
@@ -148,7 +161,9 @@ async function main() {
         ? await prepareSemanticCandidates(parsed.options)
         : parsed.command === 'prepare'
           ? await prepareCodeTask(parsed.options)
-          : await completeCodeTask(parsed.options);
+          : parsed.command === 'prepare-adherence'
+            ? await prepareAdherenceEvaluation(parsed.options)
+            : await completeCodeTask(parsed.options);
   process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
 }
 

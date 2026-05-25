@@ -140,9 +140,34 @@ Precedence while coding:
 Do not quote raw EGO sections back to the user as policy text.
 Apply them in the code and in your technical decisions.
 
-### Step 3 - Write lockfile feedback
+### Step 3 - Evaluate adherence (recommended)
 
-After the implementation work is complete, run:
+After the implementation work is complete, evaluate which compiled directives were actually followed or ignored. First, request the adherence evaluation contract:
+
+```sh
+node <this-skill-directory>/scripts/code.mjs prepare-adherence --session <session-path>
+```
+
+This prints a Runtime-owned adherence-evaluation AI contract: a prompt listing all compiled directives, a JSON schema for the evaluation payload, and a suggested artifact path. Use host Claude to review the implementation against each directive and produce a per-directive verdict file.
+
+Each verdict in the payload should include:
+- `directive_id`: the directive being evaluated
+- `verdict`: `followed`, `ignored`, or `partial`
+- `confidence`: 0.0–1.0 indicating certainty of the assessment
+- `reason`: brief explanation of the basis for the verdict
+- `ignored_reason` (when verdict is `ignored`): one of `not-applicable`, `conflicts-with-task`, `too-broad`, `repo-reality`, `false-positive`, `user-corrected`, `other`
+
+Then pass the evaluation artifact to `complete`:
+
+```sh
+node <this-skill-directory>/scripts/code.mjs complete --session <session-path> --adherence-file <path>
+```
+
+When an adherence artifact is provided, Runtime validates each verdict (structural checks, directive ID allowlist, confidence threshold >= 0.5), then uses the validated verdicts instead of the optimistic default to write lockfile feedback with `signal_confidence: 'explicit'`.
+
+### Step 4 - Write lockfile feedback
+
+If you skip the adherence evaluation step, run `complete` without `--adherence-file`:
 
 ```sh
 node <this-skill-directory>/scripts/code.mjs complete --session <session-path> [--ignored <directive-id>] [--followed <directive-id>]
@@ -159,9 +184,17 @@ The script prints JSON:
   "status": "updated",
   "lockfilePath": "<project-root>/.resonant-code/playbook.lock.yaml",
   "followedDirectiveIds": ["..."],
-  "ignoredDirectiveIds": []
+  "ignoredDirectiveIds": [],
+  "adherence": {
+    "provided": true,
+    "status": "accepted",
+    "verdictCount": 5,
+    "diagnostics": { "...": "..." }
+  }
 }
 ```
+
+The `adherence` field is included when `--adherence-file` was provided, showing validation results.
 
 If completion is skipped because Runtime guidance was unavailable, report that briefly.
 Do not manually write the lockfile.
