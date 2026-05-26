@@ -32,6 +32,7 @@ export interface RcclCandidatePayloadDiagnostics {
 export interface ValidateRcclCandidateResult {
   valid: boolean;
   observations: CandidateObservation[];
+  document: { version: string; generated_at: string | null; git_ref: string | null } | null;
   diagnostics: RcclCandidatePayloadDiagnostics;
 }
 
@@ -45,6 +46,7 @@ export function validateRcclCandidatePayload(yamlText: string): ValidateRcclCand
     return {
       valid: false,
       observations: [],
+      document: null,
       diagnostics: {
         kind: 'rccl-observation-generation',
         summary: { total: 0, accepted: 0, rejected: 1 },
@@ -121,6 +123,7 @@ function validateCandidateDocument(doc: CandidateRcclDocument): ValidateRcclCand
   return {
     valid: accepted.length > 0,
     observations: accepted,
+    document: { version: doc.version, generated_at: doc.generated_at, git_ref: doc.git_ref },
     diagnostics: { kind: 'rccl-observation-generation', summary, entries },
   };
 }

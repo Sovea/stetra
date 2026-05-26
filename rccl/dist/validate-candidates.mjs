@@ -6,6 +6,7 @@ function validateRcclCandidatePayload(yamlText) {
 	if (!parsed.valid || !parsed.data) return {
 		valid: false,
 		observations: [],
+		document: null,
 		diagnostics: {
 			kind: "rccl-observation-generation",
 			summary: {
@@ -76,6 +77,11 @@ function validateCandidateDocument(doc) {
 	return {
 		valid: accepted.length > 0,
 		observations: accepted,
+		document: {
+			version: doc.version,
+			generated_at: doc.generated_at,
+			git_ref: doc.git_ref
+		},
 		diagnostics: {
 			kind: "rccl-observation-generation",
 			summary,
