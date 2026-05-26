@@ -203,6 +203,7 @@ export async function prepareCodeTask(options) {
       interpretationMode,
     });
     const hasSemanticArtifacts = Boolean(options.hostProposalFile || options.semanticProposalFile);
+    let preloadedSources;
     const allowedIds = hasSemanticArtifacts
       ? buildAllowedIds(await runtime.prepareSemanticContractContext({
           compileInput: {
@@ -213,7 +214,7 @@ export async function prepareCodeTask(options) {
             projectRoot: paths.projectRoot,
             resolvedTask,
           },
-        }))
+        }).then((ctx) => { preloadedSources = ctx.loadedSources; return ctx; }))
       : undefined;
     relationArtifact = loadHostProposalArtifact(options.hostProposalFile, 'code-skill-semantic-relations', runtime, allowedIds);
     semanticCandidateArtifact = loadHostSemanticCandidateArtifact(options.semanticProposalFile, 'code-skill-semantic-candidates', runtime, allowedIds);
@@ -235,6 +236,7 @@ export async function prepareCodeTask(options) {
       resolvedTask,
       hostFulfillment: fulfillment,
       ...(hostProposals.length ? { hostProposals } : {}),
+      ...(preloadedSources ? { preloadedSources } : {}),
     };
     const output = await runtime.compile(compileInput);
     const interpretationSummary = summarizeInterpretationFlow(

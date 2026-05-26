@@ -1,5 +1,13 @@
 export { prepareRccl, prepareRcclWorkflowStage } from './prepare.ts';
 export { parseRccl, parseRcclCandidates, normalizeObservation, normalizeDocument } from './io/parse-rccl.ts';
+export { validateRcclCandidatePayload } from './validate-candidates.ts';
+export type {
+  RcclDiagnosticStatus,
+  RcclDiagnosticReason,
+  RcclDiagnosticEntry,
+  RcclCandidatePayloadDiagnostics,
+  ValidateRcclCandidateResult,
+} from './validate-candidates.ts';
 export { parseRcclDiscoveryArtifact, parseRcclCritiqueArtifact } from './io/parse-rccl-workflow.ts';
 export { emitRccl, serializeRccl, writeCandidateArtifact, writeConsolidationArtifact } from './io/emit-rccl.ts';
 export { consolidateObservations, materializeRcclObservations } from './consolidate/consolidate-observations.ts';

@@ -250,6 +250,7 @@ export interface CompileInputBase {
   lockfilePath?: string;
   hostProposals?: import('./ir/types.ts').HostProposalIR[];
   hostFulfillment?: HostFulfillmentSummary;
+  preloadedSources?: import('./load/compile-sources.ts').CompileSources;
 }
 
 export interface RawCompileInput extends CompileInputBase {
@@ -692,6 +693,7 @@ export interface EvaluateInput {
 export interface LockfileSignal {
   followed: number;
   ignored: number;
+  partial: number;
   follow_rate: number;
   trend: 'improving' | 'stable' | 'degrading';
 }
@@ -727,8 +729,8 @@ export interface LockfileTensionEntry {
 export interface LockfileDirectiveEntry {
   quality_signal: {
     overall: LockfileSignal;
-    by_task_type: Record<string, { followed: number; ignored: number }>;
-    by_task_profile: Record<string, { followed: number; ignored: number }>;
+    by_task_type: Record<string, { followed: number; ignored: number; partial: number }>;
+    by_task_profile: Record<string, { followed: number; ignored: number; partial: number }>;
     ignored_reasons: Partial<Record<IgnoredReason, number>>;
     last_ignored_reason?: IgnoredReason;
     signal_confidence: FeedbackSignalConfidence;

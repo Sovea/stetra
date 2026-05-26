@@ -7,6 +7,7 @@ function evaluateGuidance(input) {
 	const adherenceResolved = resolveFromAdherencePayload(input, trackedDirectiveIds);
 	const followed = adherenceResolved?.followed ?? new Set(input.followedDirectiveIds ?? trackedDirectiveIds);
 	const ignored = adherenceResolved?.ignored ?? new Set(input.ignoredDirectiveIds ?? []);
+	const partial = adherenceResolved?.partial ?? /* @__PURE__ */ new Set();
 	const ignoredReasons = adherenceResolved?.ignoredReasons ?? input.ignoredDirectiveReasons;
 	const taskType = input.ego.taskIntent.operation;
 	const taskProfile = taskProfileKey(input);
@@ -29,11 +30,13 @@ function evaluateGuidance(input) {
 		const entry = existing.directives[directiveId] ?? createEntry();
 		const counts = entry.quality_signal.by_task_type[taskType] ?? {
 			followed: 0,
-			ignored: 0
+			ignored: 0,
+			partial: 0
 		};
 		const profileCounts = entry.quality_signal.by_task_profile[taskProfile] ?? {
 			followed: 0,
-			ignored: 0
+			ignored: 0,
+			partial: 0
 		};
 		if (ignored.has(directiveId)) {
 			entry.quality_signal.overall.ignored += 1;
@@ -44,6 +47,10 @@ function evaluateGuidance(input) {
 				entry.quality_signal.ignored_reasons[ignoredReason] = (entry.quality_signal.ignored_reasons[ignoredReason] ?? 0) + 1;
 				entry.quality_signal.last_ignored_reason = ignoredReason;
 			}
+		} else if (partial.has(directiveId)) {
+			entry.quality_signal.overall.partial += 1;
+			counts.partial += 1;
+			profileCounts.partial += 1;
 		} else if (followed.has(directiveId)) {
 			entry.quality_signal.overall.followed += 1;
 			counts.followed += 1;
@@ -111,7 +118,8 @@ function normalizeDirectiveEntries(entries) {
 				...entry.quality_signal,
 				overall: {
 					...normalized.quality_signal.overall,
-					...entry.quality_signal?.overall
+					...entry.quality_signal?.overall,
+					partial: (entry.quality_signal?.overall)?.partial ?? 0
 				},
 				by_task_type: entry.quality_signal?.by_task_type ?? {},
 				by_task_profile: entry.quality_signal?.by_task_profile ?? {},
@@ -242,6 +250,7 @@ function createEntry() {
 			overall: {
 				followed: 0,
 				ignored: 0,
+				partial: 0,
 				follow_rate: 0,
 				trend: "stable"
 			},
@@ -277,8 +286,9 @@ function summarizeExecutionModes(input) {
 	return counts;
 }
 function computeFollowRate(entry) {
-	const total = entry.quality_signal.overall.followed + entry.quality_signal.overall.ignored;
-	return total === 0 ? 0 : Number((entry.quality_signal.overall.followed / total).toFixed(2));
+	const { followed, ignored, partial } = entry.quality_signal.overall;
+	const total = followed + ignored + partial;
+	return total === 0 ? 0 : Number(((followed + partial) / total).toFixed(2));
 }
 function computeTrend(entry) {
 	const rate = entry.quality_signal.overall.follow_rate;
@@ -319,6 +329,7 @@ function resolveFromAdherencePayload(input, trackedDirectiveIds) {
 	if (!input.adherencePayload?.length) return null;
 	const followed = /* @__PURE__ */ new Set();
 	const ignored = /* @__PURE__ */ new Set();
+	const partial = /* @__PURE__ */ new Set();
 	const ignoredReasons = {};
 	const trackedSet = new Set(trackedDirectiveIds);
 	const evaluated = /* @__PURE__ */ new Set();
@@ -329,12 +340,13 @@ function resolveFromAdherencePayload(input, trackedDirectiveIds) {
 		else if (verdict.verdict === "ignored") {
 			ignored.add(verdict.directive_id);
 			if (verdict.ignored_reason) ignoredReasons[verdict.directive_id] = verdict.ignored_reason;
-		} else if (verdict.verdict === "partial") followed.add(verdict.directive_id);
+		} else if (verdict.verdict === "partial") partial.add(verdict.directive_id);
 	}
 	for (const id of trackedDirectiveIds) if (!evaluated.has(id)) followed.add(id);
 	return {
 		followed,
 		ignored,
+		partial,
 		ignoredReasons
 	};
 }

@@ -80,7 +80,7 @@ async function compile(input) {
 		stage: "Context Profile Resolution",
 		lines: resolved.input_provenance.context_resolution.length ? resolved.input_provenance.context_resolution.map((item) => `${item.field}: ${formatContextValue(item.value)} source=${item.source} confidence=${item.confidence} status=${item.status} influence=${item.influence.join(", ") || "(none)"}`) : ["no context profile resolution records"]
 	});
-	const sources = await loadCompileSources(normalizedInput);
+	const sources = normalizedInput.preloadedSources ?? await loadCompileSources(normalizedInput);
 	const governanceIR = await buildGovernanceIR(normalizedInput, sources);
 	traceSteps.push({
 		stage: "Governance IR",

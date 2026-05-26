@@ -76,6 +76,7 @@ function validateAdherenceEvaluationPayload(raw, allowedDirectiveIds) {
 			diagnostics: buildContractPayloadDiagnostics("adherence-evaluation", entries)
 		};
 	}
+	const seenDirectiveIds = /* @__PURE__ */ new Set();
 	for (let i = 0; i < raw.verdicts.length; i++) {
 		const item = raw.verdicts[i];
 		const path = `verdicts[${i}]`;
@@ -95,6 +96,17 @@ function validateAdherenceEvaluationPayload(raw, allowedDirectiveIds) {
 				reason: "invalid-id",
 				path,
 				message: `Directive ID "${item.directive_id}" is not in the allowed set.`,
+				directiveId: item.directive_id,
+				confidence: item.confidence
+			});
+			continue;
+		}
+		if (seenDirectiveIds.has(item.directive_id)) {
+			entries.push({
+				status: "rejected",
+				reason: "duplicate-id",
+				path,
+				message: `Directive ID "${item.directive_id}" already has a verdict entry; only the first occurrence is accepted.`,
 				directiveId: item.directive_id,
 				confidence: item.confidence
 			});
@@ -123,6 +135,7 @@ function validateAdherenceEvaluationPayload(raw, allowedDirectiveIds) {
 			continue;
 		}
 		const ignoredReason = item.verdict === "ignored" && item.ignored_reason && VALID_IGNORED_REASONS.has(item.ignored_reason) ? item.ignored_reason : void 0;
+		seenDirectiveIds.add(item.directive_id);
 		verdicts.push({
 			directive_id: item.directive_id,
 			verdict: item.verdict,
@@ -198,7 +211,10 @@ function buildAdherenceEvaluationSchema() {
 	};
 }
 function buildEvaluationPrompt(directives, taskDescription) {
-	const directiveLines = directives.map((d) => `- ${d.id}: [${d.prescription}] ${d.description} (execution_mode: ${d.execution_mode})`);
+	const directiveLines = directives.map((d) => {
+		const tensionMarker = d.execution_mode === "deviation-noted" ? " ⚠ deviation-noted" : "";
+		return `- ${d.id}: [${d.prescription}] ${d.description} (execution_mode: ${d.execution_mode})${tensionMarker}`;
+	});
 	return [
 		"Evaluate adherence to the compiled directives after implementation.",
 		"For each directive that was part of the compiled EGO, produce a verdict:",
@@ -210,6 +226,12 @@ function buildEvaluationPrompt(directives, taskDescription) {
 		"Set confidence to reflect how certain you are about the verdict (0.0–1.0).",
 		"Provide a brief reason explaining the basis for each verdict.",
 		"",
+		...directives.some((d) => d.execution_mode === "deviation-noted") ? [
+			"Directives marked ⚠ deviation-noted have known repository tensions.",
+			"Pay special attention to these — their verdicts are the highest-value feedback signals",
+			"because they represent active conflicts between prescriptive guidance and repository reality.",
+			""
+		] : [],
 		`Task description: ${taskDescription}`,
 		"",
 		"Compiled directives:",

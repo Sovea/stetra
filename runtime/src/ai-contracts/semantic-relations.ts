@@ -3,6 +3,7 @@ import { resolveCompileTask } from '../compile-input.ts';
 import { activatedDirectiveIdsIR, resolveActivationDecisionsIR } from '../ir/activation/resolve-activation.ts';
 import { buildGovernanceIR } from '../ir/build-ir.ts';
 import { SEMANTIC_RELATION_POLICY } from '../ir/relations/policy.ts';
+import { loadCompileSources } from '../load/compile-sources.ts';
 import type {
   DirectiveIR,
   HostProposalIR,
@@ -115,10 +116,9 @@ const HOST_SEMANTIC_CANDIDATE_SCHEMA = {
 
 export async function prepareSemanticContractContext(input: SemanticContractContextInput): Promise<SemanticContractContextOutput> {
   const resolvedTask = resolveSemanticContractTask(input.compileInput);
-  const governanceIR = await buildGovernanceIR({
-    ...input.compileInput,
-    resolvedTask,
-  });
+  const compileInput = { ...input.compileInput, resolvedTask };
+  const sources = compileInput.preloadedSources ?? await loadCompileSources(compileInput);
+  const governanceIR = await buildGovernanceIR(compileInput, sources);
   const activationDecisions = resolveActivationDecisionsIR(governanceIR);
   const activatedDirectiveIds = activatedDirectiveIdsIR(activationDecisions);
   const activeDirectives = governanceIR.directives.filter((directive) => activatedDirectiveIds.has(directive.id));
@@ -127,6 +127,7 @@ export async function prepareSemanticContractContext(input: SemanticContractCont
     resolvedTask,
     directives: activeDirectives.map(summarizeDirectiveForProposal),
     observations: governanceIR.observations.map(summarizeObservationForProposal),
+    loadedSources: sources,
   };
 }
 

@@ -84,18 +84,30 @@ async function runCommit(options = {}) {
   }
 
   const rccl = await loadRccl();
-  const parsedCandidates = rccl.parseRcclCandidates(yamlText);
-  if (!parsedCandidates.valid) {
+  const validated = rccl.validateRcclCandidatePayload(yamlText);
+
+  if (!validated.valid) {
     process.stderr.write('? Validation failed for RCCL generation:\n');
-    for (const err of parsedCandidates.errors ?? []) process.stderr.write(`  - ${err}\n`);
+    for (const entry of validated.diagnostics.entries) {
+      if (entry.status === 'rejected') process.stderr.write(`  - [${entry.reason}] ${entry.path}: ${entry.message}\n`);
+    }
+    process.stdout.write(JSON.stringify({
+      error: true,
+      diagnostics: validated.diagnostics,
+      input: {
+        source: options.input === '-' ? 'stdin' : options.input,
+        supportsStdin: true,
+      },
+    }, null, 2) + '\n');
     process.exit(1);
   }
 
-  const consolidation = rccl.consolidateObservations(parsedCandidates.data.observations);
+  const candidateDoc = { version: validated.document?.version ?? '1.0', generated_at: validated.document?.generated_at ?? null, git_ref: validated.document?.git_ref ?? null, observations: validated.observations };
+  const consolidation = rccl.consolidateObservations(validated.observations);
   const draftDocument = {
-    version: parsedCandidates.data.version,
-    generated_at: parsedCandidates.data.generated_at,
-    git_ref: parsedCandidates.data.git_ref,
+    version: candidateDoc.version,
+    generated_at: candidateDoc.generated_at,
+    git_ref: candidateDoc.git_ref,
     observations: rccl.materializeRcclObservations(consolidation.observations),
   };
   const evidenceVerified = rccl.verifyEvidenceForDocument(draftDocument, projectRoot);
@@ -105,13 +117,14 @@ async function runCommit(options = {}) {
   const debugArtifacts = debugArtifactsEnabled
     ? {
       enabled: true,
-      candidates: rccl.writeCandidateArtifact(projectRoot, parsedCandidates.data),
+      candidates: rccl.writeCandidateArtifact(projectRoot, candidateDoc),
       consolidation: rccl.writeConsolidationArtifact(projectRoot, consolidation, verified),
     }
     : { enabled: false };
 
   process.stdout.write(JSON.stringify({
     ...result,
+    diagnostics: validated.diagnostics,
     input: {
       source: options.input === '-' ? 'stdin' : options.input,
       supportsStdin: true,

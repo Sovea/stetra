@@ -86,6 +86,8 @@ export function validateAdherenceEvaluationPayload(
     return { verdicts, diagnostics: buildContractPayloadDiagnostics('adherence-evaluation', entries) };
   }
 
+  const seenDirectiveIds = new Set<string>();
+
   for (let i = 0; i < raw.verdicts.length; i++) {
     const item = raw.verdicts[i];
     const path = `verdicts[${i}]`;
@@ -107,6 +109,18 @@ export function validateAdherenceEvaluationPayload(
         reason: 'invalid-id',
         path,
         message: `Directive ID "${item.directive_id}" is not in the allowed set.`,
+        directiveId: item.directive_id,
+        confidence: item.confidence,
+      });
+      continue;
+    }
+
+    if (seenDirectiveIds.has(item.directive_id)) {
+      entries.push({
+        status: 'rejected',
+        reason: 'duplicate-id',
+        path,
+        message: `Directive ID "${item.directive_id}" already has a verdict entry; only the first occurrence is accepted.`,
         directiveId: item.directive_id,
         confidence: item.confidence,
       });
@@ -140,6 +154,8 @@ export function validateAdherenceEvaluationPayload(
     const ignoredReason = item.verdict === 'ignored' && item.ignored_reason && VALID_IGNORED_REASONS.has(item.ignored_reason)
       ? item.ignored_reason as IgnoredReason
       : undefined;
+
+    seenDirectiveIds.add(item.directive_id);
 
     verdicts.push({
       directive_id: item.directive_id,
@@ -209,9 +225,12 @@ function buildEvaluationPrompt(
   directives: AdherenceEvaluationContractInput['directives'],
   taskDescription: string,
 ): string {
-  const directiveLines = directives.map((d) =>
-    `- ${d.id}: [${d.prescription}] ${d.description} (execution_mode: ${d.execution_mode})`
-  );
+  const directiveLines = directives.map((d) => {
+    const tensionMarker = d.execution_mode === 'deviation-noted' ? ' ⚠ deviation-noted' : '';
+    return `- ${d.id}: [${d.prescription}] ${d.description} (execution_mode: ${d.execution_mode})${tensionMarker}`;
+  });
+
+  const hasTensions = directives.some((d) => d.execution_mode === 'deviation-noted');
 
   return [
     'Evaluate adherence to the compiled directives after implementation.',
@@ -224,6 +243,12 @@ function buildEvaluationPrompt(
     'Set confidence to reflect how certain you are about the verdict (0.0–1.0).',
     'Provide a brief reason explaining the basis for each verdict.',
     '',
+    ...(hasTensions ? [
+      'Directives marked ⚠ deviation-noted have known repository tensions.',
+      'Pay special attention to these — their verdicts are the highest-value feedback signals',
+      'because they represent active conflicts between prescriptive guidance and repository reality.',
+      '',
+    ] : []),
     `Task description: ${taskDescription}`,
     '',
     'Compiled directives:',

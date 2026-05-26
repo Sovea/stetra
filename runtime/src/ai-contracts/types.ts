@@ -98,6 +98,7 @@ export interface SemanticContractContextOutput {
   resolvedTask: ResolvedTaskOutput;
   directives: SemanticProposalDirectiveSummary[];
   observations: SemanticProposalObservationSummary[];
+  loadedSources?: import('../load/compile-sources.ts').CompileSources;
 }
 
 export interface SemanticContractBundleInput extends SemanticContractContextInput {
@@ -130,6 +131,7 @@ export interface HostProposalSourceInput {
 export type ContractPayloadDiagnosticStatus = 'accepted' | 'rejected' | 'downgraded' | 'unused';
 export type ContractPayloadDiagnosticReason =
   | 'accepted'
+  | 'duplicate-id'
   | 'empty-payload'
   | 'invalid-id'
   | 'low-confidence'

@@ -106,7 +106,7 @@ export async function compile(input: CompileInput): Promise<CompileOutput> {
       : ['no context profile resolution records'],
   });
 
-  const sources = await loadCompileSources(normalizedInput);
+  const sources = normalizedInput.preloadedSources ?? await loadCompileSources(normalizedInput);
   const governanceIR = await buildGovernanceIR(normalizedInput, sources);
   traceSteps.push({
     stage: 'Governance IR',
