@@ -17,7 +17,12 @@ export function evaluateGuidance(input: EvaluateInput): LockfileDocument {
   const existing = loadLockfile(input.lockfilePath);
   const trackedDirectiveIds = getTrackedDirectiveIds(input);
   const adherenceResolved = resolveFromAdherencePayload(input, trackedDirectiveIds);
-  const followed = adherenceResolved?.followed ?? new Set(input.followedDirectiveIds ?? trackedDirectiveIds);
+  const hasExplicitDirectiveSignal = Boolean(
+    adherenceResolved
+    || input.followedDirectiveIds?.length
+    || input.ignoredDirectiveIds?.length,
+  );
+  const followed = adherenceResolved?.followed ?? new Set(input.followedDirectiveIds ?? []);
   const ignored = adherenceResolved?.ignored ?? new Set(input.ignoredDirectiveIds ?? []);
   const partial = adherenceResolved?.partial ?? new Set<string>();
   const ignoredReasons = adherenceResolved?.ignoredReasons ?? input.ignoredDirectiveReasons;
@@ -40,6 +45,11 @@ export function evaluateGuidance(input: EvaluateInput): LockfileDocument {
 
   updateObservationFeedback(existing, observedRccl, input, now);
   updateTensionFeedback(existing, input, now);
+
+  if (!hasExplicitDirectiveSignal) {
+    writeFileSync(input.lockfilePath, toYaml(existing as never), 'utf-8');
+    return existing;
+  }
 
   for (const directiveId of trackedDirectiveIds) {
     const entry = existing.directives[directiveId] ?? createEntry();
@@ -219,7 +229,7 @@ function summarizeHostFulfillmentFeedback(input: EvaluateInput): HostFulfillment
     ? 'adherence-evaluation' as const
     : input.followedDirectiveIds?.length || input.ignoredDirectiveIds?.length
       ? 'explicit-directives' as const
-      : 'default-approximation' as const;
+      : 'no-explicit-evaluation' as const;
   const signal = hasAdherence
     ? 'explicit' as const
     : validSignalConfidence(input.signalConfidence)

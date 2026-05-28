@@ -5,7 +5,13 @@ import type {
   RuntimeDiagnostics,
   TaskInterpretationTrace,
 } from './interpret/types.ts';
-import type { ContractPayloadDiagnostics } from './ai-contracts/types.ts';
+import type {
+  AIContractArtifact,
+  AIContractEnvelope,
+  ContractPayloadDiagnostics,
+  GuidancePlanningContractName,
+  ValidatedGuidancePlanningProposal,
+} from './ai-contracts/types.ts';
 
 export type TaskKind = 'code' | 'review' | 'analysis' | 'migration';
 export type Operation = 'create' | 'modify' | 'review' | 'refactor' | 'bugfix';
@@ -231,7 +237,7 @@ export interface HostFulfillmentSummary {
 export interface HostFulfillmentFeedbackSummary {
   interpretation_mode: InputProvenance['interpretation_mode'];
   completion_signal: FeedbackSignalConfidence;
-  completion_source: 'default-approximation' | 'explicit-directives' | 'adherence-evaluation';
+  completion_source: 'no-explicit-evaluation' | 'default-approximation' | 'explicit-directives' | 'adherence-evaluation';
   artifacts: Record<'task-interpretation' | 'semantic-relation' | 'semantic-candidate' | 'adherence-evaluation', {
     provided: boolean;
     status: HostFulfillmentStatus;
@@ -251,6 +257,53 @@ export interface CompileInputBase {
   hostProposals?: import('./ir/types.ts').HostProposalIR[];
   hostFulfillment?: HostFulfillmentSummary;
   preloadedSources?: import('./load/compile-sources.ts').CompileSources;
+}
+
+export interface GuidancePlanSourceStatus {
+  localAugment: 'present' | 'absent';
+  rccl: 'present' | 'absent' | 'stale' | 'unverified';
+  lockfile: 'present' | 'absent';
+  cache: 'hit' | 'miss' | 'partial';
+}
+
+export interface GuidancePlanProvidedContracts {
+  guidancePlanning?: boolean;
+  taskInterpretation?: boolean;
+  semanticCandidate?: boolean;
+  semanticRelation?: boolean;
+}
+
+export interface GuidancePlanArtifactPaths {
+  guidancePlanning: string;
+  taskInterpretation: string;
+}
+
+export interface GuidancePlanInput extends CompileInputBase {
+  task: CompileTaskInput;
+  planningProposal?: ValidatedGuidancePlanningProposal | null;
+  providedContracts?: GuidancePlanProvidedContracts;
+  artifactPaths: GuidancePlanArtifactPaths;
+}
+
+export interface RuntimeContractRequest {
+  kind: 'guidance-planning' | 'task-interpretation' | GuidancePlanningContractName;
+  artifact: AIContractArtifact;
+  contract: AIContractEnvelope;
+}
+
+export interface GuidancePlan {
+  mode: 'ready' | 'contracts-required' | 'degraded';
+  requiredContracts: RuntimeContractRequest[];
+  recommendedContracts: GuidancePlanningContractName[];
+  sourceStatus: GuidancePlanSourceStatus;
+  outputPolicy: {
+    stdout: 'compact';
+    trace: 'session-only';
+  };
+  diagnostics: {
+    planning: 'absent' | 'accepted' | 'low-confidence' | 'unused';
+    notes: string[];
+  };
 }
 
 export interface RawCompileInput extends CompileInputBase {

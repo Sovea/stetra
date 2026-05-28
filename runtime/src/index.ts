@@ -1,5 +1,11 @@
 export { compile, resolveTask } from './compile.ts';
 export { evaluateGuidance } from './feedback.ts';
+export { persistCompileCache } from './cache.ts';
+export { planGuidance, resolveSourceStatus } from './plan-guidance.ts';
+export {
+  prepareGuidancePlanningContract,
+  validateGuidancePlanningPayload,
+} from './ai-contracts/guidance-planning.ts';
 export {
   parseTaskInterpretationCandidatePayload,
   parseTaskInterpretationCandidatePayloadWithDiagnostics,
@@ -51,6 +57,13 @@ export type {
   ContractPayloadDiagnosticStatus,
   HostAdherenceEvaluationPayload,
   HostAdherenceVerdictEntry,
+  GuidancePlanningContractInput,
+  GuidancePlanningContractName,
+  GuidancePlanningContractOutput,
+  GuidancePlanningReasonId,
+  GuidancePlanningSemanticNeed,
+  GuidancePlanningValidationResult,
+  HostGuidancePlanningPayload,
   HostProposalNormalizer,
   HostProposalSourceInput,
   SemanticCandidateContractBundleOutput,
@@ -70,6 +83,7 @@ export type {
   TaskInterpretationContractOutput,
   TaskInterpretationRecommendation,
   ValidatedAdherenceVerdict,
+  ValidatedGuidancePlanningProposal,
 } from './ai-contracts/types.ts';
 export type {
   ActivationDecisionIR,
@@ -124,6 +138,11 @@ export type {
   EffectiveGuidanceObject,
   EvaluateInput,
   FeedbackSignalConfidence,
+  GuidancePlan,
+  GuidancePlanArtifactPaths,
+  GuidancePlanInput,
+  GuidancePlanProvidedContracts,
+  GuidancePlanSourceStatus,
   GovernancePacket,
   IgnoredReason,
   InterpretationPacket,
@@ -141,6 +160,7 @@ export type {
   ReviewGoal,
   RiskLevel,
   RuntimeSessionRecord,
+  RuntimeContractRequest,
   ScopeSize,
   SemanticMergeResult,
   TaskIntent,

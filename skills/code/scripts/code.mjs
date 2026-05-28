@@ -1,7 +1,10 @@
 import { fileURLToPath } from 'node:url';
 
 import {
+  autoCodeTask,
   completeCodeTask,
+  explainCodeSession,
+  getCodeStatus,
   prepareAdherenceEvaluation,
   prepareCodeTask,
   prepareInterpretation,
@@ -10,7 +13,10 @@ import {
 } from '../internal/workflow.mjs';
 
 export {
+  autoCodeTask,
   completeCodeTask,
+  explainCodeSession,
+  getCodeStatus,
   prepareAdherenceEvaluation,
   prepareCodeTask,
   prepareInterpretation,
@@ -21,10 +27,10 @@ export {
 function parseCli(argv) {
   const [command, ...rest] = argv;
   if (!command) {
-    throw new Error('Expected a command: prepare-interpretation, prepare-relations, prepare-semantic-candidates, prepare, prepare-adherence, or complete.');
+    throw new Error('Expected a command: auto, status, explain, prepare-interpretation, prepare-relations, prepare-semantic-candidates, prepare, prepare-adherence, or complete.');
   }
 
-  if (command === 'prepare-interpretation' || command === 'prepare-relations' || command === 'prepare-semantic-candidates' || command === 'prepare') {
+  if (command === 'auto' || command === 'prepare-interpretation' || command === 'prepare-relations' || command === 'prepare-semantic-candidates' || command === 'prepare') {
     const { positionals, flags } = parseFlags(rest);
     const projectRoot = positionals[0];
     const taskDescription = readSingleFlag(flags, 'task');
@@ -36,6 +42,7 @@ function parseCli(argv) {
         projectRoot,
         pluginRoot: readSingleFlag(flags, 'plugin-root'),
         taskDescription,
+        planningFile: readSingleFlag(flags, 'planning-file'),
         candidateFile: readSingleFlag(flags, 'candidate-file'),
         hostProposalFile: readSingleFlag(flags, 'host-proposal-file'),
         semanticProposalFile: readSingleFlag(flags, 'semantic-proposal-file'),
@@ -64,6 +71,29 @@ function parseCli(argv) {
     const { flags } = parseFlags(rest);
     const sessionPath = readSingleFlag(flags, 'session');
     if (!sessionPath) throw new Error('prepare-adherence requires --session <path>.');
+    return {
+      command,
+      options: { sessionPath },
+    };
+  }
+
+  if (command === 'status') {
+    const { positionals, flags } = parseFlags(rest);
+    const projectRoot = positionals[0];
+    if (!projectRoot) throw new Error('status requires <project-root>.');
+    return {
+      command,
+      options: {
+        projectRoot,
+        pluginRoot: readSingleFlag(flags, 'plugin-root'),
+      },
+    };
+  }
+
+  if (command === 'explain') {
+    const { flags } = parseFlags(rest);
+    const sessionPath = readSingleFlag(flags, 'session');
+    if (!sessionPath) throw new Error('explain requires --session <path>.');
     return {
       command,
       options: { sessionPath },
@@ -155,7 +185,13 @@ async function main() {
   const parsed = parseCli(process.argv.slice(2));
   const result = parsed.command === 'prepare-interpretation'
     ? await prepareInterpretation(parsed.options)
-    : parsed.command === 'prepare-relations'
+    : parsed.command === 'auto'
+      ? await autoCodeTask(parsed.options)
+      : parsed.command === 'status'
+        ? await getCodeStatus(parsed.options)
+        : parsed.command === 'explain'
+          ? await explainCodeSession(parsed.options)
+          : parsed.command === 'prepare-relations'
       ? await prepareRelations(parsed.options)
       : parsed.command === 'prepare-semantic-candidates'
         ? await prepareSemanticCandidates(parsed.options)

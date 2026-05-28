@@ -2,7 +2,7 @@ import type { CompileInput, CompileTaskInput, ResolvedTaskOutput } from '../type
 import type { HostProposalIR } from '../ir/types.ts';
 
 export type AIContractVersion = 'ai-contract/v1';
-export type AIContractKind = 'task-interpretation' | 'semantic-relation' | 'semantic-candidate' | 'rccl-observation-generation' | 'adherence-evaluation';
+export type AIContractKind = 'guidance-planning' | 'task-interpretation' | 'semantic-relation' | 'semantic-candidate' | 'rccl-observation-generation' | 'adherence-evaluation';
 export type AIContractSchemaVersion = '1.0';
 
 export interface AIContractArtifact {
@@ -50,6 +50,51 @@ export interface TaskInterpretationContractOutput {
   candidateArtifact: AIContractArtifact;
   clarificationHints: string[];
   contract: AIContractEnvelope;
+}
+
+// --- Guidance Planning Contract ---
+
+export type GuidancePlanningSemanticNeed = 'low' | 'medium' | 'high';
+export type GuidancePlanningContractName = 'task-interpretation' | 'semantic-candidate' | 'semantic-relation' | 'adherence-evaluation';
+export type GuidancePlanningReasonId =
+  | 'task-meaning-needs-host-context'
+  | 'repository-context-may-change-guidance'
+  | 'directive-observation-relation-needed'
+  | 'potential-context-tension'
+  | 'high-risk-or-sensitive-change'
+  | 'user-requested-governance'
+  | 'straightforward-low-risk-change'
+  | 'insufficient-information';
+
+export interface GuidancePlanningContractInput {
+  task: CompileTaskInput;
+  artifactPath: string;
+  sourceStatus: {
+    localAugment: 'present' | 'absent';
+    rccl: 'present' | 'absent' | 'stale' | 'unverified';
+    lockfile: 'present' | 'absent';
+  };
+}
+
+export interface HostGuidancePlanningPayload {
+  semantic_need: GuidancePlanningSemanticNeed;
+  useful_contracts: GuidancePlanningContractName[];
+  reasons: GuidancePlanningReasonId[];
+  confidence: number;
+}
+
+export interface ValidatedGuidancePlanningProposal extends HostGuidancePlanningPayload {}
+
+export interface GuidancePlanningContractOutput {
+  planningPrompt: string;
+  planningSchema: string;
+  planningArtifact: AIContractArtifact;
+  contract: AIContractEnvelope;
+}
+
+export interface GuidancePlanningValidationResult {
+  proposal: ValidatedGuidancePlanningProposal | null;
+  diagnostics: ContractPayloadDiagnostics;
 }
 
 export interface SemanticProposalDirectiveSummary {
@@ -151,7 +196,7 @@ export interface ContractPayloadDiagnosticEntry {
 }
 
 export interface ContractPayloadDiagnostics {
-  kind: 'task-interpretation' | 'semantic-relation' | 'semantic-candidate' | 'adherence-evaluation';
+  kind: 'guidance-planning' | 'task-interpretation' | 'semantic-relation' | 'semantic-candidate' | 'adherence-evaluation';
   source?: HostProposalSourceInput;
   summary: {
     total: number;

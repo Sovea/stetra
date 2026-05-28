@@ -33,7 +33,41 @@ compiled `ego` while actually implementing the requested code change.
 
 ## Instructions
 
-### Step 1 - Compile task guidance
+### Default Step 1 - Auto plan and compile task guidance
+
+For normal coding work, start with the auto workflow:
+
+```sh
+node <this-skill-directory>/scripts/code.mjs auto <project-root> --task "<user task>" [--target-file <path>] [--changed-file <path>] [--tech <name>] [--tag <name>] [--operation <create|modify|bugfix|refactor>]
+```
+
+`auto` asks Runtime to produce a guidance plan. Runtime may return `contracts-required`
+with one or more Runtime-owned AI contracts, usually `guidance-planning` and
+`task-interpretation` first. Fulfill only those listed contracts by writing the
+requested JSON artifact(s), then re-run `auto` with the artifact path flags:
+
+```sh
+node <this-skill-directory>/scripts/code.mjs auto <project-root> --task "<user task>" --planning-file <path> --candidate-file <path>
+```
+
+If Runtime later requests `semantic-candidate` or `semantic-relation`, fulfill
+those contract artifacts and re-run `auto` with `--semantic-proposal-file` or
+`--host-proposal-file`.
+
+Important:
+- Host-agent semantic judgment enters only through Runtime-owned contracts.
+- Do not replace contract fulfillment with ad hoc keyword heuristics or manual playbook parsing.
+- Deterministic task parsing is fallback context and structural normalization, not the primary semantic signal when host contracts are available.
+- When `auto` returns `status: "ok"`, use the compact `guidance` object for implementation. Use `explain --session <path>` only when the full Decision Trace is needed.
+
+Useful supporting commands:
+
+```sh
+node <this-skill-directory>/scripts/code.mjs status <project-root>
+node <this-skill-directory>/scripts/code.mjs explain --session <session-path>
+```
+
+### Advanced Step 1 - Compile task guidance manually
 
 First, when the task is semantically ambiguous, run:
 
@@ -173,9 +207,10 @@ If you skip the adherence evaluation step, run `complete` without `--adherence-f
 node <this-skill-directory>/scripts/code.mjs complete --session <session-path> [--ignored <directive-id>] [--followed <directive-id>]
 ```
 
-If you do not pass any directive ids, the script uses a conservative first-pass approximation:
-- all compiled `must_follow` directives are treated as followed
-- no directives are treated as ignored
+If you do not pass any directive ids, Runtime writes low-pollution task usage,
+contract fulfillment, observation, and tension feedback only. It does not treat
+all compiled directives as followed. Directive follow-rate and trend are updated
+only from explicit directive ids or an accepted adherence evaluation artifact.
 
 The script prints JSON:
 

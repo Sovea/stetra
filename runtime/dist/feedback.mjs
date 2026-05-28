@@ -5,7 +5,8 @@ function evaluateGuidance(input) {
 	const existing = loadLockfile(input.lockfilePath);
 	const trackedDirectiveIds = getTrackedDirectiveIds(input);
 	const adherenceResolved = resolveFromAdherencePayload(input, trackedDirectiveIds);
-	const followed = adherenceResolved?.followed ?? new Set(input.followedDirectiveIds ?? trackedDirectiveIds);
+	const hasExplicitDirectiveSignal = Boolean(adherenceResolved || input.followedDirectiveIds?.length || input.ignoredDirectiveIds?.length);
+	const followed = adherenceResolved?.followed ?? new Set(input.followedDirectiveIds ?? []);
 	const ignored = adherenceResolved?.ignored ?? new Set(input.ignoredDirectiveIds ?? []);
 	const partial = adherenceResolved?.partial ?? /* @__PURE__ */ new Set();
 	const ignoredReasons = adherenceResolved?.ignoredReasons ?? input.ignoredDirectiveReasons;
@@ -26,6 +27,10 @@ function evaluateGuidance(input) {
 	existing.governance_summary.last_updated_at = now;
 	updateObservationFeedback(existing, observedRccl, input, now);
 	updateTensionFeedback(existing, input, now);
+	if (!hasExplicitDirectiveSignal) {
+		writeFileSync(input.lockfilePath, toYaml(existing), "utf-8");
+		return existing;
+	}
 	for (const directiveId of trackedDirectiveIds) {
 		const entry = existing.directives[directiveId] ?? createEntry();
 		const counts = entry.quality_signal.by_task_type[taskType] ?? {
@@ -179,7 +184,7 @@ function getObservedRccl(input) {
 }
 function summarizeHostFulfillmentFeedback(input) {
 	const hasAdherence = input.adherencePayload?.length;
-	const source = hasAdherence ? "adherence-evaluation" : input.followedDirectiveIds?.length || input.ignoredDirectiveIds?.length ? "explicit-directives" : "default-approximation";
+	const source = hasAdherence ? "adherence-evaluation" : input.followedDirectiveIds?.length || input.ignoredDirectiveIds?.length ? "explicit-directives" : "no-explicit-evaluation";
 	const signal = hasAdherence ? "explicit" : validSignalConfidence(input.signalConfidence) ? input.signalConfidence : source === "explicit-directives" ? "explicit" : "implicit";
 	const fulfillment = input.hostFulfillment ?? input.packet.governance.trace.host_fulfillment;
 	return {

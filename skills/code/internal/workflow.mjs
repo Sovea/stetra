@@ -11,6 +11,136 @@ export async function prepareInterpretation(options) {
   return runtime.prepareTaskInterpretationContract({ task, candidatePath });
 }
 
+export async function autoCodeTask(options) {
+  const paths = resolveRuntimePaths(options.projectRoot, options.pluginRoot);
+  const runtime = await loadRuntime(paths.runtimeEntry);
+  const task = normalizeTaskInput(options, paths.projectRoot, runtime);
+  const planningPath = buildGuidancePlanningPath(paths.projectRoot, task);
+  const candidatePath = buildCandidatePath(paths.projectRoot, task);
+  const planningArtifact = loadGuidancePlanningArtifact(options.planningFile, runtime);
+  const candidateArtifact = loadCandidateArtifact(options.candidateFile, runtime);
+  const plan = runtime.planGuidance({
+    builtinRoot: paths.builtinRoot,
+    localAugmentPath: paths.localAugmentPath,
+    rcclPath: paths.rcclPath,
+    lockfilePath: paths.lockfilePath,
+    projectRoot: paths.projectRoot,
+    task,
+    planningProposal: planningArtifact.proposal,
+    providedContracts: {
+      guidancePlanning: Boolean(planningArtifact.proposal),
+      taskInterpretation: candidateArtifact.candidates.length > 0,
+      semanticCandidate: Boolean(options.semanticProposalFile),
+      semanticRelation: Boolean(options.hostProposalFile),
+    },
+    artifactPaths: {
+      guidancePlanning: planningPath,
+      taskInterpretation: candidatePath,
+    },
+  });
+
+  if (plan.requiredContracts.length > 0) {
+    return buildContractsRequiredResult({
+      paths,
+      plan,
+      task,
+      planningArtifact,
+      candidateArtifact,
+      contracts: plan.requiredContracts,
+    });
+  }
+
+  const semanticContracts = await prepareAutoSemanticContracts({
+    runtime,
+    paths,
+    task,
+    candidateArtifact,
+    planningProposal: planningArtifact.proposal,
+    options,
+  });
+  if (semanticContracts.length > 0) {
+    return buildContractsRequiredResult({
+      paths,
+      plan,
+      task,
+      planningArtifact,
+      candidateArtifact,
+      contracts: semanticContracts,
+    });
+  }
+
+  const prepared = await prepareCodeTask(options);
+  if (prepared.status !== 'ok') {
+    return {
+      status: 'failed',
+      mode: 'compile-failed',
+      sessionPath: prepared.sessionPath,
+      paths,
+      warnings: prepared.warnings,
+      error: prepared.error,
+      sourceStatus: plan.sourceStatus,
+      contracts: summarizeAutoContracts(planningArtifact, candidateArtifact, options),
+    };
+  }
+  annotateAutoSession(prepared.sessionPath, {
+    plan: {
+      mode: plan.mode,
+      recommendedContracts: plan.recommendedContracts,
+      sourceStatus: plan.sourceStatus,
+      diagnostics: plan.diagnostics,
+    },
+    guidancePlanning: summarizeArtifact(planningArtifact),
+  });
+
+  return {
+    status: 'ok',
+    mode: 'compiled',
+    sessionPath: prepared.sessionPath,
+    paths,
+    guidance: summarizeCompactGuidance(prepared.ego),
+    sourceStatus: plan.sourceStatus,
+    cache: prepared.cache,
+    warnings: prepared.warnings,
+    contracts: summarizeAutoContracts(planningArtifact, candidateArtifact, options),
+    nextStep: 'Use the compact guidance for implementation, then run complete. Use explain --session for the full Decision Trace.',
+  };
+}
+
+export async function getCodeStatus(options) {
+  const paths = resolveRuntimePaths(options.projectRoot, options.pluginRoot);
+  const runtime = await loadRuntime(paths.runtimeEntry);
+  const sourceStatus = runtime.resolveSourceStatus(paths);
+  const lockfileSummary = summarizeLockfile(paths.lockfilePath);
+  return {
+    status: 'ok',
+    paths,
+    sourceStatus,
+    lockfile: lockfileSummary,
+    defaultFlow: {
+      command: 'auto',
+      output: 'compact',
+      trace: 'session-only',
+      firstContracts: ['guidance-planning', 'task-interpretation'],
+    },
+  };
+}
+
+export async function explainCodeSession(options) {
+  const sessionPath = resolve(options.sessionPath);
+  const session = JSON.parse(readFileSync(sessionPath, 'utf-8'));
+  return {
+    status: session.status,
+    sessionPath,
+    taskInput: session.taskInput,
+    warnings: session.warnings ?? [],
+    error: session.error,
+    trace: session.compileOutput?.trace ?? session.compileOutput?.packet?.governance?.trace ?? null,
+    fulfillment: session.fulfillment ?? null,
+    auto: session.auto ?? null,
+    cache: session.compileOutput?.cache ?? null,
+  };
+}
+
 function buildCandidatePath(projectRoot, task) {
   const digest = createHash('sha1')
     .update(JSON.stringify({
@@ -25,6 +155,22 @@ function buildCandidatePath(projectRoot, task) {
     .slice(0, 10);
   const stamp = new Date().toISOString().replace(/[-:.TZ]/g, '').slice(0, 14);
   return join(projectRoot, '.resonant-code', 'context', 'task-candidates', 'code', `${stamp}-${digest}.json`);
+}
+
+function buildGuidancePlanningPath(projectRoot, task) {
+  const digest = createHash('sha1')
+    .update(JSON.stringify({
+      description: task.description,
+      targetFile: task.targetFile ?? '',
+      changedFiles: task.changedFiles,
+      techStack: task.techStack,
+      operation: task.operation ?? '',
+      type: 'guidance-planning',
+    }))
+    .digest('hex')
+    .slice(0, 10);
+  const stamp = new Date().toISOString().replace(/[-:.TZ]/g, '').slice(0, 14);
+  return join(projectRoot, '.resonant-code', 'context', 'guidance-plans', 'code', `${stamp}-${digest}.json`);
 }
 
 function summarizeInterpretationFlow(mode, candidateFile, diagnostics, candidateCount) {
@@ -239,6 +385,17 @@ export async function prepareCodeTask(options) {
       ...(preloadedSources ? { preloadedSources } : {}),
     };
     const output = await runtime.compile(compileInput);
+    let cacheArtifacts = null;
+    if (typeof runtime.persistCompileCache === 'function') {
+      try {
+        cacheArtifacts = runtime.persistCompileCache({
+          projectRoot: paths.projectRoot,
+          output,
+        });
+      } catch (cacheError) {
+        warnings.push(`Runtime cache write failed: ${formatError(cacheError)}`);
+      }
+    }
     const interpretationSummary = summarizeInterpretationFlow(
       interpretationMode,
       options.candidateFile,
@@ -262,6 +419,7 @@ export async function prepareCodeTask(options) {
       fulfillment,
       compileInput,
       compileOutput: output,
+      cacheArtifacts,
       warnings,
     };
     writeSession(sessionPath, session);
@@ -272,6 +430,8 @@ export async function prepareCodeTask(options) {
       packet: output.packet,
       ego: output.ego,
       trace: output.trace,
+      cache: output.cache,
+      cacheArtifacts,
       warnings,
       interpretation: {
         mode: interpretationMode,
@@ -372,9 +532,7 @@ export async function completeCodeTask(options) {
     const adherenceArtifact = loadAdherenceArtifact(options.adherenceFile, runtime, packet);
     const followedDirectiveIds = options.followedDirectiveIds?.length
       ? unique(options.followedDirectiveIds)
-      : packet.governance.semantic_merge.directive_modes
-          .filter((directive) => directive.execution_mode !== 'suppress')
-          .map((directive) => directive.directive_id);
+      : undefined;
     const ignoredDirectiveIds = unique(options.ignoredDirectiveIds ?? []);
     const fulfillment = session.fulfillment
       ? { ...session.fulfillment, adherenceEvaluation: summarizeArtifact(adherenceArtifact) }
@@ -394,7 +552,7 @@ export async function completeCodeTask(options) {
       status: 'updated',
       sessionPath: resolve(options.sessionPath),
       lockfilePath: session.paths.lockfilePath,
-      followedDirectiveIds,
+      followedDirectiveIds: followedDirectiveIds ?? [],
       ignoredDirectiveIds,
       ignoredDirectiveReasons: options.ignoredDirectiveReasons,
       signalConfidence: options.signalConfidence,
@@ -520,6 +678,132 @@ function loadCandidateArtifact(candidateFile, runtime) {
     status: summarizeDiagnosticStatus(result.diagnostics),
     diagnostics: result.diagnostics,
     candidates: result.candidates,
+  };
+}
+
+function loadGuidancePlanningArtifact(planningFile, runtime) {
+  if (!planningFile) {
+    return {
+      ...buildAbsentArtifact('guidance-planning'),
+      proposal: null,
+    };
+  }
+  const path = resolve(planningFile);
+  const payload = JSON.parse(readFileSync(path, 'utf-8'));
+  const result = runtime.validateGuidancePlanningPayload(payload);
+  return {
+    kind: 'guidance-planning',
+    provided: true,
+    path,
+    status: summarizeDiagnosticStatus(result.diagnostics),
+    diagnostics: result.diagnostics,
+    proposal: result.proposal,
+  };
+}
+
+async function prepareAutoSemanticContracts({ runtime, paths, task, candidateArtifact, planningProposal, options }) {
+  const requested = planningProposal?.useful_contracts ?? [];
+  if (!paths.rcclPath || candidateArtifact.candidates.length === 0) return [];
+
+  const contracts = [];
+  const interpretationMode = 'host-agent';
+  const resolvedTask = runtime.resolveTask({
+    task,
+    candidates: candidateArtifact.candidates,
+    interpretationMode,
+  });
+  const compileInput = {
+    builtinRoot: paths.builtinRoot,
+    localAugmentPath: paths.localAugmentPath,
+    rcclPath: paths.rcclPath,
+    lockfilePath: paths.lockfilePath,
+    projectRoot: paths.projectRoot,
+    resolvedTask,
+  };
+
+  if (requested.includes('semantic-candidate') && !options.semanticProposalFile) {
+    const bundle = await runtime.prepareSemanticCandidateContractBundle({
+      compileInput,
+      artifactPath: buildSemanticCandidatePath(paths.projectRoot, task),
+    });
+    contracts.push({
+      kind: 'semantic-candidate',
+      artifact: bundle.candidateArtifact,
+      contract: bundle.contract,
+    });
+  }
+
+  if (requested.includes('semantic-relation') && !options.hostProposalFile) {
+    const bundle = await runtime.prepareSemanticRelationContractBundle({
+      compileInput,
+      artifactPath: buildRelationProposalPath(paths.projectRoot, task),
+    });
+    contracts.push({
+      kind: 'semantic-relation',
+      artifact: bundle.proposalArtifact,
+      contract: bundle.contract,
+    });
+  }
+
+  return contracts;
+}
+
+function buildContractsRequiredResult({ paths, plan, task, planningArtifact, candidateArtifact, contracts }) {
+  return {
+    status: 'contracts-required',
+    mode: 'awaiting-host-artifacts',
+    paths,
+    task,
+    sourceStatus: plan.sourceStatus,
+    contracts: contracts.map((item) => ({
+      kind: item.kind,
+      artifact: item.artifact,
+      contract: item.contract,
+    })),
+    fulfillment: {
+      guidancePlanning: summarizeArtifact(planningArtifact),
+      taskInterpretation: summarizeArtifact(candidateArtifact),
+    },
+    diagnostics: plan.diagnostics,
+    nextStep: 'Fulfill the listed Runtime contract artifacts with host-agent output, then re-run auto with the returned artifact paths.',
+  };
+}
+
+function summarizeCompactGuidance(ego) {
+  if (!ego) return null;
+  return {
+    taskIntent: ego.taskIntent,
+    must_follow: ego.guidance.must_follow.map((item) => ({
+      id: item.id,
+      statement: item.statement,
+      prescription: item.prescription,
+      execution_mode: item.execution_mode,
+    })),
+    avoid: ego.guidance.avoid.map((item) => ({
+      statement: item.statement,
+      trigger: item.trigger,
+    })),
+    context_tensions: ego.guidance.context_tensions.map((item) => ({
+      directive_id: item.directive_id,
+      execution_mode: item.execution_mode,
+      conflict: item.conflict,
+      resolution: item.resolution,
+      review_priority: item.review_priority,
+    })),
+    ambientCount: ego.guidance.ambient.length,
+  };
+}
+
+function summarizeAutoContracts(planningArtifact, candidateArtifact, options) {
+  return {
+    guidancePlanning: summarizeArtifact(planningArtifact),
+    taskInterpretation: summarizeArtifact(candidateArtifact),
+    semanticCandidate: options.semanticProposalFile
+      ? { kind: 'semantic-candidate', provided: true, path: resolve(options.semanticProposalFile), status: 'provided' }
+      : { kind: 'semantic-candidate', provided: false, path: null, status: 'absent' },
+    semanticRelation: options.hostProposalFile
+      ? { kind: 'semantic-relation', provided: true, path: resolve(options.hostProposalFile), status: 'provided' }
+      : { kind: 'semantic-relation', provided: false, path: null, status: 'absent' },
   };
 }
 
@@ -724,6 +1008,40 @@ function buildAdherenceArtifactPath(projectRoot, task) {
 function writeSession(sessionPath, session) {
   mkdirSync(dirname(sessionPath), { recursive: true });
   writeFileSync(sessionPath, JSON.stringify(session, null, 2), 'utf-8');
+}
+
+function annotateAutoSession(sessionPath, auto) {
+  try {
+    const absolute = resolve(sessionPath);
+    const session = JSON.parse(readFileSync(absolute, 'utf-8'));
+    writeSession(absolute, {
+      ...session,
+      auto,
+    });
+  } catch {
+    // The compact auto result still carries planning diagnostics if session annotation fails.
+  }
+}
+
+function summarizeLockfile(lockfilePath) {
+  if (!existsSync(lockfilePath)) {
+    return {
+      status: 'absent',
+      path: lockfilePath,
+    };
+  }
+  const raw = readFileSync(lockfilePath, 'utf-8');
+  const completionSourceMatch = raw.match(/completion_source:\s*"?([^"\s]+)"?/);
+  const explicitSignals = (raw.match(/signal_confidence:\s*(explicit|review-confirmed|user-corrected)/g) ?? []).length;
+  const implicitSignals = (raw.match(/signal_confidence:\s*implicit/g) ?? []).length;
+  return {
+    status: 'present',
+    path: lockfilePath,
+    bytes: raw.length,
+    lastCompletionSource: completionSourceMatch?.[1] ?? null,
+    explicitSignals,
+    implicitSignals,
+  };
 }
 
 function unique(values) {
