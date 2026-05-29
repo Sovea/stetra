@@ -1,6 +1,7 @@
 export { compile, resolveTask } from './compile.ts';
 export { evaluateGuidance } from './feedback.ts';
 export { persistCompileCache } from './cache.ts';
+export { resolveContractPolicy } from './contract-policy.ts';
 export { planGuidance, resolveSourceStatus } from './plan-guidance.ts';
 export {
   prepareGuidancePlanningContract,
@@ -133,6 +134,10 @@ export type {
   CompileTaskInput,
   CompatibilityRequirement,
   CompleteCodeTaskResult,
+  ContractPolicyDecision,
+  ContractPolicyKind,
+  ContractPolicySkippedContract,
+  ContractPolicySkippedReason,
   ContextProfile,
   DecisionTrace,
   EffectiveGuidanceObject,

@@ -1,6 +1,14 @@
-export { prepareRccl, prepareRcclWorkflowStage } from './prepare.ts';
+export { prepareIncrementalRccl, prepareRccl, prepareRcclWorkflowStage } from './prepare.ts';
 export { parseRccl, parseRcclCandidates, normalizeObservation, normalizeDocument } from './io/parse-rccl.ts';
 export { validateRcclCandidatePayload } from './validate-candidates.ts';
+export { validateRcclObservationRefreshPayload } from './validate-refresh.ts';
+export type {
+  RcclRefreshDiagnosticStatus,
+  RcclRefreshDiagnosticReason,
+  RcclRefreshDiagnosticEntry,
+  RcclRefreshPayloadDiagnostics,
+  ValidateRcclRefreshResult,
+} from './validate-refresh.ts';
 export type {
   RcclDiagnosticStatus,
   RcclDiagnosticReason,
@@ -49,12 +57,19 @@ export type {
   CalibrationSlice,
   CalibrationWindow,
   PrepareRcclResult,
+  PrepareIncrementalRcclOptions,
+  PrepareIncrementalRcclResult,
   PrepareRcclWorkflowStageResult,
   RcclAIContractArtifact,
   RcclAIContractEnvelope,
   RcclAIContractKind,
   RcclAIContractSchemaVersion,
   RcclAIContractVersion,
+  RcclIncrementalMode,
+  RcclObservationRefreshDocument,
+  RcclObservationRefreshRetireEntry,
+  RcclRefreshExistingObservationSummary,
+  RcclRefreshPlanMode,
   SamplingPolicy,
   VerificationPolicy,
 } from './types.ts';

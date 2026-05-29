@@ -93,10 +93,11 @@ What is implemented today:
 
 - `init` prepares a narrow strong-signal layer-selection prompt, lets the host choose only evidence-backed repo-specific playbook layers, then deterministically writes `.resonant-code/playbook/local-augment.yaml` and updates `.gitignore` for generated runtime cache artifacts.
 - `calibrate-repo-context` prepares repository slices, generates RCCL candidates, verifies evidence statically, and writes authoritative output to `.resonant-code/rccl.yaml`.
+- `calibrate-repo-context` also supports an incremental `prepare-incremental` path that emits RCCL-owned `rccl-observation-refresh` contracts and writes scoped cache artifacts under `.resonant-code/context/cache/rccl/`.
 - `code` is a thin runtime consumer with a default `auto` flow. Runtime plans required host-agent contracts, the host fulfills only those structured artifacts, and Runtime validates/adjudicates before compiling compact task guidance.
 - The staged `prepare-interpretation` -> `prepare` -> `complete` flow remains available as an advanced/debug path.
 - The runtime exports `compile`, `resolveTask`, and `evaluateGuidance` and writes lockfile feedback to `.resonant-code/playbook.lock.yaml`.
-- The runtime also exports `planGuidance` and Runtime-owned guidance-planning contract helpers for low-friction contract orchestration.
+- The runtime also exports `planGuidance`, `resolveContractPolicy`, and Runtime-owned guidance-planning contract helpers for low-friction contract orchestration.
 - Interpretation supports both `deterministic-only` and `assistive-ai` modes.
 - Task candidates and runtime sessions are written under `.resonant-code/context/`.
 - Runtime compile cache artifacts are written under `.resonant-code/context/cache/runtime/`.

@@ -69,6 +69,19 @@ async function runPrepareStage(options = {}) {
   process.exit(0);
 }
 
+async function runPrepareIncremental(options = {}) {
+  const rccl = await loadRccl();
+  const result = rccl.prepareIncrementalRccl(projectRoot, {
+    scope: options.scope,
+    targetFiles: options.targetFiles,
+    changedFiles: options.changedFiles,
+    mode: options.mode,
+    debugArtifacts: shouldEmitDebugArtifacts(options.debugArtifacts),
+  });
+  process.stdout.write(JSON.stringify(result, null, 2) + '\n');
+  process.exit(0);
+}
+
 async function runCommit(options = {}) {
   if (!options.input) {
     process.stderr.write('? Missing --input argument for commit phase.\n');
@@ -185,6 +198,15 @@ function parseArgs(argsArray) {
     if (argsArray[i] === '--scope') opts.scope = argsArray[++i];
     else if (argsArray[i] === '--input') opts.input = argsArray[++i];
     else if (argsArray[i] === '--stage') opts.stage = argsArray[++i];
+    else if (argsArray[i] === '--mode') opts.mode = argsArray[++i];
+    else if (argsArray[i] === '--target-file') {
+      opts.targetFiles ??= [];
+      opts.targetFiles.push(argsArray[++i]);
+    }
+    else if (argsArray[i] === '--changed-file') {
+      opts.changedFiles ??= [];
+      opts.changedFiles.push(argsArray[++i]);
+    }
     else if (argsArray[i] === '--discovery') opts.discovery = argsArray[++i];
     else if (argsArray[i] === '--critique') opts.critique = argsArray[++i];
     else if (argsArray[i] === '--debug-artifacts') {
@@ -200,8 +222,9 @@ function parseArgs(argsArray) {
 }
 
 function printUsage() {
-  process.stderr.write('Usage: calibrate-repo-context.mjs <prepare|prepare-stage|commit> <project-root> [opts...]\n');
+  process.stderr.write('Usage: calibrate-repo-context.mjs <prepare|prepare-incremental|prepare-stage|commit> <project-root> [opts...]\n');
   process.stderr.write('  prepare <project-root> [--scope <glob>] [--debug-artifacts[=<bool>]]\n');
+  process.stderr.write('  prepare-incremental <project-root> [--target-file <path>] [--changed-file <path>] [--scope <glob>] [--mode <task-scoped|changed-files|full>] [--debug-artifacts[=<bool>]]\n');
   process.stderr.write('  prepare-stage <project-root> --stage discover [--scope <glob>] [--debug-artifacts[=<bool>]]\n');
   process.stderr.write('  prepare-stage <project-root> --stage critique --discovery <path> [--scope <glob>] [--debug-artifacts[=<bool>]]\n');
   process.stderr.write('  prepare-stage <project-root> --stage synthesize --discovery <path> --critique <path> [--scope <glob>] [--debug-artifacts[=<bool>]]\n');
@@ -211,6 +234,11 @@ function printUsage() {
 const opts = parseArgs(args);
 if (command === 'prepare') {
   runPrepare(opts).catch((error) => {
+    process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
+    process.exit(1);
+  });
+} else if (command === 'prepare-incremental') {
+  runPrepareIncremental(opts).catch((error) => {
     process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
     process.exit(1);
   });

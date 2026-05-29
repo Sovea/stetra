@@ -271,6 +271,7 @@ export interface GuidancePlanProvidedContracts {
   taskInterpretation?: boolean;
   semanticCandidate?: boolean;
   semanticRelation?: boolean;
+  adherenceEvaluation?: boolean;
 }
 
 export interface GuidancePlanArtifactPaths {
@@ -291,6 +292,26 @@ export interface RuntimeContractRequest {
   contract: AIContractEnvelope;
 }
 
+export type ContractPolicyKind = 'guidance-planning' | GuidancePlanningContractName;
+export type ContractPolicySkippedReason =
+  | 'already-provided'
+  | 'not-proposed-by-host'
+  | 'missing-rccl'
+  | 'deferred-until-after-compile'
+  | 'not-required-for-current-policy';
+
+export interface ContractPolicySkippedContract {
+  kind: ContractPolicyKind;
+  reason_id: ContractPolicySkippedReason;
+}
+
+export interface ContractPolicyDecision {
+  required: ContractPolicyKind[];
+  optional: ContractPolicyKind[];
+  skipped: ContractPolicySkippedContract[];
+  escalation: 'none' | 'semantic-candidate' | 'semantic-relation' | 'adherence-required';
+}
+
 export interface GuidancePlan {
   mode: 'ready' | 'contracts-required' | 'degraded';
   requiredContracts: RuntimeContractRequest[];
@@ -300,6 +321,7 @@ export interface GuidancePlan {
     stdout: 'compact';
     trace: 'session-only';
   };
+  policy: ContractPolicyDecision;
   diagnostics: {
     planning: 'absent' | 'accepted' | 'low-confidence' | 'unused';
     notes: string[];

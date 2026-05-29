@@ -24,6 +24,23 @@ The agent performs semantic judgment in the staged artifacts. The script owns sc
 
 ## Instructions
 
+## Default incremental workflow
+
+For task-time or small follow-up calibration, prefer the incremental prepare path:
+
+```sh
+node <this-skill-directory>/scripts/calibrate-repo-context.mjs prepare-incremental <project-root> [--target-file <path>] [--changed-file <path>] [--scope <glob>] [--mode <task-scoped|changed-files|full>]
+```
+
+This writes RCCL-owned cache artifacts under `.resonant-code/context/cache/rccl/`
+and may return an `rccl-observation-refresh` contract. Fulfill that contract with
+a structured YAML refresh proposal only when Runtime/RCCL requests it. The host
+agent may propose keep/revise/retire/new observations, but RCCL remains the
+deterministic boundary for schema validation, evidence verification,
+consolidation, lifecycle handling, and final writes.
+
+Use the full staged workflow below when doing broad repository calibration.
+
 ### Step 1 - Prepare discovery stage
 
 ```sh

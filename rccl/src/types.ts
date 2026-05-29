@@ -324,7 +324,7 @@ export interface RcclCalibrationStats {
 }
 
 export type RcclAIContractVersion = 'ai-contract/v1';
-export type RcclAIContractKind = 'rccl-observation-generation';
+export type RcclAIContractKind = 'rccl-observation-generation' | 'rccl-observation-refresh';
 export type RcclAIContractSchemaVersion = '1.0';
 
 export interface RcclAIContractArtifact {
@@ -346,6 +346,71 @@ export interface RcclAIContractEnvelope {
     deterministic: true;
   };
   cacheKeyMaterial?: unknown;
+}
+
+export type RcclIncrementalMode = 'task-scoped' | 'changed-files' | 'full';
+export type RcclRefreshPlanMode = 'cache-hit' | 'contracts-required' | 'verify-only' | 'full-refresh-recommended';
+
+export interface PrepareIncrementalRcclOptions {
+  scope?: string;
+  targetFiles?: string[];
+  changedFiles?: string[];
+  mode?: RcclIncrementalMode;
+  debugArtifacts?: boolean;
+}
+
+export interface RcclRefreshExistingObservationSummary {
+  id: string;
+  semantic_key: string;
+  category: RcclCategory;
+  scope: string;
+  pattern: string;
+  confidence: number;
+  adherence_quality: AdherenceQuality;
+  verification: RcclVerification;
+  lifecycle?: RcclLifecycle;
+  evidence_refs: string[];
+}
+
+export interface PrepareIncrementalRcclResult {
+  mode: RcclRefreshPlanMode;
+  contract?: RcclAIContractEnvelope;
+  refreshArtifact?: RcclAIContractArtifact;
+  metadata: {
+    scope: string;
+    requested_mode: RcclIncrementalMode;
+    focus_files: string[];
+    stats: RcclCalibrationStats;
+    existing_observation_count: number;
+  };
+  affectedObservations: string[];
+  staleObservations: string[];
+  cacheArtifacts: {
+    repoIndexPath: string;
+    slicePlanPath: string;
+  };
+  debugArtifacts: {
+    enabled: boolean;
+    promptPath?: string;
+    reportPath?: string;
+    slicePlanPath?: string;
+  };
+}
+
+export interface RcclObservationRefreshRetireEntry {
+  observation_id: string;
+  reason_id: 'file-missing' | 'snippet-drift' | 'scope-drift' | 'superseded' | 'no-longer-material' | 'other';
+  confidence: number;
+}
+
+export interface RcclObservationRefreshDocument {
+  version: RcclSchemaVersion;
+  generated_at: string | null;
+  scope: string;
+  keep: string[];
+  revise: CandidateObservation[];
+  retire: RcclObservationRefreshRetireEntry[];
+  new_observations: CandidateObservation[];
 }
 
 export interface PrepareRcclResult {

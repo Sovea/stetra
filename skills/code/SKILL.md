@@ -54,11 +54,16 @@ If Runtime later requests `semantic-candidate` or `semantic-relation`, fulfill
 those contract artifacts and re-run `auto` with `--semantic-proposal-file` or
 `--host-proposal-file`.
 
+If Runtime policy requires post-compile adherence, `auto` returns
+`status: "post-compile-contracts-required"` with an `adherence-evaluation`
+contract. Fulfill that artifact after implementation and pass it to `complete`.
+
 Important:
 - Host-agent semantic judgment enters only through Runtime-owned contracts.
 - Do not replace contract fulfillment with ad hoc keyword heuristics or manual playbook parsing.
 - Deterministic task parsing is fallback context and structural normalization, not the primary semantic signal when host contracts are available.
 - When `auto` returns `status: "ok"`, use the compact `guidance` object for implementation. Use `explain --session <path>` only when the full Decision Trace is needed.
+- Contract escalation is decided by Runtime contract policy from accepted host proposals and structural source state.
 
 Useful supporting commands:
 

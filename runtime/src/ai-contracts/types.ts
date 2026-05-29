@@ -2,7 +2,7 @@ import type { CompileInput, CompileTaskInput, ResolvedTaskOutput } from '../type
 import type { HostProposalIR } from '../ir/types.ts';
 
 export type AIContractVersion = 'ai-contract/v1';
-export type AIContractKind = 'guidance-planning' | 'task-interpretation' | 'semantic-relation' | 'semantic-candidate' | 'rccl-observation-generation' | 'adherence-evaluation';
+export type AIContractKind = 'guidance-planning' | 'task-interpretation' | 'semantic-relation' | 'semantic-candidate' | 'rccl-observation-generation' | 'rccl-observation-refresh' | 'adherence-evaluation';
 export type AIContractSchemaVersion = '1.0';
 
 export interface AIContractArtifact {

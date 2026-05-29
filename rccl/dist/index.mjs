@@ -1,11 +1,12 @@
-import { DEFAULT_SAMPLING_POLICY, DEFAULT_VERIFICATION_POLICY } from "./policies.mjs";
-import { prepareRccl, prepareRcclWorkflowStage } from "./prepare.mjs";
 import { normalizeDocument, normalizeObservation, parseRccl, parseRcclCandidates } from "./io/parse-rccl.mjs";
+import { DEFAULT_SAMPLING_POLICY, DEFAULT_VERIFICATION_POLICY } from "./policies.mjs";
+import { prepareIncrementalRccl, prepareRccl, prepareRcclWorkflowStage } from "./prepare.mjs";
 import { validateRcclCandidatePayload } from "./validate-candidates.mjs";
+import { validateRcclObservationRefreshPayload } from "./validate-refresh.mjs";
 import { parseRcclCritiqueArtifact, parseRcclDiscoveryArtifact } from "./io/parse-rccl-workflow.mjs";
 import { emitRccl, serializeRccl, writeCandidateArtifact, writeConsolidationArtifact } from "./io/emit-rccl.mjs";
 import { deriveScope, deriveSupport } from "./consolidate/derive-support.mjs";
 import { consolidateObservations, materializeRcclObservations } from "./consolidate/consolidate-observations.mjs";
 import { verifyEvidence, verifyEvidenceForDocument, verifyObservationEvidence } from "./verify/verify-evidence.mjs";
 import { verifyInductionForDocument, verifyObservationInduction } from "./verify/verify-induction.mjs";
-export { DEFAULT_SAMPLING_POLICY, DEFAULT_VERIFICATION_POLICY, consolidateObservations, deriveScope, deriveSupport, emitRccl, materializeRcclObservations, normalizeDocument, normalizeObservation, parseRccl, parseRcclCandidates, parseRcclCritiqueArtifact, parseRcclDiscoveryArtifact, prepareRccl, prepareRcclWorkflowStage, serializeRccl, validateRcclCandidatePayload, verifyEvidence, verifyEvidenceForDocument, verifyInductionForDocument, verifyObservationEvidence, verifyObservationInduction, writeCandidateArtifact, writeConsolidationArtifact };
+export { DEFAULT_SAMPLING_POLICY, DEFAULT_VERIFICATION_POLICY, consolidateObservations, deriveScope, deriveSupport, emitRccl, materializeRcclObservations, normalizeDocument, normalizeObservation, parseRccl, parseRcclCandidates, parseRcclCritiqueArtifact, parseRcclDiscoveryArtifact, prepareIncrementalRccl, prepareRccl, prepareRcclWorkflowStage, serializeRccl, validateRcclCandidatePayload, validateRcclObservationRefreshPayload, verifyEvidence, verifyEvidenceForDocument, verifyInductionForDocument, verifyObservationEvidence, verifyObservationInduction, writeCandidateArtifact, writeConsolidationArtifact };

@@ -55,7 +55,7 @@ export async function autoCodeTask(options) {
     paths,
     task,
     candidateArtifact,
-    planningProposal: planningArtifact.proposal,
+    policy: plan.policy,
     options,
   });
   if (semanticContracts.length > 0) {
@@ -87,13 +87,15 @@ export async function autoCodeTask(options) {
       mode: plan.mode,
       recommendedContracts: plan.recommendedContracts,
       sourceStatus: plan.sourceStatus,
+      policy: plan.policy,
       diagnostics: plan.diagnostics,
     },
     guidancePlanning: summarizeArtifact(planningArtifact),
   });
+  const postCompileContracts = preparePostCompileContracts(runtime, paths, task, prepared, plan.policy);
 
   return {
-    status: 'ok',
+    status: postCompileContracts.length ? 'post-compile-contracts-required' : 'ok',
     mode: 'compiled',
     sessionPath: prepared.sessionPath,
     paths,
@@ -102,6 +104,8 @@ export async function autoCodeTask(options) {
     cache: prepared.cache,
     warnings: prepared.warnings,
     contracts: summarizeAutoContracts(planningArtifact, candidateArtifact, options),
+    policy: plan.policy,
+    postCompileContracts,
     nextStep: 'Use the compact guidance for implementation, then run complete. Use explain --session for the full Decision Trace.',
   };
 }
@@ -701,8 +705,8 @@ function loadGuidancePlanningArtifact(planningFile, runtime) {
   };
 }
 
-async function prepareAutoSemanticContracts({ runtime, paths, task, candidateArtifact, planningProposal, options }) {
-  const requested = planningProposal?.useful_contracts ?? [];
+async function prepareAutoSemanticContracts({ runtime, paths, task, candidateArtifact, policy, options }) {
+  const requested = policy?.required ?? [];
   if (!paths.rcclPath || candidateArtifact.candidates.length === 0) return [];
 
   const contracts = [];
@@ -748,6 +752,26 @@ async function prepareAutoSemanticContracts({ runtime, paths, task, candidateArt
   return contracts;
 }
 
+function preparePostCompileContracts(runtime, paths, task, prepared, policy) {
+  if (!policy?.required?.includes('adherence-evaluation') || !prepared.ego) return [];
+  const directives = prepared.ego.guidance.must_follow.map((directive) => ({
+    id: directive.id,
+    description: directive.statement,
+    prescription: directive.prescription,
+    execution_mode: directive.execution_mode,
+  }));
+  const contractOutput = runtime.prepareAdherenceEvaluationContract({
+    directives,
+    taskDescription: task.description,
+    artifactPath: buildAdherenceArtifactPath(paths.projectRoot, task),
+  });
+  return [{
+    kind: 'adherence-evaluation',
+    artifact: contractOutput.evaluationArtifact,
+    contract: contractOutput.contract,
+  }];
+}
+
 function buildContractsRequiredResult({ paths, plan, task, planningArtifact, candidateArtifact, contracts }) {
   return {
     status: 'contracts-required',
@@ -764,6 +788,7 @@ function buildContractsRequiredResult({ paths, plan, task, planningArtifact, can
       guidancePlanning: summarizeArtifact(planningArtifact),
       taskInterpretation: summarizeArtifact(candidateArtifact),
     },
+    policy: plan.policy,
     diagnostics: plan.diagnostics,
     nextStep: 'Fulfill the listed Runtime contract artifacts with host-agent output, then re-run auto with the returned artifact paths.',
   };
