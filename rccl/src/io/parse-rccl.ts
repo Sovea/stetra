@@ -12,16 +12,20 @@ import type {
   RcclVerification,
 } from '../types.ts';
 import { parseYaml } from '../utils/yaml.ts';
+import {
+  RCCL_ADHERENCE_QUALITIES,
+  RCCL_CATEGORIES,
+  RCCL_OBSERVATION_ID_PATTERN,
+  RCCL_SCOPE_BASES,
+  validateCandidateObservationRecord,
+  validateEvidenceSnippet,
+} from '../validate-observation.ts';
 
 const RCCL_VERSION: RcclSchemaVersion = '1.0';
-const ID_PATTERN = /^obs-[a-z0-9-]+$/;
 
 function isRcclVersion(value: unknown): boolean {
   return value === RCCL_VERSION || value === 1;
 }
-const VALID_CATEGORIES = new Set(['style', 'architecture', 'pattern', 'constraint', 'legacy', 'anti-pattern', 'migration']);
-const VALID_ADHERENCE = new Set(['good', 'inconsistent', 'poor']);
-const VALID_SCOPE_BASES = new Set(['single-file', 'directory-cluster', 'module-cluster', 'cross-root']);
 const REQUIRED_VERIFICATION_FIELDS = ['evidence_status', 'evidence_verified_count', 'evidence_confidence', 'induction_status', 'induction_confidence', 'checked_at', 'disposition'];
 
 export function parseRccl(yamlText: string, options: { allowVerifiedFields?: boolean } = {}): ParsedRcclResult {
@@ -63,9 +67,10 @@ function validateFinalRcclDocument(doc: Record<string, unknown>, allowVerifiedFi
   const errors = validateDocumentEnvelope(doc);
   if (errors.length > 0) return errors;
 
+  const observations = doc.observations as unknown[];
   const ids = new Set<string>();
-  for (let i = 0; i < doc.observations.length; i += 1) {
-    const obs = doc.observations[i] as Record<string, unknown>;
+  for (let i = 0; i < observations.length; i += 1) {
+    const obs = observations[i] as Record<string, unknown>;
     const rawId = String(obs.id ?? '');
     if (rawId) {
       if (ids.has(rawId)) errors.push(`Duplicate observation id: "${rawId}"`);
@@ -80,9 +85,10 @@ function validateCandidateRcclDocument(doc: Record<string, unknown>): string[] {
   const errors = validateDocumentEnvelope(doc);
   if (errors.length > 0) return errors;
 
+  const observations = doc.observations as unknown[];
   const ids = new Set<string>();
-  for (let i = 0; i < doc.observations.length; i += 1) {
-    const obs = doc.observations[i] as Record<string, unknown>;
+  for (let i = 0; i < observations.length; i += 1) {
+    const obs = observations[i] as Record<string, unknown>;
     const rawId = String(obs.provisional_id ?? '');
     if (rawId) {
       if (ids.has(rawId)) errors.push(`Duplicate candidate observation id: "${rawId}"`);
@@ -130,33 +136,7 @@ function validateFinalObservation(obs: Record<string, unknown>, index: number, a
 }
 
 function validateCandidateObservation(obs: Record<string, unknown>, index: number): string[] {
-  const errors = validateObservationCore(obs, index, 'provisional_id', 'scope_hint');
-  const prefix = `observations[${index}]`;
-
-  if ('id' in obs) errors.push(`${prefix}: candidate observations must use 'provisional_id', not 'id'`);
-  if ('scope' in obs) errors.push(`${prefix}: candidate observations must use 'scope_hint', not 'scope'`);
-  if ('support' in obs) errors.push(`${prefix}: candidate observations must use 'support_hint', not 'support'`);
-  if ('verification' in obs) errors.push(`${prefix}: candidate observations must not include 'verification'`);
-  if ('lifecycle' in obs) errors.push(`${prefix}: candidate observations must not include 'lifecycle'`);
-
-  if (!Array.isArray(obs.source_slice_ids)) {
-    errors.push(`${prefix}: missing or invalid 'source_slice_ids'`);
-  }
-
-  if (obs.support_hint != null) {
-    const supportHint = obs.support_hint as Record<string, unknown>;
-    if (typeof supportHint !== 'object' || Array.isArray(supportHint)) {
-      errors.push(`${prefix}.support_hint: must be an object when present`);
-    } else {
-      if (supportHint.file_count != null && typeof supportHint.file_count !== 'number') errors.push(`${prefix}.support_hint.file_count: must be a number`);
-      if (supportHint.cluster_count != null && typeof supportHint.cluster_count !== 'number') errors.push(`${prefix}.support_hint.cluster_count: must be a number`);
-      if (supportHint.scope_basis != null && !VALID_SCOPE_BASES.has(String(supportHint.scope_basis))) {
-        errors.push(`${prefix}.support_hint.scope_basis: invalid value`);
-      }
-    }
-  }
-
-  return errors;
+  return validateCandidateObservationRecord(obs, `observations[${index}]`);
 }
 
 function validateObservationCore(obs: Record<string, unknown>, index: number, idField: 'id' | 'provisional_id', scopeField: 'scope' | 'scope_hint'): string[] {
@@ -166,16 +146,16 @@ function validateObservationCore(obs: Record<string, unknown>, index: number, id
   const scope = obs[scopeField];
 
   if (!id || typeof id !== 'string') errors.push(`${prefix}: missing or invalid '${idField}'`);
-  else if (!ID_PATTERN.test(String(id))) errors.push(`${prefix}: '${idField}' "${id}" does not match /^obs-[a-z0-9-]+$/`);
+  else if (!RCCL_OBSERVATION_ID_PATTERN.test(String(id))) errors.push(`${prefix}: '${idField}' "${id}" does not match /^obs-[a-z0-9-]+$/`);
 
-  if (!VALID_CATEGORIES.has(String(obs.category))) errors.push(`${prefix}: 'category' is invalid`);
+  if (!RCCL_CATEGORIES.has(String(obs.category))) errors.push(`${prefix}: 'category' is invalid`);
   if (!obs.semantic_key || typeof obs.semantic_key !== 'string') errors.push(`${prefix}: missing or invalid 'semantic_key'`);
   if (!scope || typeof scope !== 'string') errors.push(`${prefix}: missing or invalid '${scopeField}'`);
   if (!obs.pattern || typeof obs.pattern !== 'string') errors.push(`${prefix}: missing or invalid 'pattern'`);
   if (typeof obs.confidence !== 'number' || Number.isNaN(obs.confidence) || obs.confidence < 0 || obs.confidence > 1) {
     errors.push(`${prefix}: 'confidence' must be a number between 0 and 1, got ${obs.confidence}`);
   }
-  if (!VALID_ADHERENCE.has(String(obs.adherence_quality))) errors.push(`${prefix}: 'adherence_quality' is invalid`);
+  if (!RCCL_ADHERENCE_QUALITIES.has(String(obs.adherence_quality))) errors.push(`${prefix}: 'adherence_quality' is invalid`);
 
   if (!Array.isArray(obs.evidence) || obs.evidence.length === 0) {
     errors.push(`${prefix}: 'evidence' must be a non-empty array`);
@@ -200,7 +180,7 @@ function validateSupport(support: Record<string, unknown>, prefix: string): stri
   if (!Array.isArray(support.source_slices)) errors.push(`${prefix}.source_slices: must be an array`);
   if (typeof support.file_count !== 'number') errors.push(`${prefix}.file_count: must be a number`);
   if (typeof support.cluster_count !== 'number') errors.push(`${prefix}.cluster_count: must be a number`);
-  if (!VALID_SCOPE_BASES.has(String(support.scope_basis))) errors.push(`${prefix}.scope_basis: invalid value`);
+  if (!RCCL_SCOPE_BASES.has(String(support.scope_basis))) errors.push(`${prefix}.scope_basis: invalid value`);
   return errors;
 }
 
@@ -234,35 +214,14 @@ function validateLifecycle(lifecycle: Record<string, unknown> | undefined, prefi
       errors.push(`${prefix}.lifecycle.supersedes: must be an array`);
     } else {
       for (const id of lifecycle.supersedes) {
-        if (typeof id !== 'string' || !ID_PATTERN.test(id)) errors.push(`${prefix}.lifecycle.supersedes: contains invalid observation id`);
+        if (typeof id !== 'string' || !RCCL_OBSERVATION_ID_PATTERN.test(id)) errors.push(`${prefix}.lifecycle.supersedes: contains invalid observation id`);
       }
     }
   }
-  if (lifecycle.superseded_by != null && (typeof lifecycle.superseded_by !== 'string' || !ID_PATTERN.test(lifecycle.superseded_by))) {
+  if (lifecycle.superseded_by != null && (typeof lifecycle.superseded_by !== 'string' || !RCCL_OBSERVATION_ID_PATTERN.test(lifecycle.superseded_by))) {
     errors.push(`${prefix}.lifecycle.superseded_by: must be a valid observation id`);
   }
   return errors;
-}
-
-function validateEvidenceSnippet(snippet: unknown, prefix: string, index: number): string[] {
-  if (typeof snippet !== 'string') return [];
-  const normalized = snippet.replace(/\r\n/g, '\n').trim();
-  if (!normalized) return [`${prefix}.evidence[${index}]: snippet must not be empty`];
-
-  const lines = normalized.split('\n').map((line) => line.trim()).filter(Boolean);
-  const tokenMatches = normalized.match(/[A-Za-z_][A-Za-z0-9_]*|\d+|==|!=|<=|>=|=>|&&|\|\||[()[\]{}.,;:+\-*/%<>!=?]/g) ?? [];
-  const identifierCount = tokenMatches.filter((token) => /^[A-Za-z_][A-Za-z0-9_]*$/.test(token)).length;
-  const punctuationCount = tokenMatches.length - identifierCount;
-  const hasDistinctiveStructure = /[{}();=>]|\b(import|export|return|const|let|var|function|class|interface|type|if|for|while|switch|case|await|async)\b/.test(normalized);
-
-  if (lines.length >= 2 || hasDistinctiveStructure) return [];
-  if (tokenMatches.length < 4) {
-    return [`${prefix}.evidence[${index}]: snippet is too short to verify reliably; include at least a distinctive statement or 2+ lines of code`];
-  }
-  if (identifierCount <= 2 && punctuationCount === 0) {
-    return [`${prefix}.evidence[${index}]: snippet looks like an identifier or label, not a verifiable code fragment`];
-  }
-  return [];
 }
 
 function normalizeCandidateDocument(input: Record<string, unknown>): CandidateRcclDocument {

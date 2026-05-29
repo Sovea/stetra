@@ -1,4 +1,5 @@
 import { parseYaml } from "./utils/yaml.mjs";
+import { RCCL_SCOPE_BASES, validateCandidateObservationRecord, validateCandidateObservationShape } from "./validate-observation.mjs";
 //#region src/validate-refresh.ts
 const MIN_CONFIDENCE = .3;
 const RETIRE_REASON_IDS = new Set([
@@ -9,7 +10,7 @@ const RETIRE_REASON_IDS = new Set([
 	"no-longer-material",
 	"other"
 ]);
-function validateRcclObservationRefreshPayload(yamlText, allowedObservationIds = []) {
+function validateRcclObservationRefreshPayload(yamlText, validationOptions = {}) {
 	let raw;
 	try {
 		raw = parseYaml(yamlText);
@@ -17,21 +18,41 @@ function validateRcclObservationRefreshPayload(yamlText, allowedObservationIds =
 		return rejectedDocument(`YAML parse failed: ${error instanceof Error ? error.message : String(error)}`);
 	}
 	if (!isRecord(raw)) return rejectedDocument("Refresh payload must be a YAML object.");
-	const allowedIds = new Set(allowedObservationIds);
+	const options = isStringArray(validationOptions) ? validationOptions.length > 0 ? { allowedObservationIds: validationOptions } : {} : validationOptions;
+	const enforceAllowedIds = options.allowedObservationIds !== void 0;
+	const enforceActiveIds = options.activeObservationIds !== void 0 || enforceAllowedIds;
+	const allowedIds = new Set(options.allowedObservationIds ?? []);
+	const activeIds = new Set(options.activeObservationIds ?? options.allowedObservationIds ?? []);
 	const entries = [];
 	const version = raw.version === "1.0" || raw.version === 1 ? "1.0" : null;
 	const scope = typeof raw.scope === "string" ? raw.scope : null;
-	const keep = normalizeStringList(raw.keep);
-	const revise = normalizeCandidateList(raw.revise);
-	const retire = normalizeRetireList(raw.retire);
-	const newObservations = normalizeCandidateList(raw.new_observations);
+	const keep = normalizeKeepList(raw.keep, hasOwn(raw, "keep"));
+	const revise = normalizeCandidateList(raw.revise, "revise", hasOwn(raw, "revise"));
+	const retire = normalizeRetireList(raw.retire, hasOwn(raw, "retire"));
+	const newObservations = normalizeCandidateList(raw.new_observations, "new_observations", hasOwn(raw, "new_observations"));
+	const keepIds = keep.map((entry) => entry.id).filter(Boolean);
+	const reviseObservations = revise.map((entry) => entry.observation);
+	const retireEntries = retire.map((entry) => entry.entry);
+	const newObservationList = newObservations.map((entry) => entry.observation);
+	const occurrences = buildIdOccurrences(keepIds, reviseObservations, retireEntries, newObservationList);
 	if (!version) entries.push(rejected("document.version", "unsupported-value", "version must be \"1.0\"."));
 	if (!scope) entries.push(rejected("document.scope", "missing-required-field", "scope is required."));
-	for (const id of keep) if (allowedIds.size > 0 && !allowedIds.has(id)) entries.push(rejected(`keep.${id}`, "invalid-id", `Observation id "${id}" is not in the allowed id list.`, id));
-	else entries.push(accepted(`keep.${id}`, `Observation "${id}" accepted as keep proposal.`, id));
-	validateCandidateList(revise, "revise", entries);
-	validateRetireList(retire, allowedIds, entries);
-	validateCandidateList(newObservations, "new_observations", entries);
+	validateKeepList(keep, activeIds, entries, occurrences, enforceActiveIds);
+	validateCandidateList(revise, "revise", entries, {
+		allowedIds,
+		activeIds,
+		enforceAllowedIds,
+		enforceActiveIds,
+		occurrences
+	});
+	validateRetireList(retire, activeIds, entries, occurrences, enforceActiveIds);
+	validateCandidateList(newObservations, "new_observations", entries, {
+		allowedIds,
+		activeIds,
+		enforceAllowedIds,
+		enforceActiveIds,
+		occurrences
+	});
 	if (!keep.length && !revise.length && !retire.length && !newObservations.length) entries.push({
 		status: "unused",
 		reason: "empty-payload",
@@ -43,10 +64,10 @@ function validateRcclObservationRefreshPayload(yamlText, allowedObservationIds =
 		version,
 		generated_at: typeof raw.generated_at === "string" ? raw.generated_at : null,
 		scope,
-		keep,
-		revise,
-		retire,
-		new_observations: newObservations
+		keep: keepIds,
+		revise: reviseObservations,
+		retire: retireEntries,
+		new_observations: newObservationList
 	} : null;
 	return {
 		valid: Boolean(document) && diagnostics.summary.accepted > 0 && diagnostics.summary.rejected === 0,
@@ -54,13 +75,40 @@ function validateRcclObservationRefreshPayload(yamlText, allowedObservationIds =
 		diagnostics
 	};
 }
-function validateCandidateList(observations, pathPrefix, entries) {
+function validateKeepList(keep, activeIds, entries, occurrences, enforceActiveIds) {
+	for (const entry of keep) {
+		const { id, path } = entry;
+		if (entry.structureErrors.length) {
+			entries.push({
+				status: "rejected",
+				reason: classifyStructureErrors(entry.structureErrors),
+				path,
+				message: entry.structureErrors.join("; "),
+				observationId: id || void 0
+			});
+			continue;
+		}
+		if (isDuplicate(id, occurrences)) entries.push(rejected(`keep.${id}`, "duplicate-id", `Observation id "${id}" appears in multiple refresh actions.`, id));
+		else if (enforceActiveIds && !activeIds.has(id)) entries.push(rejected(`keep.${id}`, "invalid-id", `Observation id "${id}" is not in the active observation id list.`, id));
+		else entries.push(accepted(`keep.${id}`, `Observation "${id}" accepted as keep proposal.`, id));
+	}
+}
+function validateCandidateList(observations, pathPrefix, entries, options) {
 	const seen = /* @__PURE__ */ new Set();
-	observations.forEach((observation, index) => {
-		const path = `${pathPrefix}[${index}]`;
+	observations.forEach((entry) => {
+		const observation = entry.observation;
+		const path = entry.path;
 		const id = observation.provisional_id;
-		if (!id) {
-			entries.push(rejected(path, "missing-required-field", "Candidate observation is missing provisional_id."));
+		const structureErrors = dedupeErrors([...entry.structureErrors, ...validateCandidateObservationShape(observation, path)]);
+		if (structureErrors.length) {
+			entries.push({
+				status: "rejected",
+				reason: classifyStructureErrors(structureErrors),
+				path,
+				message: structureErrors.join("; "),
+				observationId: id || void 0,
+				confidence: Number.isFinite(observation.confidence) ? observation.confidence : void 0
+			});
 			return;
 		}
 		if (seen.has(id)) {
@@ -68,9 +116,16 @@ function validateCandidateList(observations, pathPrefix, entries) {
 			return;
 		}
 		seen.add(id);
-		const missing = requiredCandidateFields(observation);
-		if (missing.length) {
-			entries.push(rejected(path, "missing-required-field", `Missing required fields: ${missing.join(", ")}.`, id));
+		if (isDuplicate(id, options.occurrences)) {
+			entries.push(rejected(path, "duplicate-id", `Observation id "${id}" appears in multiple refresh actions.`, id));
+			return;
+		}
+		if (pathPrefix === "revise" && options.enforceActiveIds && !options.activeIds.has(id)) {
+			entries.push(rejected(path, "invalid-id", `Revise provisional_id "${id}" must match an active observation id.`, id));
+			return;
+		}
+		if (pathPrefix === "new_observations" && options.enforceAllowedIds && options.allowedIds.has(id)) {
+			entries.push(rejected(path, "invalid-id", `New observation provisional_id "${id}" already exists.`, id));
 			return;
 		}
 		if (observation.confidence < MIN_CONFIDENCE) {
@@ -87,15 +142,30 @@ function validateCandidateList(observations, pathPrefix, entries) {
 		entries.push(accepted(path, `Candidate "${id}" accepted as ${pathPrefix} proposal.`, id, observation.confidence));
 	});
 }
-function validateRetireList(retire, allowedIds, entries) {
-	retire.forEach((entry, index) => {
-		const path = `retire[${index}]`;
+function validateRetireList(retire, activeIds, entries, occurrences, enforceActiveIds) {
+	retire.forEach((item) => {
+		const { entry, path } = item;
+		if (item.structureErrors.length) {
+			entries.push({
+				status: "rejected",
+				reason: classifyStructureErrors(item.structureErrors),
+				path,
+				message: item.structureErrors.join("; "),
+				observationId: entry.observation_id || void 0,
+				confidence: Number.isFinite(entry.confidence) ? entry.confidence : void 0
+			});
+			return;
+		}
 		if (!entry.observation_id) {
 			entries.push(rejected(path, "missing-required-field", "Retire entry is missing observation_id."));
 			return;
 		}
-		if (allowedIds.size > 0 && !allowedIds.has(entry.observation_id)) {
-			entries.push(rejected(path, "invalid-id", `Observation id "${entry.observation_id}" is not in the allowed id list.`, entry.observation_id));
+		if (isDuplicate(entry.observation_id, occurrences)) {
+			entries.push(rejected(path, "duplicate-id", `Observation id "${entry.observation_id}" appears in multiple refresh actions.`, entry.observation_id));
+			return;
+		}
+		if (enforceActiveIds && !activeIds.has(entry.observation_id)) {
+			entries.push(rejected(path, "invalid-id", `Observation id "${entry.observation_id}" is not in the active observation id list.`, entry.observation_id));
 			return;
 		}
 		if (!RETIRE_REASON_IDS.has(entry.reason_id)) {
@@ -116,6 +186,21 @@ function validateRetireList(retire, allowedIds, entries) {
 		entries.push(accepted(path, `Retire proposal for "${entry.observation_id}" accepted.`, entry.observation_id, entry.confidence));
 	});
 }
+function buildIdOccurrences(keep, revise, retire, newObservations) {
+	const occurrences = /* @__PURE__ */ new Map();
+	const add = (id) => {
+		if (!id) return;
+		occurrences.set(id, (occurrences.get(id) ?? 0) + 1);
+	};
+	keep.forEach(add);
+	revise.forEach((item) => add(item.provisional_id));
+	retire.forEach((item) => add(item.observation_id));
+	newObservations.forEach((item) => add(item.provisional_id));
+	return occurrences;
+}
+function isDuplicate(id, occurrences) {
+	return (occurrences.get(id) ?? 0) > 1;
+}
 function rejectedDocument(message) {
 	return {
 		valid: false,
@@ -123,22 +208,50 @@ function rejectedDocument(message) {
 		diagnostics: buildDiagnostics([rejected("document", "malformed-payload", message)])
 	};
 }
-function requiredCandidateFields(observation) {
-	const missing = [];
-	if (!observation.provisional_id) missing.push("provisional_id");
-	if (!observation.semantic_key) missing.push("semantic_key");
-	if (!observation.category) missing.push("category");
-	if (!observation.scope_hint) missing.push("scope_hint");
-	if (!observation.pattern) missing.push("pattern");
-	if (!Number.isFinite(observation.confidence)) missing.push("confidence");
-	if (!observation.adherence_quality) missing.push("adherence_quality");
-	if (!observation.evidence?.length) missing.push("evidence");
-	if (!observation.source_slice_ids?.length) missing.push("source_slice_ids");
-	return missing;
+function normalizeKeepList(value, fieldPresent) {
+	if (!fieldPresent) return [];
+	if (!Array.isArray(value)) return [{
+		path: "keep",
+		id: "",
+		structureErrors: ["keep: must be an array"]
+	}];
+	return value.map((item, index) => {
+		const path = `keep[${index}]`;
+		if (!isNonEmptyString(item)) return {
+			path,
+			id: "",
+			structureErrors: [`${path}: must be a non-empty string observation id`]
+		};
+		return {
+			path,
+			id: item.trim(),
+			structureErrors: []
+		};
+	});
 }
-function normalizeCandidateList(value) {
-	if (!Array.isArray(value)) return [];
-	return value.filter(isRecord).map((item) => ({
+function normalizeCandidateList(value, pathPrefix, fieldPresent) {
+	if (!fieldPresent) return [];
+	if (!Array.isArray(value)) return [{
+		path: pathPrefix,
+		observation: emptyCandidateObservation(),
+		structureErrors: [`${pathPrefix}: must be an array`]
+	}];
+	return value.map((item, index) => {
+		const path = `${pathPrefix}[${index}]`;
+		if (!isRecord(item)) return {
+			path,
+			observation: emptyCandidateObservation(),
+			structureErrors: [`${path}: candidate observation must be an object`]
+		};
+		return {
+			path,
+			observation: normalizeCandidateObservation(item),
+			structureErrors: validateCandidateObservationRecord(item, path)
+		};
+	});
+}
+function normalizeCandidateObservation(item) {
+	return {
 		provisional_id: stringValue(item.provisional_id),
 		semantic_key: stringValue(item.semantic_key),
 		category: stringValue(item.category),
@@ -157,15 +270,63 @@ function normalizeCandidateList(value) {
 			cluster_count: nullableNumber(item.support_hint.cluster_count),
 			scope_basis: isScopeBasis(item.support_hint.scope_basis) ? item.support_hint.scope_basis : null
 		} : null
-	}));
+	};
 }
-function normalizeRetireList(value) {
-	if (!Array.isArray(value)) return [];
-	return value.filter(isRecord).map((item) => ({
+function emptyCandidateObservation() {
+	return {
+		provisional_id: "",
+		semantic_key: "",
+		category: "",
+		scope_hint: "",
+		pattern: "",
+		confidence: NaN,
+		adherence_quality: "",
+		evidence: [],
+		source_slice_ids: [],
+		support_hint: null
+	};
+}
+function normalizeRetireList(value, fieldPresent) {
+	if (!fieldPresent) return [];
+	if (!Array.isArray(value)) return [{
+		path: "retire",
+		entry: emptyRetireEntry(),
+		structureErrors: ["retire: must be an array"]
+	}];
+	return value.map((item, index) => {
+		const path = `retire[${index}]`;
+		if (!isRecord(item)) return {
+			path,
+			entry: emptyRetireEntry(),
+			structureErrors: [`${path}: retire entry must be an object`]
+		};
+		return {
+			path,
+			entry: normalizeRetireEntry(item),
+			structureErrors: validateRetireEntryRecord(item, path)
+		};
+	});
+}
+function normalizeRetireEntry(item) {
+	return {
 		observation_id: stringValue(item.observation_id),
 		reason_id: stringValue(item.reason_id),
 		confidence: numberValue(item.confidence)
-	}));
+	};
+}
+function emptyRetireEntry() {
+	return {
+		observation_id: "",
+		reason_id: "",
+		confidence: NaN
+	};
+}
+function validateRetireEntryRecord(item, path) {
+	const errors = [];
+	if (!isNonEmptyString(item.observation_id)) errors.push(`${path}: missing or invalid 'observation_id'`);
+	if (!isNonEmptyString(item.reason_id)) errors.push(`${path}: missing or invalid 'reason_id'`);
+	if (typeof item.confidence !== "number" || !Number.isFinite(item.confidence)) errors.push(`${path}: 'confidence' must be a number`);
+	return errors;
 }
 function normalizeStringList(value) {
 	return Array.isArray(value) ? value.filter((item) => typeof item === "string" && item.trim().length > 0).map((item) => item.trim()) : [];
@@ -181,6 +342,9 @@ function numberValue(value) {
 }
 function stringValue(value) {
 	return typeof value === "string" ? value.trim() : "";
+}
+function isNonEmptyString(value) {
+	return typeof value === "string" && value.trim().length > 0;
 }
 function accepted(path, message, observationId, confidence) {
 	return {
@@ -218,8 +382,23 @@ function buildDiagnostics(entries) {
 function isRecord(value) {
 	return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
+function hasOwn(record, key) {
+	return Object.prototype.hasOwnProperty.call(record, key);
+}
+function isStringArray(value) {
+	return Array.isArray(value);
+}
+function classifyStructureErrors(errors) {
+	const joined = errors.join(" ").toLowerCase();
+	if (joined.includes("missing") || joined.includes("must be a non-empty")) return "missing-required-field";
+	if (joined.includes("must be an array") || joined.includes("must be an object")) return "malformed-payload";
+	return "unsupported-value";
+}
+function dedupeErrors(errors) {
+	return Array.from(new Set(errors));
+}
 function isScopeBasis(value) {
-	return value === "single-file" || value === "directory-cluster" || value === "module-cluster" || value === "cross-root";
+	return RCCL_SCOPE_BASES.has(String(value));
 }
 //#endregion
 export { validateRcclObservationRefreshPayload };

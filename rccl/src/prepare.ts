@@ -13,6 +13,8 @@ import { buildSynthesisPrompt } from './prompt/build-synthesis-prompt.ts';
 import type {
   CalibrationSlice,
   IndexedFile,
+  RcclAIContractArtifact,
+  RcclAIContractEnvelope,
   PrepareIncrementalRcclOptions,
   PrepareIncrementalRcclResult,
   PrepareRcclResult,
@@ -44,10 +46,10 @@ generated_at: <auto-filled-or-null>
 scope: "<scope>"
 
 keep:
-  - "obs-existing-id"
+  - "obs-active-existing-id"
 
 revise:
-  - provisional_id: "obs-<kebab-case-name>"
+  - provisional_id: "obs-active-existing-id"
     semantic_key: "<stable-kebab-case-semantic-identity>"
     category: <category>
     scope_hint: "<glob>"
@@ -65,7 +67,7 @@ revise:
       scope_basis: <single-file|directory-cluster|module-cluster|cross-root|null>
 
 retire:
-  - observation_id: "obs-existing-id"
+  - observation_id: "obs-active-existing-id"
     reason_id: <file-missing|snippet-drift|scope-drift|superseded|no-longer-material|other>
     confidence: <0.0-1.0>
 
@@ -283,7 +285,7 @@ function buildDebugArtifacts(
     : { enabled: false };
 }
 
-function buildObservationGenerationArtifact(projectRoot: string, scope: string) {
+function buildObservationGenerationArtifact(projectRoot: string, scope: string): RcclAIContractArtifact {
   return {
     suggestedPath: suggestedObservationCandidatePath(projectRoot, scope),
     format: 'yaml' as const,
@@ -295,7 +297,7 @@ function buildObservationGenerationContract(
   context: PreparationContext,
   prompt: string,
   artifact: ReturnType<typeof buildObservationGenerationArtifact>,
-) {
+): RcclAIContractEnvelope {
   return {
     contractVersion: 'ai-contract/v1' as const,
     kind: 'rccl-observation-generation' as const,
@@ -306,7 +308,7 @@ function buildObservationGenerationContract(
     artifact,
     provenance: {
       owner: 'rccl' as const,
-      deterministic: true,
+      deterministic: true as const,
     },
     cacheKeyMaterial: {
       scope: context.scope,
@@ -325,11 +327,11 @@ function buildObservationGenerationContract(
   };
 }
 
-function buildObservationRefreshArtifact(projectRoot: string, scope: string, mode: string, focusFiles: string[]) {
+function buildObservationRefreshArtifact(projectRoot: string, scope: string, mode: string, focusFiles: string[]): RcclAIContractArtifact {
   return {
     suggestedPath: suggestedObservationRefreshPath(projectRoot, scope, mode, focusFiles),
     format: 'yaml' as const,
-    usage: 'Write the RCCL observation refresh proposal to this YAML path, then validate it through RCCL before commit.',
+    usage: 'Write the RCCL observation refresh proposal to this YAML path, then pass it to calibrate-repo-context commit-refresh with --input.',
   };
 }
 
@@ -342,7 +344,7 @@ function buildObservationRefreshContract(input: {
   affectedObservations: string[];
   staleObservations: string[];
   existingRccl: RcclDocument | null;
-}) {
+}): RcclAIContractEnvelope {
   return {
     contractVersion: 'ai-contract/v1' as const,
     kind: 'rccl-observation-refresh' as const,
@@ -353,7 +355,7 @@ function buildObservationRefreshContract(input: {
     artifact: input.artifact,
     provenance: {
       owner: 'rccl' as const,
-      deterministic: true,
+      deterministic: true as const,
     },
     cacheKeyMaterial: {
       scope: input.context.scope,
@@ -480,10 +482,13 @@ function buildRefreshPrompt(input: {
   lines.push('');
   lines.push('## Hard rules');
   lines.push('1. Keep existing observations only when the provided slices and existing summary still support them.');
-  lines.push('2. Revise or create observations only with exact evidence copied from the provided windows.');
-  lines.push('3. Retire is only a proposal. Use it when the existing observation appears stale, superseded, or no longer material for code decisions.');
-  lines.push('4. Use only listed existing observation ids in keep or retire.');
-  lines.push('5. Prefer fewer, stronger refresh proposals over broad summaries.');
+  lines.push('2. Revise uses provisional_id equal to an existing active observation id; v1 does not support observation id renames or historical reactivation.');
+  lines.push('3. Revise or create observations only with exact evidence copied from the provided windows.');
+  lines.push('4. Retire means the observation should become stale in v1, not superseded.');
+  lines.push('5. Use only listed existing active observation ids in keep, revise, or retire.');
+  lines.push('6. Omitted active observations are carried forward unchanged; omission is non-destructive.');
+  lines.push('7. Use the exact action schemas; do not emit shorthand retire entries or malformed action items.');
+  lines.push('8. Prefer fewer, stronger refresh proposals over broad summaries.');
   lines.push('');
   lines.push(`Scope: ${input.scope}`);
   lines.push(`Requested mode: ${input.requestedMode}`);

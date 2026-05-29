@@ -1,3 +1,4 @@
+import { validateCandidateObservationShape } from "./validate-observation.mjs";
 import { parseRcclCandidates } from "./io/parse-rccl.mjs";
 //#region src/validate-candidates.ts
 const MIN_CONFIDENCE = .3;
@@ -43,9 +44,16 @@ function validateCandidateDocument(doc) {
 			continue;
 		}
 		seenIds.add(id);
-		const missingFields = checkRequiredFields(obs, path);
-		if (missingFields) {
-			entries.push(missingFields);
+		const structureErrors = validateCandidateObservationShape(obs, path);
+		if (structureErrors.length) {
+			entries.push({
+				status: "rejected",
+				reason: classifyStructureErrors(structureErrors),
+				path,
+				message: structureErrors.join("; "),
+				observationId: id || void 0,
+				confidence: Number.isFinite(obs.confidence) ? obs.confidence : void 0
+			});
 			continue;
 		}
 		if (obs.confidence < MIN_CONFIDENCE) {
@@ -89,28 +97,16 @@ function validateCandidateDocument(doc) {
 		}
 	};
 }
-function checkRequiredFields(obs, path) {
-	const missing = [];
-	if (!obs.provisional_id) missing.push("provisional_id");
-	if (!obs.semantic_key) missing.push("semantic_key");
-	if (!obs.category) missing.push("category");
-	if (!obs.pattern) missing.push("pattern");
-	if (!obs.scope_hint) missing.push("scope_hint");
-	if (!obs.evidence || obs.evidence.length === 0) missing.push("evidence");
-	if (missing.length === 0) return null;
-	return {
-		status: "rejected",
-		reason: "missing-required-field",
-		path,
-		message: `Missing required fields: ${missing.join(", ")}.`,
-		observationId: obs.provisional_id || void 0
-	};
-}
 function classifyParseErrors(errors) {
 	const joined = errors.join(" ").toLowerCase();
 	if (joined.includes("yaml parse error") || joined.includes("must be a yaml object")) return "malformed-payload";
 	if (joined.includes("missing") || joined.includes("must be")) return "missing-required-field";
 	return "malformed-payload";
+}
+function classifyStructureErrors(errors) {
+	const joined = errors.join(" ").toLowerCase();
+	if (joined.includes("missing") || joined.includes("must be a non-empty")) return "missing-required-field";
+	return "unsupported-value";
 }
 //#endregion
 export { validateRcclCandidatePayload };

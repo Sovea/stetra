@@ -413,6 +413,43 @@ export interface RcclObservationRefreshDocument {
   new_observations: CandidateObservation[];
 }
 
+export interface CommitRcclObservationRefreshOptions {
+  debugArtifacts?: boolean;
+}
+
+export interface RcclObservationRefreshSummary {
+  previous_observation_count: number;
+  active_observation_count: number;
+  kept: string[];
+  carried_forward: string[];
+  revised: string[];
+  retired: string[];
+  added: string[];
+}
+
+export interface CommitRcclObservationRefreshSuccess {
+  status: 'committed';
+  diagnostics: import('./validate-refresh.ts').RcclRefreshPayloadDiagnostics;
+  refresh_summary: RcclObservationRefreshSummary;
+  result: EmitRcclResult;
+  debugArtifacts: {
+    enabled: boolean;
+    candidates?: string;
+    consolidation?: string;
+  };
+}
+
+export interface CommitRcclObservationRefreshFailure {
+  status: 'failed';
+  reason: 'missing-existing-rccl' | 'invalid-existing-rccl' | 'invalid-refresh-payload';
+  diagnostics?: import('./validate-refresh.ts').RcclRefreshPayloadDiagnostics;
+  errors?: string[];
+}
+
+export type CommitRcclObservationRefreshResult =
+  | CommitRcclObservationRefreshSuccess
+  | CommitRcclObservationRefreshFailure;
+
 export interface PrepareRcclResult {
   prompt: string;
   contract: RcclAIContractEnvelope;

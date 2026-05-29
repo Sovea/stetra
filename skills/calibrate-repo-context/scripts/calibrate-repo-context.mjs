@@ -158,6 +158,70 @@ async function runCommit(options = {}) {
   process.exit(0);
 }
 
+async function runCommitRefresh(options = {}) {
+  if (!options.input) {
+    process.stderr.write('? Missing --input argument for commit-refresh phase.\n');
+    process.exit(1);
+  }
+
+  let yamlText;
+  try {
+    yamlText = readInputText(options.input);
+  } catch (err) {
+    process.stderr.write(`? Failed to read input ${options.input === '-' ? 'from stdin' : `file: ${err.message}`}\n`);
+    process.exit(1);
+  }
+
+  const rccl = await loadRccl();
+  const committed = rccl.commitRcclObservationRefresh(projectRoot, yamlText, {
+    debugArtifacts: shouldEmitDebugArtifacts(options.debugArtifacts),
+  });
+
+  if (committed.status === 'failed') {
+    process.stderr.write(`? RCCL refresh commit failed: ${committed.reason}\n`);
+    for (const entry of committed.diagnostics?.entries ?? []) {
+      if (entry.status === 'rejected') process.stderr.write(`  - [${entry.reason}] ${entry.path}: ${entry.message}\n`);
+    }
+    for (const error of committed.errors ?? []) process.stderr.write(`  - ${error}\n`);
+    process.stdout.write(JSON.stringify({
+      error: true,
+      status: committed.status,
+      reason: committed.reason,
+      diagnostics: committed.diagnostics,
+      errors: committed.errors,
+      input: {
+        source: options.input === '-' ? 'stdin' : options.input,
+        supportsStdin: true,
+      },
+    }, null, 2) + '\n');
+    process.exit(1);
+  }
+
+  process.stdout.write(JSON.stringify({
+    status: committed.status,
+    ...committed.result,
+    diagnostics: committed.diagnostics,
+    refresh_summary: committed.refresh_summary,
+    input: {
+      source: options.input === '-' ? 'stdin' : options.input,
+      supportsStdin: true,
+    },
+    debugArtifacts: committed.debugArtifacts,
+  }, null, 2) + '\n');
+
+  if (committed.result.verification_summary.demoted_count > 0 || committed.result.verification_summary.reduced_confidence_count > 0) {
+    process.stderr.write('Verification summary:\n');
+    process.stderr.write(`  kept: ${committed.result.verification_summary.kept_count}\n`);
+    process.stderr.write(`  reduced-confidence: ${committed.result.verification_summary.reduced_confidence_count}\n`);
+    process.stderr.write(`  demoted: ${committed.result.verification_summary.demoted_count}\n`);
+    for (const observation of committed.result.verification_summary.observations) {
+      if (observation.disposition === 'keep') continue;
+      process.stderr.write(`  - ${observation.id}: disposition=${observation.disposition} evidence=${observation.evidence_status ?? 'pending'} induction=${observation.induction_status ?? 'pending'} verified=${observation.evidence_verified_count ?? 0}/${observation.evidence_total_count}\n`);
+    }
+  }
+  process.exit(0);
+}
+
 function readAndParseDiscovery(rccl, filePath) {
   let yamlText;
   try {
@@ -222,13 +286,14 @@ function parseArgs(argsArray) {
 }
 
 function printUsage() {
-  process.stderr.write('Usage: calibrate-repo-context.mjs <prepare|prepare-incremental|prepare-stage|commit> <project-root> [opts...]\n');
+  process.stderr.write('Usage: calibrate-repo-context.mjs <prepare|prepare-incremental|prepare-stage|commit|commit-refresh> <project-root> [opts...]\n');
   process.stderr.write('  prepare <project-root> [--scope <glob>] [--debug-artifacts[=<bool>]]\n');
   process.stderr.write('  prepare-incremental <project-root> [--target-file <path>] [--changed-file <path>] [--scope <glob>] [--mode <task-scoped|changed-files|full>] [--debug-artifacts[=<bool>]]\n');
   process.stderr.write('  prepare-stage <project-root> --stage discover [--scope <glob>] [--debug-artifacts[=<bool>]]\n');
   process.stderr.write('  prepare-stage <project-root> --stage critique --discovery <path> [--scope <glob>] [--debug-artifacts[=<bool>]]\n');
   process.stderr.write('  prepare-stage <project-root> --stage synthesize --discovery <path> --critique <path> [--scope <glob>] [--debug-artifacts[=<bool>]]\n');
   process.stderr.write('  commit <project-root> --input <path-to-yaml|-> [--debug-artifacts[=<bool>]]\n');
+  process.stderr.write('  commit-refresh <project-root> --input <path-to-refresh-yaml|-> [--debug-artifacts[=<bool>]]\n');
 }
 
 const opts = parseArgs(args);
@@ -249,6 +314,11 @@ if (command === 'prepare') {
   });
 } else if (command === 'commit') {
   runCommit(opts).catch((error) => {
+    process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
+    process.exit(1);
+  });
+} else if (command === 'commit-refresh') {
+  runCommitRefresh(opts).catch((error) => {
     process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
     process.exit(1);
   });

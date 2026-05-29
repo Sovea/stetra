@@ -1,10 +1,12 @@
 import { parseYaml } from './utils/yaml.ts';
 import type {
   CandidateObservation,
-  CandidateSupportHint,
   RcclObservationRefreshDocument,
   RcclObservationRefreshRetireEntry,
+  RcclSchemaVersion,
+  ScopeBasis,
 } from './types.ts';
+import { RCCL_SCOPE_BASES, validateCandidateObservationRecord, validateCandidateObservationShape } from './validate-observation.ts';
 
 export type RcclRefreshDiagnosticStatus = 'accepted' | 'rejected' | 'unused';
 export type RcclRefreshDiagnosticReason =
@@ -43,12 +45,35 @@ export interface ValidateRcclRefreshResult {
   diagnostics: RcclRefreshPayloadDiagnostics;
 }
 
+export interface ValidateRcclRefreshOptions {
+  allowedObservationIds?: readonly string[];
+  activeObservationIds?: readonly string[];
+}
+
+interface RefreshCandidateEntry {
+  path: string;
+  observation: CandidateObservation;
+  structureErrors: string[];
+}
+
+interface RefreshKeepEntry {
+  path: string;
+  id: string;
+  structureErrors: string[];
+}
+
+interface RefreshRetireEntry {
+  path: string;
+  entry: RcclObservationRefreshRetireEntry;
+  structureErrors: string[];
+}
+
 const MIN_CONFIDENCE = 0.3;
 const RETIRE_REASON_IDS = new Set(['file-missing', 'snippet-drift', 'scope-drift', 'superseded', 'no-longer-material', 'other']);
 
 export function validateRcclObservationRefreshPayload(
   yamlText: string,
-  allowedObservationIds: readonly string[] = [],
+  validationOptions: readonly string[] | ValidateRcclRefreshOptions = {},
 ): ValidateRcclRefreshResult {
   let raw: unknown;
   try {
@@ -59,29 +84,48 @@ export function validateRcclObservationRefreshPayload(
 
   if (!isRecord(raw)) return rejectedDocument('Refresh payload must be a YAML object.');
 
-  const allowedIds = new Set(allowedObservationIds);
+  const options: ValidateRcclRefreshOptions = isStringArray(validationOptions)
+    ? validationOptions.length > 0
+      ? { allowedObservationIds: validationOptions }
+      : {}
+    : validationOptions;
+  const enforceAllowedIds = options.allowedObservationIds !== undefined;
+  const enforceActiveIds = options.activeObservationIds !== undefined || enforceAllowedIds;
+  const allowedIds = new Set<string>(options.allowedObservationIds ?? []);
+  const activeIds = new Set<string>(options.activeObservationIds ?? options.allowedObservationIds ?? []);
   const entries: RcclRefreshDiagnosticEntry[] = [];
-  const version = raw.version === '1.0' || raw.version === 1 ? '1.0' : null;
+  const version: RcclSchemaVersion | null = raw.version === '1.0' || raw.version === 1 ? '1.0' : null;
   const scope = typeof raw.scope === 'string' ? raw.scope : null;
-  const keep = normalizeStringList(raw.keep);
-  const revise = normalizeCandidateList(raw.revise);
-  const retire = normalizeRetireList(raw.retire);
-  const newObservations = normalizeCandidateList(raw.new_observations);
+  const keep = normalizeKeepList(raw.keep, hasOwn(raw, 'keep'));
+  const revise = normalizeCandidateList(raw.revise, 'revise', hasOwn(raw, 'revise'));
+  const retire = normalizeRetireList(raw.retire, hasOwn(raw, 'retire'));
+  const newObservations = normalizeCandidateList(raw.new_observations, 'new_observations', hasOwn(raw, 'new_observations'));
+  const keepIds = keep.map((entry) => entry.id).filter(Boolean);
+  const reviseObservations = revise.map((entry) => entry.observation);
+  const retireEntries = retire.map((entry) => entry.entry);
+  const newObservationList = newObservations.map((entry) => entry.observation);
+  const occurrences = buildIdOccurrences(keepIds, reviseObservations, retireEntries, newObservationList);
 
   if (!version) entries.push(rejected('document.version', 'unsupported-value', 'version must be "1.0".'));
   if (!scope) entries.push(rejected('document.scope', 'missing-required-field', 'scope is required.'));
 
-  for (const id of keep) {
-    if (allowedIds.size > 0 && !allowedIds.has(id)) {
-      entries.push(rejected(`keep.${id}`, 'invalid-id', `Observation id "${id}" is not in the allowed id list.`, id));
-    } else {
-      entries.push(accepted(`keep.${id}`, `Observation "${id}" accepted as keep proposal.`, id));
-    }
-  }
+  validateKeepList(keep, activeIds, entries, occurrences, enforceActiveIds);
 
-  validateCandidateList(revise, 'revise', entries);
-  validateRetireList(retire, allowedIds, entries);
-  validateCandidateList(newObservations, 'new_observations', entries);
+  validateCandidateList(revise, 'revise', entries, {
+    allowedIds,
+    activeIds,
+    enforceAllowedIds,
+    enforceActiveIds,
+    occurrences,
+  });
+  validateRetireList(retire, activeIds, entries, occurrences, enforceActiveIds);
+  validateCandidateList(newObservations, 'new_observations', entries, {
+    allowedIds,
+    activeIds,
+    enforceAllowedIds,
+    enforceActiveIds,
+    occurrences,
+  });
 
   if (!keep.length && !revise.length && !retire.length && !newObservations.length) {
     entries.push({
@@ -98,10 +142,10 @@ export function validateRcclObservationRefreshPayload(
       version,
       generated_at: typeof raw.generated_at === 'string' ? raw.generated_at : null,
       scope,
-      keep,
-      revise,
-      retire,
-      new_observations: newObservations,
+      keep: keepIds,
+      revise: reviseObservations,
+      retire: retireEntries,
+      new_observations: newObservationList,
     }
     : null;
 
@@ -112,17 +156,65 @@ export function validateRcclObservationRefreshPayload(
   };
 }
 
+function validateKeepList(
+  keep: RefreshKeepEntry[],
+  activeIds: Set<string>,
+  entries: RcclRefreshDiagnosticEntry[],
+  occurrences: Map<string, number>,
+  enforceActiveIds: boolean,
+): void {
+  for (const entry of keep) {
+    const { id, path } = entry;
+    if (entry.structureErrors.length) {
+      entries.push({
+        status: 'rejected',
+        reason: classifyStructureErrors(entry.structureErrors),
+        path,
+        message: entry.structureErrors.join('; '),
+        observationId: id || undefined,
+      });
+      continue;
+    }
+    if (isDuplicate(id, occurrences)) {
+      entries.push(rejected(`keep.${id}`, 'duplicate-id', `Observation id "${id}" appears in multiple refresh actions.`, id));
+    } else if (enforceActiveIds && !activeIds.has(id)) {
+      entries.push(rejected(`keep.${id}`, 'invalid-id', `Observation id "${id}" is not in the active observation id list.`, id));
+    } else {
+      entries.push(accepted(`keep.${id}`, `Observation "${id}" accepted as keep proposal.`, id));
+    }
+  }
+}
+
 function validateCandidateList(
-  observations: CandidateObservation[],
+  observations: RefreshCandidateEntry[],
   pathPrefix: 'revise' | 'new_observations',
   entries: RcclRefreshDiagnosticEntry[],
+  options: {
+    allowedIds: Set<string>;
+    activeIds: Set<string>;
+    enforceAllowedIds: boolean;
+    enforceActiveIds: boolean;
+    occurrences: Map<string, number>;
+  },
 ): void {
   const seen = new Set<string>();
-  observations.forEach((observation, index) => {
-    const path = `${pathPrefix}[${index}]`;
+  observations.forEach((entry) => {
+    const observation = entry.observation;
+    const path = entry.path;
     const id = observation.provisional_id;
-    if (!id) {
-      entries.push(rejected(path, 'missing-required-field', 'Candidate observation is missing provisional_id.'));
+    const structureErrors = dedupeErrors([
+      ...entry.structureErrors,
+      ...validateCandidateObservationShape(observation, path),
+    ]);
+    if (structureErrors.length) {
+      entries.push({
+        status: 'rejected',
+        reason: classifyStructureErrors(structureErrors),
+        path,
+        message: structureErrors.join('; '),
+        observationId: id || undefined,
+        confidence: Number.isFinite(observation.confidence) ? observation.confidence : undefined,
+      });
       return;
     }
     if (seen.has(id)) {
@@ -130,9 +222,16 @@ function validateCandidateList(
       return;
     }
     seen.add(id);
-    const missing = requiredCandidateFields(observation);
-    if (missing.length) {
-      entries.push(rejected(path, 'missing-required-field', `Missing required fields: ${missing.join(', ')}.`, id));
+    if (isDuplicate(id, options.occurrences)) {
+      entries.push(rejected(path, 'duplicate-id', `Observation id "${id}" appears in multiple refresh actions.`, id));
+      return;
+    }
+    if (pathPrefix === 'revise' && options.enforceActiveIds && !options.activeIds.has(id)) {
+      entries.push(rejected(path, 'invalid-id', `Revise provisional_id "${id}" must match an active observation id.`, id));
+      return;
+    }
+    if (pathPrefix === 'new_observations' && options.enforceAllowedIds && options.allowedIds.has(id)) {
+      entries.push(rejected(path, 'invalid-id', `New observation provisional_id "${id}" already exists.`, id));
       return;
     }
     if (observation.confidence < MIN_CONFIDENCE) {
@@ -151,18 +250,35 @@ function validateCandidateList(
 }
 
 function validateRetireList(
-  retire: RcclObservationRefreshRetireEntry[],
-  allowedIds: Set<string>,
+  retire: RefreshRetireEntry[],
+  activeIds: Set<string>,
   entries: RcclRefreshDiagnosticEntry[],
+  occurrences: Map<string, number>,
+  enforceActiveIds: boolean,
 ): void {
-  retire.forEach((entry, index) => {
-    const path = `retire[${index}]`;
+  retire.forEach((item) => {
+    const { entry, path } = item;
+    if (item.structureErrors.length) {
+      entries.push({
+        status: 'rejected',
+        reason: classifyStructureErrors(item.structureErrors),
+        path,
+        message: item.structureErrors.join('; '),
+        observationId: entry.observation_id || undefined,
+        confidence: Number.isFinite(entry.confidence) ? entry.confidence : undefined,
+      });
+      return;
+    }
     if (!entry.observation_id) {
       entries.push(rejected(path, 'missing-required-field', 'Retire entry is missing observation_id.'));
       return;
     }
-    if (allowedIds.size > 0 && !allowedIds.has(entry.observation_id)) {
-      entries.push(rejected(path, 'invalid-id', `Observation id "${entry.observation_id}" is not in the allowed id list.`, entry.observation_id));
+    if (isDuplicate(entry.observation_id, occurrences)) {
+      entries.push(rejected(path, 'duplicate-id', `Observation id "${entry.observation_id}" appears in multiple refresh actions.`, entry.observation_id));
+      return;
+    }
+    if (enforceActiveIds && !activeIds.has(entry.observation_id)) {
+      entries.push(rejected(path, 'invalid-id', `Observation id "${entry.observation_id}" is not in the active observation id list.`, entry.observation_id));
       return;
     }
     if (!RETIRE_REASON_IDS.has(entry.reason_id)) {
@@ -184,6 +300,28 @@ function validateRetireList(
   });
 }
 
+function buildIdOccurrences(
+  keep: string[],
+  revise: CandidateObservation[],
+  retire: RcclObservationRefreshRetireEntry[],
+  newObservations: CandidateObservation[],
+): Map<string, number> {
+  const occurrences = new Map<string, number>();
+  const add = (id: string): void => {
+    if (!id) return;
+    occurrences.set(id, (occurrences.get(id) ?? 0) + 1);
+  };
+  keep.forEach(add);
+  revise.forEach((item) => add(item.provisional_id));
+  retire.forEach((item) => add(item.observation_id));
+  newObservations.forEach((item) => add(item.provisional_id));
+  return occurrences;
+}
+
+function isDuplicate(id: string, occurrences: Map<string, number>): boolean {
+  return (occurrences.get(id) ?? 0) > 1;
+}
+
 function rejectedDocument(message: string): ValidateRcclRefreshResult {
   return {
     valid: false,
@@ -192,23 +330,52 @@ function rejectedDocument(message: string): ValidateRcclRefreshResult {
   };
 }
 
-function requiredCandidateFields(observation: CandidateObservation): string[] {
-  const missing: string[] = [];
-  if (!observation.provisional_id) missing.push('provisional_id');
-  if (!observation.semantic_key) missing.push('semantic_key');
-  if (!observation.category) missing.push('category');
-  if (!observation.scope_hint) missing.push('scope_hint');
-  if (!observation.pattern) missing.push('pattern');
-  if (!Number.isFinite(observation.confidence)) missing.push('confidence');
-  if (!observation.adherence_quality) missing.push('adherence_quality');
-  if (!observation.evidence?.length) missing.push('evidence');
-  if (!observation.source_slice_ids?.length) missing.push('source_slice_ids');
-  return missing;
+function normalizeKeepList(value: unknown, fieldPresent: boolean): RefreshKeepEntry[] {
+  if (!fieldPresent) return [];
+  if (!Array.isArray(value)) {
+    return [{ path: 'keep', id: '', structureErrors: ['keep: must be an array'] }];
+  }
+  return value.map((item, index) => {
+    const path = `keep[${index}]`;
+    if (!isNonEmptyString(item)) {
+      return {
+        path,
+        id: '',
+        structureErrors: [`${path}: must be a non-empty string observation id`],
+      };
+    }
+    return { path, id: item.trim(), structureErrors: [] };
+  });
 }
 
-function normalizeCandidateList(value: unknown): CandidateObservation[] {
-  if (!Array.isArray(value)) return [];
-  return value.filter(isRecord).map((item) => ({
+function normalizeCandidateList(value: unknown, pathPrefix: 'revise' | 'new_observations', fieldPresent: boolean): RefreshCandidateEntry[] {
+  if (!fieldPresent) return [];
+  if (!Array.isArray(value)) {
+    return [{
+      path: pathPrefix,
+      observation: emptyCandidateObservation(),
+      structureErrors: [`${pathPrefix}: must be an array`],
+    }];
+  }
+  return value.map((item, index) => {
+    const path = `${pathPrefix}[${index}]`;
+    if (!isRecord(item)) {
+      return {
+        path,
+        observation: emptyCandidateObservation(),
+        structureErrors: [`${path}: candidate observation must be an object`],
+      };
+    }
+    return {
+      path,
+      observation: normalizeCandidateObservation(item),
+      structureErrors: validateCandidateObservationRecord(item, path),
+    };
+  });
+}
+
+function normalizeCandidateObservation(item: Record<string, unknown>): CandidateObservation {
+  return {
     provisional_id: stringValue(item.provisional_id),
     semantic_key: stringValue(item.semantic_key),
     category: stringValue(item.category) as CandidateObservation['category'],
@@ -231,16 +398,70 @@ function normalizeCandidateList(value: unknown): CandidateObservation[] {
         scope_basis: isScopeBasis(item.support_hint.scope_basis) ? item.support_hint.scope_basis : null,
       }
       : null,
-  }));
+  };
 }
 
-function normalizeRetireList(value: unknown): RcclObservationRefreshRetireEntry[] {
-  if (!Array.isArray(value)) return [];
-  return value.filter(isRecord).map((item) => ({
+function emptyCandidateObservation(): CandidateObservation {
+  return {
+    provisional_id: '',
+    semantic_key: '',
+    category: '' as CandidateObservation['category'],
+    scope_hint: '',
+    pattern: '',
+    confidence: Number.NaN,
+    adherence_quality: '' as CandidateObservation['adherence_quality'],
+    evidence: [],
+    source_slice_ids: [],
+    support_hint: null,
+  };
+}
+
+function normalizeRetireList(value: unknown, fieldPresent: boolean): RefreshRetireEntry[] {
+  if (!fieldPresent) return [];
+  if (!Array.isArray(value)) {
+    return [{ path: 'retire', entry: emptyRetireEntry(), structureErrors: ['retire: must be an array'] }];
+  }
+  return value.map((item, index) => {
+    const path = `retire[${index}]`;
+    if (!isRecord(item)) {
+      return {
+        path,
+        entry: emptyRetireEntry(),
+        structureErrors: [`${path}: retire entry must be an object`],
+      };
+    }
+    return {
+      path,
+      entry: normalizeRetireEntry(item),
+      structureErrors: validateRetireEntryRecord(item, path),
+    };
+  });
+}
+
+function normalizeRetireEntry(item: Record<string, unknown>): RcclObservationRefreshRetireEntry {
+  return {
     observation_id: stringValue(item.observation_id),
     reason_id: stringValue(item.reason_id) as RcclObservationRefreshRetireEntry['reason_id'],
     confidence: numberValue(item.confidence),
-  }));
+  };
+}
+
+function emptyRetireEntry(): RcclObservationRefreshRetireEntry {
+  return {
+    observation_id: '',
+    reason_id: '' as RcclObservationRefreshRetireEntry['reason_id'],
+    confidence: Number.NaN,
+  };
+}
+
+function validateRetireEntryRecord(item: Record<string, unknown>, path: string): string[] {
+  const errors: string[] = [];
+  if (!isNonEmptyString(item.observation_id)) errors.push(`${path}: missing or invalid 'observation_id'`);
+  if (!isNonEmptyString(item.reason_id)) errors.push(`${path}: missing or invalid 'reason_id'`);
+  if (typeof item.confidence !== 'number' || !Number.isFinite(item.confidence)) {
+    errors.push(`${path}: 'confidence' must be a number`);
+  }
+  return errors;
 }
 
 function normalizeStringList(value: unknown): string[] {
@@ -265,6 +486,10 @@ function numberValue(value: unknown): number {
 
 function stringValue(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
+}
+
+function isNonEmptyString(value: unknown): value is string {
+  return typeof value === 'string' && value.trim().length > 0;
 }
 
 function accepted(path: string, message: string, observationId?: string, confidence?: number): RcclRefreshDiagnosticEntry {
@@ -307,9 +532,25 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 }
 
-function isScopeBasis(value: unknown): value is NonNullable<CandidateSupportHint['scope_basis']> {
-  return value === 'single-file'
-    || value === 'directory-cluster'
-    || value === 'module-cluster'
-    || value === 'cross-root';
+function hasOwn(record: Record<string, unknown>, key: string): boolean {
+  return Object.prototype.hasOwnProperty.call(record, key);
+}
+
+function isStringArray(value: readonly string[] | ValidateRcclRefreshOptions): value is readonly string[] {
+  return Array.isArray(value);
+}
+
+function classifyStructureErrors(errors: string[]): RcclRefreshDiagnosticReason {
+  const joined = errors.join(' ').toLowerCase();
+  if (joined.includes('missing') || joined.includes('must be a non-empty')) return 'missing-required-field';
+  if (joined.includes('must be an array') || joined.includes('must be an object')) return 'malformed-payload';
+  return 'unsupported-value';
+}
+
+function dedupeErrors(errors: string[]): string[] {
+  return Array.from(new Set(errors));
+}
+
+function isScopeBasis(value: unknown): value is ScopeBasis {
+  return RCCL_SCOPE_BASES.has(String(value));
 }

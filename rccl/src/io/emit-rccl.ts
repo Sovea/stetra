@@ -166,20 +166,26 @@ export function serializeRccl(rccl: RcclDocument): string {
         checked_at: observation.verification.checked_at,
         disposition: observation.verification.disposition,
       },
-      lifecycle: observation.lifecycle == null ? undefined : {
-        first_seen_git_ref: observation.lifecycle.first_seen_git_ref,
-        last_seen_git_ref: observation.lifecycle.last_seen_git_ref,
-        last_verified_at: observation.lifecycle.last_verified_at,
-        content_fingerprint: observation.lifecycle.content_fingerprint,
-        status: observation.lifecycle.status,
-        supersedes: observation.lifecycle.supersedes,
-        superseded_by: observation.lifecycle.superseded_by,
-        stale_since_git_ref: observation.lifecycle.stale_since_git_ref,
-        superseded_at_git_ref: observation.lifecycle.superseded_at_git_ref,
-      },
+      lifecycle: serializeLifecycle(observation),
     })),
   };
   return toYaml(normalized as never);
+}
+
+function serializeLifecycle(observation: RcclObservation): Record<string, unknown> | undefined {
+  const lifecycle = observation.lifecycle;
+  if (lifecycle == null) return undefined;
+  return {
+    first_seen_git_ref: lifecycle.first_seen_git_ref,
+    last_seen_git_ref: lifecycle.last_seen_git_ref,
+    last_verified_at: lifecycle.last_verified_at,
+    content_fingerprint: lifecycle.content_fingerprint,
+    status: lifecycle.status,
+    ...(lifecycle.supersedes ? { supersedes: lifecycle.supersedes } : {}),
+    ...(lifecycle.superseded_by ? { superseded_by: lifecycle.superseded_by } : {}),
+    ...(lifecycle.stale_since_git_ref ? { stale_since_git_ref: lifecycle.stale_since_git_ref } : {}),
+    ...(lifecycle.superseded_at_git_ref ? { superseded_at_git_ref: lifecycle.superseded_at_git_ref } : {}),
+  };
 }
 
 function materializeActiveLifecycle(

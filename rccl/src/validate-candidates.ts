@@ -1,5 +1,6 @@
 import type { CandidateObservation, CandidateRcclDocument } from './types.ts';
 import { parseRcclCandidates } from './io/parse-rccl.ts';
+import { validateCandidateObservationShape } from './validate-observation.ts';
 
 export type RcclDiagnosticStatus = 'accepted' | 'rejected';
 export type RcclDiagnosticReason =
@@ -8,6 +9,7 @@ export type RcclDiagnosticReason =
   | 'low-confidence'
   | 'malformed-payload'
   | 'missing-required-field'
+  | 'unsupported-value'
   | 'failed-verification';
 
 export interface RcclDiagnosticEntry {
@@ -85,9 +87,16 @@ function validateCandidateDocument(doc: CandidateRcclDocument): ValidateRcclCand
     }
     seenIds.add(id);
 
-    const missingFields = checkRequiredFields(obs, path);
-    if (missingFields) {
-      entries.push(missingFields);
+    const structureErrors = validateCandidateObservationShape(obs, path);
+    if (structureErrors.length) {
+      entries.push({
+        status: 'rejected',
+        reason: classifyStructureErrors(structureErrors),
+        path,
+        message: structureErrors.join('; '),
+        observationId: id || undefined,
+        confidence: Number.isFinite(obs.confidence) ? obs.confidence : undefined,
+      });
       continue;
     }
 
@@ -128,28 +137,15 @@ function validateCandidateDocument(doc: CandidateRcclDocument): ValidateRcclCand
   };
 }
 
-function checkRequiredFields(obs: CandidateObservation, path: string): RcclDiagnosticEntry | null {
-  const missing: string[] = [];
-  if (!obs.provisional_id) missing.push('provisional_id');
-  if (!obs.semantic_key) missing.push('semantic_key');
-  if (!obs.category) missing.push('category');
-  if (!obs.pattern) missing.push('pattern');
-  if (!obs.scope_hint) missing.push('scope_hint');
-  if (!obs.evidence || obs.evidence.length === 0) missing.push('evidence');
-
-  if (missing.length === 0) return null;
-  return {
-    status: 'rejected',
-    reason: 'missing-required-field',
-    path,
-    message: `Missing required fields: ${missing.join(', ')}.`,
-    observationId: obs.provisional_id || undefined,
-  };
-}
-
 function classifyParseErrors(errors: string[]): RcclDiagnosticReason {
   const joined = errors.join(' ').toLowerCase();
   if (joined.includes('yaml parse error') || joined.includes('must be a yaml object')) return 'malformed-payload';
   if (joined.includes('missing') || joined.includes("must be")) return 'missing-required-field';
   return 'malformed-payload';
+}
+
+function classifyStructureErrors(errors: string[]): RcclDiagnosticReason {
+  const joined = errors.join(' ').toLowerCase();
+  if (joined.includes('missing') || joined.includes('must be a non-empty')) return 'missing-required-field';
+  return 'unsupported-value';
 }

@@ -1,4 +1,5 @@
 export { prepareIncrementalRccl, prepareRccl, prepareRcclWorkflowStage } from './prepare.ts';
+export { commitRcclObservationRefresh } from './commit-refresh.ts';
 export { parseRccl, parseRcclCandidates, normalizeObservation, normalizeDocument } from './io/parse-rccl.ts';
 export { validateRcclCandidatePayload } from './validate-candidates.ts';
 export { validateRcclObservationRefreshPayload } from './validate-refresh.ts';
@@ -7,6 +8,7 @@ export type {
   RcclRefreshDiagnosticReason,
   RcclRefreshDiagnosticEntry,
   RcclRefreshPayloadDiagnostics,
+  ValidateRcclRefreshOptions,
   ValidateRcclRefreshResult,
 } from './validate-refresh.ts';
 export type {
@@ -49,6 +51,10 @@ export type {
   ConsolidatedObservation,
   ConsolidationGroupReport,
   ConsolidationResult,
+  CommitRcclObservationRefreshOptions,
+  CommitRcclObservationRefreshResult,
+  CommitRcclObservationRefreshSuccess,
+  CommitRcclObservationRefreshFailure,
   EmitRcclResult,
   ParsedRcclResult,
   ParsedCandidateRcclResult,
@@ -68,6 +74,7 @@ export type {
   RcclIncrementalMode,
   RcclObservationRefreshDocument,
   RcclObservationRefreshRetireEntry,
+  RcclObservationRefreshSummary,
   RcclRefreshExistingObservationSummary,
   RcclRefreshPlanMode,
   SamplingPolicy,

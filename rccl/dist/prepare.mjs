@@ -1,5 +1,5 @@
-import { buildRepoIndex } from "./indexing/build-repo-index.mjs";
 import { parseRccl } from "./io/parse-rccl.mjs";
+import { buildRepoIndex } from "./indexing/build-repo-index.mjs";
 import { buildRepresentation } from "./represent/build-representation.mjs";
 import { planSlices } from "./slicing/plan-slices.mjs";
 import { RCCL_CANDIDATE_SCHEMA, buildSlicePrompt } from "./prompt/build-slice-prompt.mjs";
@@ -7,9 +7,9 @@ import { buildDiscoveryPrompt } from "./prompt/build-discovery-prompt.mjs";
 import { buildCritiquePrompt } from "./prompt/build-critique-prompt.mjs";
 import { buildSynthesisPrompt } from "./prompt/build-synthesis-prompt.mjs";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import process from "node:process";
-import { createHash } from "node:crypto";
 import { dirname, join, resolve } from "node:path";
+import { createHash } from "node:crypto";
+import process from "node:process";
 //#region src/prepare.ts
 const FALSEY_FLAG_VALUES = new Set([
 	"0",
@@ -23,10 +23,10 @@ generated_at: <auto-filled-or-null>
 scope: "<scope>"
 
 keep:
-  - "obs-existing-id"
+  - "obs-active-existing-id"
 
 revise:
-  - provisional_id: "obs-<kebab-case-name>"
+  - provisional_id: "obs-active-existing-id"
     semantic_key: "<stable-kebab-case-semantic-identity>"
     category: <category>
     scope_hint: "<glob>"
@@ -44,7 +44,7 @@ revise:
       scope_basis: <single-file|directory-cluster|module-cluster|cross-root|null>
 
 retire:
-  - observation_id: "obs-existing-id"
+  - observation_id: "obs-active-existing-id"
     reason_id: <file-missing|snippet-drift|scope-drift|superseded|no-longer-material|other>
     confidence: <0.0-1.0>
 
@@ -286,7 +286,7 @@ function buildObservationRefreshArtifact(projectRoot, scope, mode, focusFiles) {
 	return {
 		suggestedPath: suggestedObservationRefreshPath(projectRoot, scope, mode, focusFiles),
 		format: "yaml",
-		usage: "Write the RCCL observation refresh proposal to this YAML path, then validate it through RCCL before commit."
+		usage: "Write the RCCL observation refresh proposal to this YAML path, then pass it to calibrate-repo-context commit-refresh with --input."
 	};
 }
 function buildObservationRefreshContract(input) {
@@ -423,10 +423,13 @@ function buildRefreshPrompt(input) {
 	lines.push("");
 	lines.push("## Hard rules");
 	lines.push("1. Keep existing observations only when the provided slices and existing summary still support them.");
-	lines.push("2. Revise or create observations only with exact evidence copied from the provided windows.");
-	lines.push("3. Retire is only a proposal. Use it when the existing observation appears stale, superseded, or no longer material for code decisions.");
-	lines.push("4. Use only listed existing observation ids in keep or retire.");
-	lines.push("5. Prefer fewer, stronger refresh proposals over broad summaries.");
+	lines.push("2. Revise uses provisional_id equal to an existing active observation id; v1 does not support observation id renames or historical reactivation.");
+	lines.push("3. Revise or create observations only with exact evidence copied from the provided windows.");
+	lines.push("4. Retire means the observation should become stale in v1, not superseded.");
+	lines.push("5. Use only listed existing active observation ids in keep, revise, or retire.");
+	lines.push("6. Omitted active observations are carried forward unchanged; omission is non-destructive.");
+	lines.push("7. Use the exact action schemas; do not emit shorthand retire entries or malformed action items.");
+	lines.push("8. Prefer fewer, stronger refresh proposals over broad summaries.");
 	lines.push("");
 	lines.push(`Scope: ${input.scope}`);
 	lines.push(`Requested mode: ${input.requestedMode}`);

@@ -39,6 +39,19 @@ agent may propose keep/revise/retire/new observations, but RCCL remains the
 deterministic boundary for schema validation, evidence verification,
 consolidation, lifecycle handling, and final writes.
 
+Commit an accepted refresh proposal with:
+
+```sh
+node <this-skill-directory>/scripts/calibrate-repo-context.mjs commit-refresh <project-root> --input <path-to-refresh-yaml|-> [--debug-artifacts]
+```
+
+Refresh v1 rules:
+- `revise.provisional_id` must equal an existing active observation id; id renames and historical reactivation are not supported.
+- `new_observations.provisional_id` must not collide with an existing observation id.
+- `retire` means the observation should become `stale`, not `superseded`.
+- Omitted active observations are carried forward unchanged.
+- Use the exact action schemas; shorthand or malformed action items are rejected and must be corrected before commit.
+
 Use the full staged workflow below when doing broad repository calibration.
 
 ### Step 1 - Prepare discovery stage
