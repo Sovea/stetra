@@ -1,5 +1,6 @@
 import { buildContractPayloadDiagnostics } from "./diagnostics.mjs";
-import { contractVersionDiagnostic, isRecord, validConfidence, validEvidenceRefs } from "./shared.mjs";
+import { contractVersionDiagnostic, isRecord, normalizeEvidenceRefs, validConfidence, validEvidenceRefs } from "./shared.mjs";
+import { verifyEvidenceRefs } from "./evidence.mjs";
 //#region src/ai-contracts/adherence-evidence.ts
 const MINIMUM_ADHERENCE_CONFIDENCE = .5;
 const VERDICTS = new Set([
@@ -54,7 +55,7 @@ function prepareAdherenceEvidenceContract(input) {
 		}
 	};
 }
-function validateAdherenceEvidencePayload(raw, allowedDirectiveIds) {
+function validateAdherenceEvidencePayload(raw, allowedDirectiveIds, evidenceContext) {
 	const entries = [];
 	const verdicts = [];
 	const allowedIds = new Set(allowedDirectiveIds);
@@ -101,16 +102,32 @@ function validateAdherenceEvidencePayload(raw, allowedDirectiveIds) {
 			entries.push(rejected(path, "low-confidence", `Confidence ${item.confidence} is below ${MINIMUM_ADHERENCE_CONFIDENCE}.`, item));
 			return;
 		}
-		if (item.verdict !== "unverified" && !validEvidenceRefs(item.evidence_refs)) {
-			entries.push(rejected(path, "missing-evidence", "Non-unverified adherence verdicts must include evidence_refs.", item));
+		const nonUnverified = item.verdict !== "unverified";
+		const evidenceRefs = validEvidenceRefs(item.evidence_refs) ? normalizeEvidenceRefs(item.evidence_refs) : [];
+		if (nonUnverified && !evidenceRefs.length) {
+			verdicts.push(toUnverified(item, evidenceRefs));
+			entries.push(downgraded(path, "missing-evidence", "Non-unverified adherence verdict lacks evidence_refs; recorded as unverified and excluded from follow rate.", item));
 			return;
+		}
+		if (nonUnverified && evidenceRefs.length) {
+			const evidence = verifyEvidenceRefs(evidenceRefs, evidenceContext);
+			if (evidence.conversationOnly) {
+				verdicts.push(toUnverified(item, evidenceRefs));
+				entries.push(downgraded(path, "conversation-only-evidence", "Conversation-only adherence evidence cannot update follow rate; recorded as unverified.", item));
+				return;
+			}
+			if (!evidence.hasStaticEvidence) {
+				verdicts.push(toUnverified(item, evidenceRefs));
+				entries.push(downgraded(path, "insufficient-static-evidence", "Adherence verdict lacks statically verified file, diff, command, or runtime trace evidence; recorded as unverified.", item));
+				return;
+			}
 		}
 		const ignoredReason = item.verdict === "ignored" && item.ignored_reason && IGNORED_REASONS.has(item.ignored_reason) ? item.ignored_reason : void 0;
 		verdicts.push({
 			directive_id: item.directive_id,
 			verdict: item.verdict,
 			confidence: item.confidence,
-			evidence_refs: item.evidence_refs,
+			evidence_refs: evidenceRefs,
 			reason: item.reason,
 			...ignoredReason ? { ignored_reason: ignoredReason } : {}
 		});
@@ -134,6 +151,15 @@ function validateAdherenceEvidencePayload(raw, allowedDirectiveIds) {
 		diagnostics: buildContractPayloadDiagnostics("adherence-evidence", entries)
 	};
 }
+function toUnverified(item, evidenceRefs) {
+	return {
+		directive_id: item.directive_id,
+		verdict: "unverified",
+		confidence: item.confidence,
+		evidence_refs: evidenceRefs,
+		reason: item.reason
+	};
+}
 function isAdherencePayload(value) {
 	return isRecord(value) && Array.isArray(value.verdicts);
 }
@@ -144,6 +170,16 @@ function isVerdictEntry(value) {
 function rejected(path, reason, message, item) {
 	return {
 		status: "rejected",
+		reason,
+		path,
+		message,
+		directiveId: item.directive_id,
+		confidence: item.confidence
+	};
+}
+function downgraded(path, reason, message, item) {
+	return {
+		status: "downgraded",
 		reason,
 		path,
 		message,

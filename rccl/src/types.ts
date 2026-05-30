@@ -407,6 +407,7 @@ export interface RcclRefreshExistingObservationSummary {
 export interface PrepareIncrementalRcclResult {
   mode: RcclRefreshPlanMode;
   contract?: RcclAIContractEnvelope;
+  candidateArtifact?: RcclAIContractArtifact;
   refreshArtifact?: RcclAIContractArtifact;
   metadata: {
     scope: string;

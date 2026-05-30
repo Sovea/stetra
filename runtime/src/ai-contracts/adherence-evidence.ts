@@ -1,10 +1,12 @@
 import { buildContractPayloadDiagnostics } from './diagnostics.ts';
-import { contractVersionDiagnostic, isRecord, validConfidence, validEvidenceRefs } from './shared.ts';
+import { verifyEvidenceRefs } from './evidence.ts';
+import { contractVersionDiagnostic, isRecord, normalizeEvidenceRefs, validConfidence, validEvidenceRefs } from './shared.ts';
 import type {
   AdherenceEvidenceContractInput,
   AdherenceEvidenceContractOutput,
   AdherenceEvidenceValidationResult,
   ContractPayloadDiagnosticEntry,
+  EvidenceRefVerificationContext,
   HostAdherenceEvidencePayload,
   HostAdherenceEvidenceEntry,
   ValidatedAdherenceEvidenceVerdict,
@@ -50,7 +52,11 @@ export function prepareAdherenceEvidenceContract(input: AdherenceEvidenceContrac
   };
 }
 
-export function validateAdherenceEvidencePayload(raw: unknown, allowedDirectiveIds: readonly string[]): AdherenceEvidenceValidationResult {
+export function validateAdherenceEvidencePayload(
+  raw: unknown,
+  allowedDirectiveIds: readonly string[],
+  evidenceContext?: EvidenceRefVerificationContext,
+): AdherenceEvidenceValidationResult {
   const entries: ContractPayloadDiagnosticEntry[] = [];
   const verdicts: ValidatedAdherenceEvidenceVerdict[] = [];
   const allowedIds = new Set(allowedDirectiveIds);
@@ -95,9 +101,25 @@ export function validateAdherenceEvidencePayload(raw: unknown, allowedDirectiveI
       entries.push(rejected(path, 'low-confidence', `Confidence ${item.confidence} is below ${MINIMUM_ADHERENCE_CONFIDENCE}.`, item));
       return;
     }
-    if (item.verdict !== 'unverified' && !validEvidenceRefs(item.evidence_refs)) {
-      entries.push(rejected(path, 'missing-evidence', 'Non-unverified adherence verdicts must include evidence_refs.', item));
+    const nonUnverified = item.verdict !== 'unverified';
+    const evidenceRefs = validEvidenceRefs(item.evidence_refs) ? normalizeEvidenceRefs(item.evidence_refs) : [];
+    if (nonUnverified && !evidenceRefs.length) {
+      verdicts.push(toUnverified(item, evidenceRefs));
+      entries.push(downgraded(path, 'missing-evidence', 'Non-unverified adherence verdict lacks evidence_refs; recorded as unverified and excluded from follow rate.', item));
       return;
+    }
+    if (nonUnverified && evidenceRefs.length) {
+      const evidence = verifyEvidenceRefs(evidenceRefs, evidenceContext);
+      if (evidence.conversationOnly) {
+        verdicts.push(toUnverified(item, evidenceRefs));
+        entries.push(downgraded(path, 'conversation-only-evidence', 'Conversation-only adherence evidence cannot update follow rate; recorded as unverified.', item));
+        return;
+      }
+      if (!evidence.hasStaticEvidence) {
+        verdicts.push(toUnverified(item, evidenceRefs));
+        entries.push(downgraded(path, 'insufficient-static-evidence', 'Adherence verdict lacks statically verified file, diff, command, or runtime trace evidence; recorded as unverified.', item));
+        return;
+      }
     }
     const ignoredReason = item.verdict === 'ignored' && item.ignored_reason && IGNORED_REASONS.has(item.ignored_reason)
       ? item.ignored_reason as IgnoredReason
@@ -106,7 +128,7 @@ export function validateAdherenceEvidencePayload(raw: unknown, allowedDirectiveI
       directive_id: item.directive_id,
       verdict: item.verdict,
       confidence: item.confidence,
-      evidence_refs: item.evidence_refs,
+      evidence_refs: evidenceRefs,
       reason: item.reason,
       ...(ignoredReason ? { ignored_reason: ignoredReason } : {}),
     });
@@ -125,6 +147,19 @@ export function validateAdherenceEvidencePayload(raw: unknown, allowedDirectiveI
   }
 
   return { verdicts, diagnostics: buildContractPayloadDiagnostics('adherence-evidence', entries) };
+}
+
+function toUnverified(
+  item: HostAdherenceEvidenceEntry,
+  evidenceRefs: HostAdherenceEvidenceEntry['evidence_refs'],
+): ValidatedAdherenceEvidenceVerdict {
+  return {
+    directive_id: item.directive_id,
+    verdict: 'unverified',
+    confidence: item.confidence,
+    evidence_refs: evidenceRefs,
+    reason: item.reason,
+  };
 }
 
 function isAdherencePayload(value: unknown): value is HostAdherenceEvidencePayload {
@@ -149,6 +184,22 @@ function rejected(
 ): ContractPayloadDiagnosticEntry {
   return {
     status: 'rejected',
+    reason,
+    path,
+    message,
+    directiveId: item.directive_id,
+    confidence: item.confidence,
+  };
+}
+
+function downgraded(
+  path: string,
+  reason: ContractPayloadDiagnosticEntry['reason'],
+  message: string,
+  item: Partial<HostAdherenceEvidenceEntry>,
+): ContractPayloadDiagnosticEntry {
+  return {
+    status: 'downgraded',
     reason,
     path,
     message,

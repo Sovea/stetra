@@ -86,7 +86,10 @@ export type ContractPayloadDiagnosticReason =
   | 'missing-evidence'
   | 'missing-required-field'
   | 'unsupported-value'
-  | 'capped-by-policy';
+  | 'capped-by-policy'
+  | 'unverified-evidence'
+  | 'insufficient-static-evidence'
+  | 'conversation-only-evidence';
 
 export interface ContractPayloadDiagnosticEntry {
   status: ContractPayloadDiagnosticStatus;
@@ -109,6 +112,37 @@ export interface ContractPayloadDiagnostics {
     unused: number;
   };
   entries: ContractPayloadDiagnosticEntry[];
+}
+
+export interface EvidenceRefVerificationEntry {
+  ref: EvidenceRef;
+  status: 'verified' | 'unverified';
+  static: boolean;
+  reason: string;
+}
+
+export interface EvidenceRefVerificationContext {
+  projectRoot?: string;
+  observations?: Array<{
+    id: string;
+    evidence: Array<{
+      file: string;
+      line_range: [number, number];
+      snippet: string;
+    }>;
+  }>;
+  runtimeTraceRefs?: readonly string[];
+  commandOutputHashes?: readonly string[];
+  diffSnapshotHashes?: readonly string[];
+}
+
+export interface EvidenceRefVerificationResult {
+  total: number;
+  verified: number;
+  staticVerified: number;
+  conversationOnly: boolean;
+  hasStaticEvidence: boolean;
+  entries: EvidenceRefVerificationEntry[];
 }
 
 // --- Agent Capability Profile ---
@@ -152,6 +186,28 @@ export interface ContextAcquisitionContractOutput {
   acquisitionSchema: string;
   acquisitionArtifact: AIContractArtifact;
   contract: AIContractEnvelope;
+}
+
+export type ContextAcquisitionMode = 'task-scoped' | 'changed-files' | 'full';
+
+export interface ContextAcquisitionRequest {
+  kind: 'rccl-incremental';
+  mode: ContextAcquisitionMode;
+  target_files: string[];
+  changed_files: string[];
+  scope?: string;
+  reason: string;
+  confidence: number;
+  evidence_refs: EvidenceRef[];
+}
+
+export interface ContextAcquisitionPayload {
+  requests: ContextAcquisitionRequest[];
+}
+
+export interface ContextAcquisitionValidationResult {
+  requests: ContextAcquisitionRequest[];
+  diagnostics: ContractPayloadDiagnostics;
 }
 
 // --- Task Model ---
@@ -316,6 +372,7 @@ export interface SemanticGovernanceGraphValidationInput {
   source: HostProposalSourceInput;
   allowedDirectiveIds?: readonly string[];
   allowedObservationIds?: readonly string[];
+  evidenceContext?: EvidenceRefVerificationContext;
 }
 
 export interface SemanticGovernanceGraphValidationResult {

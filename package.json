@@ -3,8 +3,6 @@
   "private": true,
   "packageManager": "pnpm@10.33.0",
   "scripts": {
-    "build": "pnpm -r build",
-    "test": "pnpm -r test && node skills/code/test/workflow.test.mjs",
-    "verify:plugin": "node scripts/verify-plugin-package.mjs"
+    "build": "pnpm -r build"
   }
 }

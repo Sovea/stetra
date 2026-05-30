@@ -7,7 +7,11 @@ export {
   prepareAgentCapabilityProfileContract,
   validateAgentCapabilityProfilePayload,
 } from './ai-contracts/agent-capability-profile.ts';
-export { prepareContextAcquisitionContract } from './ai-contracts/context-acquisition.ts';
+export {
+  prepareContextAcquisitionContract,
+  validateContextAcquisitionPayload,
+} from './ai-contracts/context-acquisition.ts';
+export { verifyEvidenceRefs } from './ai-contracts/evidence.ts';
 export {
   prepareTaskModelContract,
   validateTaskModelPayload,

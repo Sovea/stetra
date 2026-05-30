@@ -21,6 +21,7 @@ Host-agent semantic judgment enters only through `ai-contract/v2` artifacts:
 
 - `task-model`
 - `semantic-governance-graph`
+- `context-acquisition`
 - `adherence-evidence`
 
 ## Default Flow
@@ -35,7 +36,9 @@ node <this-skill-directory>/scripts/code.mjs auto <project-root> --task "<user t
 
 Deterministic fallback uses neutral defaults for compatibility, migration, sensitive-interface, and similar governance semantics. Confirm those concerns through explicit CLI fields or a task-model artifact when they should affect governance.
 
-If `auto` returns `status: "contracts-required"`, fulfill only the listed Runtime-owned contract artifacts and re-run with the new v2 flags:
+`auto` may include an `agentLoop` field. Treat `agentLoop.pendingContracts` as the next host-agent work queue: write the artifact to `artifactPath`, repair only from Runtime/RCCL diagnostics, and resume with `resumeCommand`. The default repair limit is three attempts for the same contract and same failure reason.
+
+If `auto` returns `status: "contracts-required"`, this is not a default stopping point. In the same turn, fulfill only the listed Runtime-owned contract artifacts and re-run with the new v2 flags or the supplied `agentLoop.pendingContracts[].resumeCommand`:
 
 ```sh
 node <this-skill-directory>/scripts/code.mjs auto <project-root> --task "<user task>" --task-model-file <path> --governance-graph-file <path>
@@ -44,7 +47,13 @@ node <this-skill-directory>/scripts/code.mjs auto <project-root> --task "<user t
 `--task-model-file` is used for the `task-model` artifact.
 `--governance-graph-file` is used for the `semantic-governance-graph` artifact.
 
-If RCCL is absent, `auto` may also return a `contextAcquisition` recommendation. Prefer running repository calibration before expecting semantic graph coverage; deterministic structural recall is fallback only.
+If RCCL is absent, `auto` may return a `context-acquisition` contract or `contextAcquisition` recommendation. Fulfill the bounded Runtime payload, then run `calibrate-repo-context prepare-incremental`. When no `.resonant-code/rccl.yaml` exists, the RCCL incremental flow must produce an `rccl-observation-generation` contract and use `commit`; when RCCL exists, it produces an `rccl-observation-refresh` contract and uses `commit-refresh`.
+
+Mode behavior:
+
+- `fast` skips blocking host-agent contracts and may complete with `--auto-unverified`.
+- `standard` automatically fulfills Runtime-required contracts and prepares adherence evidence by default; if evidence is insufficient, write `unverified` verdicts rather than updating follow rate.
+- `strict` completes the full `task-model -> semantic-governance-graph -> adherence-evidence` lifecycle. A strict task is incomplete until adherence evidence is accepted or explicitly reported as unverified with diagnostics.
 
 Useful supporting commands:
 
@@ -72,7 +81,7 @@ To request semantic governance:
 node <this-skill-directory>/scripts/code.mjs prepare-relations <project-root> --task "<user task>" [--task-model-file <path>] [--target-file <path>] [--changed-file <path>] [--tech <name>] [--tag <name>] [--operation <create|modify|bugfix|refactor>]
 ```
 
-This prints a Runtime-owned `semantic-governance-graph` contract with allowed directive and observation ids. Host output may propose edges with relation, impact, execution intent, review priority, confidence, reason, and `evidence_refs`; Runtime still decides final relation and execution mode.
+This prints a Runtime-owned `semantic-governance-graph` contract with allowed directive and observation ids. Host output may propose edges with relation, impact, execution intent, review priority, confidence, reason, and `evidence_refs`; Runtime still decides final relation and execution mode. Edges that affect execution mode require at least one statically verifiable evidence ref; conversation-only execution evidence is rejected or downgraded before adjudication.
 
 To compile manually:
 
@@ -114,7 +123,7 @@ After implementation, request the adherence evidence contract:
 node <this-skill-directory>/scripts/code.mjs prepare-adherence --session <session-path>
 ```
 
-This prints a Runtime-owned `adherence-evidence` contract. Every `followed`, `ignored`, or `partial` verdict must cite evidence from diff, file snippets, command/test results, or implementation evidence. Use `unverified` when evidence was not inspected; unverified directives are recorded but do not update follow rate.
+This prints a Runtime-owned `adherence-evidence` contract. Every `followed`, `ignored`, or `partial` verdict must cite evidence from diff, file snippets, command/test results, runtime trace, or implementation evidence. Use `unverified` when evidence was not inspected; unverified directives are recorded but do not update follow rate. If Runtime cannot statically verify the evidence, the validator records the verdict as `unverified`.
 
 Then complete:
 

@@ -155,6 +155,46 @@ function prepareIncrementalRccl(projectRootInput, options = {}) {
 		affectedObservations,
 		staleObservations
 	});
+	if (selectedSlices.length > 0 && !existingRccl) {
+		const generationContext = {
+			...context,
+			slices: selectedSlices,
+			stats
+		};
+		const generationPrompt = buildSlicePrompt({
+			scope: context.scope,
+			slices: selectedSlices,
+			contextMeta: context.contextMeta,
+			stats
+		});
+		const candidateArtifact = buildObservationGenerationArtifact(context.projectRoot, context.scope);
+		const generationContract = buildObservationGenerationContract(generationContext, generationPrompt, candidateArtifact);
+		const debugArtifacts = buildDebugArtifacts(generationContext, generationPrompt, "rccl-incremental-generation-prompts", options.debugArtifacts, {
+			mode: requestedMode,
+			focusFiles
+		});
+		return {
+			mode: "contracts-required",
+			contract: generationContract,
+			candidateArtifact,
+			metadata: {
+				scope: context.scope,
+				requested_mode: requestedMode,
+				focus_files: focusFiles,
+				stats,
+				existing_observation_count: 0,
+				limits: {
+					file_limit: Number.isFinite(limits.fileLimit) ? limits.fileLimit : null,
+					window_limit: Number.isFinite(limits.windowLimit) ? limits.windowLimit : null,
+					applied: limits.applied
+				}
+			},
+			affectedObservations,
+			staleObservations,
+			cacheArtifacts,
+			debugArtifacts
+		};
+	}
 	const prompt = buildRefreshPrompt({
 		scope: context.scope,
 		requestedMode,

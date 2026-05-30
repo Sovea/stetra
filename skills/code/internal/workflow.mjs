@@ -13,6 +13,7 @@ const DEFAULT_AGENT_CAPABILITY_PROFILE = {
   max_command_count: 12,
 };
 const GUIDANCE_MODES = new Set(['fast', 'standard', 'strict']);
+const AGENT_LOOP_MAX_ATTEMPTS = 3;
 
 export async function prepareInterpretation(options) {
   const paths = resolveRuntimePaths(options.projectRoot, options.pluginRoot);
@@ -109,12 +110,23 @@ export async function autoCodeTask(options) {
   });
 
   const postCompileContracts = preparePostCompileContracts(runtime, paths, task, prepared, plan.policy);
+  const postCompileRequired = postCompileContracts.some((contract) => contract.required);
   const contextAcquisition = plan.policy.optional?.includes('context-acquisition')
     ? buildContextAcquisitionRecommendation(paths)
     : null;
+  const agentLoop = buildAgentLoopPlan({
+    phase: postCompileContracts.length ? 'post-compile' : 'ready',
+    paths,
+    task,
+    guidanceMode,
+    contracts: postCompileContracts,
+    taskModelFile: taskModelArtifact.path,
+    governanceGraphFile: options.governanceGraphFile,
+    sessionPath: prepared.sessionPath,
+  });
 
   return {
-    status: postCompileContracts.length ? 'post-compile-contracts-required' : 'ok',
+    status: postCompileRequired ? 'post-compile-contracts-required' : 'ok',
     mode: 'compiled',
     sessionPath: prepared.sessionPath,
     paths,
@@ -128,7 +140,8 @@ export async function autoCodeTask(options) {
     interpretation: summarizeAutoInterpretation(prepared),
     contextAcquisition,
     postCompileContracts,
-    nextStep: postCompileContracts.length
+    agentLoop,
+    nextStep: postCompileRequired
       ? 'Fulfill prepare-adherence output with evidence, then run complete with --adherence-file.'
       : buildAutoNextStep(guidanceMode),
   };
@@ -282,14 +295,16 @@ export async function prepareCodeTask(options) {
     });
     let preloadedSources;
     let allowedIds;
+    let graphEvidenceContext;
     if (options.governanceGraphFile) {
       const context = await runtime.prepareSemanticContractContext({
         compileInput: baseCompileInput(paths, { resolvedTask }),
       });
       preloadedSources = context.loadedSources;
       allowedIds = buildAllowedIds(context);
+      graphEvidenceContext = buildEvidenceContext(paths.projectRoot, context.observations);
     }
-    graphArtifact = loadGovernanceGraphArtifact(options.governanceGraphFile, runtime, allowedIds);
+    graphArtifact = loadGovernanceGraphArtifact(options.governanceGraphFile, runtime, allowedIds, graphEvidenceContext);
     const hostProposals = artifactProposalList(graphArtifact);
     const fulfillment = buildFulfillmentDiagnostics({
       taskModel: taskModelArtifact,
@@ -453,7 +468,7 @@ export async function completeCodeTask(options) {
         },
       };
     }
-    const adherenceArtifact = loadAdherenceArtifact(options.adherenceFile, runtime, packet);
+    const adherenceArtifact = loadAdherenceArtifact(options.adherenceFile, runtime, packet, buildAdherenceEvidenceContext(session, sessionPath));
     const fulfillment = session.fulfillment
       ? { ...session.fulfillment, adherenceEvidence: summarizeArtifact(adherenceArtifact) }
       : undefined;
@@ -636,8 +651,9 @@ async function prepareAutoSemanticContracts({ runtime, paths, task, taskModelArt
 
 function preparePostCompileContracts(runtime, paths, task, prepared, policy) {
   if (!prepared.ego) return [];
-  const requested = policy?.required?.includes('adherence-evidence');
+  const requested = policy?.required?.includes('adherence-evidence') || policy?.optional?.includes('adherence-evidence');
   if (!requested) return [];
+  const required = policy?.required?.includes('adherence-evidence') ?? false;
   const directives = prepared.ego.guidance.must_follow.map((directive) => ({
     id: directive.id,
     description: directive.statement,
@@ -652,12 +668,21 @@ function preparePostCompileContracts(runtime, paths, task, prepared, policy) {
   });
   return [{
     kind: 'adherence-evidence',
+    required,
     artifact: contractOutput.evidenceArtifact,
     contract: contractOutput.contract,
   }];
 }
 
 function buildContractsRequiredResult({ paths, plan, task, taskModelArtifact, contracts, guidanceMode }) {
+  const agentLoop = buildAgentLoopPlan({
+    phase: 'pre-compile',
+    paths,
+    task,
+    guidanceMode,
+    contracts,
+    taskModelFile: taskModelArtifact.path,
+  });
   return {
     status: 'contracts-required',
     mode: 'awaiting-host-artifacts',
@@ -680,8 +705,132 @@ function buildContractsRequiredResult({ paths, plan, task, taskModelArtifact, co
     }),
     policy: plan.policy,
     diagnostics: plan.diagnostics,
+    agentLoop,
     nextStep: 'Fulfill the listed Runtime contract artifacts with host-agent output, then re-run with the returned artifact paths.',
   };
+}
+
+function buildAgentLoopPlan({
+  phase,
+  paths,
+  task,
+  guidanceMode,
+  contracts,
+  taskModelFile,
+  governanceGraphFile,
+  sessionPath,
+}) {
+  return {
+    phase,
+    pendingContracts: contracts.map((item) => {
+      const artifactPath = item.artifact?.suggestedPath ?? item.contract?.artifact?.suggestedPath ?? null;
+      return {
+        kind: item.kind,
+        required: item.required ?? phase !== 'ready',
+        artifactPath,
+        artifactFormat: item.artifact?.format ?? item.contract?.artifact?.format ?? 'json',
+        resumeCommand: buildAgentLoopResumeCommand({
+          kind: item.kind,
+          artifactPath,
+          paths,
+          task,
+          guidanceMode,
+          taskModelFile,
+          governanceGraphFile,
+          sessionPath,
+        }),
+      };
+    }),
+    maxAttempts: AGENT_LOOP_MAX_ATTEMPTS,
+    repairPolicy: {
+      source: 'runtime-diagnostics-only',
+      rule: 'Repair artifacts only from Runtime/RCCL diagnostics; stop after three consecutive same-contract failures with the same reason.',
+    },
+    stopReasons: [
+      'missing-required-context',
+      'persistent-validation-failure',
+      'user-task-scope-conflict',
+      'unrecoverable-command-failure',
+    ],
+  };
+}
+
+function buildAgentLoopResumeCommand({
+  kind,
+  artifactPath,
+  paths,
+  task,
+  guidanceMode,
+  taskModelFile,
+  governanceGraphFile,
+  sessionPath,
+}) {
+  if (kind === 'adherence-evidence' && sessionPath && artifactPath) {
+    return `node skills/code/scripts/code.mjs complete --session ${shellArg(sessionPath)} --adherence-file ${shellArg(artifactPath)}`;
+  }
+  if (kind === 'context-acquisition') {
+    return buildContextAcquisitionCommand(paths.projectRoot, task);
+  }
+  const args = [
+    'node',
+    'skills/code/scripts/code.mjs',
+    'auto',
+    shellArg(paths.projectRoot),
+    '--mode',
+    shellArg(guidanceMode),
+    '--task',
+    shellArg(task.description),
+    ...taskFlagArgs(task),
+  ];
+  const taskModel = kind === 'task-model' ? artifactPath : taskModelFile;
+  const graph = kind === 'semantic-governance-graph' ? artifactPath : governanceGraphFile;
+  if (taskModel) args.push('--task-model-file', shellArg(taskModel));
+  if (graph) args.push('--governance-graph-file', shellArg(graph));
+  return args.join(' ');
+}
+
+function buildContextAcquisitionCommand(projectRoot, task) {
+  const args = [
+    'node',
+    'skills/calibrate-repo-context/scripts/calibrate-repo-context.mjs',
+    'prepare-incremental',
+    shellArg(projectRoot),
+  ];
+  if (task.targetFile) args.push('--target-file', shellArg(task.targetFile));
+  for (const file of task.changedFiles ?? []) args.push('--changed-file', shellArg(file));
+  args.push('--mode', shellArg(task.changedFiles?.length ? 'changed-files' : 'task-scoped'));
+  return args.join(' ');
+}
+
+function taskFlagArgs(task) {
+  const args = [];
+  if (task.targetFile) args.push('--target-file', shellArg(task.targetFile));
+  for (const file of task.changedFiles ?? []) args.push('--changed-file', shellArg(file));
+  for (const tech of task.techStack ?? []) args.push('--tech', shellArg(tech));
+  for (const tag of task.tags ?? []) args.push('--tag', shellArg(tag));
+  const scalarFlags = [
+    ['operation', 'operation'],
+    ['projectStage', 'project-stage'],
+    ['optimizationTarget', 'optimization-target'],
+    ['riskLevel', 'risk-level'],
+    ['scopeSize', 'scope-size'],
+    ['compatibilityRequirement', 'compatibility-requirement'],
+    ['interfaceSensitivity', 'interface-sensitivity'],
+    ['refactorTolerance', 'refactor-tolerance'],
+    ['migrationPhase', 'migration-phase'],
+    ['reviewGoal', 'review-goal'],
+  ];
+  for (const [field, flag] of scalarFlags) {
+    if (task[field]) args.push(`--${flag}`, shellArg(task[field]));
+  }
+  for (const value of task.hardConstraints ?? []) args.push('--hard-constraint', shellArg(value));
+  for (const value of task.allowedTradeoffs ?? []) args.push('--allowed-tradeoff', shellArg(value));
+  for (const value of task.avoid ?? []) args.push('--avoid', shellArg(value));
+  return args;
+}
+
+function shellArg(value) {
+  return JSON.stringify(String(value));
 }
 
 function summarizeAutoInterpretation(prepared) {
@@ -749,7 +898,7 @@ function summarizeAutoContracts(taskModelArtifact, options) {
   };
 }
 
-function loadGovernanceGraphArtifact(governanceGraphFile, runtime, allowedIds) {
+function loadGovernanceGraphArtifact(governanceGraphFile, runtime, allowedIds, evidenceContext) {
   if (!governanceGraphFile) return buildAbsentArtifact('semantic-governance-graph');
   const path = resolve(governanceGraphFile);
   const payload = JSON.parse(readFileSync(path, 'utf-8'));
@@ -760,6 +909,7 @@ function loadGovernanceGraphArtifact(governanceGraphFile, runtime, allowedIds) {
       path,
     },
     ...allowedIds,
+    ...(evidenceContext ? { evidenceContext } : {}),
   });
   return {
     kind: 'semantic-governance-graph',
@@ -771,13 +921,13 @@ function loadGovernanceGraphArtifact(governanceGraphFile, runtime, allowedIds) {
   };
 }
 
-function loadAdherenceArtifact(adherenceFile, runtime, packet) {
+function loadAdherenceArtifact(adherenceFile, runtime, packet, evidenceContext) {
   const path = resolve(adherenceFile);
   const payload = JSON.parse(readFileSync(path, 'utf-8'));
   const allowedDirectiveIds = packet.governance.semantic_merge.directive_modes
     .filter((directive) => directive.execution_mode !== 'suppress')
     .map((directive) => directive.directive_id);
-  const result = runtime.validateAdherenceEvidencePayload(payload, allowedDirectiveIds);
+  const result = runtime.validateAdherenceEvidencePayload(payload, allowedDirectiveIds, evidenceContext);
   return {
     kind: 'adherence-evidence',
     provided: true,
@@ -785,6 +935,31 @@ function loadAdherenceArtifact(adherenceFile, runtime, packet) {
     status: summarizeDiagnosticStatus(result.diagnostics),
     diagnostics: result.diagnostics,
     verdicts: result.verdicts,
+  };
+}
+
+function buildEvidenceContext(projectRoot, observations = []) {
+  return {
+    projectRoot,
+    observations: observations.map((observation) => ({
+      id: observation.id,
+      evidence: observation.evidence ?? [],
+    })),
+  };
+}
+
+function buildAdherenceEvidenceContext(session, sessionPath) {
+  const projectRoot = session.paths?.projectRoot;
+  const observations = session.compileInput?.preloadedSources?.rccl?.observations ?? [];
+  return {
+    ...(projectRoot ? { projectRoot } : {}),
+    ...(observations.length ? { observations } : {}),
+    runtimeTraceRefs: [
+      sessionPath,
+      resolve(sessionPath),
+      session.compileOutput?.trace?.trace_id,
+      session.compileOutput?.packet?.governance?.trace?.trace_id,
+    ].filter(Boolean),
   };
 }
 

@@ -4,6 +4,7 @@ import { buildGovernanceIR } from '../ir/build-ir.ts';
 import { SEMANTIC_RELATION_POLICY } from '../ir/relations/policy.ts';
 import { loadCompileSources } from '../load/compile-sources.ts';
 import { buildContractPayloadDiagnostics } from './diagnostics.ts';
+import { verifyEvidenceRefs } from './evidence.ts';
 import { contractVersionDiagnostic, isRecord, normalizeEvidenceRefs, validConfidence, validEvidenceRefs } from './shared.ts';
 import type {
   ContractPayloadDiagnosticEntry,
@@ -150,7 +151,17 @@ export function validateSemanticGovernanceGraphPayload(input: SemanticGovernance
       entries.push(rejected(path, 'missing-evidence', 'Graph edge must include evidence_refs.', edge));
       return;
     }
-    accepted.push({ ...edge, evidence_refs: normalizeEvidenceRefs(edge.evidence_refs) });
+    const evidenceRefs = normalizeEvidenceRefs(edge.evidence_refs);
+    const evidence = verifyEvidenceRefs(evidenceRefs, input.evidenceContext);
+    if (isExecutionImpactingEdge(edge) && evidence.conversationOnly) {
+      entries.push(rejected(path, 'conversation-only-evidence', 'Execution-impacting graph edges cannot be supported only by conversation evidence.', edge));
+      return;
+    }
+    if (isExecutionImpactingEdge(edge) && !evidence.hasStaticEvidence) {
+      entries.push(rejected(path, 'insufficient-static-evidence', 'Execution-impacting graph edges require at least one statically verified evidence ref.', edge));
+      return;
+    }
+    accepted.push({ ...edge, evidence_refs: evidenceRefs });
     entries.push({
       status: 'accepted',
       reason: 'accepted',
@@ -170,6 +181,11 @@ export function validateSemanticGovernanceGraphPayload(input: SemanticGovernance
     proposal: buildHostProposal(input.source, { edges: accepted }),
     diagnostics: buildContractPayloadDiagnostics('semantic-governance-graph', entries, input.source),
   };
+}
+
+function isExecutionImpactingEdge(edge: SemanticGovernanceGraphEdge): boolean {
+  return edge.impact === 'execution-mode'
+    || (edge.execution_intent !== undefined && edge.execution_intent !== 'no-change');
 }
 
 export function loadSemanticGovernanceGraphPayload(raw: unknown, source: HostProposalSourceInput): HostProposalIR {

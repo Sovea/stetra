@@ -5,6 +5,7 @@ import { SEMANTIC_RELATION_POLICY } from "../ir/relations/policy.mjs";
 import { buildGovernanceIR } from "../ir/build-ir.mjs";
 import { buildContractPayloadDiagnostics } from "./diagnostics.mjs";
 import { contractVersionDiagnostic, isRecord, normalizeEvidenceRefs, validConfidence, validEvidenceRefs } from "./shared.mjs";
+import { verifyEvidenceRefs } from "./evidence.mjs";
 //#region src/ai-contracts/semantic-governance-graph.ts
 const SEMANTIC_GRAPH_SCHEMA = {
 	type: "object",
@@ -147,9 +148,19 @@ function validateSemanticGovernanceGraphPayload(input) {
 			entries.push(rejected(path, "missing-evidence", "Graph edge must include evidence_refs.", edge));
 			return;
 		}
+		const evidenceRefs = normalizeEvidenceRefs(edge.evidence_refs);
+		const evidence = verifyEvidenceRefs(evidenceRefs, input.evidenceContext);
+		if (isExecutionImpactingEdge(edge) && evidence.conversationOnly) {
+			entries.push(rejected(path, "conversation-only-evidence", "Execution-impacting graph edges cannot be supported only by conversation evidence.", edge));
+			return;
+		}
+		if (isExecutionImpactingEdge(edge) && !evidence.hasStaticEvidence) {
+			entries.push(rejected(path, "insufficient-static-evidence", "Execution-impacting graph edges require at least one statically verified evidence ref.", edge));
+			return;
+		}
 		accepted.push({
 			...edge,
-			evidence_refs: normalizeEvidenceRefs(edge.evidence_refs)
+			evidence_refs: evidenceRefs
 		});
 		entries.push({
 			status: "accepted",
@@ -171,6 +182,9 @@ function validateSemanticGovernanceGraphPayload(input) {
 		proposal: buildHostProposal(input.source, { edges: accepted }),
 		diagnostics: buildContractPayloadDiagnostics("semantic-governance-graph", entries, input.source)
 	};
+}
+function isExecutionImpactingEdge(edge) {
+	return edge.impact === "execution-mode" || edge.execution_intent !== void 0 && edge.execution_intent !== "no-change";
 }
 function loadSemanticGovernanceGraphPayload(raw, source) {
 	return validateSemanticGovernanceGraphPayload({
