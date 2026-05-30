@@ -1,4 +1,5 @@
 import type { CompileTaskInput, ContextProfile, Operation, TaskIntent, TaskKind } from '../types.ts';
+import type { TaskModelProposal } from '../ai-contracts/types.ts';
 
 export type InterpretationSource = 'explicit' | 'deterministic' | 'host-agent' | 'assistive-ai' | 'repo-default' | 'derived';
 export type ResolutionStatus = 'resolved' | 'unresolved';
@@ -134,6 +135,6 @@ export interface ResolvedTaskInput {
 
 export interface ResolveTaskInput {
   task: CompileTaskInput;
-  candidates?: ParsedTaskCandidate[];
+  taskModels?: TaskModelProposal[];
   interpretationMode?: InterpretationMode;
 }

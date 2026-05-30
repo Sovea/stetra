@@ -1,14 +1,15 @@
 import { parseRccl } from "./io/parse-rccl.mjs";
 import { buildRepoIndex } from "./indexing/build-repo-index.mjs";
 import { buildRepresentation } from "./represent/build-representation.mjs";
+import { extractWindowsForFiles } from "./slicing/extract-windows.mjs";
 import { planSlices } from "./slicing/plan-slices.mjs";
 import { RCCL_CANDIDATE_SCHEMA, buildSlicePrompt } from "./prompt/build-slice-prompt.mjs";
 import { buildDiscoveryPrompt } from "./prompt/build-discovery-prompt.mjs";
 import { buildCritiquePrompt } from "./prompt/build-critique-prompt.mjs";
 import { buildSynthesisPrompt } from "./prompt/build-synthesis-prompt.mjs";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
 import { createHash } from "node:crypto";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import process from "node:process";
 //#region src/prepare.ts
 const FALSEY_FLAG_VALUES = new Set([
@@ -37,6 +38,12 @@ revise:
       - file: "<relative-path>"
         line_range: [<start>, <end>]
         snippet: "<code>"
+    evidence_refs:
+      - kind: "file"
+        ref: "<relative-path>:<start>-<end>"
+        file: "<relative-path>"
+        line_range: [<start>, <end>]
+    counterexamples: []
     source_slice_ids: ["<slice-id>"]
     support_hint:
       file_count: <number-or-null>
@@ -47,6 +54,7 @@ retire:
   - observation_id: "obs-active-existing-id"
     reason_id: <file-missing|snippet-drift|scope-drift|superseded|no-longer-material|other>
     confidence: <0.0-1.0>
+    evidence_refs: []
 
 new_observations:
   - provisional_id: "obs-<kebab-case-name>"
@@ -60,7 +68,25 @@ new_observations:
       - file: "<relative-path>"
         line_range: [<start>, <end>]
         snippet: "<code>"
+    evidence_refs:
+      - kind: "file"
+        ref: "<relative-path>:<start>-<end>"
+        file: "<relative-path>"
+        line_range: [<start>, <end>]
+    counterexamples: []
     source_slice_ids: ["<slice-id>"]
+
+semantic_equivalence:
+  - observation_ids: ["obs-a", "obs-b"]
+    confidence: <0.0-1.0>
+    evidence_refs: []
+    reason: "<why these should consolidate>"
+
+counterexamples:
+  - observation_id: "obs-active-existing-id"
+    confidence: <0.0-1.0>
+    evidence_refs: []
+    reason: "<why this contradicts or narrows the observation>"
 `.trim();
 function prepareRccl(projectRootInput, options = {}) {
 	const context = buildPreparationContext(projectRootInput, options.scope);
@@ -102,8 +128,10 @@ function prepareRcclWorkflowStage(projectRootInput, options) {
 function prepareIncrementalRccl(projectRootInput, options = {}) {
 	const context = buildPreparationContext(projectRootInput, options.scope);
 	const requestedMode = options.mode ?? (options.changedFiles?.length ? "changed-files" : "task-scoped");
-	const focusFiles = normalizeFocusFiles([...options.targetFiles ?? [], ...options.changedFiles ?? []]);
-	const selectedSlices = selectFocusedSlices(context.slices, focusFiles);
+	const focusFiles = normalizeFocusFiles(context.projectRoot, [...options.targetFiles ?? [], ...options.changedFiles ?? []]);
+	const limits = resolveIncrementalLimits(requestedMode, options);
+	const candidateSlices = selectFocusedSlices(context.slices, focusFiles);
+	const selectedSlices = limitCalibrationSlices(candidateSlices.length > 0 ? candidateSlices : buildFocusedFileSlices(context.projectRoot, context.indexedFiles, focusFiles, limits.fileLimit), limits);
 	const stats = statsFor(context.indexedFiles.length, selectedSlices);
 	const existingRccl = loadExistingRccl(context.projectRoot);
 	const affectedObservations = existingRccl ? findAffectedObservations(existingRccl, focusFiles, requestedMode) : [];
@@ -155,7 +183,12 @@ function prepareIncrementalRccl(projectRootInput, options = {}) {
 			requested_mode: requestedMode,
 			focus_files: focusFiles,
 			stats,
-			existing_observation_count: existingRccl?.observations.length ?? 0
+			existing_observation_count: existingRccl?.observations.length ?? 0,
+			limits: {
+				file_limit: Number.isFinite(limits.fileLimit) ? limits.fileLimit : null,
+				window_limit: Number.isFinite(limits.windowLimit) ? limits.windowLimit : null,
+				applied: limits.applied
+			}
 		},
 		affectedObservations,
 		staleObservations,
@@ -255,10 +288,10 @@ function buildObservationGenerationArtifact(projectRoot, scope) {
 }
 function buildObservationGenerationContract(context, prompt, artifact) {
 	return {
-		contractVersion: "ai-contract/v1",
+		contractVersion: "ai-contract/v2",
 		kind: "rccl-observation-generation",
 		schemaId: "rccl.observation-generation-candidate",
-		schemaVersion: "1.0",
+		schemaVersion: "2.0",
 		prompt,
 		schema: RCCL_CANDIDATE_SCHEMA,
 		artifact,
@@ -291,10 +324,10 @@ function buildObservationRefreshArtifact(projectRoot, scope, mode, focusFiles) {
 }
 function buildObservationRefreshContract(input) {
 	return {
-		contractVersion: "ai-contract/v1",
+		contractVersion: "ai-contract/v2",
 		kind: "rccl-observation-refresh",
 		schemaId: "rccl.observation-refresh",
-		schemaVersion: "1.0",
+		schemaVersion: "2.0",
 		prompt: input.prompt,
 		schema: RCCL_REFRESH_SCHEMA,
 		artifact: input.artifact,
@@ -408,6 +441,21 @@ function writeCacheArtifact(projectRoot, folder, key, value) {
 	writeFileSync(path, `${JSON.stringify(value, null, 2)}\n`, "utf-8");
 	return path;
 }
+function resolveIncrementalLimits(requestedMode, options) {
+	const defaultLimited = requestedMode !== "full";
+	const fileLimit = positiveInteger(options.fileLimit) ?? (defaultLimited ? 4 : Number.POSITIVE_INFINITY);
+	const windowLimit = positiveInteger(options.windowLimit) ?? (defaultLimited ? 24 : Number.POSITIVE_INFINITY);
+	return {
+		fileLimit,
+		windowLimit,
+		applied: Number.isFinite(fileLimit) || Number.isFinite(windowLimit)
+	};
+}
+function positiveInteger(value) {
+	if (value === void 0) return void 0;
+	if (!Number.isInteger(value) || value <= 0) throw new Error("RCCL incremental limits must be positive integers.");
+	return value;
+}
 function buildRefreshPrompt(input) {
 	const lines = [];
 	lines.push("# Incremental RCCL Observation Refresh");
@@ -423,13 +471,14 @@ function buildRefreshPrompt(input) {
 	lines.push("");
 	lines.push("## Hard rules");
 	lines.push("1. Keep existing observations only when the provided slices and existing summary still support them.");
-	lines.push("2. Revise uses provisional_id equal to an existing active observation id; v1 does not support observation id renames or historical reactivation.");
-	lines.push("3. Revise or create observations only with exact evidence copied from the provided windows.");
-	lines.push("4. Retire means the observation should become stale in v1, not superseded.");
+	lines.push("2. Revise uses provisional_id equal to an existing active observation id; v2 still keeps final merge, rename, and lifecycle authority inside RCCL.");
+	lines.push("3. Revise or create observations only with exact evidence copied from the provided windows plus matching evidence_refs.");
+	lines.push("4. Retire means the observation should become stale unless RCCL verification proves a stronger disposition.");
 	lines.push("5. Use only listed existing active observation ids in keep, revise, or retire.");
 	lines.push("6. Omitted active observations are carried forward unchanged; omission is non-destructive.");
 	lines.push("7. Use the exact action schemas; do not emit shorthand retire entries or malformed action items.");
-	lines.push("8. Prefer fewer, stronger refresh proposals over broad summaries.");
+	lines.push("8. Include counterexamples and semantic_equivalence proposals when they would narrow scope, merge duplicates, or demote noisy observations.");
+	lines.push("9. Prefer fewer, stronger refresh proposals over broad summaries.");
 	lines.push("");
 	lines.push(`Scope: ${input.scope}`);
 	lines.push(`Requested mode: ${input.requestedMode}`);
@@ -479,14 +528,64 @@ function statsFor(totalFiles, slices) {
 		windows: slices.flatMap((slice) => slice.windows).length
 	};
 }
-function normalizeFocusFiles(files) {
-	return [...new Set(files.map((file) => file.replace(/\\/g, "/").replace(/^\.\//, "").trim()).filter(Boolean))].sort();
+function normalizeFocusFiles(projectRoot, files) {
+	return [...new Set(files.map((file) => normalizeFocusFile(projectRoot, file)).filter(Boolean))].sort();
+}
+function normalizeFocusFile(projectRoot, file) {
+	const trimmed = file.trim();
+	if (!trimmed) return "";
+	const rel = relative(projectRoot, isAbsolute(trimmed) ? trimmed : resolve(projectRoot, trimmed)).replace(/\\/g, "/");
+	if (!rel || rel === ".") return "";
+	if (rel.startsWith("../") || rel === ".." || isAbsolute(rel)) return trimmed.replace(/\\/g, "/").replace(/^\.\//, "");
+	return rel.replace(/^\.\//, "");
 }
 function selectFocusedSlices(slices, focusFiles) {
 	if (focusFiles.length === 0) return slices;
 	const focusSet = new Set(focusFiles);
-	const selected = slices.filter((slice) => slice.files.some((file) => focusSet.has(file)) || slice.windows.some((window) => focusSet.has(window.file)));
-	return selected.length > 0 ? selected : slices;
+	return slices.filter((slice) => slice.files.some((file) => focusSet.has(file)) || slice.windows.some((window) => focusSet.has(window.file)));
+}
+function buildFocusedFileSlices(projectRoot, indexedFiles, focusFiles, fileLimit) {
+	if (focusFiles.length === 0) return [];
+	const indexedByPath = new Map(indexedFiles.map((file) => [file.path, file]));
+	const files = focusFiles.map((file) => indexedByPath.get(file)).filter((file) => Boolean(file)).slice(0, Number.isFinite(fileLimit) ? fileLimit : void 0);
+	if (files.length === 0) return [];
+	return [{
+		id: "focus:changed-files",
+		kind: "module",
+		files: files.map((file) => file.path),
+		rationale: "Direct task focus files selected for incremental RCCL refresh",
+		coverage_weight: 1,
+		windows: extractWindowsForFiles(projectRoot, files)
+	}];
+}
+function limitCalibrationSlices(slices, limits) {
+	if (!Number.isFinite(limits.fileLimit) && !Number.isFinite(limits.windowLimit)) return slices;
+	const selectedFiles = /* @__PURE__ */ new Set();
+	let windowCount = 0;
+	const result = [];
+	for (const slice of slices) {
+		if (Number.isFinite(limits.windowLimit) && windowCount >= limits.windowLimit) break;
+		const files = slice.files.filter((file) => {
+			if (selectedFiles.has(file)) return true;
+			if (Number.isFinite(limits.fileLimit) && selectedFiles.size >= limits.fileLimit) return false;
+			selectedFiles.add(file);
+			return true;
+		});
+		const fileSet = new Set(files);
+		const windows = [];
+		for (const window of slice.windows) {
+			if (!fileSet.has(window.file)) continue;
+			if (Number.isFinite(limits.windowLimit) && windowCount >= limits.windowLimit) break;
+			windows.push(window);
+			windowCount += 1;
+		}
+		if (files.length > 0 && windows.length > 0) result.push({
+			...slice,
+			files,
+			windows
+		});
+	}
+	return result;
 }
 function loadExistingRccl(projectRoot) {
 	const rcclPath = join(projectRoot, ".resonant-code", "rccl.yaml");

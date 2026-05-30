@@ -4,7 +4,8 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "tsdown --config ./tsdown.config.ts"
+    "build": "tsdown --config ./tsdown.config.ts",
+    "test": "node test/agentic-contracts.test.mjs"
   },
   "devDependencies": {
     "@types/node": "^22.19.15",

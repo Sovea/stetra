@@ -25,6 +25,7 @@ export function semanticRelationIRToPublic(relation: SemanticRelationIR): Direct
     ...(relation.conflictClass ? { conflict_class: relation.conflictClass } : {}),
     ...(relation.impact ? { impact: relation.impact } : {}),
     ...(relation.reviewPriority ? { review_priority: relation.reviewPriority } : {}),
+    ...(relation.executionIntent ? { execution_intent: relation.executionIntent } : {}),
     ...(relation.mergeIntent ? { merge_intent: relation.mergeIntent } : {}),
     ...(relation.groupId ? { group_id: relation.groupId } : {}),
   };

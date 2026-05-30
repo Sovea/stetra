@@ -72,10 +72,10 @@ The deterministic runtime provides a baseline through structural matching (`sema
 
 Contracts upgrade signal quality without abandoning determinism:
 
-- `task-interpretation` contract: host provides contextual understanding of the task (operation type, risk level, scope) that heuristic keyword extraction cannot reliably infer — because the host has access to the full conversation context and user intent
-- `semantic-relation` contract: host proposes explicit relations between directive-observation pairs that lexical matching would miss — because the host can reason about semantic meaning across different terminology
-- `semantic-candidate` contract: host provides lightweight candidate shortlists with lower cognitive overhead — because not every relation needs full justification, but the pipeline benefits from broader coverage
-- `adherence-evaluation` contract (target): host reports which directives were actually followed/ignored — because only the host knows what it did during code generation
+- `task-model` contract: host provides evidence-backed field-level understanding of operation, risk, scope, context, alternatives, and uncertainties that keyword extraction cannot reliably infer
+- `semantic-governance-graph` contract: host proposes evidence-backed directive/observation/task/feedback edges with relation, impact, execution intent, and review priority, replacing separate relation and shortlist tracks
+- `adherence-evidence` contract: host reports evidence-backed followed/ignored/partial/unverified verdicts after implementation, so uncovered directives are recorded as unverified instead of optimistically followed
+- `governance-evolution-proposal` contract: host may propose review-only playbook or RCCL evolution from repeated evidence signals, but Runtime/RCCL never auto-write those proposals as authoritative truth
 
 In every case, the host's proposal passes through deterministic adjudication (scope gates, verification gates, lifecycle gates, confidence thresholds) before influencing the compiled output. The contract is the structured injection channel; adjudication is the quality guarantee.
 
@@ -147,10 +147,12 @@ Host-agent capability should be used through a full contract fulfillment lifecyc
 
 Supported contract families include:
 
-- task interpretation candidates
-- semantic relation proposals
-- semantic candidate shortlists
-- RCCL observation-generation candidates
+- agent capability profiles
+- task models
+- semantic governance graphs
+- adherence evidence
+- governance evolution proposals
+- RCCL observation generation, refresh, counterexample, and semantic-equivalence proposals
 
 Host artifacts should be treated as assistive inputs, not policy. A valid artifact can influence deterministic compilation; it cannot bypass deterministic compilation.
 
@@ -452,20 +454,22 @@ Current first-pass Runtime covers:
 Current skill/runtime behavior that already exists:
 
 - `code` supports `prepare-interpretation`, `prepare`, and `complete`
-- task interpretation can run in `deterministic-only` or `assistive-ai` mode
-- assistive interpretation candidates are written under `.resonant-code/context/task-candidates/code/`
+- task modeling can use host-agent `task-model` artifacts, with deterministic fields marked as defaulted fallback
+- task models are written under `.resonant-code/context/task-models/code/`
+- semantic governance graphs are written under `.resonant-code/context/semantic-governance-graphs/code/`
+- adherence evidence is written under `.resonant-code/context/adherence-evidence/code/`
 - runtime sessions are written under `.resonant-code/context/runtime-sessions/code/`
 - calibration emits report, slice-plan, candidate, and consolidation artifacts under `.resonant-code/context/` only when debug artifacts are explicitly enabled
 - `init` updates `.gitignore` to ignore `.resonant-code/context/cache/`
 
 Current limitations that should be understood before extending:
 
-- intent parse is currently deterministic heuristics, not full structured LLM parse — the `task-interpretation` contract exists to close this gap by letting the host provide richer contextual interpretation
-- semantic merge is currently conservative and lexical, not embedding-based — the `semantic-relation` and `semantic-candidate` contracts exist to close this gap by letting the host provide cross-concept semantic judgments that token matching cannot achieve
+- deterministic intent parse remains fallback/recall; `task-model` is the primary host-agent semantic channel for task understanding
+- semantic merge still uses structural recall internally, but host semantic judgment enters through `semantic-governance-graph`
 - cache keys exist, but full cache storage and invalidation are not complete
 - layer filtering and merge should continue moving toward the full target design above
-- `rccl-observation-generation` contract kind is declared but not yet fully implemented as a contract lifecycle
-- `adherence-evaluation` contract does not yet exist — feedback loop currently relies on host self-reporting or optimistic defaults
+- RCCL v2 contracts include evidence refs, counterexamples, and semantic equivalence proposals, but final consolidation and demotion remain static verification boundaries
+- adherence feedback now requires `adherence-evidence`; uncovered directives are recorded as `unverified` and do not update follow rate
 
 These limitations are contract-layer maturation gaps, not architecture changes.
 Each gap above corresponds to a contract lifecycle that needs implementation (issue → fulfill → validate → adjudicate → trace → feedback).

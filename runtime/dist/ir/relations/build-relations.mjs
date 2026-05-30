@@ -3,7 +3,11 @@ import { adjudicateSemanticRelations } from "./adjudicate-relations.mjs";
 import { proposeSemanticRelations } from "./propose-relations.mjs";
 //#region src/ir/relations/build-relations.ts
 function buildSemanticRelationsIR(bundle) {
-	return adjudicateSemanticRelations(mergeRelationProposals(proposeSemanticRelations(bundle)), bundle);
+	const proposals = proposeSemanticRelations(bundle);
+	const agenticRelations = adjudicateSemanticRelations(mergeRelationProposals(proposals.filter(isAgenticRelationProposal)), bundle);
+	const agenticPairs = effectiveRelationPairs(agenticRelations);
+	const structuralFallbackRelations = adjudicateSemanticRelations(mergeRelationProposals(proposals.filter((relation) => relation.proposedBy === "runtime-structural" && !agenticPairs.has(relationPairKey(relation)))), bundle);
+	return [...agenticRelations, ...structuralFallbackRelations].sort((left, right) => left.directiveId.localeCompare(right.directiveId) || left.observationId.localeCompare(right.observationId));
 }
 function mergeRelationProposals(relations) {
 	const grouped = /* @__PURE__ */ new Map();
@@ -25,6 +29,7 @@ function mergeRelationGroup(group) {
 	const proposedBy = group.some((item) => item.proposedBy !== group[0].proposedBy) ? "multi-source" : group[0].proposedBy;
 	const impact = chooseImpact(group, relation);
 	const reviewPriority = chooseReviewPriority(group);
+	const executionIntent = chooseExecutionIntent(group);
 	const mergeIntent = chooseMergeIntent(group);
 	const groupId = chooseGroupId(group);
 	const conflictClass = chooseConflictClass(group, relation);
@@ -50,6 +55,7 @@ function mergeRelationGroup(group) {
 			evidenceRefs,
 			impact,
 			reviewPriority,
+			executionIntent,
 			mergeIntent,
 			groupId
 		]),
@@ -65,6 +71,7 @@ function mergeRelationGroup(group) {
 		reasoningSummary: summarizeMergedReasoning(group, relation),
 		...impact ? { impact } : {},
 		...reviewPriority ? { reviewPriority } : {},
+		...executionIntent ? { executionIntent } : {},
 		...mergeIntent ? { mergeIntent } : {},
 		...groupId ? { groupId } : {},
 		adjudication: {
@@ -98,6 +105,25 @@ function chooseReviewPriority(group) {
 		critical: 3
 	};
 	return group.map((item) => item.reviewPriority).filter((item) => Boolean(item)).sort((left, right) => order[right] - order[left])[0];
+}
+function isAgenticRelationProposal(relation) {
+	return relation.proposedBy === "host-agent" || relation.proposedBy === "feedback";
+}
+function effectiveRelationPairs(relations) {
+	return new Set(relations.filter((relation) => relation.adjudication.status !== "rejected" && relation.adjudication.finalRelation !== "unrelated").map(relationPairKey));
+}
+function relationPairKey(relation) {
+	return `${relation.directiveId}::${relation.observationId}`;
+}
+function chooseExecutionIntent(group) {
+	const order = {
+		suppress: 5,
+		"deviation-noted": 4,
+		enforce: 3,
+		ambient: 2,
+		"no-change": 1
+	};
+	return group.map((item) => item.executionIntent).filter((item) => Boolean(item)).sort((left, right) => order[right] - order[left])[0];
 }
 function chooseMergeIntent(group) {
 	return group.find((item) => item.mergeIntent)?.mergeIntent;

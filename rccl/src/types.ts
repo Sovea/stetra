@@ -12,6 +12,18 @@ export interface RcclEvidence {
   snippet: string;
 }
 
+export type EvidenceRefKind = 'file' | 'diff' | 'command' | 'rccl-evidence' | 'runtime-trace' | 'conversation';
+
+export interface EvidenceRef {
+  kind: EvidenceRefKind;
+  ref: string;
+  file?: string;
+  line_range?: [number, number];
+  snippet_hash?: string;
+  command?: string;
+  output_hash?: string;
+}
+
 export interface RcclSupport {
   source_slices: string[];
   file_count: number;
@@ -85,6 +97,8 @@ export interface CandidateObservation {
   confidence: number;
   adherence_quality: AdherenceQuality;
   evidence: RcclEvidence[];
+  evidence_refs?: EvidenceRef[];
+  counterexamples?: EvidenceRef[];
   source_slice_ids: string[];
   support_hint?: CandidateSupportHint | null;
 }
@@ -323,13 +337,18 @@ export interface RcclCalibrationStats {
   windows: number;
 }
 
-export type RcclAIContractVersion = 'ai-contract/v1';
-export type RcclAIContractKind = 'rccl-observation-generation' | 'rccl-observation-refresh';
-export type RcclAIContractSchemaVersion = '1.0';
+export type RcclAIContractVersion = 'ai-contract/v2';
+export type RcclAIContractKind =
+  | 'context-acquisition'
+  | 'rccl-observation-generation'
+  | 'rccl-observation-refresh'
+  | 'rccl-counterexample'
+  | 'rccl-semantic-equivalence';
+export type RcclAIContractSchemaVersion = '2.0';
 
 export interface RcclAIContractArtifact {
   suggestedPath: string;
-  format: 'yaml';
+  format: 'yaml' | 'json';
   usage: string;
 }
 
@@ -356,6 +375,8 @@ export interface PrepareIncrementalRcclOptions {
   targetFiles?: string[];
   changedFiles?: string[];
   mode?: RcclIncrementalMode;
+  fileLimit?: number;
+  windowLimit?: number;
   debugArtifacts?: boolean;
 }
 
@@ -382,6 +403,11 @@ export interface PrepareIncrementalRcclResult {
     focus_files: string[];
     stats: RcclCalibrationStats;
     existing_observation_count: number;
+    limits: {
+      file_limit: number | null;
+      window_limit: number | null;
+      applied: boolean;
+    };
   };
   affectedObservations: string[];
   staleObservations: string[];
@@ -401,6 +427,21 @@ export interface RcclObservationRefreshRetireEntry {
   observation_id: string;
   reason_id: 'file-missing' | 'snippet-drift' | 'scope-drift' | 'superseded' | 'no-longer-material' | 'other';
   confidence: number;
+  evidence_refs?: EvidenceRef[];
+}
+
+export interface RcclSemanticEquivalenceProposal {
+  observation_ids: string[];
+  confidence: number;
+  evidence_refs: EvidenceRef[];
+  reason: string;
+}
+
+export interface RcclCounterexampleProposal {
+  observation_id: string;
+  confidence: number;
+  evidence_refs: EvidenceRef[];
+  reason: string;
 }
 
 export interface RcclObservationRefreshDocument {
@@ -411,10 +452,29 @@ export interface RcclObservationRefreshDocument {
   revise: CandidateObservation[];
   retire: RcclObservationRefreshRetireEntry[];
   new_observations: CandidateObservation[];
+  semantic_equivalence?: RcclSemanticEquivalenceProposal[];
+  counterexamples?: RcclCounterexampleProposal[];
 }
 
 export interface CommitRcclObservationRefreshOptions {
   debugArtifacts?: boolean;
+}
+
+export interface RcclSemanticEquivalenceCommitSummary {
+  observation_ids: string[];
+  canonical_id: string | null;
+  superseded_ids: string[];
+  confidence: number;
+  status: 'applied' | 'rejected' | 'unused';
+  reason: string;
+}
+
+export interface RcclCounterexampleCommitSummary {
+  observation_id: string;
+  confidence: number;
+  status: 'applied' | 'rejected' | 'unused';
+  action: 'reduced-confidence' | 'demoted-to-ambient' | 'none';
+  reason: string;
 }
 
 export interface RcclObservationRefreshSummary {
@@ -425,6 +485,8 @@ export interface RcclObservationRefreshSummary {
   revised: string[];
   retired: string[];
   added: string[];
+  semantic_equivalence: RcclSemanticEquivalenceCommitSummary[];
+  counterexamples: RcclCounterexampleCommitSummary[];
 }
 
 export interface CommitRcclObservationRefreshSuccess {

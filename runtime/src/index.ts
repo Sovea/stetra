@@ -4,29 +4,26 @@ export { persistCompileCache } from './cache.ts';
 export { resolveContractPolicy } from './contract-policy.ts';
 export { planGuidance, resolveSourceStatus } from './plan-guidance.ts';
 export {
-  prepareGuidancePlanningContract,
-  validateGuidancePlanningPayload,
-} from './ai-contracts/guidance-planning.ts';
+  prepareAgentCapabilityProfileContract,
+  validateAgentCapabilityProfilePayload,
+} from './ai-contracts/agent-capability-profile.ts';
+export { prepareContextAcquisitionContract } from './ai-contracts/context-acquisition.ts';
 export {
-  parseTaskInterpretationCandidatePayload,
-  parseTaskInterpretationCandidatePayloadWithDiagnostics,
-  prepareTaskInterpretationContract,
-} from './ai-contracts/task-interpretation.ts';
+  prepareTaskModelContract,
+  validateTaskModelPayload,
+} from './ai-contracts/task-model.ts';
 export {
-  prepareAdherenceEvaluationContract,
-  validateAdherenceEvaluationPayload,
-} from './ai-contracts/adherence-evaluation.ts';
-export {
-  loadSemanticCandidateProposalPayload,
-  loadSemanticRelationProposalPayload,
-  prepareSemanticCandidateContract,
-  prepareSemanticCandidateContractBundle,
   prepareSemanticContractContext,
-  prepareSemanticRelationContract,
-  prepareSemanticRelationContractBundle,
-  validateSemanticCandidateProposalPayload,
-  validateSemanticRelationProposalPayload,
-} from './ai-contracts/semantic-relations.ts';
+  prepareSemanticGovernanceGraphContract,
+  prepareSemanticGovernanceGraphContractBundle,
+  validateSemanticGovernanceGraphPayload,
+  loadSemanticGovernanceGraphPayload,
+} from './ai-contracts/semantic-governance-graph.ts';
+export {
+  prepareAdherenceEvidenceContract,
+  validateAdherenceEvidencePayload,
+} from './ai-contracts/adherence-evidence.ts';
+export { validateGovernanceEvolutionProposalPayload } from './ai-contracts/governance-evolution-proposal.ts';
 export { resolveActivationDecisionsIR, activatedDirectiveIdsIR } from './ir/activation/resolve-activation.ts';
 export { buildGovernanceIR } from './ir/build-ir.ts';
 export { resolveExecutionDecisionsIR } from './ir/execution/resolve-execution.ts';
@@ -42,50 +39,7 @@ export {
   TASK_INTERPRETATION_SOURCES,
 } from './intent/schema.ts';
 export type { TaskInterpretationProvider } from './interpret/provider.ts';
-export type {
-  AdherenceEvaluationContractInput,
-  AdherenceEvaluationContractOutput,
-  AdherenceEvaluationValidationResult,
-  AdherenceVerdict,
-  AIContractArtifact,
-  AIContractEnvelope,
-  AIContractKind,
-  AIContractSchemaVersion,
-  AIContractVersion,
-  ContractPayloadDiagnosticEntry,
-  ContractPayloadDiagnosticReason,
-  ContractPayloadDiagnostics,
-  ContractPayloadDiagnosticStatus,
-  HostAdherenceEvaluationPayload,
-  HostAdherenceVerdictEntry,
-  GuidancePlanningContractInput,
-  GuidancePlanningContractName,
-  GuidancePlanningContractOutput,
-  GuidancePlanningReasonId,
-  GuidancePlanningSemanticNeed,
-  GuidancePlanningValidationResult,
-  HostGuidancePlanningPayload,
-  HostProposalNormalizer,
-  HostProposalSourceInput,
-  SemanticCandidateContractBundleOutput,
-  SemanticCandidateContractOutput,
-  SemanticContractBundleInput,
-  SemanticContractContextInput,
-  SemanticContractContextOutput,
-  SemanticContractInput,
-  SemanticProposalDirectiveSummary,
-  SemanticProposalObservationSummary,
-  SemanticProposalValidationInput,
-  SemanticProposalValidationResult,
-  SemanticRelationContractBundleOutput,
-  SemanticRelationContractOutput,
-  TaskInterpretationCandidateParseResult,
-  TaskInterpretationContractInput,
-  TaskInterpretationContractOutput,
-  TaskInterpretationRecommendation,
-  ValidatedAdherenceVerdict,
-  ValidatedGuidancePlanningProposal,
-} from './ai-contracts/types.ts';
+export type * from './ai-contracts/types.ts';
 export type {
   ActivationDecisionIR,
   DirectiveFeedbackSignalIR,
@@ -99,11 +53,6 @@ export type {
   GovernanceIRBundle,
   GovernanceIRVersion,
   HostProposalIR,
-  HostSemanticCandidateHintIR,
-  HostSemanticCandidateProposal,
-  HostSemanticCandidateProposalPayload,
-  HostSemanticRelationProposal,
-  HostSemanticRelationProposalPayload,
   IRFingerprintSet,
   LayerIR,
   ObservationIR,

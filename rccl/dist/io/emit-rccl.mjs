@@ -1,9 +1,9 @@
 import { toYaml } from "../utils/yaml.mjs";
 import { parseRccl } from "./parse-rccl.mjs";
+import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { execSync } from "node:child_process";
-import { createHash } from "node:crypto";
 //#region src/io/emit-rccl.ts
 function emitRccl(rccl, projectRoot) {
 	const outputDir = join(projectRoot, ".resonant-code");

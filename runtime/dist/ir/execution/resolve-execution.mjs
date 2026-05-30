@@ -56,6 +56,8 @@ function deriveDirectiveDecision(directive, relations) {
 		contextApplied: [],
 		contextRulesApplied: []
 	};
+	const graphIntentDecision = resolveGraphExecutionIntent(directive, relations);
+	if (graphIntentDecision) return graphIntentDecision;
 	if (!hasTension) return {
 		mode: directive.prescription === "must" ? "enforce" : "ambient",
 		reason: "no strong repository tension matched this directive, so default execution behavior applies",
@@ -66,10 +68,83 @@ function deriveDirectiveDecision(directive, relations) {
 	return {
 		mode: directive.prescription === "must" ? "deviation-noted" : "ambient",
 		reason: "repository observations materially overlap this directive, so execution is adjusted to reflect current repository reality",
-		basis: "semantic-relation",
+		basis: "governance-graph",
 		contextApplied: [],
 		contextRulesApplied: []
 	};
+}
+function resolveGraphExecutionIntent(directive, relations) {
+	const candidates = relations.filter((relation) => relation.adjudication.status === "accepted" && relation.impact === "execution-mode" && relation.executionIntent != null && relation.executionIntent !== "no-change").sort((left, right) => executionIntentRank(right.executionIntent) - executionIntentRank(left.executionIntent));
+	for (const selected of candidates) {
+		const decision = resolveGraphExecutionIntentCandidate(directive, selected, relations);
+		if (decision) return decision;
+	}
+	return null;
+}
+function resolveGraphExecutionIntentCandidate(directive, selected, relations) {
+	if (!selected.executionIntent) return null;
+	if (selected.executionIntent === "suppress") {
+		if (selected.adjudication.finalRelation !== "suppress") return null;
+		return {
+			mode: "suppress",
+			reason: `semantic governance graph requested suppress execution for ${directive.id}, and Runtime accepted a suppress relation`,
+			basis: "governance-graph",
+			contextApplied: ["execution_intent:suppress"],
+			contextRulesApplied: []
+		};
+	}
+	if (selected.executionIntent === "deviation-noted") {
+		if (selected.adjudication.finalRelation !== "tension") return null;
+		return {
+			mode: "deviation-noted",
+			reason: `semantic governance graph requested deviation-noted execution for ${directive.id}, and Runtime accepted the execution-mode relation ${selected.id}`,
+			basis: "governance-graph",
+			contextApplied: ["execution_intent:deviation-noted"],
+			contextRulesApplied: []
+		};
+	}
+	if (selected.executionIntent === "ambient") {
+		if (selected.adjudication.finalRelation !== "ambient-only" && selected.adjudication.finalRelation !== "tension") return null;
+		if (directive.prescription === "must" || directive.weight === "critical") {
+			if (selected.adjudication.finalRelation !== "tension") return null;
+			return {
+				mode: "deviation-noted",
+				reason: `semantic governance graph requested ambient execution for must-or-critical ${directive.id}; Runtime floors accepted tension to deviation-noted instead of silently weakening protected guidance`,
+				basis: "governance-graph",
+				contextApplied: ["execution_intent:ambient", "execution_intent_floor:must-deviation-noted"],
+				contextRulesApplied: []
+			};
+		}
+		return {
+			mode: "ambient",
+			reason: `semantic governance graph requested ambient execution for ${directive.id}, and Runtime accepted the execution-mode relation ${selected.id}`,
+			basis: "governance-graph",
+			contextApplied: ["execution_intent:ambient"],
+			contextRulesApplied: []
+		};
+	}
+	if (selected.executionIntent === "enforce") {
+		if (selected.adjudication.finalRelation !== "reinforce") return null;
+		if (relations.some((relation) => relation.adjudication.finalRelation === "tension" || relation.adjudication.finalRelation === "suppress")) return null;
+		return {
+			mode: "enforce",
+			reason: `semantic governance graph requested enforce execution for ${directive.id}, and Runtime accepted the execution-mode relation ${selected.id}`,
+			basis: "governance-graph",
+			contextApplied: ["execution_intent:enforce"],
+			contextRulesApplied: []
+		};
+	}
+	return null;
+}
+function executionIntentRank(intent) {
+	switch (intent) {
+		case "suppress": return 5;
+		case "deviation-noted": return 4;
+		case "enforce": return 3;
+		case "ambient": return 2;
+		case "no-change": return 1;
+		default: return 0;
+	}
 }
 function applyContextAdjustments(directive, relations, defaultDecision, context) {
 	return applyContextExecutionPolicy({

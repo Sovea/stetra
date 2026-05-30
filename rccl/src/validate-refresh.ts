@@ -1,9 +1,12 @@
 import { parseYaml } from './utils/yaml.ts';
 import type {
   CandidateObservation,
+  EvidenceRef,
+  RcclCounterexampleProposal,
   RcclObservationRefreshDocument,
   RcclObservationRefreshRetireEntry,
   RcclSchemaVersion,
+  RcclSemanticEquivalenceProposal,
   ScopeBasis,
 } from './types.ts';
 import { RCCL_SCOPE_BASES, validateCandidateObservationRecord, validateCandidateObservationShape } from './validate-observation.ts';
@@ -68,6 +71,18 @@ interface RefreshRetireEntry {
   structureErrors: string[];
 }
 
+interface RefreshSemanticEquivalenceEntry {
+  path: string;
+  proposal: RcclSemanticEquivalenceProposal;
+  structureErrors: string[];
+}
+
+interface RefreshCounterexampleEntry {
+  path: string;
+  proposal: RcclCounterexampleProposal;
+  structureErrors: string[];
+}
+
 const MIN_CONFIDENCE = 0.3;
 const RETIRE_REASON_IDS = new Set(['file-missing', 'snippet-drift', 'scope-drift', 'superseded', 'no-longer-material', 'other']);
 
@@ -100,6 +115,8 @@ export function validateRcclObservationRefreshPayload(
   const revise = normalizeCandidateList(raw.revise, 'revise', hasOwn(raw, 'revise'));
   const retire = normalizeRetireList(raw.retire, hasOwn(raw, 'retire'));
   const newObservations = normalizeCandidateList(raw.new_observations, 'new_observations', hasOwn(raw, 'new_observations'));
+  const semanticEquivalence = normalizeSemanticEquivalenceList(raw.semantic_equivalence, hasOwn(raw, 'semantic_equivalence'));
+  const counterexamples = normalizeCounterexampleList(raw.counterexamples, hasOwn(raw, 'counterexamples'));
   const keepIds = keep.map((entry) => entry.id).filter(Boolean);
   const reviseObservations = revise.map((entry) => entry.observation);
   const retireEntries = retire.map((entry) => entry.entry);
@@ -126,6 +143,8 @@ export function validateRcclObservationRefreshPayload(
     enforceActiveIds,
     occurrences,
   });
+  validateSemanticEquivalenceList(semanticEquivalence, activeIds, entries, enforceActiveIds);
+  validateCounterexampleList(counterexamples, activeIds, entries, enforceActiveIds);
 
   if (!keep.length && !revise.length && !retire.length && !newObservations.length) {
     entries.push({
@@ -146,6 +165,8 @@ export function validateRcclObservationRefreshPayload(
       revise: reviseObservations,
       retire: retireEntries,
       new_observations: newObservationList,
+      ...(semanticEquivalence.length ? { semantic_equivalence: semanticEquivalence.map((entry) => entry.proposal) } : {}),
+      ...(counterexamples.length ? { counterexamples: counterexamples.map((entry) => entry.proposal) } : {}),
     }
     : null;
 
@@ -300,6 +321,49 @@ function validateRetireList(
   });
 }
 
+function validateSemanticEquivalenceList(
+  proposals: RefreshSemanticEquivalenceEntry[],
+  activeIds: Set<string>,
+  entries: RcclRefreshDiagnosticEntry[],
+  enforceActiveIds: boolean,
+): void {
+  proposals.forEach((item) => {
+    const { proposal, path } = item;
+    if (item.structureErrors.length) {
+      entries.push(rejected(path, classifyStructureErrors(item.structureErrors), item.structureErrors.join('; ')));
+      return;
+    }
+    if (enforceActiveIds) {
+      const invalidId = proposal.observation_ids.find((id) => !activeIds.has(id));
+      if (invalidId) {
+        entries.push(rejected(path, 'invalid-id', `Semantic equivalence references non-active observation id "${invalidId}".`, invalidId));
+        return;
+      }
+    }
+    entries.push(accepted(path, `Semantic equivalence proposal for ${proposal.observation_ids.join(', ')} accepted for RCCL adjudication.`, proposal.observation_ids[0], proposal.confidence));
+  });
+}
+
+function validateCounterexampleList(
+  proposals: RefreshCounterexampleEntry[],
+  activeIds: Set<string>,
+  entries: RcclRefreshDiagnosticEntry[],
+  enforceActiveIds: boolean,
+): void {
+  proposals.forEach((item) => {
+    const { proposal, path } = item;
+    if (item.structureErrors.length) {
+      entries.push(rejected(path, classifyStructureErrors(item.structureErrors), item.structureErrors.join('; '), proposal.observation_id));
+      return;
+    }
+    if (enforceActiveIds && !activeIds.has(proposal.observation_id)) {
+      entries.push(rejected(path, 'invalid-id', `Counterexample references non-active observation id "${proposal.observation_id}".`, proposal.observation_id));
+      return;
+    }
+    entries.push(accepted(path, `Counterexample proposal for "${proposal.observation_id}" accepted for RCCL adjudication.`, proposal.observation_id, proposal.confidence));
+  });
+}
+
 function buildIdOccurrences(
   keep: string[],
   revise: CandidateObservation[],
@@ -390,6 +454,8 @@ function normalizeCandidateObservation(item: Record<string, unknown>): Candidate
         snippet: stringValue(evidence.snippet),
       }))
       : [],
+    evidence_refs: normalizeEvidenceRefs(item.evidence_refs),
+    counterexamples: normalizeEvidenceRefs(item.counterexamples),
     source_slice_ids: normalizeStringList(item.source_slice_ids),
     support_hint: isRecord(item.support_hint)
       ? {
@@ -443,6 +509,7 @@ function normalizeRetireEntry(item: Record<string, unknown>): RcclObservationRef
     observation_id: stringValue(item.observation_id),
     reason_id: stringValue(item.reason_id) as RcclObservationRefreshRetireEntry['reason_id'],
     confidence: numberValue(item.confidence),
+    evidence_refs: normalizeEvidenceRefs(item.evidence_refs),
   };
 }
 
@@ -462,6 +529,128 @@ function validateRetireEntryRecord(item: Record<string, unknown>, path: string):
     errors.push(`${path}: 'confidence' must be a number`);
   }
   return errors;
+}
+
+function normalizeSemanticEquivalenceList(value: unknown, fieldPresent: boolean): RefreshSemanticEquivalenceEntry[] {
+  if (!fieldPresent) return [];
+  if (!Array.isArray(value)) {
+    return [{ path: 'semantic_equivalence', proposal: emptySemanticEquivalenceProposal(), structureErrors: ['semantic_equivalence: must be an array'] }];
+  }
+  return value.map((item, index) => {
+    const path = `semantic_equivalence[${index}]`;
+    if (!isRecord(item)) {
+      return { path, proposal: emptySemanticEquivalenceProposal(), structureErrors: [`${path}: semantic equivalence entry must be an object`] };
+    }
+    return {
+      path,
+      proposal: {
+        observation_ids: normalizeStringList(item.observation_ids),
+        confidence: numberValue(item.confidence),
+        evidence_refs: normalizeEvidenceRefs(item.evidence_refs),
+        reason: stringValue(item.reason),
+      },
+      structureErrors: validateSemanticEquivalenceRecord(item, path),
+    };
+  });
+}
+
+function normalizeCounterexampleList(value: unknown, fieldPresent: boolean): RefreshCounterexampleEntry[] {
+  if (!fieldPresent) return [];
+  if (!Array.isArray(value)) {
+    return [{ path: 'counterexamples', proposal: emptyCounterexampleProposal(), structureErrors: ['counterexamples: must be an array'] }];
+  }
+  return value.map((item, index) => {
+    const path = `counterexamples[${index}]`;
+    if (!isRecord(item)) {
+      return { path, proposal: emptyCounterexampleProposal(), structureErrors: [`${path}: counterexample entry must be an object`] };
+    }
+    return {
+      path,
+      proposal: {
+        observation_id: stringValue(item.observation_id),
+        confidence: numberValue(item.confidence),
+        evidence_refs: normalizeEvidenceRefs(item.evidence_refs),
+        reason: stringValue(item.reason),
+      },
+      structureErrors: validateCounterexampleRecord(item, path),
+    };
+  });
+}
+
+function validateSemanticEquivalenceRecord(item: Record<string, unknown>, path: string): string[] {
+  const errors: string[] = [];
+  const ids = normalizeStringList(item.observation_ids);
+  if (ids.length < 2) errors.push(`${path}: observation_ids must contain at least two ids`);
+  if (!Number.isFinite(numberValue(item.confidence)) || numberValue(item.confidence) < MIN_CONFIDENCE || numberValue(item.confidence) > 1) errors.push(`${path}: confidence must be between ${MIN_CONFIDENCE} and 1`);
+  if (!validEvidenceRefs(item.evidence_refs)) errors.push(`${path}: evidence_refs must contain at least one valid evidence reference`);
+  if (!isNonEmptyString(item.reason)) errors.push(`${path}: missing or invalid 'reason'`);
+  return errors;
+}
+
+function validateCounterexampleRecord(item: Record<string, unknown>, path: string): string[] {
+  const errors: string[] = [];
+  if (!isNonEmptyString(item.observation_id)) errors.push(`${path}: missing or invalid 'observation_id'`);
+  if (!Number.isFinite(numberValue(item.confidence)) || numberValue(item.confidence) < MIN_CONFIDENCE || numberValue(item.confidence) > 1) errors.push(`${path}: confidence must be between ${MIN_CONFIDENCE} and 1`);
+  if (!validEvidenceRefs(item.evidence_refs)) errors.push(`${path}: evidence_refs must contain at least one valid evidence reference`);
+  if (!isNonEmptyString(item.reason)) errors.push(`${path}: missing or invalid 'reason'`);
+  return errors;
+}
+
+function emptySemanticEquivalenceProposal(): RcclSemanticEquivalenceProposal {
+  return {
+    observation_ids: [],
+    confidence: Number.NaN,
+    evidence_refs: [],
+    reason: '',
+  };
+}
+
+function emptyCounterexampleProposal(): RcclCounterexampleProposal {
+  return {
+    observation_id: '',
+    confidence: Number.NaN,
+    evidence_refs: [],
+    reason: '',
+  };
+}
+
+function normalizeEvidenceRefs(value: unknown): EvidenceRef[] {
+  if (!Array.isArray(value)) return [];
+  return value.filter(isEvidenceRef).map((ref) => ({
+    kind: ref.kind,
+    ref: ref.ref,
+    ...(typeof ref.file === 'string' ? { file: ref.file } : {}),
+    ...(Array.isArray(ref.line_range) && typeof ref.line_range[0] === 'number' && typeof ref.line_range[1] === 'number'
+      ? { line_range: [ref.line_range[0], ref.line_range[1]] as [number, number] }
+      : {}),
+    ...(typeof ref.snippet_hash === 'string' ? { snippet_hash: ref.snippet_hash } : {}),
+    ...(typeof ref.command === 'string' ? { command: ref.command } : {}),
+    ...(typeof ref.output_hash === 'string' ? { output_hash: ref.output_hash } : {}),
+  }));
+}
+
+function validEvidenceRefs(value: unknown): boolean {
+  return Array.isArray(value) && value.length > 0 && value.every(isEvidenceRef);
+}
+
+function isEvidenceRef(value: unknown): value is EvidenceRef {
+  if (!isRecord(value)) return false;
+  return isEvidenceRefKind(value.kind)
+    && isNonEmptyString(value.ref)
+    && (value.file === undefined || typeof value.file === 'string')
+    && (value.line_range === undefined || (Array.isArray(value.line_range) && typeof value.line_range[0] === 'number' && typeof value.line_range[1] === 'number'))
+    && (value.snippet_hash === undefined || typeof value.snippet_hash === 'string')
+    && (value.command === undefined || typeof value.command === 'string')
+    && (value.output_hash === undefined || typeof value.output_hash === 'string');
+}
+
+function isEvidenceRefKind(value: unknown): value is EvidenceRef['kind'] {
+  return value === 'file'
+    || value === 'diff'
+    || value === 'command'
+    || value === 'rccl-evidence'
+    || value === 'runtime-trace'
+    || value === 'conversation';
 }
 
 function normalizeStringList(value: unknown): string[] {

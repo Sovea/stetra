@@ -6,7 +6,7 @@ const deterministicProvider = new DeterministicInterpretationProvider();
 const MIN_ASSISTIVE_CONTEXT_CONFIDENCE = .5;
 function resolveTask(input) {
 	const deterministicCandidate = deterministicProvider.interpret(input.task);
-	const candidates = [...input.candidates ?? [], deterministicCandidate];
+	const candidates = [...(input.taskModels ?? []).map(taskModelToCandidate), deterministicCandidate];
 	const conflicts = [];
 	const discardedInputs = [];
 	const taskKindResolution = resolveField({
@@ -272,7 +272,7 @@ function resolveTask(input) {
 	return {
 		task,
 		taskKind: taskKindResolution.value,
-		candidates,
+		task_models: input.taskModels ?? [],
 		task_intent: intent,
 		context_profile: contextProfile,
 		input_provenance: provenance,
@@ -309,8 +309,9 @@ function resolveField({ field, explicitValue, candidates, fallbackValue, default
 		};
 	}
 	if (resolvedCandidates.length > 0) {
-		const winner = resolvedCandidates[0];
-		registerConflict(field, winner.source, resolvedCandidates.slice(1).map((candidate) => candidate.source), conflicts, "first resolved candidate wins based on provider ordering");
+		const ordered = resolvedCandidates.slice().sort(compareCandidateField);
+		const winner = ordered[0];
+		registerConflict(field, winner.source, ordered.slice(1).map((candidate) => candidate.source), conflicts, "field-level evidence/confidence policy selected the strongest candidate");
 		return {
 			value: winner.value,
 			source: winner.source,
@@ -337,8 +338,9 @@ function resolveListField({ field, explicitValues, candidates, fallbackValues, d
 	}
 	const resolvedCandidates = candidates.filter((candidate) => candidate !== void 0 && candidate.status === "resolved" && candidate.values.length > 0);
 	if (resolvedCandidates.length > 0) {
-		const winner = resolvedCandidates[0];
-		registerConflict(field, winner.source, resolvedCandidates.slice(1).map((candidate) => candidate.source), conflicts, "first resolved candidate wins based on provider ordering");
+		const ordered = resolvedCandidates.slice().sort(compareCandidateListField);
+		const winner = ordered[0];
+		registerConflict(field, winner.source, ordered.slice(1).map((candidate) => candidate.source), conflicts, "field-level evidence/confidence policy selected the strongest candidate");
 		return {
 			values: unique(winner.values),
 			source: winner.source,
@@ -379,7 +381,7 @@ function buildProvenance(input, resolved, conflicts) {
 		resolved_fields,
 		unresolved_fields: [...resolved.target_file.value ? [] : ["intent.target_file"], ...resolved.project_stage.value ? [] : ["context.project_stage"]],
 		context_resolution: buildContextResolution(resolved, conflicts),
-		interpretation_mode: input.interpretationMode ?? (input.candidates?.length ? "assistive-ai" : "deterministic-only"),
+		interpretation_mode: input.interpretationMode ?? (input.taskModels?.length ? "host-agent" : "deterministic-only"),
 		resolution_quality: determineResolutionQuality(resolved_fields)
 	};
 }
@@ -461,9 +463,9 @@ function buildDiagnostics(input, candidates, provenance, conflicts, discardedInp
 		warnings: [...ambiguity_reasons.map((item) => `interpretation warning: ${item}`), ...discarded.map((item) => `interpretation discarded ${item.source} ${item.field}=${item.value || "(empty)"}: ${item.reason}`)],
 		fallback_usage: {
 			used_deterministic_interpretation: provenance.resolved_fields.some((field) => field.source === "deterministic"),
-			used_candidate_normalization: Boolean(input.candidates?.length)
+			used_candidate_normalization: Boolean(input.taskModels?.length)
 		},
-		clarification_recommended: ambiguity_reasons.length > 0 && (!input.candidates?.length || conflicts.length > 0),
+		clarification_recommended: ambiguity_reasons.length > 0 && (!input.taskModels?.length || conflicts.length > 0),
 		ambiguity_reasons,
 		discarded_inputs: discarded
 	};
@@ -546,6 +548,71 @@ function summarizeCandidate(candidate) {
 		resolved_fields,
 		unresolved_fields
 	};
+}
+function taskModelToCandidate(model) {
+	return {
+		intent: {
+			task_kind: scalarField(model.intent.task_kind),
+			operation: scalarField(model.intent.operation),
+			target_layer: scalarField(model.intent.target_layer),
+			target_file: scalarField(model.intent.target_file),
+			changed_files: listField(model.intent.changed_files),
+			tech_stack: listField(model.intent.tech_stack),
+			tags: listField(model.intent.tags)
+		},
+		context: {
+			project_stage: scalarField(model.context.project_stage),
+			change_type: void 0,
+			optimization_target: scalarField(model.context.optimization_target),
+			hard_constraints: listField(model.context.hard_constraints),
+			allowed_tradeoffs: listField(model.context.allowed_tradeoffs),
+			avoid: listField(model.context.avoid),
+			risk_level: scalarField(model.context.risk_level),
+			scope_size: scalarField(model.context.scope_size),
+			compatibility_requirement: scalarField(model.context.compatibility_requirement),
+			interface_sensitivity: scalarField(model.context.interface_sensitivity),
+			refactor_tolerance: scalarField(model.context.refactor_tolerance),
+			migration_phase: scalarField(model.context.migration_phase),
+			review_goal: scalarField(model.context.review_goal)
+		},
+		uncertainties: model.uncertainties
+	};
+}
+function scalarField(field) {
+	if (!field || field.value === void 0) return void 0;
+	return {
+		value: field.value,
+		source: "host-agent",
+		confidence: field.confidence,
+		status: "resolved",
+		rationale: `task-model evidence_refs=${field.evidence_refs.map((ref) => ref.ref).join(", ")}`
+	};
+}
+function listField(field) {
+	if (!field) return void 0;
+	return {
+		values: field.values,
+		source: "host-agent",
+		confidence: field.confidence,
+		status: field.values.length ? "resolved" : "unresolved",
+		rationale: `task-model evidence_refs=${field.evidence_refs.map((ref) => ref.ref).join(", ")}`
+	};
+}
+function compareCandidateField(left, right) {
+	return sourceRank(right.source) - sourceRank(left.source) || right.confidence - left.confidence;
+}
+function compareCandidateListField(left, right) {
+	return sourceRank(right.source) - sourceRank(left.source) || right.confidence - left.confidence || right.values.length - left.values.length;
+}
+function sourceRank(source) {
+	switch (source) {
+		case "explicit": return 5;
+		case "host-agent":
+		case "assistive-ai": return 4;
+		case "derived": return 3;
+		case "repo-default": return 2;
+		case "deterministic": return 1;
+	}
 }
 function summarizeScalarField(field, resolved) {
 	if (resolved.value === void 0) return null;

@@ -230,7 +230,8 @@ export type SemanticRelationKindIR = 'reinforce' | 'tension' | 'suppress' | 'amb
 export type SemanticRelationSignalDirectionIR = 'reinforce' | 'tension' | 'suppress' | 'ambient' | 'neutral';
 export type SemanticRelationImpactIR = 'execution-mode' | 'review-focus' | 'ambient-context' | 'no-effect';
 export type SemanticRelationReviewPriorityIR = 'low' | 'normal' | 'high' | 'critical';
-export type SemanticRelationProposedByIR = 'runtime-structural' | 'host-agent' | 'host-semantic-candidate' | 'feedback' | 'multi-source';
+export type SemanticRelationProposedByIR = 'runtime-structural' | 'host-agent' | 'feedback' | 'multi-source';
+export type SemanticRelationExecutionIntentIR = ExecutionMode | 'no-change';
 
 export interface SemanticRelationSignalIR {
   kind: 'semantic-key' | 'category' | 'scope' | 'verification' | 'lifecycle' | 'feedback' | 'host-proposal';
@@ -299,6 +300,7 @@ export interface SemanticRelationIR {
   reasoningSummary: string;
   impact?: SemanticRelationImpactIR;
   reviewPriority?: SemanticRelationReviewPriorityIR;
+  executionIntent?: SemanticRelationExecutionIntentIR;
   mergeIntent?: string;
   groupId?: string;
   adjudication: {
@@ -324,7 +326,7 @@ export interface ActivationDecisionIR {
 export interface HostProposalIR {
   irVersion: GovernanceIRVersion;
   source: SourceRefIR;
-  kind: 'task-interpretation' | 'semantic-relation' | 'semantic-candidate' | 'review-outcome';
+  kind: 'semantic-governance-graph' | 'review-outcome' | 'governance-evolution-proposal';
   payload: unknown;
 }
 
@@ -343,7 +345,7 @@ export interface ExecutionDecisionIR {
   directiveId: string;
   mode: ExecutionMode;
   defaultMode: ExecutionMode;
-  basis: 'prescription' | 'semantic-relation' | 'verification' | 'task-context' | 'feedback' | 'anti-pattern';
+  basis: 'prescription' | 'governance-graph' | 'verification' | 'task-context' | 'feedback' | 'anti-pattern';
   relationIds: string[];
   contextApplied: string[];
   contextRulesApplied: string[];

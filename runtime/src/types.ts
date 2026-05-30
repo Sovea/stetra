@@ -8,9 +8,11 @@ import type {
 import type {
   AIContractArtifact,
   AIContractEnvelope,
+  AIContractKind,
+  AgentCapabilityProfile,
   ContractPayloadDiagnostics,
-  GuidancePlanningContractName,
-  ValidatedGuidancePlanningProposal,
+  TaskModelProposal,
+  ValidatedAdherenceEvidenceVerdict,
 } from './ai-contracts/types.ts';
 
 export type TaskKind = 'code' | 'review' | 'analysis' | 'migration';
@@ -35,6 +37,7 @@ export type InterfaceSensitivity = 'internal' | 'public-api' | 'persistence' | '
 export type RefactorTolerance = 'none' | 'local-only' | 'bounded' | 'broad';
 export type MigrationPhase = 'none' | 'preparation' | 'dual-run' | 'cutover' | 'cleanup';
 export type ReviewGoal = 'correctness' | 'regression-risk' | 'architecture-fit' | 'maintainability' | 'security' | 'performance';
+export type GuidanceExecutionMode = 'fast' | 'standard' | 'strict';
 
 export interface DirectiveExampleSide {
   code: string;
@@ -218,7 +221,7 @@ export interface ResolveTaskInput extends RuntimeResolveTaskInput {}
 export type HostFulfillmentStatus = 'absent' | 'accepted' | 'partially-accepted' | 'rejected' | 'unused';
 
 export interface HostFulfillmentArtifactSummary {
-  kind: 'task-interpretation' | 'semantic-relation' | 'semantic-candidate' | 'adherence-evaluation';
+  kind: 'agent-capability-profile' | 'task-model' | 'semantic-governance-graph' | 'adherence-evidence';
   provided: boolean;
   path: string | null;
   recommendedPath?: string | null;
@@ -228,17 +231,17 @@ export interface HostFulfillmentArtifactSummary {
 
 export interface HostFulfillmentSummary {
   status: HostFulfillmentStatus;
-  taskInterpretation: HostFulfillmentArtifactSummary;
-  semanticRelation: HostFulfillmentArtifactSummary;
-  semanticCandidate: HostFulfillmentArtifactSummary;
-  adherenceEvaluation?: HostFulfillmentArtifactSummary;
+  agentCapability: HostFulfillmentArtifactSummary;
+  taskModel: HostFulfillmentArtifactSummary;
+  semanticGovernanceGraph: HostFulfillmentArtifactSummary;
+  adherenceEvidence?: HostFulfillmentArtifactSummary;
 }
 
 export interface HostFulfillmentFeedbackSummary {
   interpretation_mode: InputProvenance['interpretation_mode'];
   completion_signal: FeedbackSignalConfidence;
-  completion_source: 'no-explicit-evaluation' | 'default-approximation' | 'explicit-directives' | 'adherence-evaluation';
-  artifacts: Record<'task-interpretation' | 'semantic-relation' | 'semantic-candidate' | 'adherence-evaluation', {
+  completion_source: 'no-explicit-evaluation' | 'explicit-directives' | 'adherence-evidence';
+  artifacts: Record<'agent-capability-profile' | 'task-model' | 'semantic-governance-graph' | 'adherence-evidence', {
     provided: boolean;
     status: HostFulfillmentStatus;
     accepted: number;
@@ -256,6 +259,7 @@ export interface CompileInputBase {
   lockfilePath?: string;
   hostProposals?: import('./ir/types.ts').HostProposalIR[];
   hostFulfillment?: HostFulfillmentSummary;
+  agentCapabilityProfile?: AgentCapabilityProfile;
   preloadedSources?: import('./load/compile-sources.ts').CompileSources;
 }
 
@@ -267,37 +271,50 @@ export interface GuidancePlanSourceStatus {
 }
 
 export interface GuidancePlanProvidedContracts {
-  guidancePlanning?: boolean;
-  taskInterpretation?: boolean;
-  semanticCandidate?: boolean;
-  semanticRelation?: boolean;
-  adherenceEvaluation?: boolean;
+  agentCapability?: boolean;
+  taskModel?: boolean;
+  semanticGovernanceGraph?: boolean;
+  adherenceEvidence?: boolean;
 }
 
 export interface GuidancePlanArtifactPaths {
-  guidancePlanning: string;
-  taskInterpretation: string;
+  agentCapabilityProfile: string;
+  taskModel: string;
+  semanticGovernanceGraph?: string;
+  contextAcquisition?: string;
 }
 
 export interface GuidancePlanInput extends CompileInputBase {
   task: CompileTaskInput;
-  planningProposal?: ValidatedGuidancePlanningProposal | null;
+  taskModels?: TaskModelProposal[];
+  mode?: GuidanceExecutionMode;
   providedContracts?: GuidancePlanProvidedContracts;
   artifactPaths: GuidancePlanArtifactPaths;
 }
 
 export interface RuntimeContractRequest {
-  kind: 'guidance-planning' | 'task-interpretation' | GuidancePlanningContractName;
+  kind: ContractPolicyKind;
   artifact: AIContractArtifact;
   contract: AIContractEnvelope;
+  context?: unknown;
 }
 
-export type ContractPolicyKind = 'guidance-planning' | GuidancePlanningContractName;
+export type ContractPolicyKind =
+  | 'agent-capability-profile'
+  | 'task-model'
+  | 'semantic-governance-graph'
+  | 'adherence-evidence'
+  | 'governance-evolution-proposal'
+  | 'context-acquisition';
 export type ContractPolicySkippedReason =
   | 'already-provided'
-  | 'not-proposed-by-host'
+  | 'insufficient-agent-capability'
   | 'missing-rccl'
+  | 'mode-fast'
+  | 'rccl-not-relevant'
+  | 'waiting-for-task-model'
   | 'deferred-until-after-compile'
+  | 'deterministic-fallback-allowed'
   | 'not-required-for-current-policy';
 
 export interface ContractPolicySkippedContract {
@@ -306,16 +323,24 @@ export interface ContractPolicySkippedContract {
 }
 
 export interface ContractPolicyDecision {
+  mode: GuidanceExecutionMode;
   required: ContractPolicyKind[];
   optional: ContractPolicyKind[];
   skipped: ContractPolicySkippedContract[];
-  escalation: 'none' | 'semantic-candidate' | 'semantic-relation' | 'adherence-required';
+  escalation: 'none' | 'task-model' | 'semantic-governance-graph' | 'adherence-required' | 'context-acquisition';
+  diagnostics: {
+    task_model_required: boolean;
+    semantic_graph_required: boolean;
+    rccl_relevant?: boolean;
+    reasons: string[];
+  };
 }
 
 export interface GuidancePlan {
   mode: 'ready' | 'contracts-required' | 'degraded';
+  guidanceMode: GuidanceExecutionMode;
   requiredContracts: RuntimeContractRequest[];
-  recommendedContracts: GuidancePlanningContractName[];
+  recommendedContracts: AIContractKind[];
   sourceStatus: GuidancePlanSourceStatus;
   outputPolicy: {
     stdout: 'compact';
@@ -323,21 +348,21 @@ export interface GuidancePlan {
   };
   policy: ContractPolicyDecision;
   diagnostics: {
-    planning: 'absent' | 'accepted' | 'low-confidence' | 'unused';
+    policy: 'ready' | 'contracts-required' | 'degraded';
     notes: string[];
   };
 }
 
 export interface RawCompileInput extends CompileInputBase {
   task: CompileTaskInput;
-  parsedTaskCandidate?: ParsedTaskCandidate;
+  taskModels?: TaskModelProposal[];
   interpretationMode?: InputProvenance['interpretation_mode'];
 }
 
 export interface ResolveTaskRequest {
   task: CompileTaskInput;
   taskKind?: TaskKind;
-  candidates?: ParsedTaskCandidate[];
+  taskModels?: TaskModelProposal[];
   interpretationMode?: InputProvenance['interpretation_mode'];
 }
 
@@ -348,7 +373,7 @@ export interface ResolvedCompileInput extends CompileInputBase {
 export type CompileInput = RawCompileInput | ResolvedCompileInput;
 
 export interface InterpretationPacket {
-  candidates?: ParsedTaskCandidate[];
+  task_models?: TaskModelProposal[];
   input_provenance: InputProvenance;
   diagnostics: RuntimeDiagnostics;
   trace: TaskInterpretationTrace;
@@ -492,7 +517,7 @@ export interface DirectiveObservationRelation {
   confidence: number;
   basis: Array<'scope' | 'verification' | 'category' | 'context'>;
   reason: string;
-  proposed_by: 'runtime-structural' | 'host-agent' | 'host-semantic-candidate' | 'feedback' | 'multi-source';
+  proposed_by: 'runtime-structural' | 'host-agent' | 'feedback' | 'multi-source';
   adjudication_status: 'accepted' | 'rejected' | 'downgraded';
   final_relation: RelationKind;
   conflict_class?: string;
@@ -507,6 +532,7 @@ export interface DirectiveObservationRelation {
   adjudication_reason: string;
   impact?: 'execution-mode' | 'review-focus' | 'ambient-context' | 'no-effect';
   review_priority?: 'low' | 'normal' | 'high' | 'critical';
+  execution_intent?: ExecutionMode | 'no-change';
   merge_intent?: string;
   group_id?: string;
 }
@@ -588,7 +614,7 @@ export interface SemanticMergeResult {
     proposed_by_counts: Record<string, number>;
     execution_mode_impacting: number;
     feedback_applied_count: number;
-    host_semantic_candidate_count: number;
+    host_graph_edge_count: number;
     review_priority_counts: Record<'low' | 'normal' | 'high' | 'critical', number>;
     policy: {
       host_semantic: {
@@ -610,7 +636,7 @@ export interface SemanticMergeResult {
 export interface ResolvedTaskOutput {
   task: CompileTaskInput;
   taskKind: TaskKind;
-  candidates?: ParsedTaskCandidate[];
+  task_models?: TaskModelProposal[];
   task_intent: TaskIntent;
   context_profile: ContextProfile;
   input_provenance: InputProvenance;
@@ -635,25 +661,20 @@ export interface ChangeDecisionPacket {
 
 export interface PrepareInterpretationOutput {
   task: CompileTaskInput;
-  interpretationPrompt: string;
-  taskSchema: string;
+  taskModelPrompt: string;
+  taskModelSchema: string;
   ambiguityHints: string[];
-  recommendation: {
-    shouldUseHostCandidate: boolean;
-    reason: string;
-    nextStep: string;
-  };
-  candidateArtifact: {
+  modelArtifact: {
     suggestedPath: string;
     format: 'json' | 'yaml';
     usage: string;
   };
   clarificationHints: string[];
   contract: {
-    contractVersion: 'ai-contract/v1';
-    kind: 'task-interpretation';
+    contractVersion: 'ai-contract/v2';
+    kind: 'task-model';
     schemaId: string;
-    schemaVersion: '1.0';
+    schemaVersion: '2.0';
     prompt: string;
     schema: unknown;
     artifact: {
@@ -685,7 +706,7 @@ export interface RuntimeSessionRecord {
   taskInput: CompileTaskInput;
   interpretation: {
     mode: InputProvenance['interpretation_mode'];
-    candidates?: ParsedTaskCandidate[];
+    taskModels?: TaskModelProposal[];
     provenance?: InputProvenance;
     diagnostics?: RuntimeDiagnostics;
     trace?: TaskInterpretationTrace;
@@ -698,12 +719,11 @@ export interface RuntimeSessionRecord {
     projectRoot: string;
     resolvedTask?: ResolvedTaskOutput;
     task?: CompileTaskInput;
-    parsedTaskCandidate?: ParsedTaskCandidate;
+    taskModels?: TaskModelProposal[];
     interpretationMode?: InputProvenance['interpretation_mode'];
     hostProposals?: import('./ir/types.ts').HostProposalIR[];
     hostFulfillment?: HostFulfillmentSummary;
-    hostProposalFile?: string;
-    semanticProposalFile?: string;
+    governanceGraphFile?: string;
   };
   compileOutput: CompileOutput | null;
   warnings: string[];
@@ -738,7 +758,7 @@ export interface PrepareCodeTaskInput extends CompileTaskInput {
   projectRoot: string;
   pluginRoot?: string;
   taskDescription: string;
-  candidateFile?: string;
+  taskModelFile?: string;
 }
 
 export interface CompileOutput {
@@ -762,13 +782,14 @@ export interface EvaluateInput {
   ignoredDirectiveReasons?: Partial<Record<string, IgnoredReason>>;
   signalConfidence?: FeedbackSignalConfidence;
   hostFulfillment?: HostFulfillmentSummary;
-  adherencePayload?: import('./ai-contracts/types.ts').ValidatedAdherenceVerdict[];
+  adherencePayload?: ValidatedAdherenceEvidenceVerdict[];
 }
 
 export interface LockfileSignal {
   followed: number;
   ignored: number;
   partial: number;
+  unverified: number;
   follow_rate: number;
   trend: 'improving' | 'stable' | 'degrading';
 }
@@ -804,11 +825,13 @@ export interface LockfileTensionEntry {
 export interface LockfileDirectiveEntry {
   quality_signal: {
     overall: LockfileSignal;
-    by_task_type: Record<string, { followed: number; ignored: number; partial: number }>;
-    by_task_profile: Record<string, { followed: number; ignored: number; partial: number }>;
+    by_task_type: Record<string, { followed: number; ignored: number; partial: number; unverified: number }>;
+    by_task_profile: Record<string, { followed: number; ignored: number; partial: number; unverified: number }>;
     ignored_reasons: Partial<Record<IgnoredReason, number>>;
     last_ignored_reason?: IgnoredReason;
     signal_confidence: FeedbackSignalConfidence;
+    evidence_confidence?: number;
+    last_evaluation_source?: HostFulfillmentFeedbackSummary['completion_source'];
     last_seen: string;
   };
   governance?: {

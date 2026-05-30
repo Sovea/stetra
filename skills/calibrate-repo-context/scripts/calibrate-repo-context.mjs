@@ -76,6 +76,8 @@ async function runPrepareIncremental(options = {}) {
     targetFiles: options.targetFiles,
     changedFiles: options.changedFiles,
     mode: options.mode,
+    fileLimit: options.fileLimit,
+    windowLimit: options.windowLimit,
     debugArtifacts: shouldEmitDebugArtifacts(options.debugArtifacts),
   });
   process.stdout.write(JSON.stringify(result, null, 2) + '\n');
@@ -263,6 +265,8 @@ function parseArgs(argsArray) {
     else if (argsArray[i] === '--input') opts.input = argsArray[++i];
     else if (argsArray[i] === '--stage') opts.stage = argsArray[++i];
     else if (argsArray[i] === '--mode') opts.mode = argsArray[++i];
+    else if (argsArray[i] === '--file-limit') opts.fileLimit = readPositiveIntegerFlag('--file-limit', argsArray[++i]);
+    else if (argsArray[i] === '--window-limit') opts.windowLimit = readPositiveIntegerFlag('--window-limit', argsArray[++i]);
     else if (argsArray[i] === '--target-file') {
       opts.targetFiles ??= [];
       opts.targetFiles.push(argsArray[++i]);
@@ -285,10 +289,19 @@ function parseArgs(argsArray) {
   return opts;
 }
 
+function readPositiveIntegerFlag(flag, value) {
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed <= 0) {
+    process.stderr.write(`? ${flag} must be a positive integer.\n`);
+    process.exit(1);
+  }
+  return parsed;
+}
+
 function printUsage() {
   process.stderr.write('Usage: calibrate-repo-context.mjs <prepare|prepare-incremental|prepare-stage|commit|commit-refresh> <project-root> [opts...]\n');
   process.stderr.write('  prepare <project-root> [--scope <glob>] [--debug-artifacts[=<bool>]]\n');
-  process.stderr.write('  prepare-incremental <project-root> [--target-file <path>] [--changed-file <path>] [--scope <glob>] [--mode <task-scoped|changed-files|full>] [--debug-artifacts[=<bool>]]\n');
+  process.stderr.write('  prepare-incremental <project-root> [--target-file <path>] [--changed-file <path>] [--scope <glob>] [--mode <task-scoped|changed-files|full>] [--file-limit <n>] [--window-limit <n>] [--debug-artifacts[=<bool>]]\n');
   process.stderr.write('  prepare-stage <project-root> --stage discover [--scope <glob>] [--debug-artifacts[=<bool>]]\n');
   process.stderr.write('  prepare-stage <project-root> --stage critique --discovery <path> [--scope <glob>] [--debug-artifacts[=<bool>]]\n');
   process.stderr.write('  prepare-stage <project-root> --stage synthesize --discovery <path> --critique <path> [--scope <glob>] [--debug-artifacts[=<bool>]]\n');

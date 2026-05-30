@@ -79,7 +79,7 @@ Critical constraints for the host-produced candidate:
 node <this-skill-directory>/scripts/init.mjs commit <project-root> <this-plugin-directory>/playbook --input <path-to-candidate-json> [--force]
 ```
 
-The commit phase is deterministic. It validates the candidate JSON, keeps the default baseline layers, filters repo-specific selections against installed built-in layers, writes `.resonant-code/playbook/local-augment.yaml`, and updates `.gitignore` for generated runtime cache artifacts.
+The commit phase is deterministic. It validates the candidate JSON, keeps the default baseline layers, filters repo-specific selections against installed built-in layers, writes `.resonant-code/playbook/local-augment.yaml`, and updates `.gitignore` for generated runtime context artifacts.
 
 **Exit 0 - Created successfully**
 
@@ -90,7 +90,7 @@ Important output fields:
 - `extends.included` — selected repo-specific layers that exist in this installation
 - `extends.unavailable` — evidence-backed canonical layers not installed yet
 - `signals` — evidence and rationale for each selected repo-specific layer
-- `gitignore.ignored` — generated runtime artifacts now ignored
+- `gitignore.ignored` — generated runtime context artifacts now ignored
 
 **Exit 1 - File already exists**
 

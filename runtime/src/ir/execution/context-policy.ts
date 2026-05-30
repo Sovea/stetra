@@ -4,7 +4,7 @@ import type { DirectiveIR, GovernanceIRBundle, SemanticRelationIR } from '../typ
 export interface DirectiveDecision {
   mode: ExecutionMode;
   reason: string;
-  basis: 'prescription' | 'semantic-relation' | 'verification' | 'task-context' | 'feedback' | 'anti-pattern';
+  basis: 'prescription' | 'governance-graph' | 'verification' | 'task-context' | 'feedback' | 'anti-pattern';
   contextApplied: string[];
   contextRulesApplied: string[];
 }

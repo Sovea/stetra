@@ -30,6 +30,8 @@ function validateRcclObservationRefreshPayload(yamlText, validationOptions = {})
 	const revise = normalizeCandidateList(raw.revise, "revise", hasOwn(raw, "revise"));
 	const retire = normalizeRetireList(raw.retire, hasOwn(raw, "retire"));
 	const newObservations = normalizeCandidateList(raw.new_observations, "new_observations", hasOwn(raw, "new_observations"));
+	const semanticEquivalence = normalizeSemanticEquivalenceList(raw.semantic_equivalence, hasOwn(raw, "semantic_equivalence"));
+	const counterexamples = normalizeCounterexampleList(raw.counterexamples, hasOwn(raw, "counterexamples"));
 	const keepIds = keep.map((entry) => entry.id).filter(Boolean);
 	const reviseObservations = revise.map((entry) => entry.observation);
 	const retireEntries = retire.map((entry) => entry.entry);
@@ -53,6 +55,8 @@ function validateRcclObservationRefreshPayload(yamlText, validationOptions = {})
 		enforceActiveIds,
 		occurrences
 	});
+	validateSemanticEquivalenceList(semanticEquivalence, activeIds, entries, enforceActiveIds);
+	validateCounterexampleList(counterexamples, activeIds, entries, enforceActiveIds);
 	if (!keep.length && !revise.length && !retire.length && !newObservations.length) entries.push({
 		status: "unused",
 		reason: "empty-payload",
@@ -67,7 +71,9 @@ function validateRcclObservationRefreshPayload(yamlText, validationOptions = {})
 		keep: keepIds,
 		revise: reviseObservations,
 		retire: retireEntries,
-		new_observations: newObservationList
+		new_observations: newObservationList,
+		...semanticEquivalence.length ? { semantic_equivalence: semanticEquivalence.map((entry) => entry.proposal) } : {},
+		...counterexamples.length ? { counterexamples: counterexamples.map((entry) => entry.proposal) } : {}
 	} : null;
 	return {
 		valid: Boolean(document) && diagnostics.summary.accepted > 0 && diagnostics.summary.rejected === 0,
@@ -186,6 +192,37 @@ function validateRetireList(retire, activeIds, entries, occurrences, enforceActi
 		entries.push(accepted(path, `Retire proposal for "${entry.observation_id}" accepted.`, entry.observation_id, entry.confidence));
 	});
 }
+function validateSemanticEquivalenceList(proposals, activeIds, entries, enforceActiveIds) {
+	proposals.forEach((item) => {
+		const { proposal, path } = item;
+		if (item.structureErrors.length) {
+			entries.push(rejected(path, classifyStructureErrors(item.structureErrors), item.structureErrors.join("; ")));
+			return;
+		}
+		if (enforceActiveIds) {
+			const invalidId = proposal.observation_ids.find((id) => !activeIds.has(id));
+			if (invalidId) {
+				entries.push(rejected(path, "invalid-id", `Semantic equivalence references non-active observation id "${invalidId}".`, invalidId));
+				return;
+			}
+		}
+		entries.push(accepted(path, `Semantic equivalence proposal for ${proposal.observation_ids.join(", ")} accepted for RCCL adjudication.`, proposal.observation_ids[0], proposal.confidence));
+	});
+}
+function validateCounterexampleList(proposals, activeIds, entries, enforceActiveIds) {
+	proposals.forEach((item) => {
+		const { proposal, path } = item;
+		if (item.structureErrors.length) {
+			entries.push(rejected(path, classifyStructureErrors(item.structureErrors), item.structureErrors.join("; "), proposal.observation_id));
+			return;
+		}
+		if (enforceActiveIds && !activeIds.has(proposal.observation_id)) {
+			entries.push(rejected(path, "invalid-id", `Counterexample references non-active observation id "${proposal.observation_id}".`, proposal.observation_id));
+			return;
+		}
+		entries.push(accepted(path, `Counterexample proposal for "${proposal.observation_id}" accepted for RCCL adjudication.`, proposal.observation_id, proposal.confidence));
+	});
+}
 function buildIdOccurrences(keep, revise, retire, newObservations) {
 	const occurrences = /* @__PURE__ */ new Map();
 	const add = (id) => {
@@ -264,6 +301,8 @@ function normalizeCandidateObservation(item) {
 			line_range: normalizeLineRange(evidence.line_range),
 			snippet: stringValue(evidence.snippet)
 		})) : [],
+		evidence_refs: normalizeEvidenceRefs(item.evidence_refs),
+		counterexamples: normalizeEvidenceRefs(item.counterexamples),
 		source_slice_ids: normalizeStringList(item.source_slice_ids),
 		support_hint: isRecord(item.support_hint) ? {
 			file_count: nullableNumber(item.support_hint.file_count),
@@ -311,7 +350,8 @@ function normalizeRetireEntry(item) {
 	return {
 		observation_id: stringValue(item.observation_id),
 		reason_id: stringValue(item.reason_id),
-		confidence: numberValue(item.confidence)
+		confidence: numberValue(item.confidence),
+		evidence_refs: normalizeEvidenceRefs(item.evidence_refs)
 	};
 }
 function emptyRetireEntry() {
@@ -327,6 +367,112 @@ function validateRetireEntryRecord(item, path) {
 	if (!isNonEmptyString(item.reason_id)) errors.push(`${path}: missing or invalid 'reason_id'`);
 	if (typeof item.confidence !== "number" || !Number.isFinite(item.confidence)) errors.push(`${path}: 'confidence' must be a number`);
 	return errors;
+}
+function normalizeSemanticEquivalenceList(value, fieldPresent) {
+	if (!fieldPresent) return [];
+	if (!Array.isArray(value)) return [{
+		path: "semantic_equivalence",
+		proposal: emptySemanticEquivalenceProposal(),
+		structureErrors: ["semantic_equivalence: must be an array"]
+	}];
+	return value.map((item, index) => {
+		const path = `semantic_equivalence[${index}]`;
+		if (!isRecord(item)) return {
+			path,
+			proposal: emptySemanticEquivalenceProposal(),
+			structureErrors: [`${path}: semantic equivalence entry must be an object`]
+		};
+		return {
+			path,
+			proposal: {
+				observation_ids: normalizeStringList(item.observation_ids),
+				confidence: numberValue(item.confidence),
+				evidence_refs: normalizeEvidenceRefs(item.evidence_refs),
+				reason: stringValue(item.reason)
+			},
+			structureErrors: validateSemanticEquivalenceRecord(item, path)
+		};
+	});
+}
+function normalizeCounterexampleList(value, fieldPresent) {
+	if (!fieldPresent) return [];
+	if (!Array.isArray(value)) return [{
+		path: "counterexamples",
+		proposal: emptyCounterexampleProposal(),
+		structureErrors: ["counterexamples: must be an array"]
+	}];
+	return value.map((item, index) => {
+		const path = `counterexamples[${index}]`;
+		if (!isRecord(item)) return {
+			path,
+			proposal: emptyCounterexampleProposal(),
+			structureErrors: [`${path}: counterexample entry must be an object`]
+		};
+		return {
+			path,
+			proposal: {
+				observation_id: stringValue(item.observation_id),
+				confidence: numberValue(item.confidence),
+				evidence_refs: normalizeEvidenceRefs(item.evidence_refs),
+				reason: stringValue(item.reason)
+			},
+			structureErrors: validateCounterexampleRecord(item, path)
+		};
+	});
+}
+function validateSemanticEquivalenceRecord(item, path) {
+	const errors = [];
+	if (normalizeStringList(item.observation_ids).length < 2) errors.push(`${path}: observation_ids must contain at least two ids`);
+	if (!Number.isFinite(numberValue(item.confidence)) || numberValue(item.confidence) < MIN_CONFIDENCE || numberValue(item.confidence) > 1) errors.push(`${path}: confidence must be between ${MIN_CONFIDENCE} and 1`);
+	if (!validEvidenceRefs(item.evidence_refs)) errors.push(`${path}: evidence_refs must contain at least one valid evidence reference`);
+	if (!isNonEmptyString(item.reason)) errors.push(`${path}: missing or invalid 'reason'`);
+	return errors;
+}
+function validateCounterexampleRecord(item, path) {
+	const errors = [];
+	if (!isNonEmptyString(item.observation_id)) errors.push(`${path}: missing or invalid 'observation_id'`);
+	if (!Number.isFinite(numberValue(item.confidence)) || numberValue(item.confidence) < MIN_CONFIDENCE || numberValue(item.confidence) > 1) errors.push(`${path}: confidence must be between ${MIN_CONFIDENCE} and 1`);
+	if (!validEvidenceRefs(item.evidence_refs)) errors.push(`${path}: evidence_refs must contain at least one valid evidence reference`);
+	if (!isNonEmptyString(item.reason)) errors.push(`${path}: missing or invalid 'reason'`);
+	return errors;
+}
+function emptySemanticEquivalenceProposal() {
+	return {
+		observation_ids: [],
+		confidence: NaN,
+		evidence_refs: [],
+		reason: ""
+	};
+}
+function emptyCounterexampleProposal() {
+	return {
+		observation_id: "",
+		confidence: NaN,
+		evidence_refs: [],
+		reason: ""
+	};
+}
+function normalizeEvidenceRefs(value) {
+	if (!Array.isArray(value)) return [];
+	return value.filter(isEvidenceRef).map((ref) => ({
+		kind: ref.kind,
+		ref: ref.ref,
+		...typeof ref.file === "string" ? { file: ref.file } : {},
+		...Array.isArray(ref.line_range) && typeof ref.line_range[0] === "number" && typeof ref.line_range[1] === "number" ? { line_range: [ref.line_range[0], ref.line_range[1]] } : {},
+		...typeof ref.snippet_hash === "string" ? { snippet_hash: ref.snippet_hash } : {},
+		...typeof ref.command === "string" ? { command: ref.command } : {},
+		...typeof ref.output_hash === "string" ? { output_hash: ref.output_hash } : {}
+	}));
+}
+function validEvidenceRefs(value) {
+	return Array.isArray(value) && value.length > 0 && value.every(isEvidenceRef);
+}
+function isEvidenceRef(value) {
+	if (!isRecord(value)) return false;
+	return isEvidenceRefKind(value.kind) && isNonEmptyString(value.ref) && (value.file === void 0 || typeof value.file === "string") && (value.line_range === void 0 || Array.isArray(value.line_range) && typeof value.line_range[0] === "number" && typeof value.line_range[1] === "number") && (value.snippet_hash === void 0 || typeof value.snippet_hash === "string") && (value.command === void 0 || typeof value.command === "string") && (value.output_hash === void 0 || typeof value.output_hash === "string");
+}
+function isEvidenceRefKind(value) {
+	return value === "file" || value === "diff" || value === "command" || value === "rccl-evidence" || value === "runtime-trace" || value === "conversation";
 }
 function normalizeStringList(value) {
 	return Array.isArray(value) ? value.filter((item) => typeof item === "string" && item.trim().length > 0).map((item) => item.trim()) : [];

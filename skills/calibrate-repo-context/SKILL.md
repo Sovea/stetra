@@ -33,11 +33,14 @@ node <this-skill-directory>/scripts/calibrate-repo-context.mjs prepare-increment
 ```
 
 This writes RCCL-owned cache artifacts under `.resonant-code/context/cache/rccl/`
-and may return an `rccl-observation-refresh` contract. Fulfill that contract with
+and may return an `ai-contract/v2` `rccl-observation-refresh` contract. Fulfill that contract with
 a structured YAML refresh proposal only when Runtime/RCCL requests it. The host
-agent may propose keep/revise/retire/new observations, but RCCL remains the
+agent may propose keep/revise/retire/new observations, evidence refs, counterexamples,
+and semantic-equivalence groups, but RCCL remains the
 deterministic boundary for schema validation, evidence verification,
 consolidation, lifecycle handling, and final writes.
+
+Task-time incremental calibration is intentionally narrow by default: `task-scoped` and `changed-files` cap selected context to 4 files and 24 windows. Override with `--file-limit <n>` and `--window-limit <n>` only when broader context is worth the added host-agent cost. Use `--mode full` for broad refreshes.
 
 Commit an accepted refresh proposal with:
 
@@ -45,10 +48,10 @@ Commit an accepted refresh proposal with:
 node <this-skill-directory>/scripts/calibrate-repo-context.mjs commit-refresh <project-root> --input <path-to-refresh-yaml|-> [--debug-artifacts]
 ```
 
-Refresh v1 rules:
-- `revise.provisional_id` must equal an existing active observation id; id renames and historical reactivation are not supported.
+Refresh v2 rules:
+- `revise.provisional_id` must equal an existing active observation id; final id renames and historical reactivation are RCCL-owned decisions.
 - `new_observations.provisional_id` must not collide with an existing observation id.
-- `retire` means the observation should become `stale`, not `superseded`.
+- `retire` is a proposal; RCCL verification decides stale, demotion, or carry-forward behavior.
 - Omitted active observations are carried forward unchanged.
 - Use the exact action schemas; shorthand or malformed action items are rejected and must be corrected before commit.
 
@@ -85,6 +88,12 @@ seeds:
       - file: "<relative-path>"
         line_range: [<start>, <end>]
         snippet: "<code>"
+    evidence_refs:
+      - kind: "file"
+        ref: "<relative-path>:<start>-<end>"
+        file: "<relative-path>"
+        line_range: [<start>, <end>]
+    counterexamples: []
     source_slice_ids: ["<slice-id>"]
     uncertainty: "<optional-limit-or-null>"
 ```
@@ -158,7 +167,7 @@ observations:
 ```
 
 Critical candidate constraints:
-- Every observation must include real `evidence` copied from provided windows.
+- Every observation must include real `evidence` copied from provided windows and matching `evidence_refs`.
 - Use `provisional_id`, not final `id`.
 - Use `scope_hint`, not final `scope`.
 - Use `source_slice_ids` and optional `support_hint`, not final `support`.
@@ -219,14 +228,14 @@ Preserved: <stats.preserved> observations
 
 Exit `1`: validation failed. Report structured errors from stderr and do not write the file manually.
 
-## Legacy one-shot mode
+## One-shot mode
 
-For quick compatibility checks, the old one-shot prepare command remains available:
+For quick calibration checks, the one-shot prepare command remains available:
 
 ```sh
 node <this-skill-directory>/scripts/calibrate-repo-context.mjs prepare <project-root> [--scope <glob>]
 ```
 
-The one-shot prepare output includes the legacy prompt plus an RCCL-owned `contract` envelope and `candidateArtifact` metadata for the `rccl-observation-generation` host artifact. Host Claude may write candidate YAML to that suggested path, but `commit` remains the only deterministic parse, verification, and write boundary.
+The one-shot prepare output includes an RCCL-owned `ai-contract/v2` envelope and `candidateArtifact` metadata for the `rccl-observation-generation` host artifact. Host Claude may write candidate YAML to that suggested path, but `commit` remains the only deterministic parse, verification, and write boundary.
 
 Prefer the staged workflow for real calibration because it separates semantic discovery, critique, and synthesis before the deterministic commit boundary.

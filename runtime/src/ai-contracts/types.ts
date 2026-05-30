@@ -1,9 +1,36 @@
-import type { CompileInput, CompileTaskInput, ResolvedTaskOutput } from '../types.ts';
-import type { HostProposalIR } from '../ir/types.ts';
+import type {
+  CompatibilityRequirement,
+  CompileTaskInput,
+  ContextProfile,
+  ExecutionMode,
+  IgnoredReason,
+  InterfaceSensitivity,
+  MigrationPhase,
+  Operation,
+  RefactorTolerance,
+  ReviewGoal,
+  RiskLevel,
+  ScopeSize,
+  TaskKind,
+} from '../types.ts';
+import type {
+  SemanticRelationImpactIR,
+  SemanticRelationKindIR,
+  SemanticRelationReviewPriorityIR,
+} from '../ir/types.ts';
 
-export type AIContractVersion = 'ai-contract/v1';
-export type AIContractKind = 'guidance-planning' | 'task-interpretation' | 'semantic-relation' | 'semantic-candidate' | 'rccl-observation-generation' | 'rccl-observation-refresh' | 'adherence-evaluation';
-export type AIContractSchemaVersion = '1.0';
+export type AIContractVersion = 'ai-contract/v2';
+export type AIContractSchemaVersion = '2.0';
+export type AIContractKind =
+  | 'agent-capability-profile'
+  | 'task-model'
+  | 'semantic-governance-graph'
+  | 'adherence-evidence'
+  | 'governance-evolution-proposal'
+  | 'context-acquisition'
+  | 'rccl-observation-generation'
+  | 'rccl-observation-refresh'
+  | 'rccl-counterexample';
 
 export interface AIContractArtifact {
   suggestedPath: string;
@@ -24,77 +51,202 @@ export interface AIContractEnvelope<TSchema = unknown> {
     observationIds?: string[];
   };
   provenance: {
-    owner: 'runtime';
+    owner: 'runtime' | 'rccl';
     deterministic: true;
   };
+  context?: unknown;
   cacheKeyMaterial?: unknown;
 }
 
-export interface TaskInterpretationContractInput {
-  task: CompileTaskInput;
-  candidatePath: string;
+export type EvidenceRefKind = 'file' | 'diff' | 'command' | 'rccl-evidence' | 'runtime-trace' | 'conversation';
+
+export interface EvidenceRef {
+  kind: EvidenceRefKind;
+  ref: string;
+  file?: string;
+  line_range?: [number, number];
+  snippet_hash?: string;
+  command?: string;
+  output_hash?: string;
 }
 
-export interface TaskInterpretationRecommendation {
-  shouldUseHostCandidate: boolean;
-  reason: string;
-  nextStep: string;
+export interface HostProposalSourceInput {
+  id: string;
+  path?: string;
 }
 
-export interface TaskInterpretationContractOutput {
+export type ContractPayloadDiagnosticStatus = 'accepted' | 'rejected' | 'downgraded' | 'unused';
+export type ContractPayloadDiagnosticReason =
+  | 'accepted'
+  | 'duplicate-id'
+  | 'empty-payload'
+  | 'invalid-id'
+  | 'low-confidence'
+  | 'malformed-payload'
+  | 'missing-evidence'
+  | 'missing-required-field'
+  | 'unsupported-value'
+  | 'capped-by-policy';
+
+export interface ContractPayloadDiagnosticEntry {
+  status: ContractPayloadDiagnosticStatus;
+  reason: ContractPayloadDiagnosticReason;
+  path: string;
+  message: string;
+  directiveId?: string;
+  observationId?: string;
+  confidence?: number;
+}
+
+export interface ContractPayloadDiagnostics {
+  kind: AIContractKind;
+  source?: HostProposalSourceInput;
+  summary: {
+    total: number;
+    accepted: number;
+    rejected: number;
+    downgraded: number;
+    unused: number;
+  };
+  entries: ContractPayloadDiagnosticEntry[];
+}
+
+// --- Agent Capability Profile ---
+
+export interface AgentCapabilityProfile {
+  can_read_files: boolean;
+  can_search_files: boolean;
+  can_run_commands: boolean;
+  can_inspect_diff: boolean;
+  can_request_context: boolean;
+  max_context_files?: number;
+  max_command_count?: number;
+}
+
+export interface AgentCapabilityProfileContractInput {
   task: CompileTaskInput;
-  interpretationPrompt: string;
-  taskSchema: string;
+  artifactPath: string;
+}
+
+export interface AgentCapabilityProfileContractOutput {
+  profilePrompt: string;
+  profileSchema: string;
+  profileArtifact: AIContractArtifact;
+  contract: AIContractEnvelope;
+}
+
+export interface AgentCapabilityProfileValidationResult {
+  profile: AgentCapabilityProfile | null;
+  diagnostics: ContractPayloadDiagnostics;
+}
+
+// --- Context Acquisition ---
+
+export interface ContextAcquisitionContractInput {
+  task: CompileTaskInput;
+  artifactPath: string;
+}
+
+export interface ContextAcquisitionContractOutput {
+  acquisitionPrompt: string;
+  acquisitionSchema: string;
+  acquisitionArtifact: AIContractArtifact;
+  contract: AIContractEnvelope;
+}
+
+// --- Task Model ---
+
+export interface TaskModelScalarField<T extends string = string> {
+  value?: T;
+  confidence: number;
+  evidence_refs: EvidenceRef[];
+  alternatives?: T[];
+  uncertainties?: string[];
+}
+
+export interface TaskModelListField<T extends string = string> {
+  values: T[];
+  confidence: number;
+  evidence_refs: EvidenceRef[];
+  alternatives?: T[][];
+  uncertainties?: string[];
+}
+
+export interface TaskModelProposal {
+  intent: {
+    task_kind?: TaskModelScalarField<TaskKind>;
+    operation?: TaskModelScalarField<Operation>;
+    target_layer?: TaskModelScalarField<string>;
+    target_file?: TaskModelScalarField<string>;
+    changed_files?: TaskModelListField<string>;
+    tech_stack?: TaskModelListField<string>;
+    tags?: TaskModelListField<string>;
+  };
+  context: {
+    project_stage?: TaskModelScalarField<NonNullable<ContextProfile['project_stage']>>;
+    optimization_target?: TaskModelScalarField<ContextProfile['optimization_target']>;
+    hard_constraints?: TaskModelListField<string>;
+    allowed_tradeoffs?: TaskModelListField<string>;
+    avoid?: TaskModelListField<string>;
+    risk_level?: TaskModelScalarField<RiskLevel>;
+    scope_size?: TaskModelScalarField<ScopeSize>;
+    compatibility_requirement?: TaskModelScalarField<CompatibilityRequirement>;
+    interface_sensitivity?: TaskModelScalarField<InterfaceSensitivity>;
+    refactor_tolerance?: TaskModelScalarField<RefactorTolerance>;
+    migration_phase?: TaskModelScalarField<MigrationPhase>;
+    review_goal?: TaskModelScalarField<ReviewGoal>;
+  };
+  uncertainties: string[];
+}
+
+export interface TaskModelContractInput {
+  task: CompileTaskInput;
+  artifactPath: string;
+}
+
+export interface TaskModelContractOutput {
+  task: CompileTaskInput;
+  taskModelPrompt: string;
+  taskModelSchema: string;
   ambiguityHints: string[];
-  recommendation: TaskInterpretationRecommendation;
-  candidateArtifact: AIContractArtifact;
+  modelArtifact: AIContractArtifact;
   clarificationHints: string[];
   contract: AIContractEnvelope;
 }
 
-// --- Guidance Planning Contract ---
-
-export type GuidancePlanningSemanticNeed = 'low' | 'medium' | 'high';
-export type GuidancePlanningContractName = 'task-interpretation' | 'semantic-candidate' | 'semantic-relation' | 'adherence-evaluation';
-export type GuidancePlanningReasonId =
-  | 'task-meaning-needs-host-context'
-  | 'repository-context-may-change-guidance'
-  | 'directive-observation-relation-needed'
-  | 'potential-context-tension'
-  | 'high-risk-or-sensitive-change'
-  | 'user-requested-governance'
-  | 'straightforward-low-risk-change'
-  | 'insufficient-information';
-
-export interface GuidancePlanningContractInput {
-  task: CompileTaskInput;
-  artifactPath: string;
-  sourceStatus: {
-    localAugment: 'present' | 'absent';
-    rccl: 'present' | 'absent' | 'stale' | 'unverified';
-    lockfile: 'present' | 'absent';
-  };
-}
-
-export interface HostGuidancePlanningPayload {
-  semantic_need: GuidancePlanningSemanticNeed;
-  useful_contracts: GuidancePlanningContractName[];
-  reasons: GuidancePlanningReasonId[];
-  confidence: number;
-}
-
-export interface ValidatedGuidancePlanningProposal extends HostGuidancePlanningPayload {}
-
-export interface GuidancePlanningContractOutput {
-  planningPrompt: string;
-  planningSchema: string;
-  planningArtifact: AIContractArtifact;
-  contract: AIContractEnvelope;
-}
-
-export interface GuidancePlanningValidationResult {
-  proposal: ValidatedGuidancePlanningProposal | null;
+export interface TaskModelValidationResult {
+  models: TaskModelProposal[];
   diagnostics: ContractPayloadDiagnostics;
+}
+
+// --- Semantic Governance Graph ---
+
+export type SemanticGovernanceNodeKind = 'directive' | 'observation' | 'task-context' | 'feedback';
+export type SemanticGovernanceExecutionIntent = ExecutionMode | 'no-change';
+
+export interface SemanticGovernanceGraphNode {
+  id: string;
+  kind: SemanticGovernanceNodeKind;
+}
+
+export interface SemanticGovernanceGraphEdge {
+  directive_id: string;
+  observation_id: string;
+  relation: SemanticRelationKindIR;
+  confidence: number;
+  reason: string;
+  evidence_refs: EvidenceRef[];
+  execution_intent?: SemanticGovernanceExecutionIntent;
+  impact?: SemanticRelationImpactIR;
+  review_priority?: SemanticRelationReviewPriorityIR;
+  conflict_class?: 'compatibility-boundary' | 'migration-tension' | 'local-deviation' | 'legacy-interface' | 'anti-pattern' | 'scope-mismatch' | 'style-drift' | 'architecture-drift';
+  merge_intent?: string;
+  group_id?: string;
+}
+
+export interface SemanticGovernanceGraphPayload {
+  nodes?: SemanticGovernanceGraphNode[];
+  edges: SemanticGovernanceGraphEdge[];
 }
 
 export interface SemanticProposalDirectiveSummary {
@@ -128,150 +280,101 @@ export interface SemanticProposalObservationSummary {
   }>;
 }
 
-export interface SemanticContractInput {
-  resolvedTask: ResolvedTaskOutput;
+export interface SemanticGovernanceGraphContractInput {
+  resolvedTask: import('../types.ts').ResolvedTaskOutput;
   directives: SemanticProposalDirectiveSummary[];
   observations: SemanticProposalObservationSummary[];
   artifactPath: string;
 }
 
 export interface SemanticContractContextInput {
-  compileInput: CompileInput;
+  compileInput: import('../types.ts').CompileInput;
 }
 
 export interface SemanticContractContextOutput {
-  resolvedTask: ResolvedTaskOutput;
+  resolvedTask: import('../types.ts').ResolvedTaskOutput;
   directives: SemanticProposalDirectiveSummary[];
   observations: SemanticProposalObservationSummary[];
   loadedSources?: import('../load/compile-sources.ts').CompileSources;
 }
 
-export interface SemanticContractBundleInput extends SemanticContractContextInput {
+export interface SemanticGovernanceGraphContractBundleInput extends SemanticContractContextInput {
   artifactPath: string;
 }
 
-export interface SemanticRelationContractOutput {
-  proposalPrompt: string;
-  proposalSchema: string;
-  proposalArtifact: AIContractArtifact;
+export interface SemanticGovernanceGraphContractOutput {
+  graphPrompt: string;
+  graphSchema: string;
+  graphArtifact: AIContractArtifact;
   contract: AIContractEnvelope;
 }
 
-export interface SemanticCandidateContractOutput {
-  candidatePrompt: string;
-  candidateSchema: string;
-  candidateArtifact: AIContractArtifact;
-  contract: AIContractEnvelope;
-}
+export interface SemanticGovernanceGraphContractBundleOutput extends SemanticContractContextOutput, SemanticGovernanceGraphContractOutput {}
 
-export interface SemanticRelationContractBundleOutput extends SemanticContractContextOutput, SemanticRelationContractOutput {}
-
-export interface SemanticCandidateContractBundleOutput extends SemanticContractContextOutput, SemanticCandidateContractOutput {}
-
-export interface HostProposalSourceInput {
-  id: string;
-  path?: string;
-}
-
-export type ContractPayloadDiagnosticStatus = 'accepted' | 'rejected' | 'downgraded' | 'unused';
-export type ContractPayloadDiagnosticReason =
-  | 'accepted'
-  | 'duplicate-id'
-  | 'empty-payload'
-  | 'invalid-id'
-  | 'low-confidence'
-  | 'malformed-payload'
-  | 'missing-required-field'
-  | 'unsupported-value'
-  | 'capped-by-policy';
-
-export interface ContractPayloadDiagnosticEntry {
-  status: ContractPayloadDiagnosticStatus;
-  reason: ContractPayloadDiagnosticReason;
-  path: string;
-  message: string;
-  directiveId?: string;
-  observationId?: string;
-  confidence?: number;
-}
-
-export interface ContractPayloadDiagnostics {
-  kind: 'guidance-planning' | 'task-interpretation' | 'semantic-relation' | 'semantic-candidate' | 'adherence-evaluation';
-  source?: HostProposalSourceInput;
-  summary: {
-    total: number;
-    accepted: number;
-    rejected: number;
-    downgraded: number;
-    unused: number;
-  };
-  entries: ContractPayloadDiagnosticEntry[];
-}
-
-export interface TaskInterpretationCandidateParseResult {
-  candidates: import('../interpret/types.ts').ParsedTaskCandidate[];
-  diagnostics: ContractPayloadDiagnostics;
-}
-
-export interface SemanticProposalValidationInput {
+export interface SemanticGovernanceGraphValidationInput {
   raw: unknown;
   source: HostProposalSourceInput;
   allowedDirectiveIds?: readonly string[];
   allowedObservationIds?: readonly string[];
 }
 
-export interface SemanticProposalValidationResult {
-  proposal: HostProposalIR;
+export interface SemanticGovernanceGraphValidationResult {
+  proposal: import('../ir/types.ts').HostProposalIR;
   diagnostics: ContractPayloadDiagnostics;
 }
 
-export type HostProposalNormalizer = (raw: unknown, source: HostProposalSourceInput) => HostProposalIR;
+// --- Adherence Evidence ---
 
-// --- Adherence Evaluation Contract ---
+export type AdherenceEvidenceVerdict = 'followed' | 'ignored' | 'partial' | 'unverified';
 
-export type AdherenceVerdict = 'followed' | 'ignored' | 'partial';
-
-export interface AdherenceEvaluationDirectiveSummary {
+export interface AdherenceEvidenceDirectiveSummary {
   id: string;
   description: string;
   prescription: string;
   execution_mode: string;
 }
 
-export interface AdherenceEvaluationContractInput {
-  directives: AdherenceEvaluationDirectiveSummary[];
+export interface AdherenceEvidenceContractInput {
+  directives: AdherenceEvidenceDirectiveSummary[];
   taskDescription: string;
   artifactPath: string;
 }
 
-export interface AdherenceEvaluationContractOutput {
-  evaluationPrompt: string;
-  evaluationSchema: string;
-  evaluationArtifact: AIContractArtifact;
+export interface AdherenceEvidenceContractOutput {
+  evidencePrompt: string;
+  evidenceSchema: string;
+  evidenceArtifact: AIContractArtifact;
   contract: AIContractEnvelope;
 }
 
-export interface HostAdherenceVerdictEntry {
+export interface HostAdherenceEvidenceEntry {
   directive_id: string;
-  verdict: AdherenceVerdict;
+  verdict: AdherenceEvidenceVerdict;
   confidence: number;
+  evidence_refs: EvidenceRef[];
   reason: string;
-  ignored_reason?: import('../types.ts').IgnoredReason;
+  ignored_reason?: IgnoredReason;
 }
 
-export interface HostAdherenceEvaluationPayload {
-  verdicts: HostAdherenceVerdictEntry[];
+export interface HostAdherenceEvidencePayload {
+  verdicts: HostAdherenceEvidenceEntry[];
 }
 
-export interface ValidatedAdherenceVerdict {
-  directive_id: string;
-  verdict: AdherenceVerdict;
-  confidence: number;
-  reason: string;
-  ignored_reason?: import('../types.ts').IgnoredReason;
-}
+export interface ValidatedAdherenceEvidenceVerdict extends HostAdherenceEvidenceEntry {}
 
-export interface AdherenceEvaluationValidationResult {
-  verdicts: ValidatedAdherenceVerdict[];
+export interface AdherenceEvidenceValidationResult {
+  verdicts: ValidatedAdherenceEvidenceVerdict[];
   diagnostics: ContractPayloadDiagnostics;
+}
+
+// --- Governance Evolution ---
+
+export interface GovernanceEvolutionProposal {
+  proposals: Array<{
+    kind: 'local-override' | 'local-suppress' | 'local-addition' | 'rccl-refresh';
+    target_id?: string;
+    reason: string;
+    evidence_refs: EvidenceRef[];
+    confidence: number;
+  }>;
 }

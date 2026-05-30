@@ -13,6 +13,7 @@ import {
   TASK_KINDS,
 } from '../intent/schema.ts';
 import type { CompileTaskInput, ContextProfile, Operation, ResolveTaskRequest, ResolvedTaskOutput, TaskIntent, TaskKind } from '../types.ts';
+import type { TaskModelListField, TaskModelProposal, TaskModelScalarField } from '../ai-contracts/types.ts';
 import { DeterministicInterpretationProvider } from './deterministic-extractor.ts';
 import type {
   CandidateField,
@@ -33,7 +34,8 @@ const MIN_ASSISTIVE_CONTEXT_CONFIDENCE = 0.5;
 
 export function resolveTask(input: ResolveTaskRequest): ResolvedTaskOutput {
   const deterministicCandidate = deterministicProvider.interpret(input.task);
-  const candidates = [...(input.candidates ?? []), deterministicCandidate];
+  const modelCandidates = (input.taskModels ?? []).map(taskModelToCandidate);
+  const candidates = [...modelCandidates, deterministicCandidate];
   const conflicts: InterpretationConflict[] = [];
   const discardedInputs: DiscardedInterpretationInput[] = [];
 
@@ -322,7 +324,7 @@ export function resolveTask(input: ResolveTaskRequest): ResolvedTaskOutput {
   return {
     task,
     taskKind: taskKindResolution.value,
-    candidates,
+    task_models: input.taskModels ?? [],
     task_intent: intent,
     context_profile: contextProfile,
     input_provenance: provenance,
@@ -395,8 +397,9 @@ function resolveField<T>({
     }
   }
   if (resolvedCandidates.length > 0) {
-    const winner = resolvedCandidates[0];
-    registerConflict(field, winner.source, resolvedCandidates.slice(1).map((candidate) => candidate.source), conflicts, 'first resolved candidate wins based on provider ordering');
+    const ordered = resolvedCandidates.slice().sort(compareCandidateField);
+    const winner = ordered[0];
+    registerConflict(field, winner.source, ordered.slice(1).map((candidate) => candidate.source), conflicts, 'field-level evidence/confidence policy selected the strongest candidate');
     return { value: winner.value as T, source: winner.source, confidence: winner.confidence, status: 'resolved' };
   }
   return { value: fallbackValue as T, source: defaultSource, confidence: defaultConfidence, status: 'resolved' };
@@ -425,8 +428,9 @@ function resolveListField<T>({
   }
   const resolvedCandidates = candidates.filter((candidate): candidate is CandidateListField<T> => candidate !== undefined && candidate.status === 'resolved' && candidate.values.length > 0);
   if (resolvedCandidates.length > 0) {
-    const winner = resolvedCandidates[0];
-    registerConflict(field, winner.source, resolvedCandidates.slice(1).map((candidate) => candidate.source), conflicts, 'first resolved candidate wins based on provider ordering');
+    const ordered = resolvedCandidates.slice().sort(compareCandidateListField);
+    const winner = ordered[0];
+    registerConflict(field, winner.source, ordered.slice(1).map((candidate) => candidate.source), conflicts, 'field-level evidence/confidence policy selected the strongest candidate');
     return { values: unique(winner.values), source: winner.source, confidence: winner.confidence, status: 'resolved' };
   }
   const fallback = unique(fallbackValues);
@@ -492,7 +496,7 @@ function buildProvenance(
     resolved_fields,
     unresolved_fields,
     context_resolution: buildContextResolution(resolved, conflicts),
-    interpretation_mode: input.interpretationMode ?? (input.candidates?.length ? 'assistive-ai' : 'deterministic-only'),
+    interpretation_mode: input.interpretationMode ?? (input.taskModels?.length ? 'host-agent' : 'deterministic-only'),
     resolution_quality: determineResolutionQuality(resolved_fields),
   };
 }
@@ -633,9 +637,9 @@ function buildDiagnostics(
     ],
     fallback_usage: {
       used_deterministic_interpretation: provenance.resolved_fields.some((field) => field.source === 'deterministic'),
-      used_candidate_normalization: Boolean(input.candidates?.length),
+      used_candidate_normalization: Boolean(input.taskModels?.length),
     },
-    clarification_recommended: ambiguity_reasons.length > 0 && (!input.candidates?.length || conflicts.length > 0),
+    clarification_recommended: ambiguity_reasons.length > 0 && (!input.taskModels?.length || conflicts.length > 0),
     ambiguity_reasons,
     discarded_inputs: discarded,
   };
@@ -743,6 +747,82 @@ function summarizeCandidate(candidate: ParsedTaskCandidate): CandidateSummary {
     resolved_fields,
     unresolved_fields,
   };
+}
+
+function taskModelToCandidate(model: TaskModelProposal): ParsedTaskCandidate {
+  return {
+    intent: {
+      task_kind: scalarField(model.intent.task_kind),
+      operation: scalarField(model.intent.operation),
+      target_layer: scalarField(model.intent.target_layer),
+      target_file: scalarField(model.intent.target_file),
+      changed_files: listField(model.intent.changed_files),
+      tech_stack: listField(model.intent.tech_stack),
+      tags: listField(model.intent.tags),
+    },
+    context: {
+      project_stage: scalarField(model.context.project_stage),
+      change_type: undefined,
+      optimization_target: scalarField(model.context.optimization_target),
+      hard_constraints: listField(model.context.hard_constraints),
+      allowed_tradeoffs: listField(model.context.allowed_tradeoffs),
+      avoid: listField(model.context.avoid),
+      risk_level: scalarField(model.context.risk_level),
+      scope_size: scalarField(model.context.scope_size),
+      compatibility_requirement: scalarField(model.context.compatibility_requirement),
+      interface_sensitivity: scalarField(model.context.interface_sensitivity),
+      refactor_tolerance: scalarField(model.context.refactor_tolerance),
+      migration_phase: scalarField(model.context.migration_phase),
+      review_goal: scalarField(model.context.review_goal),
+    },
+    uncertainties: model.uncertainties,
+  };
+}
+
+function scalarField<T extends string>(field: TaskModelScalarField<T> | undefined): CandidateField<T> | undefined {
+  if (!field || field.value === undefined) return undefined;
+  return {
+    value: field.value,
+    source: 'host-agent',
+    confidence: field.confidence,
+    status: 'resolved',
+    rationale: `task-model evidence_refs=${field.evidence_refs.map((ref) => ref.ref).join(', ')}`,
+  };
+}
+
+function listField<T extends string>(field: TaskModelListField<T> | undefined): CandidateListField<T> | undefined {
+  if (!field) return undefined;
+  return {
+    values: field.values,
+    source: 'host-agent',
+    confidence: field.confidence,
+    status: field.values.length ? 'resolved' : 'unresolved',
+    rationale: `task-model evidence_refs=${field.evidence_refs.map((ref) => ref.ref).join(', ')}`,
+  };
+}
+
+function compareCandidateField<T>(left: CandidateField<T>, right: CandidateField<T>): number {
+  return sourceRank(right.source) - sourceRank(left.source) || right.confidence - left.confidence;
+}
+
+function compareCandidateListField<T>(left: CandidateListField<T>, right: CandidateListField<T>): number {
+  return sourceRank(right.source) - sourceRank(left.source) || right.confidence - left.confidence || right.values.length - left.values.length;
+}
+
+function sourceRank(source: CandidateField<unknown>['source']): number {
+  switch (source) {
+    case 'explicit':
+      return 5;
+    case 'host-agent':
+    case 'assistive-ai':
+      return 4;
+    case 'derived':
+      return 3;
+    case 'repo-default':
+      return 2;
+    case 'deterministic':
+      return 1;
+  }
 }
 
 function summarizeScalarField<T>(field: string, resolved: ScalarResolution<T | undefined>) {

@@ -4,8 +4,20 @@ import { proposeSemanticRelations } from './propose-relations.ts';
 import { stableHash } from '../../utils/hash.ts';
 
 export function buildSemanticRelationsIR(bundle: GovernanceIRBundle): SemanticRelationIR[] {
-  const proposals = mergeRelationProposals(proposeSemanticRelations(bundle));
-  return adjudicateSemanticRelations(proposals, bundle);
+  const proposals = proposeSemanticRelations(bundle);
+  const agenticRelations = adjudicateSemanticRelations(
+    mergeRelationProposals(proposals.filter(isAgenticRelationProposal)),
+    bundle,
+  );
+  const agenticPairs = effectiveRelationPairs(agenticRelations);
+  const structuralFallbackRelations = adjudicateSemanticRelations(
+    mergeRelationProposals(proposals.filter((relation) =>
+      relation.proposedBy === 'runtime-structural'
+      && !agenticPairs.has(relationPairKey(relation)))),
+    bundle,
+  );
+  return [...agenticRelations, ...structuralFallbackRelations]
+    .sort((left, right) => left.directiveId.localeCompare(right.directiveId) || left.observationId.localeCompare(right.observationId));
 }
 
 function mergeRelationProposals(relations: SemanticRelationIR[]): SemanticRelationIR[] {
@@ -33,6 +45,7 @@ function mergeRelationGroup(group: SemanticRelationIR[]): SemanticRelationIR {
   const proposedBy = group.some((item) => item.proposedBy !== group[0].proposedBy) ? 'multi-source' : group[0].proposedBy;
   const impact = chooseImpact(group, relation);
   const reviewPriority = chooseReviewPriority(group);
+  const executionIntent = chooseExecutionIntent(group);
   const mergeIntent = chooseMergeIntent(group);
   const groupId = chooseGroupId(group);
   const conflictClass = chooseConflictClass(group, relation);
@@ -48,7 +61,7 @@ function mergeRelationGroup(group: SemanticRelationIR[]): SemanticRelationIR {
 
   return {
     irVersion: 'governance-ir/v1',
-    id: stableHash(['semantic-relation-ir', 'merged', directiveId, observationId, relation, proposedBy, signals, evidenceRefs, impact, reviewPriority, mergeIntent, groupId]),
+    id: stableHash(['semantic-relation-ir', 'merged', directiveId, observationId, relation, proposedBy, signals, evidenceRefs, impact, reviewPriority, executionIntent, mergeIntent, groupId]),
     directiveId,
     observationId,
     proposedBy,
@@ -61,6 +74,7 @@ function mergeRelationGroup(group: SemanticRelationIR[]): SemanticRelationIR {
     reasoningSummary: summarizeMergedReasoning(group, relation),
     ...(impact ? { impact } : {}),
     ...(reviewPriority ? { reviewPriority } : {}),
+    ...(executionIntent ? { executionIntent } : {}),
     ...(mergeIntent ? { mergeIntent } : {}),
     ...(groupId ? { groupId } : {}),
     adjudication: {
@@ -95,6 +109,34 @@ function chooseReviewPriority(group: SemanticRelationIR[]): SemanticRelationIR['
   return group
     .map((item) => item.reviewPriority)
     .filter((item): item is NonNullable<SemanticRelationIR['reviewPriority']> => Boolean(item))
+    .sort((left, right) => order[right] - order[left])[0];
+}
+
+function isAgenticRelationProposal(relation: SemanticRelationIR): boolean {
+  return relation.proposedBy === 'host-agent' || relation.proposedBy === 'feedback';
+}
+
+function effectiveRelationPairs(relations: SemanticRelationIR[]): Set<string> {
+  return new Set(relations
+    .filter((relation) => relation.adjudication.status !== 'rejected' && relation.adjudication.finalRelation !== 'unrelated')
+    .map(relationPairKey));
+}
+
+function relationPairKey(relation: Pick<SemanticRelationIR, 'directiveId' | 'observationId'>): string {
+  return `${relation.directiveId}::${relation.observationId}`;
+}
+
+function chooseExecutionIntent(group: SemanticRelationIR[]): SemanticRelationIR['executionIntent'] {
+  const order = {
+    suppress: 5,
+    'deviation-noted': 4,
+    enforce: 3,
+    ambient: 2,
+    'no-change': 1,
+  } as const;
+  return group
+    .map((item) => item.executionIntent)
+    .filter((item): item is NonNullable<SemanticRelationIR['executionIntent']> => Boolean(item))
     .sort((left, right) => order[right] - order[left])[0];
 }
 

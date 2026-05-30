@@ -9,7 +9,6 @@ import {
   prepareCodeTask,
   prepareInterpretation,
   prepareRelations,
-  prepareSemanticCandidates,
 } from '../internal/workflow.mjs';
 
 export {
@@ -21,17 +20,17 @@ export {
   prepareCodeTask,
   prepareInterpretation,
   prepareRelations,
-  prepareSemanticCandidates,
 } from '../internal/workflow.mjs';
 
 function parseCli(argv) {
   const [command, ...rest] = argv;
   if (!command) {
-    throw new Error('Expected a command: auto, status, explain, prepare-interpretation, prepare-relations, prepare-semantic-candidates, prepare, prepare-adherence, or complete.');
+    throw new Error('Expected a command: auto, status, doctor, explain, prepare-interpretation, prepare-relations, prepare, prepare-adherence, or complete.');
   }
 
-  if (command === 'auto' || command === 'prepare-interpretation' || command === 'prepare-relations' || command === 'prepare-semantic-candidates' || command === 'prepare') {
+  if (command === 'auto' || command === 'prepare-interpretation' || command === 'prepare-relations' || command === 'prepare') {
     const { positionals, flags } = parseFlags(rest);
+    rejectRemovedFlags(flags, ['planning-file', 'candidate-file', 'host-proposal-file', 'semantic-proposal-file']);
     const projectRoot = positionals[0];
     const taskDescription = readSingleFlag(flags, 'task');
     if (!projectRoot) throw new Error(`${command} requires <project-root>.`);
@@ -42,10 +41,9 @@ function parseCli(argv) {
         projectRoot,
         pluginRoot: readSingleFlag(flags, 'plugin-root'),
         taskDescription,
-        planningFile: readSingleFlag(flags, 'planning-file'),
-        candidateFile: readSingleFlag(flags, 'candidate-file'),
-        hostProposalFile: readSingleFlag(flags, 'host-proposal-file'),
-        semanticProposalFile: readSingleFlag(flags, 'semantic-proposal-file'),
+        guidanceMode: readSingleFlag(flags, 'mode'),
+        taskModelFile: readSingleFlag(flags, 'task-model-file'),
+        governanceGraphFile: readSingleFlag(flags, 'governance-graph-file'),
         targetFile: readSingleFlag(flags, 'target-file'),
         changedFiles: readMultiFlag(flags, 'changed-file'),
         techStack: readMultiFlag(flags, 'tech'),
@@ -77,7 +75,7 @@ function parseCli(argv) {
     };
   }
 
-  if (command === 'status') {
+  if (command === 'status' || command === 'doctor') {
     const { positionals, flags } = parseFlags(rest);
     const projectRoot = positionals[0];
     if (!projectRoot) throw new Error('status requires <project-root>.');
@@ -101,18 +99,19 @@ function parseCli(argv) {
   }
 
   if (command === 'complete') {
-    const { flags } = parseFlags(rest);
+    const { flags } = parseFlags(rest, ['auto-unverified']);
+    rejectRemovedFlags(flags, ['followed', 'ignored', 'ignored-reason', 'signal-confidence']);
     const sessionPath = readSingleFlag(flags, 'session');
     if (!sessionPath) throw new Error('complete requires --session <path>.');
+    const adherenceFile = readSingleFlag(flags, 'adherence-file');
+    const autoUnverified = readBooleanFlag(flags, 'auto-unverified');
+    if (!adherenceFile && !autoUnverified) throw new Error('complete requires --adherence-file <path> or --auto-unverified.');
     return {
       command,
       options: {
         sessionPath,
-        followedDirectiveIds: readMultiFlag(flags, 'followed'),
-        ignoredDirectiveIds: readMultiFlag(flags, 'ignored'),
-        ignoredDirectiveReasons: readIgnoredReasonMap(readMultiFlag(flags, 'ignored-reason')),
-        signalConfidence: readSingleFlag(flags, 'signal-confidence'),
-        adherenceFile: readSingleFlag(flags, 'adherence-file'),
+        adherenceFile,
+        autoUnverified,
       },
     };
   }
@@ -120,9 +119,10 @@ function parseCli(argv) {
   throw new Error(`Unknown command: ${command}`);
 }
 
-function parseFlags(argv) {
+function parseFlags(argv, booleanFlags = []) {
   const positionals = [];
   const flags = new Map();
+  const booleanFlagSet = new Set(booleanFlags);
   for (let index = 0; index < argv.length; index += 1) {
     const token = argv[index];
     if (!token.startsWith('--')) {
@@ -132,6 +132,10 @@ function parseFlags(argv) {
     const key = token.slice(2);
     const next = argv[index + 1];
     if (!next || next.startsWith('--')) {
+      if (booleanFlagSet.has(key)) {
+        flags.set(key, ['true']);
+        continue;
+      }
       throw new Error(`Flag ${token} requires a value.`);
     }
     const values = flags.get(key) ?? [];
@@ -150,31 +154,18 @@ function readMultiFlag(flags, key) {
   return flags.get(key) ?? [];
 }
 
-function readIgnoredReasonMap(values) {
-  const result = {};
-  for (const value of values) {
-    const separator = value.indexOf(':');
-    if (separator <= 0) {
-      throw new Error(`Invalid --ignored-reason value "${value}"; expected <directive-id>:<reason>.`);
-    }
-    const directiveId = value.slice(0, separator);
-    const reason = value.slice(separator + 1);
-    if (!isIgnoredReason(reason)) {
-      throw new Error(`Invalid ignored reason "${reason}" for ${directiveId}.`);
-    }
-    result[directiveId] = reason;
-  }
-  return result;
+function readBooleanFlag(flags, key) {
+  const value = readSingleFlag(flags, key);
+  if (value === undefined) return false;
+  return !['0', 'false', 'no', 'off'].includes(String(value).trim().toLowerCase());
 }
 
-function isIgnoredReason(value) {
-  return value === 'not-applicable'
-    || value === 'conflicts-with-task'
-    || value === 'too-broad'
-    || value === 'repo-reality'
-    || value === 'false-positive'
-    || value === 'user-corrected'
-    || value === 'other';
+function rejectRemovedFlags(flags, removed) {
+  for (const flag of removed) {
+    if (flags.has(flag)) {
+      throw new Error(`Flag --${flag} was removed by the ai-contract/v2 workflow. Use --task-model-file, --governance-graph-file, or --adherence-file as appropriate.`);
+    }
+  }
 }
 
 function formatError(error) {
@@ -187,15 +178,13 @@ async function main() {
     ? await prepareInterpretation(parsed.options)
     : parsed.command === 'auto'
       ? await autoCodeTask(parsed.options)
-      : parsed.command === 'status'
+      : parsed.command === 'status' || parsed.command === 'doctor'
         ? await getCodeStatus(parsed.options)
         : parsed.command === 'explain'
           ? await explainCodeSession(parsed.options)
           : parsed.command === 'prepare-relations'
       ? await prepareRelations(parsed.options)
-      : parsed.command === 'prepare-semantic-candidates'
-        ? await prepareSemanticCandidates(parsed.options)
-        : parsed.command === 'prepare'
+      : parsed.command === 'prepare'
           ? await prepareCodeTask(parsed.options)
           : parsed.command === 'prepare-adherence'
             ? await prepareAdherenceEvaluation(parsed.options)

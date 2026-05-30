@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 const GITIGNORE_BLOCK_START = '# resonant-code: generated runtime artifacts';
 const GITIGNORE_BLOCK_END = '# .resonant-code/';
 const GENERATED_GITIGNORE_RULES = [
-  '.resonant-code/context/cache/',
+  '.resonant-code/context/',
 ];
 
 const DETERMINISTIC_DEFAULT_EXTENDS = [

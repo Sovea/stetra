@@ -13,7 +13,7 @@ import { readFileSync } from "node:fs";
 //#region src/compile.ts
 function buildInterpretationPacket(resolved) {
 	return {
-		candidates: resolved.candidates,
+		task_models: resolved.task_models,
 		input_provenance: resolved.input_provenance,
 		diagnostics: resolved.diagnostics,
 		trace: resolved.trace,
@@ -152,11 +152,11 @@ async function compile(input) {
 			`final_relations: ${formatRecordCounts(semanticMergeResult.merge_summary.final_relation_counts)}`,
 			`relation_sources: ${formatRecordCounts(semanticMergeResult.merge_summary.proposed_by_counts)}`,
 			`execution_mode_impacting_relations: ${semanticMergeResult.merge_summary.execution_mode_impacting}`,
-			`host_semantic_candidates: ${semanticMergeResult.merge_summary.host_semantic_candidate_count}`,
+			`host_graph_edges: ${semanticMergeResult.merge_summary.host_graph_edge_count}`,
 			`feedback_applied: ${semanticMergeResult.merge_summary.feedback_applied_count}`,
 			`semantic_relation_policy: ${formatPolicy(semanticMergeResult.merge_summary.policy)}`,
 			`review_focus_by_priority: ${formatRecordCounts(semanticMergeResult.merge_summary.review_priority_counts)}`,
-			`semantic_relation_mode_changes: ${semanticRelationModeChanges(semanticMergeResult).join(", ") || "(none)"}`,
+			`governance_graph_mode_changes: ${governanceGraphModeChanges(semanticMergeResult).join(", ") || "(none)"}`,
 			`context_policy_rules: ${formatListCounts(executionDecisionsIR.flatMap((decision) => decision.contextRulesApplied))}`,
 			`context_tensions: ${semanticMergeResult.context_tensions.length}`,
 			`review_focus: ${focus.review_focus.length}`,
@@ -270,7 +270,7 @@ function buildFocusTitle(kind, directiveDescription, directiveId, observationId)
 		case "compatibility-boundary": return `Inspect compatibility boundary for ${directiveLabel}`;
 	}
 }
-function semanticRelationModeChanges(semanticMergeResult) {
+function governanceGraphModeChanges(semanticMergeResult) {
 	return semanticMergeResult.directive_modes.filter((item) => item.relation_ids.length > 0 && item.execution_mode !== item.default_execution_mode).map((item) => `${item.directive_id}:${item.default_execution_mode}->${item.execution_mode}`);
 }
 function countSourceIds(sourceIds) {
@@ -282,14 +282,39 @@ function summarizeHostFulfillment(hostFulfillment) {
 	if (!hostFulfillment) return ["no host fulfillment summary provided"];
 	return [
 		`status: ${hostFulfillment.status}`,
-		formatHostFulfillmentArtifact("task_interpretation", hostFulfillment.taskInterpretation),
-		formatHostFulfillmentArtifact("semantic_relation", hostFulfillment.semanticRelation),
-		formatHostFulfillmentArtifact("semantic_candidate", hostFulfillment.semanticCandidate)
+		formatHostFulfillmentArtifact("agent_capability_profile", hostFulfillment.agentCapability),
+		formatHostFulfillmentArtifact("task_model", hostFulfillment.taskModel),
+		formatHostFulfillmentArtifact("semantic_governance_graph", hostFulfillment.semanticGovernanceGraph),
+		...hostFulfillment.adherenceEvidence ? [formatHostFulfillmentArtifact("adherence_evidence", hostFulfillment.adherenceEvidence)] : [],
+		`evidence_coverage: ${formatEvidenceCoverage(hostFulfillment)}`
 	];
 }
 function formatHostFulfillmentArtifact(label, artifact) {
 	const diagnostics = artifact.diagnostics?.summary;
 	return `${label}: provided=${artifact.provided} status=${artifact.status} accepted=${diagnostics?.accepted ?? 0} rejected=${diagnostics?.rejected ?? 0} downgraded=${diagnostics?.downgraded ?? 0} unused=${diagnostics?.unused ?? 0}`;
+}
+function formatEvidenceCoverage(hostFulfillment) {
+	const totals = [
+		hostFulfillment.taskModel,
+		hostFulfillment.semanticGovernanceGraph,
+		hostFulfillment.adherenceEvidence
+	].filter(Boolean).reduce((acc, artifact) => {
+		const summary = artifact.diagnostics?.summary;
+		acc.total += summary?.total ?? 0;
+		acc.accepted += summary?.accepted ?? 0;
+		acc.rejected += summary?.rejected ?? 0;
+		acc.downgraded += summary?.downgraded ?? 0;
+		acc.unused += summary?.unused ?? 0;
+		return acc;
+	}, {
+		total: 0,
+		accepted: 0,
+		rejected: 0,
+		downgraded: 0,
+		unused: 0
+	});
+	if (totals.total === 0) return "none";
+	return `accepted=${totals.accepted}/${totals.total} rejected=${totals.rejected} downgraded=${totals.downgraded} unused=${totals.unused}`;
 }
 function formatRecordCounts(counts) {
 	const entries = Object.entries(counts).filter(([, count]) => count > 0);

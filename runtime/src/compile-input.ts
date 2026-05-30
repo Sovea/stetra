@@ -9,14 +9,14 @@ export function resolveCompileTask(input: CompileInput): ResolvedTaskOutput {
   if (hasResolvedTask(input)) return input.resolvedTask;
   return resolveTask({
     task: input.task,
-    candidates: input.parsedTaskCandidate ? [input.parsedTaskCandidate] : [],
+    taskModels: input.taskModels ?? [],
     interpretationMode: input.interpretationMode,
   });
 }
 
 export function toResolvedCompileInput(input: CompileInput): ResolvedCompileInput {
   if (hasResolvedTask(input)) return input;
-  const { task: _task, parsedTaskCandidate: _parsedTaskCandidate, interpretationMode: _interpretationMode, ...base } = input;
+  const { task: _task, taskModels: _taskModels, interpretationMode: _interpretationMode, ...base } = input;
   return {
     ...base,
     resolvedTask: resolveCompileTask(input),

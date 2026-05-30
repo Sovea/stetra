@@ -103,7 +103,7 @@ function publicDecisionBasis(basis: ExecutionDecisionIR['basis']): SemanticMerge
   switch (basis) {
     case 'prescription':
       return 'default';
-    case 'semantic-relation':
+    case 'governance-graph':
       return 'observed-conflict';
     case 'verification':
       return 'rccl-immune';
@@ -282,7 +282,7 @@ function buildMergeSummary(relations: SemanticRelationIR[], decisions: Execution
     proposed_by_counts,
     execution_mode_impacting: executionModeImpacting,
     feedback_applied_count: decisions.reduce((count, decision) => count + decision.feedbackApplied.length, 0),
-    host_semantic_candidate_count: relations.filter(hasHostSemanticCandidateSource).length,
+    host_graph_edge_count: relations.filter(hasHostGraphSource).length,
     review_priority_counts,
     policy: semanticRelationPolicyTraceRecord(),
   };
@@ -325,9 +325,9 @@ function directiveFocusPriority(
   return 'low';
 }
 
-function hasHostSemanticCandidateSource(relation: SemanticRelationIR): boolean {
-  return relation.proposedBy === 'host-semantic-candidate'
-    || relation.signals.some((signal) => signal.kind === 'host-proposal' && signal.reason.startsWith('host semantic candidate:'));
+function hasHostGraphSource(relation: SemanticRelationIR): boolean {
+  return relation.proposedBy === 'host-agent'
+    || relation.signals.some((signal) => signal.kind === 'host-proposal');
 }
 
 function buildContextInfluences(decisions: ExecutionDecisionIR[]): ContextInfluenceRecord[] {

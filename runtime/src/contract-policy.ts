@@ -1,92 +1,217 @@
 import type {
+  AgentCapabilityProfile,
+  TaskModelProposal,
+} from './ai-contracts/types.ts';
+import { resolveTask } from './interpret/normalize-candidate.ts';
+import type {
   ContractPolicyDecision,
   ContractPolicyKind,
+  CompileTaskInput,
+  ContextProfile,
+  GuidanceExecutionMode,
   GuidancePlanProvidedContracts,
   GuidancePlanSourceStatus,
+  ResolvedTaskOutput,
+  RiskLevel,
 } from './types.ts';
-import type { ValidatedGuidancePlanningProposal } from './ai-contracts/types.ts';
 
 export interface ContractPolicyInput {
   sourceStatus: GuidancePlanSourceStatus;
-  planningProposal?: ValidatedGuidancePlanningProposal | null;
   providedContracts?: GuidancePlanProvidedContracts;
+  agentCapabilityProfile?: AgentCapabilityProfile | null;
+  taskRisk?: RiskLevel;
+  task?: CompileTaskInput;
+  taskModels?: TaskModelProposal[];
+  resolvedTask?: ResolvedTaskOutput;
+  mode?: GuidanceExecutionMode;
+  rcclRelevant?: boolean;
 }
 
+const DEFAULT_CAPABILITIES: AgentCapabilityProfile = {
+  can_read_files: true,
+  can_search_files: true,
+  can_run_commands: false,
+  can_inspect_diff: false,
+  can_request_context: true,
+  max_context_files: 12,
+  max_command_count: 0,
+};
+
 export function resolveContractPolicy(input: ContractPolicyInput): ContractPolicyDecision {
+  const mode = input.mode ?? 'standard';
+  const policyInput = {
+    ...input,
+    resolvedTask: input.resolvedTask ?? resolvePolicyTask(input),
+  };
   const provided = input.providedContracts ?? {};
+  const capability = input.agentCapabilityProfile ?? DEFAULT_CAPABILITIES;
+  const highRiskTask = isHighRisk(policyRiskLevel(policyInput));
+  const taskModelRequired = shouldRequireTaskModel(policyInput, mode);
+  const semanticGraphRequired = shouldRequireSemanticGraph(policyInput, mode, taskModelRequired);
   const required: ContractPolicyKind[] = [];
   const optional: ContractPolicyKind[] = [];
   const skipped: ContractPolicyDecision['skipped'] = [];
-  const proposed = new Set(input.planningProposal?.useful_contracts ?? []);
+  const reasons: string[] = [];
 
-  if (!provided.guidancePlanning && !input.planningProposal) {
-    required.push('guidance-planning');
+  if (!input.agentCapabilityProfile && !provided.agentCapability) {
+    required.push('agent-capability-profile');
   } else {
-    skipped.push({ kind: 'guidance-planning', reason_id: 'already-provided' });
+    skipped.push({ kind: 'agent-capability-profile', reason_id: 'already-provided' });
   }
 
-  if (!provided.taskInterpretation) {
-    required.push('task-interpretation');
+  if (provided.taskModel) {
+    skipped.push({ kind: 'task-model', reason_id: 'already-provided' });
+  } else if (taskModelRequired) {
+    required.push('task-model');
+    reasons.push(mode === 'strict'
+      ? 'strict mode requires task-model before deterministic compilation.'
+      : 'task risk, compatibility, migration, or ambiguity requires task-model.');
   } else {
-    skipped.push({ kind: 'task-interpretation', reason_id: 'already-provided' });
+    optional.push('task-model');
+    skipped.push({ kind: 'task-model', reason_id: mode === 'fast' ? 'mode-fast' : 'deterministic-fallback-allowed' });
+    reasons.push('deterministic task interpretation is allowed for this mode and task shape.');
   }
 
-  resolveSemanticContract('semantic-candidate', input.sourceStatus, proposed, provided.semanticCandidate, required, skipped);
-  resolveSemanticContract('semantic-relation', input.sourceStatus, proposed, provided.semanticRelation, required, skipped);
+  const needsTaskModel = taskModelRequired && !provided.taskModel;
 
-  if (proposed.has('adherence-evaluation')) {
-    const highSignal = input.planningProposal?.reasons.some((reason) =>
-      reason === 'high-risk-or-sensitive-change'
-      || reason === 'user-requested-governance'
-      || reason === 'potential-context-tension') ?? false;
-    if (provided.adherenceEvaluation) {
-      skipped.push({ kind: 'adherence-evaluation', reason_id: 'already-provided' });
-    } else if (highSignal) {
-      required.push('adherence-evaluation');
+  if (rcclAvailable(input.sourceStatus)) {
+    if (provided.semanticGovernanceGraph) {
+      skipped.push({ kind: 'semantic-governance-graph', reason_id: 'already-provided' });
+    } else if (!semanticGraphRequired) {
+      skipped.push({
+        kind: 'semantic-governance-graph',
+        reason_id: mode === 'fast'
+          ? 'mode-fast'
+          : input.rcclRelevant === false
+            ? 'rccl-not-relevant'
+            : 'not-required-for-current-policy',
+      });
+    } else if (needsTaskModel) {
+      skipped.push({ kind: 'semantic-governance-graph', reason_id: 'waiting-for-task-model' });
+      reasons.push('semantic-governance-graph is deferred until task-model is provided.');
     } else {
-      optional.push('adherence-evaluation');
-      skipped.push({ kind: 'adherence-evaluation', reason_id: 'deferred-until-after-compile' });
+      required.push('semantic-governance-graph');
+      reasons.push('RCCL is relevant to this task and semantic governance should be host-assisted.');
     }
+  } else if (capability.can_request_context) {
+    if (mode === 'strict' && highRiskTask) required.push('context-acquisition');
+    else optional.push('context-acquisition');
+    skipped.push({ kind: 'semantic-governance-graph', reason_id: 'missing-rccl' });
   } else {
-    skipped.push({ kind: 'adherence-evaluation', reason_id: 'not-proposed-by-host' });
+    skipped.push({ kind: 'semantic-governance-graph', reason_id: 'missing-rccl' });
+    skipped.push({ kind: 'context-acquisition', reason_id: 'insufficient-agent-capability' });
+  }
+
+  if (!provided.adherenceEvidence && (capability.can_inspect_diff || capability.can_read_files || capability.can_run_commands)) {
+    if (mode === 'strict') required.push('adherence-evidence');
+    else optional.push('adherence-evidence');
+    skipped.push({ kind: 'adherence-evidence', reason_id: 'deferred-until-after-compile' });
+  } else if (provided.adherenceEvidence) {
+    skipped.push({ kind: 'adherence-evidence', reason_id: 'already-provided' });
+  } else {
+    skipped.push({ kind: 'adherence-evidence', reason_id: 'insufficient-agent-capability' });
+  }
+
+  if (input.sourceStatus.lockfile === 'present') {
+    optional.push('governance-evolution-proposal');
+  } else {
+    skipped.push({ kind: 'governance-evolution-proposal', reason_id: 'not-required-for-current-policy' });
   }
 
   return {
+    mode,
     required: unique(required),
     optional: unique(optional),
     skipped,
-    escalation: resolveEscalation(required),
+    escalation: resolveEscalation(required, optional),
+    diagnostics: {
+      task_model_required: taskModelRequired,
+      semantic_graph_required: semanticGraphRequired,
+      ...(input.rcclRelevant !== undefined ? { rccl_relevant: input.rcclRelevant } : {}),
+      reasons,
+    },
   };
 }
 
-function resolveSemanticContract(
-  kind: Extract<ContractPolicyKind, 'semantic-candidate' | 'semantic-relation'>,
-  sourceStatus: GuidancePlanSourceStatus,
-  proposed: Set<ContractPolicyKind>,
-  provided: boolean | undefined,
-  required: ContractPolicyKind[],
-  skipped: ContractPolicyDecision['skipped'],
-): void {
-  if (provided) {
-    skipped.push({ kind, reason_id: 'already-provided' });
-    return;
-  }
-  if (!proposed.has(kind)) {
-    skipped.push({ kind, reason_id: 'not-proposed-by-host' });
-    return;
-  }
-  if (sourceStatus.rccl !== 'present' && sourceStatus.rccl !== 'stale' && sourceStatus.rccl !== 'unverified') {
-    skipped.push({ kind, reason_id: 'missing-rccl' });
-    return;
-  }
-  required.push(kind);
+function resolveEscalation(required: ContractPolicyKind[], optional: ContractPolicyKind[]): ContractPolicyDecision['escalation'] {
+  if (required.includes('task-model')) return 'task-model';
+  if (required.includes('semantic-governance-graph')) return 'semantic-governance-graph';
+  if (required.includes('adherence-evidence')) return 'adherence-required';
+  if (required.includes('context-acquisition')) return 'context-acquisition';
+  return 'none';
 }
 
-function resolveEscalation(required: ContractPolicyKind[]): ContractPolicyDecision['escalation'] {
-  if (required.includes('adherence-evaluation')) return 'adherence-required';
-  if (required.includes('semantic-relation')) return 'semantic-relation';
-  if (required.includes('semantic-candidate')) return 'semantic-candidate';
-  return 'none';
+function shouldRequireTaskModel(input: ContractPolicyInput, mode: GuidanceExecutionMode): boolean {
+  if (mode === 'strict') return true;
+  if (mode === 'fast') return false;
+  const profile = policyContextProfile(input);
+  const task = policyTask(input);
+  const operation = input.resolvedTask?.task_intent.operation ?? task?.operation;
+  const taskKind = input.resolvedTask?.taskKind ?? task?.taskKind;
+  if (isHighRisk(policyRiskLevel(input))) return true;
+  if (profile?.scope_size === 'cross-cutting') return true;
+  if (profile?.compatibility_requirement && profile.compatibility_requirement !== 'none' && profile.compatibility_requirement !== 'breaking-allowed') return true;
+  if (profile?.interface_sensitivity && profile.interface_sensitivity !== 'internal' && profile.interface_sensitivity !== 'unknown') return true;
+  if (profile?.migration_phase && profile.migration_phase !== 'none') return true;
+  if (profile?.review_goal === 'security' || profile?.review_goal === 'regression-risk' || profile?.review_goal === 'architecture-fit') return true;
+  if (taskKind === 'migration' || operation === 'review') return true;
+  return hasAmbiguousTaskResolution(input);
+}
+
+function shouldRequireSemanticGraph(
+  input: ContractPolicyInput,
+  mode: GuidanceExecutionMode,
+  taskModelRequired: boolean,
+): boolean {
+  if (!rcclAvailable(input.sourceStatus)) return false;
+  if (mode === 'fast') return false;
+  if (mode === 'strict') return true;
+  if (input.rcclRelevant !== true) return false;
+  return taskModelRequired || isHighRisk(policyRiskLevel(input));
+}
+
+function hasAmbiguousTaskResolution(input: ContractPolicyInput): boolean {
+  const resolved = input.resolvedTask;
+  if (!resolved?.diagnostics.clarification_recommended) return false;
+  const hasTarget = Boolean(
+    resolved.task_intent.target_file
+    || resolved.task_intent.changed_files.length
+    || input.task?.targetFile
+    || input.task?.changedFiles?.length,
+  );
+  if (hasTarget) return false;
+  const operationField = resolved.input_provenance.resolved_fields.find((field) => field.field === 'intent.operation');
+  return !input.task?.operation
+    && (!operationField || (operationField.source === 'deterministic' && operationField.confidence <= 0.5));
+}
+
+function rcclAvailable(sourceStatus: GuidancePlanSourceStatus): boolean {
+  return sourceStatus.rccl === 'present' || sourceStatus.rccl === 'stale' || sourceStatus.rccl === 'unverified';
+}
+
+function resolvePolicyTask(input: ContractPolicyInput): ResolvedTaskOutput | undefined {
+  if (!input.task) return undefined;
+  return resolveTask({
+    task: input.task,
+    taskModels: input.taskModels ?? [],
+    interpretationMode: input.taskModels?.length ? 'host-agent' : 'deterministic-only',
+  });
+}
+
+function policyTask(input: ContractPolicyInput): CompileTaskInput | undefined {
+  return input.resolvedTask?.task ?? input.task;
+}
+
+function policyContextProfile(input: ContractPolicyInput): ContextProfile | undefined {
+  return input.resolvedTask?.context_profile;
+}
+
+function policyRiskLevel(input: ContractPolicyInput): RiskLevel | undefined {
+  return input.resolvedTask?.context_profile.risk_level ?? input.taskRisk ?? input.task?.riskLevel;
+}
+
+function isHighRisk(value: RiskLevel | undefined): boolean {
+  return value === 'high' || value === 'critical';
 }
 
 function unique<T>(values: T[]): T[] {
