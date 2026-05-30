@@ -38,6 +38,7 @@ function validateCandidateObservationRecord(obs, prefix) {
 			if (supportHint.scope_basis != null && !RCCL_SCOPE_BASES.has(String(supportHint.scope_basis))) errors.push(`${prefix}.support_hint.scope_basis: invalid value`);
 		}
 	}
+	errors.push(...validateTraitsRecord(obs.traits, `${prefix}.traits`));
 	return errors;
 }
 function validateCandidateObservationShape(observation, prefix) {
@@ -59,6 +60,7 @@ function validateCandidateObservationShape(observation, prefix) {
 		if (supportHint.cluster_count != null && !isPositiveNumber(supportHint.cluster_count)) errors.push(`${prefix}.support_hint.cluster_count: must be a positive number`);
 		if (supportHint.scope_basis != null && !isScopeBasis(supportHint.scope_basis)) errors.push(`${prefix}.support_hint.scope_basis: invalid value`);
 	}
+	errors.push(...validateTraitsRecord(observation.traits, `${prefix}.traits`));
 	return errors;
 }
 function validateEvidenceSnippet(snippet, prefix, index) {
@@ -88,6 +90,24 @@ function validateCandidateCoreRecord(obs, prefix) {
 	if (typeof obs.confidence !== "number" || !Number.isFinite(obs.confidence) || obs.confidence < 0 || obs.confidence > 1) errors.push(`${prefix}: 'confidence' must be a number between 0 and 1, got ${obs.confidence}`);
 	if (!RCCL_ADHERENCE_QUALITIES.has(String(obs.adherence_quality))) errors.push(`${prefix}: 'adherence_quality' is invalid`);
 	errors.push(...validateEvidenceRecord(obs.evidence, prefix));
+	errors.push(...validateTraitsRecord(obs.traits, `${prefix}.traits`));
+	return errors;
+}
+function validateTraitsRecord(value, prefix) {
+	if (value == null) return [];
+	const errors = [];
+	if (!isRecord(value)) return [`${prefix}: must be an object when present`];
+	const allowed = new Set([
+		"legacy",
+		"migration_boundary",
+		"anti_pattern",
+		"compatibility_boundary"
+	]);
+	for (const [key, item] of Object.entries(value)) {
+		if (item === void 0) continue;
+		if (!allowed.has(key)) errors.push(`${prefix}.${key}: unsupported trait`);
+		else if (typeof item !== "boolean") errors.push(`${prefix}.${key}: must be boolean`);
+	}
 	return errors;
 }
 function validateEvidenceRecord(value, prefix) {
@@ -142,4 +162,4 @@ function isRecord(value) {
 	return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 //#endregion
-export { RCCL_ADHERENCE_QUALITIES, RCCL_CATEGORIES, RCCL_OBSERVATION_ID_PATTERN, RCCL_SCOPE_BASES, validateCandidateObservationRecord, validateCandidateObservationShape, validateEvidenceSnippet };
+export { RCCL_ADHERENCE_QUALITIES, RCCL_CATEGORIES, RCCL_OBSERVATION_ID_PATTERN, RCCL_SCOPE_BASES, validateCandidateObservationRecord, validateCandidateObservationShape, validateEvidenceSnippet, validateTraitsRecord };

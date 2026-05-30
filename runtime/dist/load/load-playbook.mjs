@@ -89,6 +89,7 @@ function normalizeDirective(input, layerId, filePath, kind) {
 		exceptions: Array.isArray(input.exceptions) ? input.exceptions.map(String) : [],
 		examples: normalizeExamples(input.examples),
 		rccl_immune: Boolean(input.rccl_immune),
+		traits: normalizeTraits(input.traits),
 		source: {
 			kind,
 			layerId,
@@ -111,6 +112,20 @@ function normalizeExamples(input) {
 			note: String(item.note ?? "")
 		};
 	});
+}
+function normalizeTraits(input) {
+	if (!input || typeof input !== "object" || Array.isArray(input)) return void 0;
+	const value = input;
+	const traits = {
+		safety_critical: booleanTrait(value.safety_critical),
+		broad_scope: booleanTrait(value.broad_scope),
+		compatibility_sensitive: booleanTrait(value.compatibility_sensitive),
+		migration_sensitive: booleanTrait(value.migration_sensitive)
+	};
+	return Object.values(traits).some((item) => item !== void 0) ? traits : void 0;
+}
+function booleanTrait(input) {
+	return typeof input === "boolean" ? input : void 0;
 }
 //#endregion
 export { discoverBuiltinLayers, loadDirectiveFile, loadLocalPlaybook, resolveExtendedLayers };

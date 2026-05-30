@@ -132,6 +132,7 @@ function serializeRccl(rccl) {
 			pattern: observation.pattern,
 			confidence: observation.confidence,
 			adherence_quality: observation.adherence_quality,
+			...observation.traits ? { traits: serializeTraits(observation) } : {},
 			evidence: observation.evidence,
 			support: observation.support,
 			verification: {
@@ -161,6 +162,17 @@ function serializeLifecycle(observation) {
 		...lifecycle.stale_since_git_ref ? { stale_since_git_ref: lifecycle.stale_since_git_ref } : {},
 		...lifecycle.superseded_at_git_ref ? { superseded_at_git_ref: lifecycle.superseded_at_git_ref } : {}
 	};
+}
+function serializeTraits(observation) {
+	const traits = observation.traits;
+	if (traits == null) return void 0;
+	const serialized = {
+		...traits.legacy !== void 0 ? { legacy: traits.legacy } : {},
+		...traits.migration_boundary !== void 0 ? { migration_boundary: traits.migration_boundary } : {},
+		...traits.anti_pattern !== void 0 ? { anti_pattern: traits.anti_pattern } : {},
+		...traits.compatibility_boundary !== void 0 ? { compatibility_boundary: traits.compatibility_boundary } : {}
+	};
+	return Object.keys(serialized).length ? serialized : void 0;
 }
 function materializeActiveLifecycle(observation, previous, gitRef, checkedAt) {
 	const contentFingerprint = fingerprintObservation(observation);
@@ -256,6 +268,7 @@ function fingerprintObservation(observation) {
 		pattern: observation.pattern,
 		confidence: observation.confidence,
 		adherence_quality: observation.adherence_quality,
+		traits: observation.traits,
 		evidence: observation.evidence,
 		support: observation.support
 	};

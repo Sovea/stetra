@@ -142,12 +142,14 @@ export async function getCodeStatus(options) {
   const plugin = inspectPluginCompleteness(paths.pluginRoot);
   const cacheVolume = inspectCacheVolume(paths.projectRoot);
   const defaultModeProbe = await buildDefaultModeProbe(runtime, paths);
+  const diagnostics = buildStatusDiagnostics(sourceStatus, gitignore, plugin, defaultModeProbe, paths);
   return {
     status: 'ok',
     paths,
     sourceStatus,
     lockfile: summarizeLockfile(paths.lockfilePath),
     cacheVolume,
+    readiness: buildReadinessSummary(diagnostics.items),
     defaultFlow: {
       command: 'auto',
       defaultMode: 'standard',
@@ -161,7 +163,7 @@ export async function getCodeStatus(options) {
       completionContract: 'adherence-evidence is optional unless --mode strict is used',
       probe: defaultModeProbe,
     },
-    diagnostics: buildStatusDiagnostics(sourceStatus, gitignore, plugin, defaultModeProbe),
+    diagnostics,
     plugin,
     artifactLifecycle: {
       commit: ['.resonant-code/playbook/local-augment.yaml'],
@@ -1143,13 +1145,15 @@ function selectProbeTarget(projectRoot) {
   return candidates.find((candidate) => existsSync(join(projectRoot, candidate))) ?? undefined;
 }
 
-function buildStatusDiagnostics(sourceStatus, gitignore, plugin, defaultModeProbe) {
+function buildStatusDiagnostics(sourceStatus, gitignore, plugin, defaultModeProbe, paths) {
   const items = [];
   if (sourceStatus.localAugment === 'absent') {
     items.push({
       severity: 'warning',
       code: 'local-augment-absent',
       message: 'Local augment is absent; Runtime will use built-in playbook layers only.',
+      action: 'Run init prepare/commit when project-specific durable guidance is worth the setup cost.',
+      command: `node skills/init/scripts/init.mjs prepare ${JSON.stringify(paths.projectRoot)}`,
     });
   }
   if (sourceStatus.rccl === 'absent') {
@@ -1157,6 +1161,8 @@ function buildStatusDiagnostics(sourceStatus, gitignore, plugin, defaultModeProb
       severity: 'info',
       code: 'rccl-absent',
       message: 'RCCL is absent; repository observations will not influence task-time guidance.',
+      action: 'Run incremental calibration for target-scoped repository observations when a task needs local context.',
+      command: `node skills/calibrate-repo-context/scripts/calibrate-repo-context.mjs prepare-incremental ${JSON.stringify(paths.projectRoot)}`,
     });
   }
   if (gitignore.broadResonantIgnore) {
@@ -1164,6 +1170,7 @@ function buildStatusDiagnostics(sourceStatus, gitignore, plugin, defaultModeProb
       severity: 'warning',
       code: 'broad-resonant-ignore',
       message: '.gitignore ignores all of .resonant-code; durable artifacts such as local-augment.yaml cannot be committed.',
+      action: 'Replace the broad .resonant-code/ ignore with .resonant-code/context/ only.',
     });
   }
   if (!gitignore.contextIgnored) {
@@ -1171,13 +1178,16 @@ function buildStatusDiagnostics(sourceStatus, gitignore, plugin, defaultModeProb
       severity: 'info',
       code: 'context-not-ignored',
       message: '.resonant-code/context/ is generated runtime state and should normally be ignored.',
+      action: 'Add .resonant-code/context/ to .gitignore.',
     });
   }
   if (plugin.status !== 'ok') {
     items.push({
-      severity: 'warning',
+      severity: 'error',
       code: 'plugin-incomplete',
       message: `Plugin root is missing or has empty required runtime files: ${[...plugin.missing, ...plugin.emptyDirectories].join(', ')}`,
+      action: 'Run pnpm -r build and verify the plugin package before installing or publishing.',
+      command: 'pnpm -r build && pnpm verify:plugin',
     });
   }
   if (defaultModeProbe.status === 'ok' && defaultModeProbe.wouldBlock) {
@@ -1185,18 +1195,42 @@ function buildStatusDiagnostics(sourceStatus, gitignore, plugin, defaultModeProb
       severity: 'warning',
       code: 'standard-default-blocks',
       message: `A low-risk single-file standard-mode probe would block on: ${defaultModeProbe.requiredContracts.join(', ')}`,
+      action: 'Inspect resolveContractPolicy before using this plugin as a low-friction default.',
     });
   }
   if (defaultModeProbe.status === 'error') {
     items.push({
-      severity: 'warning',
+      severity: 'error',
       code: 'standard-probe-failed',
       message: `Standard-mode probe failed: ${defaultModeProbe.error}`,
+      action: 'Fix Runtime loading or build output before using code auto.',
+      command: 'pnpm -r build',
     });
   }
   return {
     gitignore,
     items,
+  };
+}
+
+function buildReadinessSummary(items) {
+  const errors = items.filter((item) => item.severity === 'error');
+  const warnings = items.filter((item) => item.severity === 'warning');
+  const infos = items.filter((item) => item.severity === 'info');
+  return {
+    status: errors.length ? 'blocked' : warnings.length ? 'needs-attention' : 'ready',
+    counts: {
+      error: errors.length,
+      warning: warnings.length,
+      info: infos.length,
+    },
+    nextActions: [...errors, ...warnings, ...infos]
+      .slice(0, 5)
+      .map((item) => ({
+        code: item.code,
+        action: item.action,
+        ...(item.command ? { command: item.command } : {}),
+      })),
   };
 }
 

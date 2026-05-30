@@ -19,6 +19,7 @@ import {
   RCCL_SCOPE_BASES,
   validateCandidateObservationRecord,
   validateEvidenceSnippet,
+  validateTraitsRecord,
 } from '../validate-observation.ts';
 
 const RCCL_VERSION: RcclSchemaVersion = '1.0';
@@ -116,6 +117,7 @@ function validateFinalObservation(obs: Record<string, unknown>, index: number, a
   if ('scope_hint' in obs) errors.push(`${prefix}: final RCCL observations must use 'scope', not 'scope_hint'`);
   if ('source_slice_ids' in obs) errors.push(`${prefix}: final RCCL observations must store source slices in 'support.source_slices'`);
   if ('support_hint' in obs) errors.push(`${prefix}: final RCCL observations must use 'support', not 'support_hint'`);
+  errors.push(...validateTraitsRecord(obs.traits, `${prefix}.traits`));
 
   const support = obs.support as Record<string, unknown> | undefined;
   if (!support || typeof support !== 'object' || Array.isArray(support)) {
@@ -253,6 +255,7 @@ function normalizeCandidateObservation(input: unknown): CandidateObservation {
           file_count: supportHint.file_count == null ? null : Number(supportHint.file_count),
           cluster_count: supportHint.cluster_count == null ? null : Number(supportHint.cluster_count),
         },
+    traits: normalizeTraits(item.traits),
   };
 }
 
@@ -279,6 +282,7 @@ export function normalizeObservation(input: unknown): RcclObservation {
     support: normalizeSupport(item.support as Record<string, unknown>),
     verification: normalizeVerification(item.verification as Record<string, unknown>),
     lifecycle: normalizeLifecycle(item.lifecycle as Record<string, unknown> | undefined),
+    traits: normalizeTraits(item.traits),
   };
 }
 
@@ -327,6 +331,22 @@ function normalizeLifecycle(input: Record<string, unknown> | undefined): RcclLif
     stale_since_git_ref: typeof input.stale_since_git_ref === 'string' ? input.stale_since_git_ref : null,
     superseded_at_git_ref: typeof input.superseded_at_git_ref === 'string' ? input.superseded_at_git_ref : null,
   };
+}
+
+function normalizeTraits(input: unknown): RcclObservation['traits'] {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) return undefined;
+  const value = input as Record<string, unknown>;
+  const traits: RcclObservation['traits'] = {
+    legacy: booleanTrait(value.legacy),
+    migration_boundary: booleanTrait(value.migration_boundary),
+    anti_pattern: booleanTrait(value.anti_pattern),
+    compatibility_boundary: booleanTrait(value.compatibility_boundary),
+  };
+  return Object.values(traits).some((item) => item !== undefined) ? traits : undefined;
+}
+
+function booleanTrait(input: unknown): boolean | undefined {
+  return typeof input === 'boolean' ? input : undefined;
 }
 
 function normalizeScopeBasis(value: string): RcclSupport['scope_basis'] {

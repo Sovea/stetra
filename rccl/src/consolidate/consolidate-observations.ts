@@ -33,6 +33,7 @@ export function consolidateObservations(candidates: CandidateObservation[]): Con
     const adherence_quality = reduceAdherence(groupCandidates.map((item) => item.adherence_quality));
     const representative = pickRepresentative(groupCandidates);
     const id = normalizeConsolidatedId(representative.provisional_id, representative.semantic_key, representative.category, observations.length);
+    const traits = mergeTraits(groupCandidates);
 
     observations.push({
       id,
@@ -46,6 +47,7 @@ export function consolidateObservations(candidates: CandidateObservation[]): Con
       evidence: mergedEvidence,
       source_slice_ids,
       support,
+      ...(traits ? { traits } : {}),
     });
 
     reportGroups.push({
@@ -86,6 +88,7 @@ export function materializeRcclObservations(consolidated: ConsolidatedObservatio
     adherence_quality: item.adherence_quality,
     evidence: item.evidence,
     support: item.support,
+    ...(item.traits ? { traits: item.traits } : {}),
     verification: {
       evidence_status: null,
       evidence_verified_count: null,
@@ -189,6 +192,16 @@ function reduceAdherence(values: ConsolidatedObservation['adherence_quality'][])
   if (values.includes('poor')) return 'poor';
   if (values.includes('inconsistent')) return 'inconsistent';
   return 'good';
+}
+
+function mergeTraits(candidates: CandidateObservation[]): CandidateObservation['traits'] {
+  const traits = {
+    legacy: candidates.some((item) => item.traits?.legacy === true) || undefined,
+    migration_boundary: candidates.some((item) => item.traits?.migration_boundary === true) || undefined,
+    anti_pattern: candidates.some((item) => item.traits?.anti_pattern === true) || undefined,
+    compatibility_boundary: candidates.some((item) => item.traits?.compatibility_boundary === true) || undefined,
+  };
+  return Object.values(traits).some((value) => value !== undefined) ? traits : undefined;
 }
 
 function describeMergeBasis(group: CandidateObservation[]): string {

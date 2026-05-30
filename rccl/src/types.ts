@@ -41,6 +41,13 @@ export interface RcclVerification {
   disposition: VerificationDisposition | null;
 }
 
+export interface RcclObservationTraits {
+  legacy?: boolean;
+  migration_boundary?: boolean;
+  anti_pattern?: boolean;
+  compatibility_boundary?: boolean;
+}
+
 export type RcclLifecycleStatus = 'active' | 'stale' | 'superseded';
 
 export interface RcclLifecycle {
@@ -67,6 +74,7 @@ export interface RcclObservation {
   support: RcclSupport;
   verification: RcclVerification;
   lifecycle?: RcclLifecycle;
+  traits?: RcclObservationTraits;
 }
 
 export interface RcclDocument {
@@ -101,6 +109,7 @@ export interface CandidateObservation {
   counterexamples?: EvidenceRef[];
   source_slice_ids: string[];
   support_hint?: CandidateSupportHint | null;
+  traits?: RcclObservationTraits;
 }
 
 export interface CandidateRcclDocument {
@@ -180,6 +189,7 @@ export interface ConsolidatedObservation {
   evidence: RcclEvidence[];
   source_slice_ids: string[];
   support: RcclSupport;
+  traits?: RcclObservationTraits;
 }
 
 export interface ConsolidationGroupReport {
@@ -391,6 +401,7 @@ export interface RcclRefreshExistingObservationSummary {
   verification: RcclVerification;
   lifecycle?: RcclLifecycle;
   evidence_refs: string[];
+  traits?: RcclObservationTraits;
 }
 
 export interface PrepareIncrementalRcclResult {

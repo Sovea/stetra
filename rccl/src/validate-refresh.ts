@@ -464,6 +464,7 @@ function normalizeCandidateObservation(item: Record<string, unknown>): Candidate
         scope_basis: isScopeBasis(item.support_hint.scope_basis) ? item.support_hint.scope_basis : null,
       }
       : null,
+    traits: normalizeTraits(item.traits),
   };
 }
 
@@ -675,6 +676,21 @@ function numberValue(value: unknown): number {
 
 function stringValue(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
+}
+
+function normalizeTraits(value: unknown): CandidateObservation['traits'] {
+  if (!isRecord(value)) return undefined;
+  const traits: CandidateObservation['traits'] = {
+    legacy: booleanValue(value.legacy),
+    migration_boundary: booleanValue(value.migration_boundary),
+    anti_pattern: booleanValue(value.anti_pattern),
+    compatibility_boundary: booleanValue(value.compatibility_boundary),
+  };
+  return Object.values(traits).some((item) => item !== undefined) ? traits : undefined;
+}
+
+function booleanValue(value: unknown): boolean | undefined {
+  return typeof value === 'boolean' ? value : undefined;
 }
 
 function isNonEmptyString(value: unknown): value is string {

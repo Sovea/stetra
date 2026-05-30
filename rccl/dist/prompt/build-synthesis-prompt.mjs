@@ -23,6 +23,11 @@ observations:
       file_count: <number-or-null>
       cluster_count: <number-or-null>
       scope_basis: <single-file|directory-cluster|module-cluster|cross-root|null>
+    traits:
+      legacy: <true|false>
+      migration_boundary: <true|false>
+      anti_pattern: <true|false>
+      compatibility_boundary: <true|false>
 `.trim();
 function buildSynthesisPrompt(input) {
 	const lines = [];
@@ -43,11 +48,12 @@ function buildSynthesisPrompt(input) {
 	lines.push("3. Drop seeds with disposition drop unless there is a concrete critique reason that permits a narrower replacement.");
 	lines.push("4. Every observation must include non-empty evidence copied from the provided windows.");
 	lines.push("5. Evidence snippets must be verification anchors, not labels or paraphrases.");
-	lines.push("6. Use provisional_id, scope_hint, source_slice_ids, and optional support_hint.");
+	lines.push("6. Use provisional_id, scope_hint, source_slice_ids, and optional support_hint/traits.");
 	lines.push("7. Do not include final RCCL fields: id, scope, support, verification, or lifecycle.");
 	lines.push("8. semantic_key must stay stable across synonymous phrasings and repeated calibrations.");
 	lines.push("9. Prefer 5 to 12 observations and skip weak or redundant signals.");
-	lines.push("10. If the reviewed artifacts do not justify a verifiable observation, omit it instead of guessing.");
+	lines.push("10. Set traits only when the reviewed evidence directly supports them; Runtime does not infer compatibility, migration, legacy, or anti-pattern semantics from prose.");
+	lines.push("11. If the reviewed artifacts do not justify a verifiable observation, omit it instead of guessing.");
 	lines.push("");
 	appendContext(lines, input.contextMeta);
 	lines.push("## Discovery artifact");

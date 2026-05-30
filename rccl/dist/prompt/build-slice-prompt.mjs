@@ -29,6 +29,11 @@ observations:
       file_count: <number-or-null>
       cluster_count: <number-or-null>
       scope_basis: <single-file|directory-cluster|module-cluster|cross-root|null>
+    traits:
+      legacy: <true|false>
+      migration_boundary: <true|false>
+      anti_pattern: <true|false>
+      compatibility_boundary: <true|false>
 `.trim();
 function buildSlicePrompt(input) {
 	const lines = [];
@@ -48,7 +53,7 @@ function buildSlicePrompt(input) {
 	lines.push("1. Every observation must include non-empty evidence with exact file paths, line ranges, snippets, and matching evidence_refs from the provided windows.");
 	lines.push("2. Evidence snippets are verification anchors, not labels: include the smallest self-contained code fragment that proves the observation, usually at least 2 lines or a distinctive full statement/block.");
 	lines.push("3. Do not use single identifiers, isolated keywords, or paraphrased summaries as snippets unless the provided window itself is only that small.");
-	lines.push("4. Candidate observations must use provisional_id, scope_hint, source_slice_ids, and optional support_hint.");
+	lines.push("4. Candidate observations must use provisional_id, scope_hint, source_slice_ids, and optional support_hint/traits.");
 	lines.push("5. Do not include final RCCL fields: id, scope, support, verification, or lifecycle.");
 	lines.push("6. semantic_key is required and must stay stable across synonymous phrasings and repeated calibrations.");
 	lines.push("7. pattern should stay human-readable and descriptive, but semantic_key is the primary identity.");
@@ -56,7 +61,8 @@ function buildSlicePrompt(input) {
 	lines.push("9. Use source_slice_ids to list the calibration slices that support the observation.");
 	lines.push("10. Use counterexamples when nearby code contradicts or narrows the observation; RCCL will verify and adjudicate demotion or scope narrowing.");
 	lines.push("11. Prefer 5 to 12 observations and skip weak or redundant signals.");
-	lines.push("12. If you cannot supply a verifiable snippet for an observation, omit that observation instead of guessing.");
+	lines.push("12. Set traits only when the evidence directly supports them; Runtime will not infer compatibility, migration, legacy, or anti-pattern semantics from prose.");
+	lines.push("13. If you cannot supply a verifiable snippet for an observation, omit that observation instead of guessing.");
 	lines.push("");
 	if (input.contextMeta?.raw) {
 		lines.push("## Repository context");

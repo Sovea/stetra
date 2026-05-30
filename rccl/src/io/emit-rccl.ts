@@ -155,6 +155,7 @@ export function serializeRccl(rccl: RcclDocument): string {
       pattern: observation.pattern,
       confidence: observation.confidence,
       adherence_quality: observation.adherence_quality,
+      ...(observation.traits ? { traits: serializeTraits(observation) } : {}),
       evidence: observation.evidence,
       support: observation.support,
       verification: {
@@ -186,6 +187,18 @@ function serializeLifecycle(observation: RcclObservation): Record<string, unknow
     ...(lifecycle.stale_since_git_ref ? { stale_since_git_ref: lifecycle.stale_since_git_ref } : {}),
     ...(lifecycle.superseded_at_git_ref ? { superseded_at_git_ref: lifecycle.superseded_at_git_ref } : {}),
   };
+}
+
+function serializeTraits(observation: RcclObservation): Record<string, unknown> | undefined {
+  const traits = observation.traits;
+  if (traits == null) return undefined;
+  const serialized = {
+    ...(traits.legacy !== undefined ? { legacy: traits.legacy } : {}),
+    ...(traits.migration_boundary !== undefined ? { migration_boundary: traits.migration_boundary } : {}),
+    ...(traits.anti_pattern !== undefined ? { anti_pattern: traits.anti_pattern } : {}),
+    ...(traits.compatibility_boundary !== undefined ? { compatibility_boundary: traits.compatibility_boundary } : {}),
+  };
+  return Object.keys(serialized).length ? serialized : undefined;
 }
 
 function materializeActiveLifecycle(
@@ -303,6 +316,7 @@ function fingerprintObservation(observation: RcclObservation): string {
     pattern: observation.pattern,
     confidence: observation.confidence,
     adherence_quality: observation.adherence_quality,
+    traits: observation.traits,
     evidence: observation.evidence,
     support: observation.support,
   };

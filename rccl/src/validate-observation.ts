@@ -32,6 +32,7 @@ export function validateCandidateObservationRecord(obs: Record<string, unknown>,
       }
     }
   }
+  errors.push(...validateTraitsRecord(obs.traits, `${prefix}.traits`));
 
   return errors;
 }
@@ -63,6 +64,7 @@ export function validateCandidateObservationShape(observation: CandidateObservat
     if (supportHint.cluster_count != null && !isPositiveNumber(supportHint.cluster_count)) errors.push(`${prefix}.support_hint.cluster_count: must be a positive number`);
     if (supportHint.scope_basis != null && !isScopeBasis(supportHint.scope_basis)) errors.push(`${prefix}.support_hint.scope_basis: invalid value`);
   }
+  errors.push(...validateTraitsRecord(observation.traits, `${prefix}.traits`));
 
   return errors;
 }
@@ -105,7 +107,21 @@ function validateCandidateCoreRecord(obs: Record<string, unknown>, prefix: strin
   }
   if (!RCCL_ADHERENCE_QUALITIES.has(String(obs.adherence_quality))) errors.push(`${prefix}: 'adherence_quality' is invalid`);
   errors.push(...validateEvidenceRecord(obs.evidence, prefix));
+  errors.push(...validateTraitsRecord(obs.traits, `${prefix}.traits`));
 
+  return errors;
+}
+
+export function validateTraitsRecord(value: unknown, prefix: string): string[] {
+  if (value == null) return [];
+  const errors: string[] = [];
+  if (!isRecord(value)) return [`${prefix}: must be an object when present`];
+  const allowed = new Set(['legacy', 'migration_boundary', 'anti_pattern', 'compatibility_boundary']);
+  for (const [key, item] of Object.entries(value)) {
+    if (item === undefined) continue;
+    if (!allowed.has(key)) errors.push(`${prefix}.${key}: unsupported trait`);
+    else if (typeof item !== 'boolean') errors.push(`${prefix}.${key}: must be boolean`);
+  }
   return errors;
 }
 

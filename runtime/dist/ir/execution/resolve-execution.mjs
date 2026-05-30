@@ -6,7 +6,7 @@ function resolveExecutionDecisionsIR(bundle, relations) {
 	return bundle.directives.map((directive) => {
 		const linkedRelations = relationsByDirective.get(directive.id) ?? [];
 		const defaultDecision = deriveDirectiveDecision(directive, linkedRelations);
-		const contextDecision = applyContextAdjustments(directive, linkedRelations, defaultDecision, bundle.task.context);
+		const contextDecision = applyContextAdjustments(directive, linkedRelations, defaultDecision, bundle.task.context, bundle.task.provenance);
 		const feedbackEffects = feedbackSignalsForDirective(bundle, directive, linkedRelations);
 		const decision = applyFeedbackAdjustments(directive, contextDecision, feedbackEffects);
 		return {
@@ -48,7 +48,7 @@ function deriveDirectiveDecision(directive, relations) {
 		contextApplied: [],
 		contextRulesApplied: []
 	};
-	const hasTension = relations.some((relation) => relation.adjudication.finalRelation === "tension");
+	const hasTension = relations.some((relation) => relation.adjudication.finalRelation === "tension" && relation.impact === "execution-mode");
 	if (relations.some((relation) => relation.adjudication.finalRelation === "suppress")) return {
 		mode: "suppress",
 		reason: "anti-pattern observations materially overlap this directive and should suppress matching behavior",
@@ -146,12 +146,13 @@ function executionIntentRank(intent) {
 		default: return 0;
 	}
 }
-function applyContextAdjustments(directive, relations, defaultDecision, context) {
+function applyContextAdjustments(directive, relations, defaultDecision, context, provenance) {
 	return applyContextExecutionPolicy({
 		directive,
 		relations,
 		defaultDecision,
-		context
+		context,
+		provenance
 	});
 }
 function applyFeedbackAdjustments(directive, decision, effects) {
@@ -162,9 +163,7 @@ function applyFeedbackAdjustments(directive, decision, effects) {
 	};
 	if (effects.recurringTension && directive.prescription === "must") result = {
 		...result,
-		mode: result.mode === "suppress" ? result.mode : "deviation-noted",
-		basis: "feedback",
-		reason: `${result.reason} Recurring lockfile tension keeps this must-level directive reviewable as deviation-noted instead of silently treating the repository reality as unrelated.`
+		reason: `${result.reason} Recurring lockfile tension keeps this must-level directive visible for review, but feedback alone does not alter execution mode without a host semantic graph or explicit task context.`
 	};
 	if (effects.frequentlyIgnored && directive.prescription === "should") result = {
 		...result,

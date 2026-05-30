@@ -64,6 +64,8 @@
     path: "**/*.{ts,tsx}"
   prescription: must
   weight: high
+  traits:
+    compatibility_sensitive: true
 
   description: "Keep exported function signatures, component props, and shared contracts explicit. Do not leak internal implementation detail into public types."
 
@@ -125,6 +127,8 @@
   prescription: must
   weight: critical
   rccl_immune: true
+  traits:
+    safety_critical: true
 
   description: "Avoid any except at unavoidable boundaries. Prefer narrowing and modeling over assertion. Model nullability, optionality, and variant states explicitly."
 
@@ -254,6 +258,8 @@
   prescription: must
   weight: critical
   rccl_immune: true
+  traits:
+    safety_critical: true
 
   description: "Treat network data, user input, environment variables, and third-party values as untrusted until explicitly validated. Do not use TypeScript types as a substitute for runtime validation at boundaries."
 

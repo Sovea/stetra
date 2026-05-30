@@ -53,6 +53,13 @@ export interface DirectiveScope {
   path: string;
 }
 
+export interface DirectiveTraits {
+  safety_critical?: boolean;
+  broad_scope?: boolean;
+  compatibility_sensitive?: boolean;
+  migration_sensitive?: boolean;
+}
+
 export interface Directive {
   id: string;
   type: DirectiveType;
@@ -65,6 +72,7 @@ export interface Directive {
   exceptions?: string[];
   examples: DirectiveExample[];
   rccl_immune?: boolean;
+  traits?: DirectiveTraits;
   source: {
     kind: 'builtin' | 'local-addition';
     layerId: string;
@@ -96,6 +104,14 @@ export interface RcclObservation {
   support: RcclSupport;
   verification: RcclVerification;
   lifecycle?: RcclLifecycle;
+  traits?: RcclObservationTraits;
+}
+
+export interface RcclObservationTraits {
+  legacy?: boolean;
+  migration_boundary?: boolean;
+  anti_pattern?: boolean;
+  compatibility_boundary?: boolean;
 }
 
 export interface RcclDocument {
@@ -333,6 +349,13 @@ export interface ContractPolicyDecision {
     semantic_graph_required: boolean;
     rccl_relevant?: boolean;
     reasons: string[];
+    deterministic_fallbacks: Array<{
+      field: string;
+      value: string;
+      confidence: number;
+      action: 'ignored-for-policy';
+      reason: string;
+    }>;
   };
 }
 

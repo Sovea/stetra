@@ -1,12 +1,12 @@
-import type { BoundaryZone, IndexedFile, MigrationZone, ModuleCluster, RepoRepresentation, RepoRootSummary, StyleCluster } from '../types.ts';
+import type { IndexedFile, ModuleCluster, RepoRepresentation, RepoRootSummary } from '../types.ts';
 
 export function buildRepresentation(indexedFiles: IndexedFile[]): RepoRepresentation {
   return {
     roots: buildRoots(indexedFiles),
     modules: buildModules(indexedFiles),
-    boundaries: buildBoundaries(indexedFiles),
-    migrations: buildMigrations(indexedFiles),
-    style_clusters: buildStyleClusters(indexedFiles),
+    boundaries: [],
+    migrations: [],
+    style_clusters: [],
   };
 }
 
@@ -38,49 +38,6 @@ function buildModules(indexedFiles: IndexedFile[]): ModuleCluster[] {
     file_paths: files.map((file) => file.path).sort(),
     dominant_language: dominant(files.map((file) => file.language)),
   })).sort((a, b) => b.file_paths.length - a.file_paths.length || a.base_path.localeCompare(b.base_path));
-}
-
-function buildBoundaries(indexedFiles: IndexedFile[]): BoundaryZone[] {
-  const files = indexedFiles.filter((file) =>
-    file.role_hints.includes('observed-boundary-file') || file.role_hints.includes('observed-adapter-file'),
-  );
-  if (files.length === 0) return [];
-  return [{
-    id: 'boundary:observed-file-hints',
-    file_paths: files.map((file) => file.path).sort(),
-    reason: 'Observed file-path hints suggest boundary or adapter responsibilities',
-  }];
-}
-
-function buildMigrations(indexedFiles: IndexedFile[]): MigrationZone[] {
-  const files = indexedFiles.filter((file) => file.role_hints.includes('observed-legacy-signal'));
-  if (files.length === 0) return [];
-  return [{
-    id: 'migration:observed-legacy-signals',
-    file_paths: files.map((file) => file.path).sort(),
-    reason: 'Observed file contents include legacy, deprecated, or TODO/FIXME signals',
-  }];
-}
-
-function buildStyleClusters(indexedFiles: IndexedFile[]): StyleCluster[] {
-  const highImport = indexedFiles.filter((file) => file.imports_count >= 8);
-  const interfaceHeavy = indexedFiles.filter((file) => file.role_hints.includes('observed-interface-heavy'));
-  const result: StyleCluster[] = [];
-  if (highImport.length > 0) {
-    result.push({
-      id: 'style:observed-high-import-density',
-      file_paths: highImport.map((file) => file.path).sort(),
-      reason: 'Observed import density is comparatively high in these files',
-    });
-  }
-  if (interfaceHeavy.length > 0) {
-    result.push({
-      id: 'style:observed-interface-heavy',
-      file_paths: interfaceHeavy.map((file) => file.path).sort(),
-      reason: 'Observed interface, protocol, trait, or exported-type signals cluster in these files',
-    });
-  }
-  return result;
 }
 
 function inferBasePath(filePath: string): string {

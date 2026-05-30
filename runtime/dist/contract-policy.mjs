@@ -20,6 +20,7 @@ function resolveContractPolicy(input) {
 	const highRiskTask = isHighRisk(policyRiskLevel(policyInput));
 	const taskModelRequired = shouldRequireTaskModel(policyInput, mode);
 	const semanticGraphRequired = shouldRequireSemanticGraph(policyInput, mode, taskModelRequired);
+	const deterministicFallbacks = collectDeterministicFallbackGovernance(policyInput);
 	const required = [];
 	const optional = [];
 	const skipped = [];
@@ -110,7 +111,8 @@ function resolveContractPolicy(input) {
 			task_model_required: taskModelRequired,
 			semantic_graph_required: semanticGraphRequired,
 			...input.rcclRelevant !== void 0 ? { rccl_relevant: input.rcclRelevant } : {},
-			reasons
+			reasons,
+			deterministic_fallbacks: deterministicFallbacks
 		}
 	};
 }
@@ -128,13 +130,14 @@ function shouldRequireTaskModel(input, mode) {
 	const task = policyTask(input);
 	const operation = input.resolvedTask?.task_intent.operation ?? task?.operation;
 	const taskKind = input.resolvedTask?.taskKind ?? task?.taskKind;
-	if (isHighRisk(policyRiskLevel(input))) return true;
+	if (isHighRisk(policyRiskLevel(input)) && isPolicyAuthoritative(input, "context.risk_level", "riskLevel")) return true;
 	if (profile?.scope_size === "cross-cutting") return true;
-	if (profile?.compatibility_requirement && profile.compatibility_requirement !== "none" && profile.compatibility_requirement !== "breaking-allowed") return true;
-	if (profile?.interface_sensitivity && profile.interface_sensitivity !== "internal" && profile.interface_sensitivity !== "unknown") return true;
-	if (profile?.migration_phase && profile.migration_phase !== "none") return true;
-	if (profile?.review_goal === "security" || profile?.review_goal === "regression-risk" || profile?.review_goal === "architecture-fit") return true;
-	if (taskKind === "migration" || operation === "review") return true;
+	if (profile?.compatibility_requirement && profile.compatibility_requirement !== "none" && profile.compatibility_requirement !== "breaking-allowed" && isPolicyAuthoritative(input, "context.compatibility_requirement", "compatibilityRequirement")) return true;
+	if (profile?.interface_sensitivity && profile.interface_sensitivity !== "internal" && profile.interface_sensitivity !== "unknown" && isPolicyAuthoritative(input, "context.interface_sensitivity", "interfaceSensitivity")) return true;
+	if (profile?.migration_phase && profile.migration_phase !== "none" && isPolicyAuthoritative(input, "context.migration_phase", "migrationPhase")) return true;
+	if ((profile?.review_goal === "security" || profile?.review_goal === "regression-risk" || profile?.review_goal === "architecture-fit") && isPolicyAuthoritative(input, "context.review_goal", "reviewGoal")) return true;
+	if (taskKind === "migration" && isPolicyAuthoritative(input, "intent.task_kind", "taskKind")) return true;
+	if (operation === "review" && isPolicyAuthoritative(input, "intent.operation", "operation")) return true;
 	return hasAmbiguousTaskResolution(input);
 }
 function shouldRequireSemanticGraph(input, mode, taskModelRequired) {
@@ -150,6 +153,48 @@ function hasAmbiguousTaskResolution(input) {
 	if (Boolean(resolved.task_intent.target_file || resolved.task_intent.changed_files.length || input.task?.targetFile || input.task?.changedFiles?.length)) return false;
 	const operationField = resolved.input_provenance.resolved_fields.find((field) => field.field === "intent.operation");
 	return !input.task?.operation && (!operationField || operationField.source === "deterministic" && operationField.confidence <= .5);
+}
+function collectDeterministicFallbackGovernance(input) {
+	const result = [];
+	const profile = policyContextProfile(input);
+	if (!profile) return result;
+	addFallbackGovernance(result, input, "context.risk_level", profile.risk_level ?? "");
+	addFallbackGovernance(result, input, "context.compatibility_requirement", profile.compatibility_requirement ?? "");
+	addFallbackGovernance(result, input, "context.interface_sensitivity", profile.interface_sensitivity ?? "");
+	addFallbackGovernance(result, input, "context.migration_phase", profile.migration_phase ?? "");
+	addFallbackGovernance(result, input, "context.review_goal", profile.review_goal ?? "");
+	return result;
+}
+function addFallbackGovernance(result, input, field, value) {
+	if (!value || !isElevatedFallbackField(field, value)) return;
+	const resolved = resolvedField(input, field);
+	if (resolved?.source !== "deterministic") return;
+	result.push({
+		field,
+		value,
+		confidence: resolved.confidence,
+		action: "ignored-for-policy",
+		reason: "deterministic fallback is trace-only and does not trigger standard-mode governance contracts"
+	});
+}
+function isElevatedFallbackField(field, value) {
+	if (field === "context.risk_level") return value === "high" || value === "critical";
+	if (field === "context.compatibility_requirement") return value !== "none" && value !== "breaking-allowed";
+	if (field === "context.interface_sensitivity") return value !== "internal" && value !== "unknown";
+	if (field === "context.migration_phase") return value !== "none";
+	if (field === "context.review_goal") return value === "security" || value === "regression-risk" || value === "architecture-fit";
+	return false;
+}
+function isPolicyAuthoritative(input, field, rawTaskField) {
+	if (rawTaskField === "riskLevel" && input.taskRisk && isHighRisk(input.taskRisk)) return true;
+	return Boolean(input.task?.[rawTaskField]) && isFieldAuthoritative(input, field);
+}
+function isFieldAuthoritative(input, field) {
+	const source = resolvedField(input, field)?.source;
+	return source === "explicit" || source === "host-agent" || source === "assistive-ai" || source === "repo-default";
+}
+function resolvedField(input, field) {
+	return input.resolvedTask?.input_provenance.resolved_fields.find((item) => item.field === field);
 }
 function rcclAvailable(sourceStatus) {
 	return sourceStatus.rccl === "present" || sourceStatus.rccl === "stale" || sourceStatus.rccl === "unverified";

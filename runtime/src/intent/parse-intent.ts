@@ -47,7 +47,7 @@ export function parseIntent(task: CompileTaskInput): TaskIntent {
 
 function inferTechStackFromFile(targetFile: string | undefined): string[] {
   if (!targetFile) return [];
-  if (targetFile.endsWith('.tsx')) return ['typescript', 'react'];
+  if (targetFile.endsWith('.tsx')) return ['typescript'];
   if (targetFile.endsWith('.ts')) return ['typescript'];
   return [];
 }
@@ -107,9 +107,8 @@ export function buildContextProfile(task: CompileTaskInput, intent: TaskIntent):
 }
 
 function inferRiskLevel(task: CompileTaskInput, intent: TaskIntent): ContextProfile['risk_level'] {
-  const text = searchableTaskText(task);
-  if (task.projectStage === 'critical' || /critical|security|auth|payment|data loss|breaking/i.test(text)) return 'critical';
-  if (task.optimizationTarget === 'safety' || /public api|preserve api|migration|regression|compat/i.test(text)) return 'high';
+  if (task.projectStage === 'critical') return 'critical';
+  if (task.optimizationTarget === 'safety') return 'high';
   if (intent.operation === 'create' && intent.changed_files.length <= 1) return 'low';
   return 'medium';
 }
@@ -122,59 +121,25 @@ function inferScopeSize(intent: TaskIntent): ContextProfile['scope_size'] {
   return roots.size <= 1 ? 'module' : 'cross-cutting';
 }
 
-function inferCompatibilityRequirement(task: CompileTaskInput): ContextProfile['compatibility_requirement'] {
-  const text = searchableTaskText(task);
-  if (/breaking allowed|allow breaking|breaking change allowed/i.test(text)) return 'breaking-allowed';
-  if (/preserve public api|preserve api|public api|api compatibility/i.test(text)) return 'preserve-api';
-  if (/migration compatible|dual run|cutover/i.test(text)) return 'migration-compatible';
-  if (/preserve behavior|avoid breaking|backward compatible|compatibility/i.test(text)) return 'preserve-behavior';
+function inferCompatibilityRequirement(_task: CompileTaskInput): ContextProfile['compatibility_requirement'] {
   return 'none';
 }
 
 function inferInterfaceSensitivity(intent: TaskIntent): ContextProfile['interface_sensitivity'] {
-  const inputs = [intent.target_file, ...intent.changed_files, ...intent.tags, ...intent.tech_stack].filter(Boolean).join(' ');
-  if (/(^|\/)(auth|security)(\/|$)|token|permission|credential/i.test(inputs)) return 'auth-security';
-  if (/(^|\/)(db|database|schema|migrations?|models?)(\/|$)|persistence|storage/i.test(inputs)) return 'persistence';
-  if (/(^|\/)(api|routes|controllers?|handlers?)(\/|$)|public-api|endpoint/i.test(inputs)) return 'public-api';
-  if (/(^|\/)(integrations?|webhooks?|clients?)(\/|$)|external/i.test(inputs)) return 'external-integration';
-  return inputs ? 'internal' : 'unknown';
+  return intent.target_file || intent.changed_files.length || intent.tags.length || intent.tech_stack.length ? 'internal' : 'unknown';
 }
 
-function inferRefactorTolerance(task: CompileTaskInput, intent: TaskIntent): ContextProfile['refactor_tolerance'] {
-  const text = searchableTaskText(task);
-  if (/no refactor|avoid refactor|do not refactor/i.test(text)) return 'none';
-  if (/local only|narrow change|minimal change|avoid broad|broad rewrites|overengineering/i.test(text)) return 'local-only';
+function inferRefactorTolerance(_task: CompileTaskInput, intent: TaskIntent): ContextProfile['refactor_tolerance'] {
   if (intent.operation === 'refactor') return 'bounded';
   return 'local-only';
 }
 
-function inferMigrationPhase(task: CompileTaskInput): ContextProfile['migration_phase'] {
-  const text = searchableTaskText(task);
-  if (/dual run|dual-run|parallel run/i.test(text)) return 'dual-run';
-  if (/cutover|switch over/i.test(text)) return 'cutover';
-  if (/cleanup|remove legacy|delete legacy/i.test(text)) return 'cleanup';
-  if (/prepare migration|migration prep|preparation/i.test(text)) return 'preparation';
+function inferMigrationPhase(_task: CompileTaskInput): ContextProfile['migration_phase'] {
   return 'none';
 }
 
 function inferReviewGoal(task: CompileTaskInput, intent: TaskIntent): ContextProfile['review_goal'] {
-  const text = searchableTaskText(task);
-  if (/security|auth|permission|credential/i.test(text)) return 'security';
-  if (/performance|latency|throughput|memory/i.test(text)) return 'performance';
-  if (/architecture|design|fit/i.test(text)) return 'architecture-fit';
   if (intent.operation === 'bugfix' || task.optimizationTarget === 'safety') return 'regression-risk';
   if (intent.operation === 'review') return 'correctness';
   return 'maintainability';
-}
-
-function searchableTaskText(task: CompileTaskInput): string {
-  return [
-    task.description,
-    task.targetFile,
-    ...(task.changedFiles ?? []),
-    ...(task.tags ?? []),
-    ...(task.hardConstraints ?? []),
-    ...(task.allowedTradeoffs ?? []),
-    ...(task.avoid ?? []),
-  ].filter(Boolean).join(' ');
 }

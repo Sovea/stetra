@@ -565,7 +565,7 @@ function contextScalar<T>(
     source: resolved.source,
     confidence: resolved.confidence,
     status: contextResolutionStatus(field, resolved.source, resolved.value === undefined, conflicts),
-    influence: contextInfluenceHints(field, value),
+    influence: contextInfluenceHints(field, value, resolved.source),
   };
 }
 
@@ -580,7 +580,7 @@ function contextList(
     source: resolved.source,
     confidence: resolved.confidence,
     status: contextResolutionStatus(field, resolved.source, resolved.values.length === 0, conflicts),
-    influence: contextInfluenceHints(field, resolved.values.join(',')),
+    influence: contextInfluenceHints(field, resolved.values.join(','), resolved.source),
   };
 }
 
@@ -595,7 +595,8 @@ function contextResolutionStatus(
   return source === 'deterministic' || source === 'repo-default' ? 'defaulted' : 'resolved';
 }
 
-function contextInfluenceHints(field: string, value: string): string[] {
+function contextInfluenceHints(field: string, value: string, source: CandidateField<unknown>['source']): string[] {
+  if (source === 'deterministic') return [];
   switch (field) {
     case 'context.risk_level':
       return value === 'high' || value === 'critical' ? ['review-focus-priority', 'must-guidance-preservation'] : [];

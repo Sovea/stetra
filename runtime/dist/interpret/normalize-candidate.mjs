@@ -422,7 +422,7 @@ function contextScalar(field, resolved, conflicts) {
 		source: resolved.source,
 		confidence: resolved.confidence,
 		status: contextResolutionStatus(field, resolved.source, resolved.value === void 0, conflicts),
-		influence: contextInfluenceHints(field, value)
+		influence: contextInfluenceHints(field, value, resolved.source)
 	};
 }
 function contextList(field, resolved, conflicts) {
@@ -432,7 +432,7 @@ function contextList(field, resolved, conflicts) {
 		source: resolved.source,
 		confidence: resolved.confidence,
 		status: contextResolutionStatus(field, resolved.source, resolved.values.length === 0, conflicts),
-		influence: contextInfluenceHints(field, resolved.values.join(","))
+		influence: contextInfluenceHints(field, resolved.values.join(","), resolved.source)
 	};
 }
 function contextResolutionStatus(field, source, unresolved, conflicts) {
@@ -440,7 +440,8 @@ function contextResolutionStatus(field, source, unresolved, conflicts) {
 	if (unresolved) return "unresolved";
 	return source === "deterministic" || source === "repo-default" ? "defaulted" : "resolved";
 }
-function contextInfluenceHints(field, value) {
+function contextInfluenceHints(field, value, source) {
+	if (source === "deterministic") return [];
 	switch (field) {
 		case "context.risk_level": return value === "high" || value === "critical" ? ["review-focus-priority", "must-guidance-preservation"] : [];
 		case "context.scope_size": return value === "single-file" ? ["broad-guidance-ambient"] : [];

@@ -308,7 +308,8 @@ function normalizeCandidateObservation(item) {
 			file_count: nullableNumber(item.support_hint.file_count),
 			cluster_count: nullableNumber(item.support_hint.cluster_count),
 			scope_basis: isScopeBasis(item.support_hint.scope_basis) ? item.support_hint.scope_basis : null
-		} : null
+		} : null,
+		traits: normalizeTraits(item.traits)
 	};
 }
 function emptyCandidateObservation() {
@@ -488,6 +489,19 @@ function numberValue(value) {
 }
 function stringValue(value) {
 	return typeof value === "string" ? value.trim() : "";
+}
+function normalizeTraits(value) {
+	if (!isRecord(value)) return void 0;
+	const traits = {
+		legacy: booleanValue(value.legacy),
+		migration_boundary: booleanValue(value.migration_boundary),
+		anti_pattern: booleanValue(value.anti_pattern),
+		compatibility_boundary: booleanValue(value.compatibility_boundary)
+	};
+	return Object.values(traits).some((item) => item !== void 0) ? traits : void 0;
+}
+function booleanValue(value) {
+	return typeof value === "boolean" ? value : void 0;
 }
 function isNonEmptyString(value) {
 	return typeof value === "string" && value.trim().length > 0;

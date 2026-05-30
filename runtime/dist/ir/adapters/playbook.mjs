@@ -63,13 +63,13 @@ function buildPriority(layerId, prescription, weight, overrideApplied) {
 	};
 }
 function buildTraits(directive) {
-	const text = `${directive.id} ${directive.type} ${directive.description} ${directive.rationale} ${(directive.exceptions ?? []).join(" ")}`.toLowerCase();
+	const explicit = directive.traits ?? {};
 	return {
 		rcclImmune: directive.rccl_immune === true,
-		safetyCritical: directive.prescription === "must" && /safety|security|correctness|data loss|breaking/.test(text),
-		broadScope: /architecture|system|global|cross-cutting|rewrite|large/.test(text),
-		compatibilitySensitive: directive.type === "constraint" || directive.rccl_immune === true || /compatib|public api|breaking|migration|legacy/.test(text),
-		migrationSensitive: /migration|legacy|backward|compatib/.test(text)
+		safetyCritical: explicit.safety_critical === true,
+		broadScope: explicit.broad_scope === true,
+		compatibilitySensitive: explicit.compatibility_sensitive === true,
+		migrationSensitive: explicit.migration_sensitive === true
 	};
 }
 function toSemanticKey(id) {

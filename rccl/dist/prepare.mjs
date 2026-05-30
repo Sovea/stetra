@@ -49,6 +49,11 @@ revise:
       file_count: <number-or-null>
       cluster_count: <number-or-null>
       scope_basis: <single-file|directory-cluster|module-cluster|cross-root|null>
+    traits:
+      legacy: <true|false>
+      migration_boundary: <true|false>
+      anti_pattern: <true|false>
+      compatibility_boundary: <true|false>
 
 retire:
   - observation_id: "obs-active-existing-id"
@@ -75,6 +80,11 @@ new_observations:
         line_range: [<start>, <end>]
     counterexamples: []
     source_slice_ids: ["<slice-id>"]
+    traits:
+      legacy: <true|false>
+      migration_boundary: <true|false>
+      anti_pattern: <true|false>
+      compatibility_boundary: <true|false>
 
 semantic_equivalence:
   - observation_ids: ["obs-a", "obs-b"]
@@ -478,7 +488,8 @@ function buildRefreshPrompt(input) {
 	lines.push("6. Omitted active observations are carried forward unchanged; omission is non-destructive.");
 	lines.push("7. Use the exact action schemas; do not emit shorthand retire entries or malformed action items.");
 	lines.push("8. Include counterexamples and semantic_equivalence proposals when they would narrow scope, merge duplicates, or demote noisy observations.");
-	lines.push("9. Prefer fewer, stronger refresh proposals over broad summaries.");
+	lines.push("9. Set traits only when the provided evidence directly supports them; RCCL/Runtime do not infer compatibility, migration, legacy, or anti-pattern semantics from prose.");
+	lines.push("10. Prefer fewer, stronger refresh proposals over broad summaries.");
 	lines.push("");
 	lines.push(`Scope: ${input.scope}`);
 	lines.push(`Requested mode: ${input.requestedMode}`);
@@ -502,6 +513,7 @@ function buildRefreshPrompt(input) {
 		lines.push(`  confidence: ${observation.confidence}`);
 		lines.push(`  adherence_quality: ${observation.adherence_quality}`);
 		lines.push(`  evidence_refs: ${observation.evidence_refs.join(", ") || "(none)"}`);
+		if (observation.traits) lines.push(`  traits: ${formatTraits(observation.traits)}`);
 		lines.push(`  lifecycle: ${observation.lifecycle?.status ?? "unknown"}`);
 		lines.push(`  disposition: ${observation.verification.disposition ?? "pending"}`);
 	}
@@ -618,8 +630,12 @@ function summarizeExistingObservations(document, affectedObservationIds) {
 		adherence_quality: observation.adherence_quality,
 		verification: observation.verification,
 		lifecycle: observation.lifecycle,
-		evidence_refs: observation.evidence.map((evidence) => `${evidence.file}:${evidence.line_range[0]}-${evidence.line_range[1]}`)
+		evidence_refs: observation.evidence.map((evidence) => `${evidence.file}:${evidence.line_range[0]}-${evidence.line_range[1]}`),
+		traits: observation.traits
 	}));
+}
+function formatTraits(traits) {
+	return Object.entries(traits).filter(([, value]) => value !== void 0).map(([key, value]) => `${key}=${value}`).join(", ") || "(none)";
 }
 function scopeMatchesFile(scope, file) {
 	if (scope === "**" || scope === "**/*") return true;

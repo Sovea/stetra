@@ -1,7 +1,7 @@
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { join, relative } from 'node:path';
 import { parseYaml } from '../utils/yaml.ts';
-import type { Directive, DirectiveExample, DirectiveScope, DirectiveType, LocalPlaybook, Prescription, Weight } from '../types.ts';
+import type { Directive, DirectiveExample, DirectiveScope, DirectiveTraits, DirectiveType, LocalPlaybook, Prescription, Weight } from '../types.ts';
 
 /**
  * Discovers built-in layer ids by scanning the plugin playbook directory.
@@ -114,6 +114,7 @@ function normalizeDirective(
     exceptions: Array.isArray(input.exceptions) ? input.exceptions.map(String) : [],
     examples: normalizeExamples(input.examples),
     rccl_immune: Boolean(input.rccl_immune),
+    traits: normalizeTraits(input.traits),
     source: { kind, layerId, filePath },
   };
 }
@@ -140,4 +141,20 @@ function normalizeExamples(input: unknown): DirectiveExample[] {
       note: String(item.note ?? ''),
     };
   });
+}
+
+function normalizeTraits(input: unknown): DirectiveTraits | undefined {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) return undefined;
+  const value = input as Record<string, unknown>;
+  const traits: DirectiveTraits = {
+    safety_critical: booleanTrait(value.safety_critical),
+    broad_scope: booleanTrait(value.broad_scope),
+    compatibility_sensitive: booleanTrait(value.compatibility_sensitive),
+    migration_sensitive: booleanTrait(value.migration_sensitive),
+  };
+  return Object.values(traits).some((item) => item !== undefined) ? traits : undefined;
+}
+
+function booleanTrait(input: unknown): boolean | undefined {
+  return typeof input === 'boolean' ? input : undefined;
 }

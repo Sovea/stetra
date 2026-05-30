@@ -11,6 +11,10 @@
     path: "**/*"
   prescription: must
   weight: critical
+  traits:
+    safety_critical: true
+    compatibility_sensitive: true
+    migration_sensitive: true
 
   description: "Optimize for a safe, reviewable, reversible transition — not just the cleanest final architecture."
 
@@ -69,6 +73,9 @@
     path: "**/*"
   prescription: must
   weight: high
+  traits:
+    compatibility_sensitive: true
+    migration_sensitive: true
 
   description: "Make the source pattern, target pattern, and change boundary explicit. Do not mix multiple migration goals into one indistinct rewrite."
 
@@ -136,6 +143,9 @@
     path: "**/*"
   prescription: should
   weight: critical
+  traits:
+    compatibility_sensitive: true
+    migration_sensitive: true
 
   description: "Prefer staged migration over sweeping replacement when both are viable. Keep steps small enough to review, validate, and recover from."
 
@@ -205,6 +215,10 @@
   prescription: must
   weight: critical
   rccl_immune: true
+  traits:
+    safety_critical: true
+    compatibility_sensitive: true
+    migration_sensitive: true
 
   description: "Be explicit about whether compatibility must be preserved, partially preserved, or intentionally broken. Keep public contracts stable until the migration explicitly changes them."
 
@@ -288,6 +302,9 @@
     path: "**/*"
   prescription: should
   weight: high
+  traits:
+    compatibility_sensitive: true
+    migration_sensitive: true
 
   description: "Mark transitional code by structure and intent. Do not let migration scaffolding become indistinguishable from permanent design."
 
@@ -351,6 +368,9 @@
     path: "**/*"
   prescription: should
   weight: normal
+  traits:
+    broad_scope: true
+    migration_sensitive: true
 
   description: "Match local conventions during migration unless the migration specifically exists to replace them. Do not spread the target pattern more broadly than the migration requires."
 
@@ -411,6 +431,10 @@
     path: "**/*"
   prescription: should
   weight: high
+  traits:
+    safety_critical: true
+    compatibility_sensitive: true
+    migration_sensitive: true
 
   description: "Validate source behavior and target behavior at each meaningful migration step. Include checks around adapters, boundary transformations, and data shape changes."
 
@@ -487,6 +511,9 @@
     path: "**/*"
   prescription: should
   weight: high
+  traits:
+    broad_scope: true
+    migration_sensitive: true
 
   description: "Do not use migration as cover for opportunistic redesign. Distinguish required transition changes from optional structural improvement."
 
@@ -553,6 +580,9 @@
     path: "**/*"
   prescription: should
   weight: high
+  traits:
+    broad_scope: true
+    migration_sensitive: true
 
   description: "Each migration step should reduce ambiguity between old and new patterns. Avoid creating multiple competing long-term patterns without a clear convergence direction."
 

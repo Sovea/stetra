@@ -19,7 +19,7 @@ export function resolveExecutionDecisionsIR(
   return bundle.directives.map((directive) => {
     const linkedRelations = relationsByDirective.get(directive.id) ?? [];
     const defaultDecision = deriveDirectiveDecision(directive, linkedRelations);
-    const contextDecision = applyContextAdjustments(directive, linkedRelations, defaultDecision, bundle.task.context);
+    const contextDecision = applyContextAdjustments(directive, linkedRelations, defaultDecision, bundle.task.context, bundle.task.provenance);
     const feedbackEffects = feedbackSignalsForDirective(bundle, directive, linkedRelations);
     const decision = applyFeedbackAdjustments(directive, contextDecision, feedbackEffects);
 
@@ -72,7 +72,9 @@ function deriveDirectiveDecision(
     };
   }
 
-  const hasTension = relations.some((relation) => relation.adjudication.finalRelation === 'tension');
+  const hasTension = relations.some((relation) =>
+    relation.adjudication.finalRelation === 'tension'
+    && relation.impact === 'execution-mode');
   const hasSuppress = relations.some((relation) => relation.adjudication.finalRelation === 'suppress');
   if (hasSuppress) {
     return {
@@ -207,8 +209,9 @@ function applyContextAdjustments(
   relations: SemanticRelationIR[],
   defaultDecision: DirectiveDecision,
   context: GovernanceIRBundle['task']['context'],
+  provenance: GovernanceIRBundle['task']['provenance'],
 ): DirectiveDecision {
-  return applyContextExecutionPolicy({ directive, relations, defaultDecision, context });
+  return applyContextExecutionPolicy({ directive, relations, defaultDecision, context, provenance });
 }
 
 function applyFeedbackAdjustments(
@@ -221,9 +224,7 @@ function applyFeedbackAdjustments(
   if (effects.recurringTension && directive.prescription === 'must') {
     result = {
       ...result,
-      mode: result.mode === 'suppress' ? result.mode : 'deviation-noted',
-      basis: 'feedback',
-      reason: `${result.reason} Recurring lockfile tension keeps this must-level directive reviewable as deviation-noted instead of silently treating the repository reality as unrelated.`,
+      reason: `${result.reason} Recurring lockfile tension keeps this must-level directive visible for review, but feedback alone does not alter execution mode without a host semantic graph or explicit task context.`,
     };
   }
 

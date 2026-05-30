@@ -46,12 +46,12 @@ function observationsToIR(observations, rcclPath) {
 	}));
 }
 function buildTraits(observation) {
-	const text = `${observation.semantic_key} ${observation.category} ${observation.pattern}`.toLowerCase();
+	const explicit = observation.traits ?? {};
 	return {
-		legacy: observation.category === "legacy" || /legacy|backward|compatib/.test(text),
-		migrationBoundary: observation.category === "migration" || /migration|transition|incremental/.test(text),
-		antiPattern: observation.category === "anti-pattern",
-		compatibilityBoundary: /compatib|public api|breaking|legacy|interface|contract/.test(text)
+		legacy: observation.category === "legacy" || explicit.legacy === true,
+		migrationBoundary: observation.category === "migration" || explicit.migration_boundary === true,
+		antiPattern: observation.category === "anti-pattern" || explicit.anti_pattern === true,
+		compatibilityBoundary: explicit.compatibility_boundary === true
 	};
 }
 //#endregion

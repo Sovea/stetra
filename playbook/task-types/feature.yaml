@@ -106,6 +106,8 @@
     path: "**/*"
   prescription: should
   weight: high
+  traits:
+    broad_scope: true
 
   description: "Give the implementation enough structure to remain clear and maintainable, but no more."
 
@@ -158,6 +160,8 @@
     path: "**/*"
   prescription: should
   weight: high
+  traits:
+    broad_scope: true
 
   description: "Keep domain logic, transport, rendering, persistence, and framework glue separated where the distinction matters."
 
@@ -228,6 +232,8 @@
   prescription: must
   weight: critical
   rccl_immune: true
+  traits:
+    safety_critical: true
 
   description: "Treat external inputs, state transitions, and side effects deliberately. Do not let happy-path implementation hide boundary fragility."
 
@@ -337,6 +343,8 @@
     path: "**/*"
   prescription: should
   weight: normal
+  traits:
+    broad_scope: true
 
   description: "Choose names, interfaces, and boundaries that support near-term evolution without premature generalization."
 
@@ -383,6 +391,8 @@
     path: "**/*"
   prescription: should
   weight: high
+  traits:
+    safety_critical: true
 
   description: "Include validation, error handling, test coverage, and state handling appropriate to the feature's importance and risk."
 

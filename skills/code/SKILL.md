@@ -33,6 +33,8 @@ node <this-skill-directory>/scripts/code.mjs auto <project-root> --task "<user t
 
 `standard` is the default and should compile guidance directly for low-risk, clearly scoped work. Use `fast` to force deterministic fallback with no blocking host-agent contracts. Use `strict` for migration, public API, high-risk, cross-module, or audit-heavy work; strict preserves the full task-model, semantic-governance-graph, and adherence-evidence lifecycle.
 
+Deterministic fallback uses neutral defaults for compatibility, migration, sensitive-interface, and similar governance semantics. Confirm those concerns through explicit CLI fields or a task-model artifact when they should affect governance.
+
 If `auto` returns `status: "contracts-required"`, fulfill only the listed Runtime-owned contract artifacts and re-run with the new v2 flags:
 
 ```sh
@@ -52,7 +54,7 @@ node <this-skill-directory>/scripts/code.mjs doctor <project-root>
 node <this-skill-directory>/scripts/code.mjs explain --session <session-path>
 ```
 
-`doctor` is an alias for `status`. It reports local augment, RCCL, lockfile, generated cache volume, gitignore lifecycle state, plugin completeness, and a low-risk single-file `standard`-mode probe that shows whether the default flow would unexpectedly block.
+`doctor` is an alias for `status`. It reports local augment, RCCL, lockfile, generated cache volume, gitignore lifecycle state, plugin completeness, and a low-risk single-file `standard`-mode probe that shows whether the default flow would unexpectedly block. Prefer the `readiness.status` and `readiness.nextActions` fields for user-facing guidance; detailed diagnostics remain available under `diagnostics.items`.
 
 ## Manual Contract Flow
 

@@ -64,7 +64,7 @@ function indexFile(projectRoot: string, file: string): IndexedFile | null {
       imports_count: imports,
       exports_count: exports,
       symbol_density: lines.length === 0 ? 0 : Number((symbolMatches / lines.length).toFixed(3)),
-      role_hints: inferRoleHints(file, content),
+      role_hints: [],
     };
   } catch {
     return null;
@@ -74,16 +74,4 @@ function indexFile(projectRoot: string, file: string): IndexedFile | null {
 function inferPackageRoot(file: string): string {
   const [root] = file.split('/');
   return root || '.';
-}
-
-function inferRoleHints(file: string, content: string): string[] {
-  const hints = new Set<string>();
-  if (/index\.[^.]+$/.test(file)) hints.add('observed-entry-file');
-  if (/(^|\/)(config|settings)(\/|\.)/.test(file)) hints.add('observed-config-file');
-  if (/(^|\/)(cli|command|cmd)(\/|\.)/.test(file)) hints.add('observed-cli-file');
-  if (/(api|route|handler|controller)/.test(file)) hints.add('observed-boundary-file');
-  if (/(adapter|bridge|gateway)/.test(file)) hints.add('observed-adapter-file');
-  if (/\b(interface|trait|protocol)\b|\btype\s+[A-Z]/.test(content)) hints.add('observed-interface-heavy');
-  if (/TODO|FIXME|legacy|deprecated/i.test(content)) hints.add('observed-legacy-signal');
-  return [...hints].sort();
 }

@@ -429,6 +429,7 @@ function mergeEquivalentObservations(
   return {
     ...canonical,
     confidence: Number(Math.min(Math.max(...group.map((observation) => observation.confidence)), proposal.confidence).toFixed(2)),
+    traits: mergeObservationTraits(group),
     evidence,
     support: {
       source_slices: sourceSlices,
@@ -454,6 +455,16 @@ function mergeEquivalentObservations(
       supersedes,
     },
   };
+}
+
+function mergeObservationTraits(observations: RcclObservation[]): RcclObservation['traits'] {
+  const traits = {
+    legacy: observations.some((item) => item.traits?.legacy === true) || undefined,
+    migration_boundary: observations.some((item) => item.traits?.migration_boundary === true) || undefined,
+    anti_pattern: observations.some((item) => item.traits?.anti_pattern === true) || undefined,
+    compatibility_boundary: observations.some((item) => item.traits?.compatibility_boundary === true) || undefined,
+  };
+  return Object.values(traits).some((value) => value !== undefined) ? traits : undefined;
 }
 
 function dedupeEvidence(evidence: RcclObservation['evidence']): RcclObservation['evidence'] {

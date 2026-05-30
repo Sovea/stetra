@@ -295,6 +295,7 @@ function mergeEquivalentObservations(canonical, group, supersededIds, proposal) 
 	return {
 		...canonical,
 		confidence: Number(Math.min(Math.max(...group.map((observation) => observation.confidence)), proposal.confidence).toFixed(2)),
+		traits: mergeObservationTraits(group),
 		evidence,
 		support: {
 			source_slices: sourceSlices,
@@ -320,6 +321,15 @@ function mergeEquivalentObservations(canonical, group, supersededIds, proposal) 
 			supersedes
 		}
 	};
+}
+function mergeObservationTraits(observations) {
+	const traits = {
+		legacy: observations.some((item) => item.traits?.legacy === true) || void 0,
+		migration_boundary: observations.some((item) => item.traits?.migration_boundary === true) || void 0,
+		anti_pattern: observations.some((item) => item.traits?.anti_pattern === true) || void 0,
+		compatibility_boundary: observations.some((item) => item.traits?.compatibility_boundary === true) || void 0
+	};
+	return Object.values(traits).some((value) => value !== void 0) ? traits : void 0;
 }
 function dedupeEvidence(evidence) {
 	const byKey = /* @__PURE__ */ new Map();

@@ -1,15 +1,26 @@
 //#region src/ir/execution/context-policy.ts
+const AUTHORITATIVE_CONTEXT_SOURCES = new Set([
+	"explicit",
+	"host-agent",
+	"assistive-ai",
+	"repo-default",
+	"derived"
+]);
 function applyContextExecutionPolicy(input) {
 	let decision = {
 		...input.defaultDecision,
 		contextApplied: [...input.defaultDecision.contextApplied],
 		contextRulesApplied: [...input.defaultDecision.contextRulesApplied]
 	};
-	const hasTension = input.relations.some((relation) => relation.adjudication.finalRelation === "tension");
+	const hasTension = input.relations.some((relation) => relation.adjudication.finalRelation === "tension" && relation.impact === "execution-mode");
 	for (const rule of CONTEXT_EXECUTION_RULES) {
 		const ruleInput = {
-			...input,
+			directive: input.directive,
+			relations: input.relations,
+			defaultDecision: input.defaultDecision,
 			decision,
+			context: input.context,
+			provenance: input.provenance ?? [],
 			hasTension
 		};
 		if (!rule.matches(ruleInput)) continue;
@@ -54,7 +65,7 @@ const CONTEXT_EXECUTION_RULES = [
 		id: "context.safety.promote-compatible-should",
 		field: "optimization_target",
 		effect: "mode-adjustment",
-		matches: ({ context, directive, defaultDecision, hasTension }) => context.optimization_target === "safety" && directive.prescription === "should" && defaultDecision.mode === "ambient" && hasTension && isCompatibilitySensitiveDirective(directive),
+		matches: (input) => hasAuthoritativeContextField(input, "optimization_target") && input.context.optimization_target === "safety" && input.directive.prescription === "should" && input.defaultDecision.mode === "ambient" && input.hasTension && isCompatibilitySensitiveDirective(input.directive),
 		apply: () => ({
 			mode: "deviation-noted",
 			basis: "task-context",
@@ -66,7 +77,7 @@ const CONTEXT_EXECUTION_RULES = [
 		id: "context.safety.preserve-must-deviation",
 		field: "optimization_target",
 		effect: "review-priority",
-		matches: ({ context, directive, defaultDecision }) => context.optimization_target === "safety" && directive.prescription === "must" && defaultDecision.mode === "deviation-noted",
+		matches: (input) => hasAuthoritativeContextField(input, "optimization_target") && input.context.optimization_target === "safety" && input.directive.prescription === "must" && input.defaultDecision.mode === "deviation-noted",
 		apply: () => ({
 			basis: "task-context",
 			reasonSuffix: "Safety-focused context preserves stricter enforcement intent even though repository compatibility still requires a deviation-noted posture.",
@@ -77,31 +88,31 @@ const CONTEXT_EXECUTION_RULES = [
 		id: "context.compatibility.must-with-tension",
 		field: "compatibility_requirement",
 		effect: "mode-adjustment",
-		matches: ({ context, directive, decision, hasTension }) => (hasConstraint(context.hard_constraints, [
+		matches: (input) => (hasAuthoritativeConstraint(input, "hard_constraints", [
 			"preserve compatibility",
 			"avoid breaking changes",
 			"preserve public api"
-		]) || hasCompatibilityRequirement(context)) && directive.prescription === "must" && decision.mode === "enforce" && hasTension,
-		apply: ({ context }) => ({
+		]) || hasAuthoritativeContextField(input, "compatibility_requirement") && hasCompatibilityRequirement(input.context)) && input.directive.prescription === "must" && input.decision.mode === "enforce" && input.hasTension,
+		apply: (input) => ({
 			mode: "deviation-noted",
 			basis: "task-context",
 			reasonSuffix: "Explicit compatibility constraints shift execution to deviation-noted because legacy or migration realities must be preserved at touched interfaces.",
-			contextApplied: [context.compatibility_requirement !== "none" ? `compatibility_requirement:${context.compatibility_requirement}` : "hard_constraints:compatibility"]
+			contextApplied: [hasAuthoritativeContextField(input, "compatibility_requirement") && input.context.compatibility_requirement !== "none" ? `compatibility_requirement:${input.context.compatibility_requirement}` : "hard_constraints:compatibility"]
 		})
 	},
 	{
 		id: "context.scope.keep-broad-guidance-ambient",
 		field: "scope_size",
 		effect: "ambienting",
-		matches: ({ context, directive }) => (hasConstraint(context.allowed_tradeoffs, ["prefer narrow change scope"]) || context.scope_size === "single-file" || context.refactor_tolerance === "none" || context.refactor_tolerance === "local-only") && directive.prescription === "should" && directive.traits.broadScope,
-		apply: ({ context }) => ({
+		matches: (input) => (hasAuthoritativeConstraint(input, "allowed_tradeoffs", ["prefer narrow change scope"]) || input.context.scope_size === "single-file" && hasAuthoritativeScopeEvidence(input) || hasAuthoritativeContextField(input, "refactor_tolerance") && (input.context.refactor_tolerance === "none" || input.context.refactor_tolerance === "local-only")) && input.directive.prescription === "should" && input.directive.traits.broadScope,
+		apply: (input) => ({
 			mode: "ambient",
 			basis: "task-context",
 			reasonSuffix: "Narrow-scope tradeoff guidance keeps broad architectural guidance ambient for this task.",
 			contextApplied: [
-				...hasConstraint(context.allowed_tradeoffs, ["prefer narrow change scope"]) ? ["allowed_tradeoffs:prefer narrow change scope"] : [],
-				...context.scope_size === "single-file" ? ["scope_size:single-file"] : [],
-				...context.refactor_tolerance === "none" || context.refactor_tolerance === "local-only" ? [`refactor_tolerance:${context.refactor_tolerance}`] : []
+				...hasAuthoritativeConstraint(input, "allowed_tradeoffs", ["prefer narrow change scope"]) ? ["allowed_tradeoffs:prefer narrow change scope"] : [],
+				...input.context.scope_size === "single-file" && hasAuthoritativeScopeEvidence(input) ? ["scope_size:single-file"] : [],
+				...hasAuthoritativeContextField(input, "refactor_tolerance") && (input.context.refactor_tolerance === "none" || input.context.refactor_tolerance === "local-only") ? [`refactor_tolerance:${input.context.refactor_tolerance}`] : []
 			]
 		})
 	},
@@ -109,7 +120,7 @@ const CONTEXT_EXECUTION_RULES = [
 		id: "context.avoid.keep-broad-rewrite-ambient",
 		field: "avoid",
 		effect: "ambienting",
-		matches: ({ context, directive }) => hasConstraint(context.avoid, ["broad rewrites", "overengineering"]) && directive.prescription === "should" && directive.traits.broadScope,
+		matches: (input) => hasAuthoritativeConstraint(input, "avoid", ["broad rewrites", "overengineering"]) && input.directive.prescription === "should" && input.directive.traits.broadScope,
 		apply: () => ({
 			mode: "ambient",
 			basis: "task-context",
@@ -121,19 +132,19 @@ const CONTEXT_EXECUTION_RULES = [
 		id: "context.compatibility.promote-compatible-should",
 		field: "compatibility_requirement",
 		effect: "mode-adjustment",
-		matches: ({ context, directive, defaultDecision, hasTension }) => hasCompatibilityRequirement(context) && directive.prescription === "should" && defaultDecision.mode === "ambient" && hasTension && isCompatibilitySensitiveDirective(directive),
-		apply: ({ context }) => ({
+		matches: (input) => hasAuthoritativeContextField(input, "compatibility_requirement") && hasCompatibilityRequirement(input.context) && input.directive.prescription === "should" && input.defaultDecision.mode === "ambient" && input.hasTension && isCompatibilitySensitiveDirective(input.directive),
+		apply: (input) => ({
 			mode: "deviation-noted",
 			basis: "task-context",
 			reasonSuffix: "Compatibility requirements promote compatible should-level guidance to deviation-noted when verified repository tension exists.",
-			contextApplied: [`compatibility_requirement:${context.compatibility_requirement}`]
+			contextApplied: [`compatibility_requirement:${input.context.compatibility_requirement}`]
 		})
 	},
 	{
 		id: "context.risk.raise-review-attention",
 		field: "risk_level",
 		effect: "review-priority",
-		matches: ({ context, directive, decision }) => isHighRisk(context) && (directive.prescription === "must" || directive.traits.safetyCritical || decision.mode === "deviation-noted") && decision.mode !== "suppress",
+		matches: (input) => hasAuthoritativeContextField(input, "risk_level") && isHighRisk(input.context) && (input.directive.prescription === "must" || input.directive.traits.safetyCritical || input.decision.mode === "deviation-noted") && input.decision.mode !== "suppress",
 		apply: ({ context, decision }) => ({
 			basis: decision.basis === "prescription" ? "task-context" : decision.basis,
 			reasonSuffix: "High-risk context keeps this directive prominent for execution and review.",
@@ -144,7 +155,7 @@ const CONTEXT_EXECUTION_RULES = [
 		id: "context.interface.raise-review-attention",
 		field: "interface_sensitivity",
 		effect: "review-priority",
-		matches: ({ context, directive, decision }) => isSensitiveInterface(context) && (directive.prescription === "must" || isCompatibilitySensitiveDirective(directive)) && decision.mode !== "suppress",
+		matches: (input) => hasAuthoritativeContextField(input, "interface_sensitivity") && isSensitiveInterface(input.context) && (input.directive.prescription === "must" || isCompatibilitySensitiveDirective(input.directive)) && input.decision.mode !== "suppress",
 		apply: ({ context, decision }) => ({
 			basis: decision.basis === "prescription" ? "task-context" : decision.basis,
 			reasonSuffix: "Sensitive interface context raises review attention for this directive.",
@@ -155,7 +166,7 @@ const CONTEXT_EXECUTION_RULES = [
 		id: "context.migration.keep-boundary-tension-explicit",
 		field: "migration_phase",
 		effect: "mode-adjustment",
-		matches: ({ context, directive, decision, hasTension }) => isMigrationExecutionPhase(context) && directive.traits.migrationSensitive && hasTension && decision.mode !== "suppress",
+		matches: (input) => hasAuthoritativeContextField(input, "migration_phase") && isMigrationExecutionPhase(input.context) && input.directive.traits.migrationSensitive && input.hasTension && input.decision.mode !== "suppress",
 		apply: ({ context, directive }) => ({
 			mode: directive.prescription === "must" ? "deviation-noted" : void 0,
 			basis: "task-context",
@@ -164,6 +175,21 @@ const CONTEXT_EXECUTION_RULES = [
 		})
 	}
 ];
+function hasAuthoritativeContextField(input, field) {
+	return isAuthoritativeProvenance(findProvenance(input.provenance, `context.${field}`));
+}
+function hasAuthoritativeConstraint(input, field, expected) {
+	return hasAuthoritativeContextField(input, field) && hasConstraint(input.context[field], expected);
+}
+function hasAuthoritativeScopeEvidence(input) {
+	return hasAuthoritativeContextField(input, "scope_size") || isAuthoritativeProvenance(findProvenance(input.provenance, "intent.target_file")) || isAuthoritativeProvenance(findProvenance(input.provenance, "intent.changed_files"));
+}
+function findProvenance(provenance, field) {
+	return provenance.find((item) => item.field === field);
+}
+function isAuthoritativeProvenance(provenance) {
+	return provenance !== void 0 && provenance.confidence > 0 && AUTHORITATIVE_CONTEXT_SOURCES.has(provenance.source);
+}
 function isCompatibilitySensitiveDirective(directive) {
 	return directive.traits.compatibilitySensitive || directive.traits.rcclImmune || directive.prescription === "must";
 }

@@ -48,7 +48,7 @@ function toFeedbackTensionRelation(signal, directive, observation, task, taskSco
 		signals,
 		evidenceRefs: observationEvidenceRefs(observation),
 		reasoningSummary: `lockfile feedback recorded recurring tension ${signal.tensionKey} across ${signal.seenCount} task(s) for ${task.operation} work`,
-		impact: directive.prescription === "must" ? "execution-mode" : "review-focus",
+		impact: "review-focus",
 		reviewPriority: directive.prescription === "must" ? "high" : "normal",
 		mergeIntent: "Treat the recurring lockfile tension as a reviewable repository reality, without bypassing RCCL verification.",
 		adjudication: {

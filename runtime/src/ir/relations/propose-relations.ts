@@ -38,15 +38,13 @@ function proposeRuntimeStructuralRelation(
 
   const taskScoped = scopeMatchesTask(directive.scope.path, task) && scopeMatchesTask(observation.scope.path, task);
   const semanticKey = semanticKeysOverlap(directive.semanticKey, observation.semanticKey);
-  const category = categoryRelated(directive, observation);
-  if (!semanticKey && !category) return null;
+  if (!semanticKey) return null;
 
   const evidence = hasVerifiedEvidence(observation);
-  const ambientOnly = observation.lifecycle.status === 'stale' || observation.verification.disposition === 'demote-to-ambient';
-  const relation = inferRuntimeRelation(directive, observation, { taskScoped, semanticKey, category, evidence, ambientOnly });
-  if (!relation) return null;
+  if (!taskScoped || !evidence) return null;
+  const relation = 'ambient-only';
 
-  const signals = buildRuntimeSignals(directive, observation, taskScoped, semanticKey, category, relation);
+  const signals = buildRuntimeSignals(observation, taskScoped, semanticKey, relation);
   const conflictClass = inferConflictClass(directive, observation, relation);
   return {
     irVersion: 'governance-ir/v1',
@@ -56,24 +54,24 @@ function proposeRuntimeStructuralRelation(
     proposedBy: 'runtime-structural',
     relation,
     ...(conflictClass ? { conflictClass } : {}),
-    confidence: runtimeRelationConfidence(observation, semanticKey, category, relation),
+    confidence: runtimeRelationConfidence(observation),
     basis: {
       scope: taskScoped,
       semanticKey,
-      category,
+      category: false,
       evidence,
       hostReasoning: false,
       feedback: false,
     },
     signals,
     evidenceRefs: observationEvidenceRefs(observation),
-    reasoningSummary: summarizeRuntimeProposal(directive, observation, relation, { semanticKey, category }),
+    reasoningSummary: summarizeRuntimeProposal(relation),
     impact: defaultImpact(relation),
     reviewPriority: defaultReviewPriority(directive, relation),
     adjudication: {
       status: 'accepted',
       finalRelation: relation,
-      reason: 'initial runtime structural fallback relation proposal before adjudication',
+      reason: 'initial runtime structural context shortlist before adjudication',
     },
   };
 }
@@ -171,41 +169,6 @@ function requiredObservation(observations: ObservationIR[], id: string): Observa
   return observation;
 }
 
-function inferRuntimeRelation(
-  directive: DirectiveIR,
-  observation: ObservationIR,
-  basis: {
-    taskScoped: boolean;
-    semanticKey: boolean;
-    category: boolean;
-    evidence: boolean;
-    ambientOnly: boolean;
-  },
-): SemanticRelationIR['relation'] | null {
-  if (basis.ambientOnly) return 'ambient-only';
-  if (!basis.taskScoped || !basis.evidence) return null;
-  if (isAntiPatternRelationCandidate(directive, observation, basis)) return 'suppress';
-  if (isCompatibilityTensionCandidate(directive, observation)) return 'tension';
-  if (basis.semanticKey || basis.category) {
-    return observation.adherence.quality === 'good' ? 'reinforce' : 'tension';
-  }
-  return null;
-}
-
-function isAntiPatternRelationCandidate(
-  directive: DirectiveIR,
-  observation: ObservationIR,
-  basis: { semanticKey: boolean; category: boolean },
-): boolean {
-  if (!observation.traits.antiPattern && directive.kind !== 'anti-pattern') return false;
-  return basis.semanticKey || basis.category || observation.traits.antiPattern;
-}
-
-function isCompatibilityTensionCandidate(directive: DirectiveIR, observation: ObservationIR): boolean {
-  return (directive.traits.compatibilitySensitive || directive.traits.migrationSensitive)
-    && (observation.traits.compatibilityBoundary || observation.traits.legacy || observation.traits.migrationBoundary);
-}
-
 function buildHostGraphSignals(
   edge: SemanticGovernanceGraphEdge,
   observation: ObservationIR,
@@ -241,11 +204,9 @@ function buildHostGraphSignals(
 }
 
 function buildRuntimeSignals(
-  directive: DirectiveIR,
   observation: ObservationIR,
   taskScoped: boolean,
   semanticKey: boolean,
-  category: boolean,
   relation: SemanticRelationIR['relation'],
 ): SemanticRelationSignalIR[] {
   return [
@@ -273,12 +234,6 @@ function buildRuntimeSignals(
       direction: relationToSignalDirection(relation),
       reason: 'directive and observation semantic keys overlap',
     }] : []),
-    ...(category ? [{
-      kind: 'category' as const,
-      strength: 'weak' as const,
-      direction: relationToSignalDirection(relation),
-      reason: `directive traits match observation category or traits for ${directive.id}/${observation.id}`,
-    }] : []),
   ];
 }
 
@@ -303,24 +258,13 @@ function hasVerifiedEvidence(observation: ObservationIR): boolean {
     || observation.verification.evidenceStatus === 'partial';
 }
 
-function runtimeRelationConfidence(
-  observation: ObservationIR,
-  semanticKey: boolean,
-  category: boolean,
-  relation: SemanticRelationIR['relation'],
-): number {
+function runtimeRelationConfidence(observation: ObservationIR): number {
   const verificationConfidence = Math.max(
     observation.verification.evidenceConfidence,
     observation.verification.inductionConfidence,
     observation.adherence.confidence,
   );
-  const basisConfidence = relation === 'suppress'
-    ? 0.8
-    : semanticKey
-      ? 0.75
-      : category
-        ? 0.65
-        : 0.35;
+  const basisConfidence = 0.75;
   return Number(Math.min(1, Math.max(verificationConfidence, basisConfidence)).toFixed(2));
 }
 
@@ -340,17 +284,12 @@ function inferConflictClass(
 }
 
 function summarizeRuntimeProposal(
-  directive: DirectiveIR,
-  observation: ObservationIR,
   relation: SemanticRelationIR['relation'],
-  basis: { semanticKey: boolean; category: boolean },
 ): string {
-  if (relation === 'ambient-only') return 'runtime structural fallback kept this observation ambient because lifecycle or verification prevents execution influence';
-  const basisText = [
-    basis.semanticKey ? 'semantic-key overlap' : '',
-    basis.category ? 'category/trait match' : '',
-  ].filter(Boolean).join(' and ');
-  return `${relation} fallback proposed by deterministic structural signals from ${basisText || 'verified repository context'} between ${directive.id} and ${observation.id}`;
+  if (relation === 'ambient-only') {
+    return 'runtime structural fallback only shortlisted this verified task-scoped observation as ambient context; execution influence requires a host semantic graph or feedback signal';
+  }
+  return 'runtime structural fallback did not assign execution influence';
 }
 
 function defaultImpact(relation: SemanticRelationIR['relation']): SemanticRelationImpactIR {
@@ -379,18 +318,6 @@ function semanticKeysOverlap(left: string, right: string): boolean {
 
 function tokenSet(value: string): Set<string> {
   return new Set(value.toLowerCase().split(/[^a-z0-9]+/).filter((token) => token.length >= 4));
-}
-
-function categoryRelated(directive: DirectiveIR, observation: ObservationIR): boolean {
-  if (directive.traits.compatibilitySensitive && observation.traits.compatibilityBoundary) return true;
-  if (directive.traits.migrationSensitive && (observation.traits.migrationBoundary || observation.traits.legacy)) return true;
-  if (directive.traits.safetyCritical && observation.category === 'constraint') return true;
-  if (directive.traits.broadScope && (observation.category === 'architecture' || observation.category === 'pattern')) return true;
-  if (directive.kind === 'anti-pattern' && observation.traits.antiPattern) return true;
-  if (directive.kind === 'architecture' && observation.category === 'architecture') return true;
-  if (directive.kind === 'constraint' && observation.category === 'constraint') return true;
-  if ((directive.kind === 'convention' || directive.kind === 'preference') && (observation.category === 'style' || observation.category === 'pattern')) return true;
-  return false;
 }
 
 function observationEvidenceRefs(observation: ObservationIR): string[] {

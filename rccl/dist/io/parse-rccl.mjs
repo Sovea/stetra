@@ -1,5 +1,5 @@
 import { parseYaml } from "../utils/yaml.mjs";
-import { RCCL_ADHERENCE_QUALITIES, RCCL_CATEGORIES, RCCL_OBSERVATION_ID_PATTERN, RCCL_SCOPE_BASES, validateCandidateObservationRecord, validateEvidenceSnippet } from "../validate-observation.mjs";
+import { RCCL_ADHERENCE_QUALITIES, RCCL_CATEGORIES, RCCL_OBSERVATION_ID_PATTERN, RCCL_SCOPE_BASES, validateCandidateObservationRecord, validateEvidenceSnippet, validateTraitsRecord } from "../validate-observation.mjs";
 //#region src/io/parse-rccl.ts
 const RCCL_VERSION = "1.0";
 function isRcclVersion(value) {
@@ -113,6 +113,7 @@ function validateFinalObservation(obs, index, allowVerifiedFields) {
 	if ("scope_hint" in obs) errors.push(`${prefix}: final RCCL observations must use 'scope', not 'scope_hint'`);
 	if ("source_slice_ids" in obs) errors.push(`${prefix}: final RCCL observations must store source slices in 'support.source_slices'`);
 	if ("support_hint" in obs) errors.push(`${prefix}: final RCCL observations must use 'support', not 'support_hint'`);
+	errors.push(...validateTraitsRecord(obs.traits, `${prefix}.traits`));
 	const support = obs.support;
 	if (!support || typeof support !== "object" || Array.isArray(support)) errors.push(`${prefix}: missing or invalid 'support'`);
 	else errors.push(...validateSupport(support, `${prefix}.support`));
@@ -201,7 +202,8 @@ function normalizeCandidateObservation(input) {
 			scope_basis: supportHint.scope_basis == null ? null : normalizeScopeBasis(String(supportHint.scope_basis)),
 			file_count: supportHint.file_count == null ? null : Number(supportHint.file_count),
 			cluster_count: supportHint.cluster_count == null ? null : Number(supportHint.cluster_count)
-		}
+		},
+		traits: normalizeTraits(item.traits)
 	};
 }
 function normalizeDocument(input) {
@@ -225,7 +227,8 @@ function normalizeObservation(input) {
 		evidence: Array.isArray(item.evidence) ? item.evidence.map(normalizeEvidence) : [],
 		support: normalizeSupport(item.support),
 		verification: normalizeVerification(item.verification),
-		lifecycle: normalizeLifecycle(item.lifecycle)
+		lifecycle: normalizeLifecycle(item.lifecycle),
+		traits: normalizeTraits(item.traits)
 	};
 }
 function normalizeEvidence(input) {
@@ -270,6 +273,20 @@ function normalizeLifecycle(input) {
 		stale_since_git_ref: typeof input.stale_since_git_ref === "string" ? input.stale_since_git_ref : null,
 		superseded_at_git_ref: typeof input.superseded_at_git_ref === "string" ? input.superseded_at_git_ref : null
 	};
+}
+function normalizeTraits(input) {
+	if (!input || typeof input !== "object" || Array.isArray(input)) return void 0;
+	const value = input;
+	const traits = {
+		legacy: booleanTrait(value.legacy),
+		migration_boundary: booleanTrait(value.migration_boundary),
+		anti_pattern: booleanTrait(value.anti_pattern),
+		compatibility_boundary: booleanTrait(value.compatibility_boundary)
+	};
+	return Object.values(traits).some((item) => item !== void 0) ? traits : void 0;
+}
+function booleanTrait(input) {
+	return typeof input === "boolean" ? input : void 0;
 }
 function normalizeScopeBasis(value) {
 	if (value === "single-file" || value === "directory-cluster" || value === "module-cluster" || value === "cross-root") return value;

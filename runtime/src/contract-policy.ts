@@ -48,6 +48,7 @@ export function resolveContractPolicy(input: ContractPolicyInput): ContractPolic
   const highRiskTask = isHighRisk(policyRiskLevel(policyInput));
   const taskModelRequired = shouldRequireTaskModel(policyInput, mode);
   const semanticGraphRequired = shouldRequireSemanticGraph(policyInput, mode, taskModelRequired);
+  const deterministicFallbacks = collectDeterministicFallbackGovernance(policyInput);
   const required: ContractPolicyKind[] = [];
   const optional: ContractPolicyKind[] = [];
   const skipped: ContractPolicyDecision['skipped'] = [];
@@ -129,6 +130,7 @@ export function resolveContractPolicy(input: ContractPolicyInput): ContractPolic
       semantic_graph_required: semanticGraphRequired,
       ...(input.rcclRelevant !== undefined ? { rccl_relevant: input.rcclRelevant } : {}),
       reasons,
+      deterministic_fallbacks: deterministicFallbacks,
     },
   };
 }
@@ -148,13 +150,18 @@ function shouldRequireTaskModel(input: ContractPolicyInput, mode: GuidanceExecut
   const task = policyTask(input);
   const operation = input.resolvedTask?.task_intent.operation ?? task?.operation;
   const taskKind = input.resolvedTask?.taskKind ?? task?.taskKind;
-  if (isHighRisk(policyRiskLevel(input))) return true;
+  if (isHighRisk(policyRiskLevel(input)) && isPolicyAuthoritative(input, 'context.risk_level', 'riskLevel')) return true;
   if (profile?.scope_size === 'cross-cutting') return true;
-  if (profile?.compatibility_requirement && profile.compatibility_requirement !== 'none' && profile.compatibility_requirement !== 'breaking-allowed') return true;
-  if (profile?.interface_sensitivity && profile.interface_sensitivity !== 'internal' && profile.interface_sensitivity !== 'unknown') return true;
-  if (profile?.migration_phase && profile.migration_phase !== 'none') return true;
-  if (profile?.review_goal === 'security' || profile?.review_goal === 'regression-risk' || profile?.review_goal === 'architecture-fit') return true;
-  if (taskKind === 'migration' || operation === 'review') return true;
+  if (profile?.compatibility_requirement && profile.compatibility_requirement !== 'none' && profile.compatibility_requirement !== 'breaking-allowed'
+    && isPolicyAuthoritative(input, 'context.compatibility_requirement', 'compatibilityRequirement')) return true;
+  if (profile?.interface_sensitivity && profile.interface_sensitivity !== 'internal' && profile.interface_sensitivity !== 'unknown'
+    && isPolicyAuthoritative(input, 'context.interface_sensitivity', 'interfaceSensitivity')) return true;
+  if (profile?.migration_phase && profile.migration_phase !== 'none'
+    && isPolicyAuthoritative(input, 'context.migration_phase', 'migrationPhase')) return true;
+  if ((profile?.review_goal === 'security' || profile?.review_goal === 'regression-risk' || profile?.review_goal === 'architecture-fit')
+    && isPolicyAuthoritative(input, 'context.review_goal', 'reviewGoal')) return true;
+  if (taskKind === 'migration' && isPolicyAuthoritative(input, 'intent.task_kind', 'taskKind')) return true;
+  if (operation === 'review' && isPolicyAuthoritative(input, 'intent.operation', 'operation')) return true;
   return hasAmbiguousTaskResolution(input);
 }
 
@@ -183,6 +190,65 @@ function hasAmbiguousTaskResolution(input: ContractPolicyInput): boolean {
   const operationField = resolved.input_provenance.resolved_fields.find((field) => field.field === 'intent.operation');
   return !input.task?.operation
     && (!operationField || (operationField.source === 'deterministic' && operationField.confidence <= 0.5));
+}
+
+function collectDeterministicFallbackGovernance(
+  input: ContractPolicyInput,
+): ContractPolicyDecision['diagnostics']['deterministic_fallbacks'] {
+  const result: ContractPolicyDecision['diagnostics']['deterministic_fallbacks'] = [];
+  const profile = policyContextProfile(input);
+  if (!profile) return result;
+  addFallbackGovernance(result, input, 'context.risk_level', profile.risk_level ?? '');
+  addFallbackGovernance(result, input, 'context.compatibility_requirement', profile.compatibility_requirement ?? '');
+  addFallbackGovernance(result, input, 'context.interface_sensitivity', profile.interface_sensitivity ?? '');
+  addFallbackGovernance(result, input, 'context.migration_phase', profile.migration_phase ?? '');
+  addFallbackGovernance(result, input, 'context.review_goal', profile.review_goal ?? '');
+  return result;
+}
+
+function addFallbackGovernance(
+  result: ContractPolicyDecision['diagnostics']['deterministic_fallbacks'],
+  input: ContractPolicyInput,
+  field: string,
+  value: string,
+): void {
+  if (!value || !isElevatedFallbackField(field, value)) return;
+  const resolved = resolvedField(input, field);
+  if (resolved?.source !== 'deterministic') return;
+  result.push({
+    field,
+    value,
+    confidence: resolved.confidence,
+    action: 'ignored-for-policy',
+    reason: 'deterministic fallback is trace-only and does not trigger standard-mode governance contracts',
+  });
+}
+
+function isElevatedFallbackField(field: string, value: string): boolean {
+  if (field === 'context.risk_level') return value === 'high' || value === 'critical';
+  if (field === 'context.compatibility_requirement') return value !== 'none' && value !== 'breaking-allowed';
+  if (field === 'context.interface_sensitivity') return value !== 'internal' && value !== 'unknown';
+  if (field === 'context.migration_phase') return value !== 'none';
+  if (field === 'context.review_goal') return value === 'security' || value === 'regression-risk' || value === 'architecture-fit';
+  return false;
+}
+
+function isPolicyAuthoritative(
+  input: ContractPolicyInput,
+  field: string,
+  rawTaskField: keyof CompileTaskInput,
+): boolean {
+  if (rawTaskField === 'riskLevel' && input.taskRisk && isHighRisk(input.taskRisk)) return true;
+  return Boolean(input.task?.[rawTaskField]) && isFieldAuthoritative(input, field);
+}
+
+function isFieldAuthoritative(input: ContractPolicyInput, field: string): boolean {
+  const source = resolvedField(input, field)?.source;
+  return source === 'explicit' || source === 'host-agent' || source === 'assistive-ai' || source === 'repo-default';
+}
+
+function resolvedField(input: ContractPolicyInput, field: string): ResolvedTaskOutput['input_provenance']['resolved_fields'][number] | undefined {
+  return input.resolvedTask?.input_provenance.resolved_fields.find((item) => item.field === field);
 }
 
 function rcclAvailable(sourceStatus: GuidancePlanSourceStatus): boolean {
