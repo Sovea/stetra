@@ -23,6 +23,8 @@ export type DirectiveType = 'constraint' | 'preference' | 'convention' | 'archit
 export type AdherenceQuality = 'good' | 'inconsistent' | 'poor';
 export type VerificationStatus = 'pending' | 'verified' | 'partial' | 'failed' | 'unverifiable';
 export type VerificationDisposition = 'keep' | 'keep-with-reduced-confidence' | 'demote-to-ambient';
+export type RuntimeRcclVerificationPolicy = 'task-relevant' | 'deep' | 'trust-existing';
+export type RuntimeRcclVerificationAction = 'reverified' | 'reused' | 'demoted' | 'skipped-not-task-relevant';
 export type InductionStatus = 'well-supported' | 'narrowly-supported' | 'overgeneralized' | 'ambiguous';
 export type ScopeBasis = 'single-file' | 'directory-cluster' | 'module-cluster' | 'cross-root';
 export type RcclSchemaVersion = '1.0';
@@ -200,6 +202,34 @@ export interface RcclVerification {
   disposition: VerificationDisposition | null;
 }
 
+export interface RuntimeRcclVerificationRecord {
+  observation_id: string;
+  action: RuntimeRcclVerificationAction;
+  task_relevant: boolean;
+  reason: string;
+  before: {
+    evidence_status: VerificationStatus | null;
+    induction_status: InductionStatus | null;
+    disposition: VerificationDisposition | null;
+    checked_at: string | null;
+  };
+  after: {
+    evidence_status: VerificationStatus | null;
+    induction_status: InductionStatus | null;
+    disposition: VerificationDisposition | null;
+    checked_at: string | null;
+  };
+}
+
+export interface RuntimeRcclVerificationSummary {
+  policy: RuntimeRcclVerificationPolicy;
+  reverified_count: number;
+  reused_count: number;
+  demoted_count: number;
+  skipped_not_task_relevant_count: number;
+  records: RuntimeRcclVerificationRecord[];
+}
+
 export interface BaseTaskInput {
   description: string;
   taskKind?: TaskKind;
@@ -234,7 +264,7 @@ export interface ReviewTaskInput extends BaseTaskInput {
 
 export interface ResolveTaskInput extends RuntimeResolveTaskInput {}
 
-export type HostFulfillmentStatus = 'absent' | 'accepted' | 'partially-accepted' | 'rejected' | 'unused';
+export type HostFulfillmentStatus = 'absent' | 'accepted' | 'partially-accepted' | 'rejected' | 'unused' | 'assumed';
 
 export interface HostFulfillmentArtifactSummary {
   kind: 'agent-capability-profile' | 'task-model' | 'semantic-governance-graph' | 'adherence-evidence';
@@ -276,6 +306,7 @@ export interface CompileInputBase {
   hostProposals?: import('./ir/types.ts').HostProposalIR[];
   hostFulfillment?: HostFulfillmentSummary;
   agentCapabilityProfile?: AgentCapabilityProfile;
+  verificationPolicy?: RuntimeRcclVerificationPolicy;
   preloadedSources?: import('./load/compile-sources.ts').CompileSources;
 }
 
@@ -331,6 +362,7 @@ export type ContractPolicySkippedReason =
   | 'waiting-for-task-model'
   | 'deferred-until-after-compile'
   | 'deterministic-fallback-allowed'
+  | 'runtime-assumption'
   | 'not-required-for-current-policy';
 
 export interface ContractPolicySkippedContract {
@@ -667,6 +699,14 @@ export interface ResolvedTaskOutput {
   trace: TaskInterpretationTrace;
 }
 
+export interface RuntimeCacheKeys {
+  l1Key: string;
+  l2Key: string;
+  l3Key: string;
+  verificationPolicy: RuntimeRcclVerificationPolicy;
+  rcclVerificationKey: string;
+}
+
 export interface ChangeDecisionPacket {
   version: '1.0';
   task: {
@@ -675,11 +715,7 @@ export interface ChangeDecisionPacket {
   };
   interpretation: InterpretationPacket;
   governance: GovernancePacket;
-  cache: {
-    l1Key: string;
-    l2Key: string;
-    l3Key: string;
-  };
+  cache: RuntimeCacheKeys;
 }
 
 export interface PrepareInterpretationOutput {
@@ -744,6 +780,7 @@ export interface RuntimeSessionRecord {
     task?: CompileTaskInput;
     taskModels?: TaskModelProposal[];
     interpretationMode?: InputProvenance['interpretation_mode'];
+    verificationPolicy?: RuntimeRcclVerificationPolicy;
     hostProposals?: import('./ir/types.ts').HostProposalIR[];
     hostFulfillment?: HostFulfillmentSummary;
     governanceGraphFile?: string;
@@ -789,11 +826,7 @@ export interface CompileOutput {
   resolvedTask: ResolvedTaskOutput;
   ego: EffectiveGuidanceObject;
   trace: DecisionTrace;
-  cache: {
-    l1Key: string;
-    l2Key: string;
-    l3Key: string;
-  };
+  cache: RuntimeCacheKeys;
 }
 
 export interface EvaluateInput {

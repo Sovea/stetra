@@ -466,7 +466,7 @@ Current limitations that should be understood before extending:
 
 - deterministic intent parse remains fallback/recall; `task-model` is the primary host-agent semantic channel for task understanding
 - semantic merge still uses structural recall internally, but host semantic judgment enters through `semantic-governance-graph`
-- cache keys exist, but full cache storage and invalidation are not complete
+- runtime cache storage records L1/L2/L3 artifacts, invalidation inputs, and RCCL verification fingerprints; cache reads are inspection-only and must not replace task-time Runtime compile or RCCL verification
 - layer filtering and merge should continue moving toward the full target design above
 - RCCL v2 contracts include evidence refs, counterexamples, and semantic equivalence proposals, but final consolidation and demotion remain static verification boundaries
 - adherence feedback now requires `adherence-evidence`; uncovered directives are recorded as `unverified` and do not update follow rate

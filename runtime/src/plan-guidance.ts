@@ -1,4 +1,4 @@
-import { existsSync, readdirSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { prepareAgentCapabilityProfileContract } from './ai-contracts/agent-capability-profile.ts';
 import { prepareContextAcquisitionContract } from './ai-contracts/context-acquisition.ts';
@@ -8,6 +8,7 @@ import { resolveContractPolicy } from './contract-policy.ts';
 import { resolveTask } from './interpret/normalize-candidate.ts';
 import { loadRccl } from './load/load-rccl.ts';
 import { minimatch } from './utils/glob.ts';
+import { parseYaml } from './utils/yaml.ts';
 import type {
   CompileInput,
   CompileTaskInput,
@@ -134,10 +135,40 @@ export async function planGuidance(input: GuidancePlanInput): Promise<GuidancePl
 export function resolveSourceStatus(input: Pick<GuidancePlanInput, 'localAugmentPath' | 'rcclPath' | 'lockfilePath' | 'projectRoot'>): GuidancePlanSourceStatus {
   return {
     localAugment: input.localAugmentPath && existsSync(input.localAugmentPath) ? 'present' : 'absent',
-    rccl: input.rcclPath && existsSync(input.rcclPath) ? 'present' : 'absent',
+    rccl: resolveRcclSourceStatus(input.rcclPath),
     lockfile: input.lockfilePath && existsSync(input.lockfilePath) ? 'present' : 'absent',
     cache: resolveCacheStatus(input.projectRoot),
   };
+}
+
+function resolveRcclSourceStatus(rcclPath?: string): GuidancePlanSourceStatus['rccl'] {
+  if (!rcclPath || !existsSync(rcclPath)) return 'absent';
+  try {
+    const parsed = parseYaml(readFileSync(rcclPath, 'utf-8'));
+    if (!isRecord(parsed) || !Array.isArray(parsed.observations)) return 'unverified';
+    if (parsed.observations.length === 0) return 'present';
+    const observations = parsed.observations.filter(isRecord);
+    if (observations.length !== parsed.observations.length) return 'unverified';
+    const hasUnverified = observations.some((observation) => {
+      const verification = isRecord(observation.verification) ? observation.verification : null;
+      if (!verification) return true;
+      return !hasVerificationValue(verification, 'evidence_status')
+        || !hasVerificationValue(verification, 'evidence_verified_count')
+        || !hasVerificationValue(verification, 'evidence_confidence')
+        || !hasVerificationValue(verification, 'induction_status')
+        || !hasVerificationValue(verification, 'induction_confidence')
+        || !hasVerificationValue(verification, 'checked_at')
+        || !hasVerificationValue(verification, 'disposition');
+    });
+    if (hasUnverified) return 'unverified';
+    const hasStaleLifecycle = observations.some((observation) => {
+      const lifecycle = isRecord(observation.lifecycle) ? observation.lifecycle : null;
+      return lifecycle?.status === 'stale' || lifecycle?.status === 'superseded';
+    });
+    return hasStaleLifecycle ? 'stale' : 'present';
+  } catch {
+    return 'unverified';
+  }
 }
 
 function resolveCacheStatus(projectRoot: string): GuidancePlanSourceStatus['cache'] {
@@ -185,8 +216,8 @@ async function resolveRcclRelevance(
   if (!rccl) return undefined;
   return rccl.observations.some((observation) =>
     targets.some((target) =>
-      pathMatchesScope(target, observation.scope)
-      || observation.evidence.some((evidence) => evidence.file === target)));
+      scopeOverlapsPath(observation.scope, target)
+      || observation.evidence.some((evidence) => fileOverlapsTarget(evidence.file, target))));
 }
 
 function taskTargets(task: CompileTaskInput, resolvedTask: ResolvedTaskOutput): string[] {
@@ -195,13 +226,33 @@ function taskTargets(task: CompileTaskInput, resolvedTask: ResolvedTaskOutput): 
     ...(task.changedFiles ?? []),
     resolvedTask.task_intent.target_file,
     ...resolvedTask.task_intent.changed_files,
-  ].filter((value): value is string => Boolean(value)));
+  ].filter((value): value is string => Boolean(value)).map(normalizePath));
 }
 
 function pathMatchesScope(path: string, scope: string): boolean {
   if (scope === '*' || scope === '**' || scope === '**/*') return true;
   if (scope.includes('*') || scope.includes('?') || scope.includes('{')) return minimatch(path, scope);
-  return path === scope || path.startsWith(`${scope.replace(/\/$/, '')}/`);
+  const normalizedScope = scope.replace(/\/$/, '');
+  return path === normalizedScope || path.startsWith(`${normalizedScope}/`);
+}
+
+function scopeOverlapsPath(scope: string, path: string): boolean {
+  const normalizedScope = normalizePath(scope);
+  const normalizedPath = normalizePath(path);
+  return pathMatchesScope(normalizedPath, normalizedScope)
+    || pathMatchesScope(normalizedScope, normalizedPath);
+}
+
+function fileOverlapsTarget(file: string, target: string): boolean {
+  const normalizedFile = normalizePath(file);
+  const normalizedTarget = normalizePath(target);
+  return normalizedFile === normalizedTarget
+    || pathMatchesScope(normalizedFile, normalizedTarget)
+    || pathMatchesScope(normalizedTarget, normalizedFile);
+}
+
+function normalizePath(value: string): string {
+  return value.replace(/\\/g, '/').replace(/^\.\//, '');
 }
 
 function hasFiles(directory: string): boolean {
@@ -214,4 +265,12 @@ function hasFiles(directory: string): boolean {
 
 function unique<T>(values: T[]): T[] {
   return [...new Set(values)];
+}
+
+function hasVerificationValue(record: Record<string, unknown>, key: string): boolean {
+  return record[key] !== undefined && record[key] !== null && record[key] !== '';
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 }

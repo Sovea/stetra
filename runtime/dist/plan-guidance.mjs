@@ -1,12 +1,13 @@
 import { resolveTask } from "./interpret/normalize-candidate.mjs";
 import { minimatch } from "./utils/glob.mjs";
+import { parseYaml } from "./utils/yaml.mjs";
 import { loadRccl } from "./load/load-rccl.mjs";
 import { resolveContractPolicy } from "./contract-policy.mjs";
 import { prepareAgentCapabilityProfileContract } from "./ai-contracts/agent-capability-profile.mjs";
 import { prepareContextAcquisitionContract } from "./ai-contracts/context-acquisition.mjs";
 import { prepareSemanticGovernanceGraphContractBundle } from "./ai-contracts/semantic-governance-graph.mjs";
 import { prepareTaskModelContract } from "./ai-contracts/task-model.mjs";
-import { existsSync, readdirSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 //#region src/plan-guidance.ts
 async function planGuidance(input) {
@@ -107,10 +108,31 @@ async function planGuidance(input) {
 function resolveSourceStatus(input) {
 	return {
 		localAugment: input.localAugmentPath && existsSync(input.localAugmentPath) ? "present" : "absent",
-		rccl: input.rcclPath && existsSync(input.rcclPath) ? "present" : "absent",
+		rccl: resolveRcclSourceStatus(input.rcclPath),
 		lockfile: input.lockfilePath && existsSync(input.lockfilePath) ? "present" : "absent",
 		cache: resolveCacheStatus(input.projectRoot)
 	};
+}
+function resolveRcclSourceStatus(rcclPath) {
+	if (!rcclPath || !existsSync(rcclPath)) return "absent";
+	try {
+		const parsed = parseYaml(readFileSync(rcclPath, "utf-8"));
+		if (!isRecord(parsed) || !Array.isArray(parsed.observations)) return "unverified";
+		if (parsed.observations.length === 0) return "present";
+		const observations = parsed.observations.filter(isRecord);
+		if (observations.length !== parsed.observations.length) return "unverified";
+		if (observations.some((observation) => {
+			const verification = isRecord(observation.verification) ? observation.verification : null;
+			if (!verification) return true;
+			return !hasVerificationValue(verification, "evidence_status") || !hasVerificationValue(verification, "evidence_verified_count") || !hasVerificationValue(verification, "evidence_confidence") || !hasVerificationValue(verification, "induction_status") || !hasVerificationValue(verification, "induction_confidence") || !hasVerificationValue(verification, "checked_at") || !hasVerificationValue(verification, "disposition");
+		})) return "unverified";
+		return observations.some((observation) => {
+			const lifecycle = isRecord(observation.lifecycle) ? observation.lifecycle : null;
+			return lifecycle?.status === "stale" || lifecycle?.status === "superseded";
+		}) ? "stale" : "present";
+	} catch {
+		return "unverified";
+	}
 }
 function resolveCacheStatus(projectRoot) {
 	const cacheRoot = join(projectRoot, ".resonant-code", "context", "cache", "runtime");
@@ -152,7 +174,7 @@ async function resolveRcclRelevance(input, sourceStatus, resolvedTask) {
 		return;
 	}
 	if (!rccl) return void 0;
-	return rccl.observations.some((observation) => targets.some((target) => pathMatchesScope(target, observation.scope) || observation.evidence.some((evidence) => evidence.file === target)));
+	return rccl.observations.some((observation) => targets.some((target) => scopeOverlapsPath(observation.scope, target) || observation.evidence.some((evidence) => fileOverlapsTarget(evidence.file, target))));
 }
 function taskTargets(task, resolvedTask) {
 	return unique([
@@ -160,12 +182,26 @@ function taskTargets(task, resolvedTask) {
 		...task.changedFiles ?? [],
 		resolvedTask.task_intent.target_file,
 		...resolvedTask.task_intent.changed_files
-	].filter((value) => Boolean(value)));
+	].filter((value) => Boolean(value)).map(normalizePath));
 }
 function pathMatchesScope(path, scope) {
 	if (scope === "*" || scope === "**" || scope === "**/*") return true;
 	if (scope.includes("*") || scope.includes("?") || scope.includes("{")) return minimatch(path, scope);
-	return path === scope || path.startsWith(`${scope.replace(/\/$/, "")}/`);
+	const normalizedScope = scope.replace(/\/$/, "");
+	return path === normalizedScope || path.startsWith(`${normalizedScope}/`);
+}
+function scopeOverlapsPath(scope, path) {
+	const normalizedScope = normalizePath(scope);
+	const normalizedPath = normalizePath(path);
+	return pathMatchesScope(normalizedPath, normalizedScope) || pathMatchesScope(normalizedScope, normalizedPath);
+}
+function fileOverlapsTarget(file, target) {
+	const normalizedFile = normalizePath(file);
+	const normalizedTarget = normalizePath(target);
+	return normalizedFile === normalizedTarget || pathMatchesScope(normalizedFile, normalizedTarget) || pathMatchesScope(normalizedTarget, normalizedFile);
+}
+function normalizePath(value) {
+	return value.replace(/\\/g, "/").replace(/^\.\//, "");
 }
 function hasFiles(directory) {
 	try {
@@ -176,6 +212,12 @@ function hasFiles(directory) {
 }
 function unique(values) {
 	return [...new Set(values)];
+}
+function hasVerificationValue(record, key) {
+	return record[key] !== void 0 && record[key] !== null && record[key] !== "";
+}
+function isRecord(value) {
+	return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 //#endregion
 export { planGuidance, resolveSourceStatus };

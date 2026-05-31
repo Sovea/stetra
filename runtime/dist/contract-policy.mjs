@@ -25,11 +25,11 @@ function resolveContractPolicy(input) {
 	const optional = [];
 	const skipped = [];
 	const reasons = [];
-	if (!input.agentCapabilityProfile && !provided.agentCapability) required.push("agent-capability-profile");
-	else skipped.push({
+	skipped.push({
 		kind: "agent-capability-profile",
-		reason_id: "already-provided"
+		reason_id: provided.agentCapability ? "already-provided" : "runtime-assumption"
 	});
+	if (!provided.agentCapability) reasons.push("agent capability profile is a Runtime assumption for policy selection, not a host artifact.");
 	if (provided.taskModel) skipped.push({
 		kind: "task-model",
 		reason_id: "already-provided"

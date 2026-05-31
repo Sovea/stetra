@@ -1,6 +1,6 @@
 import { resolveCompileTask } from "../compile-input.mjs";
 import { activatedDirectiveIdsIR, resolveActivationDecisionsIR } from "../ir/activation/resolve-activation.mjs";
-import { loadCompileSources } from "../load/compile-sources.mjs";
+import { loadOrVerifyCompileSources } from "../load/compile-sources.mjs";
 import { SEMANTIC_RELATION_POLICY } from "../ir/relations/policy.mjs";
 import { buildGovernanceIR } from "../ir/build-ir.mjs";
 import { buildContractPayloadDiagnostics } from "./diagnostics.mjs";
@@ -22,13 +22,13 @@ async function prepareSemanticContractContext(input) {
 		...input.compileInput,
 		resolvedTask
 	};
-	const sources = compileInput.preloadedSources ?? await loadCompileSources(compileInput);
+	const sources = await loadOrVerifyCompileSources(compileInput, compileInput.preloadedSources);
 	const governanceIR = await buildGovernanceIR(compileInput, sources);
 	const activatedDirectiveIds = activatedDirectiveIdsIR(resolveActivationDecisionsIR(governanceIR));
 	return {
 		resolvedTask,
 		directives: governanceIR.directives.filter((directive) => activatedDirectiveIds.has(directive.id)).map(summarizeDirectiveForProposal),
-		observations: governanceIR.observations.map(summarizeObservationForProposal),
+		observations: governanceIR.observations.filter((observation) => !skippedObservationIds(sources).has(observation.id)).map(summarizeObservationForProposal),
 		loadedSources: sources
 	};
 }
@@ -276,6 +276,9 @@ function summarizeObservationForProposal(observation) {
 			snippet: evidence.snippet
 		}))
 	};
+}
+function skippedObservationIds(sources) {
+	return new Set((sources.rcclVerificationSummary?.records ?? []).filter((record) => record.action === "skipped-not-task-relevant").map((record) => record.observation_id));
 }
 function buildGraphPrompt(input) {
 	const directives = input.directives.map(compactDirectiveForContract);

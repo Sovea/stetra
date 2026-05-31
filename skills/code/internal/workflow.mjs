@@ -13,6 +13,7 @@ const DEFAULT_AGENT_CAPABILITY_PROFILE = {
   max_command_count: 12,
 };
 const GUIDANCE_MODES = new Set(['fast', 'standard', 'strict']);
+const VERIFICATION_POLICIES = new Set(['task-relevant', 'deep', 'trust-existing']);
 const AGENT_LOOP_MAX_ATTEMPTS = 3;
 
 export async function prepareInterpretation(options) {
@@ -30,6 +31,7 @@ export async function autoCodeTask(options) {
   const runtime = await loadRuntime(paths.runtimeEntry);
   const task = normalizeTaskInput(options, paths.projectRoot, runtime);
   const guidanceMode = normalizeGuidanceMode(options.guidanceMode);
+  const verificationPolicy = normalizeVerificationPolicy(options.verificationPolicy);
   const taskModelArtifact = loadTaskModelArtifact(options.taskModelFile, runtime);
   const plan = await runtime.planGuidance({
     builtinRoot: paths.builtinRoot,
@@ -37,12 +39,13 @@ export async function autoCodeTask(options) {
     rcclPath: paths.rcclPath,
     lockfilePath: paths.lockfilePath,
     projectRoot: paths.projectRoot,
+    verificationPolicy,
     task,
     taskModels: taskModelArtifact.models,
     mode: guidanceMode,
     agentCapabilityProfile: DEFAULT_AGENT_CAPABILITY_PROFILE,
     providedContracts: {
-      agentCapability: true,
+      agentCapability: false,
       taskModel: taskModelArtifact.models.length > 0,
       semanticGovernanceGraph: Boolean(options.governanceGraphFile),
     },
@@ -62,6 +65,7 @@ export async function autoCodeTask(options) {
       taskModelArtifact,
       contracts: plan.requiredContracts,
       guidanceMode,
+      verificationPolicy,
     });
   }
 
@@ -81,6 +85,7 @@ export async function autoCodeTask(options) {
       taskModelArtifact,
       contracts: semanticContracts,
       guidanceMode,
+      verificationPolicy,
     });
   }
 
@@ -112,7 +117,7 @@ export async function autoCodeTask(options) {
   const postCompileContracts = preparePostCompileContracts(runtime, paths, task, prepared, plan.policy);
   const postCompileRequired = postCompileContracts.some((contract) => contract.required);
   const contextAcquisition = plan.policy.optional?.includes('context-acquisition')
-    ? buildContextAcquisitionRecommendation(paths)
+    ? buildContextAcquisitionRecommendation(paths, task)
     : null;
   const agentLoop = buildAgentLoopPlan({
     phase: postCompileContracts.length ? 'post-compile' : 'ready',
@@ -123,6 +128,8 @@ export async function autoCodeTask(options) {
     taskModelFile: taskModelArtifact.path,
     governanceGraphFile: options.governanceGraphFile,
     sessionPath: prepared.sessionPath,
+    contextAcquisition,
+    verificationPolicy,
   });
 
   return {
@@ -162,6 +169,11 @@ export async function getCodeStatus(options) {
     sourceStatus,
     lockfile: summarizeLockfile(paths.lockfilePath),
     cacheVolume,
+    cacheRead: {
+      status: typeof runtime.inspectCompileCache === 'function' ? 'inspection-api-available' : 'unavailable',
+      trustBoundary: 'cache-read-only',
+      packetUsableForExecution: false,
+    },
     readiness: buildReadinessSummary(diagnostics.items),
     defaultFlow: {
       command: 'auto',
@@ -179,9 +191,10 @@ export async function getCodeStatus(options) {
     diagnostics,
     plugin,
     artifactLifecycle: {
-      commit: ['.resonant-code/playbook/local-augment.yaml'],
-      optionalCommit: ['.resonant-code/rccl.yaml', '.resonant-code/playbook.lock.yaml'],
-      ignore: ['.resonant-code/context/'],
+      commit: [],
+      optionalCommit: [],
+      localOnly: ['.resonant-code/**'],
+      ignore: ['.resonant-code/'],
     },
   };
 }
@@ -197,6 +210,8 @@ export async function explainCodeSession(options) {
     error: session.error,
     trace: session.compileOutput?.trace ?? session.compileOutput?.packet?.governance?.trace ?? null,
     fulfillment: session.fulfillment ?? null,
+    contractReports: session.contractReports ?? [],
+    cacheInspection: session.cacheInspection ?? null,
     auto: session.auto ?? null,
     cache: session.compileOutput?.cache ?? null,
   };
@@ -206,6 +221,7 @@ export async function prepareRelations(options) {
   const paths = resolveRuntimePaths(options.projectRoot, options.pluginRoot);
   const runtime = await loadRuntime(paths.runtimeEntry);
   const task = normalizeTaskInput(options, paths.projectRoot, runtime);
+  const verificationPolicy = normalizeVerificationPolicy(options.verificationPolicy);
   const taskModelArtifact = loadTaskModelArtifact(options.taskModelFile, runtime);
   const interpretationMode = taskModelArtifact.models.length ? 'host-agent' : 'deterministic-only';
   const resolvedTask = runtime.resolveTask({
@@ -213,7 +229,7 @@ export async function prepareRelations(options) {
     taskModels: taskModelArtifact.models,
     interpretationMode,
   });
-  const compileInput = baseCompileInput(paths, { resolvedTask });
+  const compileInput = baseCompileInput(paths, { resolvedTask, verificationPolicy });
   const contractOutput = await runtime.prepareSemanticGovernanceGraphContractBundle({
     compileInput,
     artifactPath: buildGovernanceGraphPath(paths.projectRoot, task),
@@ -264,6 +280,7 @@ export async function prepareAdherenceEvaluation(options) {
   return {
     status: 'ok',
     sessionPath,
+    evidenceContext: buildAdherenceEvidenceAvailability(session, sessionPath),
     ...runtime.prepareAdherenceEvidenceContract({
       directives,
       taskDescription,
@@ -272,10 +289,192 @@ export async function prepareAdherenceEvaluation(options) {
   };
 }
 
+export async function prepareGovernanceEvolution(options) {
+  const paths = resolveRuntimePaths(options.projectRoot, options.pluginRoot);
+  const runtime = await loadRuntime(paths.runtimeEntry);
+  const output = runtime.prepareGovernanceEvolutionProposalContract({
+    lockfilePath: paths.lockfilePath,
+    artifactPath: options.artifactPath,
+  });
+  return {
+    status: 'ok',
+    mode: 'review-only',
+    paths,
+    authoritativeWrite: false,
+    ...output,
+  };
+}
+
+export async function reportContextAcquisition(options) {
+  const paths = resolveRuntimePaths(options.projectRoot, options.pluginRoot);
+  const runtime = await loadRuntime(paths.runtimeEntry);
+  const path = resolveRequiredArtifact(options.contextAcquisitionFile, 'report-context-acquisition requires --context-acquisition-file <path>.');
+  const payload = JSON.parse(readFileSync(path, 'utf-8'));
+  const result = runtime.validateContextAcquisitionPayload(payload);
+  const acceptedRequests = result.requests.map((request, index) => ({
+    index,
+    request,
+    lifecycle: buildContextAcquisitionLifecycle(paths, request),
+  }));
+  const report = {
+    status: 'ok',
+    mode: 'report-only',
+    kind: 'context-acquisition',
+    paths,
+    artifact: {
+      path,
+      format: 'json',
+    },
+    authoritativeWrite: false,
+    diagnostics: result.diagnostics,
+    acceptedRequests,
+    agentLoop: {
+      phase: 'context-acquisition-report',
+      pendingRccLWorkflows: acceptedRequests.map((item) => ({
+        index: item.index,
+        prepareCommand: item.lifecycle.prepareCommand,
+        commitMode: item.lifecycle.commitMode,
+        commitCommandTemplate: item.lifecycle.commitCommandTemplate,
+        resumeAfterCommit: item.lifecycle.resumeAfterCommit,
+      })),
+      repairPolicy: {
+        source: 'runtime-diagnostics-only',
+        rule: 'Repair the context-acquisition payload only from Runtime diagnostics; do not write RCCL directly.',
+      },
+    },
+  };
+  return withOptionalContractReportSession(report, options.sessionPath);
+}
+
+export async function reportGovernanceEvolution(options) {
+  const paths = resolveRuntimePaths(options.projectRoot, options.pluginRoot);
+  const runtime = await loadRuntime(paths.runtimeEntry);
+  const path = resolveRequiredArtifact(options.proposalFile, 'report-governance-evolution requires --proposal-file <path>.');
+  const payload = JSON.parse(readFileSync(path, 'utf-8'));
+  const result = runtime.validateGovernanceEvolutionProposalPayload(payload);
+  const report = {
+    status: 'ok',
+    mode: 'review-only',
+    kind: 'governance-evolution-proposal',
+    paths,
+    artifact: {
+      path,
+      format: 'json',
+    },
+    authoritativeWrite: false,
+    proposalSummary: {
+      accepted: result.proposals.length,
+      byKind: countBy(result.proposals, (proposal) => proposal.kind),
+    },
+    proposalGroups: groupGovernanceEvolutionProposals(result.proposals, result.diagnostics),
+    proposals: result.proposals,
+    diagnostics: result.diagnostics,
+  };
+  return withOptionalContractReportSession(report, options.sessionPath);
+}
+
+function withOptionalContractReportSession(report, sessionPath) {
+  if (!sessionPath) {
+    return {
+      ...report,
+      sessionUpdate: {
+        requested: false,
+        updated: false,
+      },
+    };
+  }
+  const absoluteSessionPath = resolve(sessionPath);
+  const session = JSON.parse(readFileSync(absoluteSessionPath, 'utf-8'));
+  const entry = buildContractReportSessionEntry(report);
+  writeSession(absoluteSessionPath, {
+    ...session,
+    contractReports: [
+      ...(Array.isArray(session.contractReports) ? session.contractReports : []),
+      entry,
+    ],
+  });
+  return {
+    ...report,
+    sessionUpdate: {
+      requested: true,
+      updated: true,
+      sessionPath: absoluteSessionPath,
+      recordedEntry: entry,
+    },
+  };
+}
+
+function buildContractReportSessionEntry(report) {
+  return {
+    kind: report.kind,
+    mode: report.mode,
+    recordedAt: new Date().toISOString(),
+    artifact: report.artifact,
+    authoritativeWrite: false,
+    diagnostics: report.diagnostics,
+    summary: summarizeContractReportForSession(report),
+  };
+}
+
+function summarizeContractReportForSession(report) {
+  if (report.kind === 'context-acquisition') {
+    return {
+      acceptedRequests: report.acceptedRequests?.length ?? 0,
+      diagnosticSummary: report.diagnostics?.summary ?? null,
+      workflows: (report.acceptedRequests ?? []).map((item) => ({
+        index: item.index,
+        mode: item.request.mode,
+        targetFileCount: item.request.target_files?.length ?? 0,
+        changedFileCount: item.request.changed_files?.length ?? 0,
+        commitMode: item.lifecycle.commitMode,
+      })),
+    };
+  }
+  if (report.kind === 'governance-evolution-proposal') {
+    return {
+      acceptedProposals: report.proposalSummary?.accepted ?? 0,
+      byKind: report.proposalSummary?.byKind ?? {},
+      proposalGroups: report.proposalGroups ?? {},
+      diagnosticSummary: report.diagnostics?.summary ?? null,
+    };
+  }
+  return {
+    diagnosticSummary: report.diagnostics?.summary ?? null,
+  };
+}
+
+function groupGovernanceEvolutionProposals(proposals, diagnostics) {
+  const playbookKinds = new Set(['local-override', 'local-suppress', 'local-addition']);
+  const playbookCandidates = proposals.filter((proposal) => playbookKinds.has(proposal.kind));
+  const rcclCandidates = proposals.filter((proposal) => proposal.kind === 'rccl-refresh');
+  return {
+    playbookCandidate: {
+      count: playbookCandidates.length,
+      targetIds: playbookCandidates.map((proposal) => proposal.target_id).filter(Boolean),
+      reviewOnly: true,
+      authoritativeWrite: false,
+    },
+    rcclCandidate: {
+      count: rcclCandidates.length,
+      targetIds: rcclCandidates.map((proposal) => proposal.target_id).filter(Boolean),
+      reviewOnly: true,
+      authoritativeWrite: false,
+    },
+    noAction: {
+      recommended: proposals.length === 0,
+      reason: proposals.length === 0
+        ? 'No accepted governance evolution proposal was produced.'
+        : 'Accepted proposals require human review; Runtime will not write authoritative governance state.',
+      rejectedOrDowngraded: (diagnostics?.summary?.rejected ?? 0) + (diagnostics?.summary?.downgraded ?? 0),
+    },
+  };
+}
+
 export async function prepareCodeTask(options) {
   const paths = resolveRuntimePaths(options.projectRoot, options.pluginRoot);
   const runtime = await loadRuntime(paths.runtimeEntry);
   const task = normalizeTaskInput(options, paths.projectRoot, runtime);
+  const verificationPolicy = normalizeVerificationPolicy(options.verificationPolicy);
   const sessionPath = buildSessionPath(paths.projectRoot, task);
   const warnings = [];
 
@@ -298,7 +497,7 @@ export async function prepareCodeTask(options) {
     let graphEvidenceContext;
     if (options.governanceGraphFile) {
       const context = await runtime.prepareSemanticContractContext({
-        compileInput: baseCompileInput(paths, { resolvedTask }),
+        compileInput: baseCompileInput(paths, { resolvedTask, verificationPolicy }),
       });
       preloadedSources = context.loadedSources;
       allowedIds = buildAllowedIds(context);
@@ -312,12 +511,14 @@ export async function prepareCodeTask(options) {
     });
     const compileInput = baseCompileInput(paths, {
       resolvedTask,
+      verificationPolicy,
       hostFulfillment: fulfillment,
       ...(hostProposals.length ? { hostProposals } : {}),
       ...(preloadedSources ? { preloadedSources } : {}),
     });
     const output = await runtime.compile(compileInput);
     const cacheArtifacts = persistRuntimeCache(runtime, paths, output, warnings);
+    const cacheInspection = inspectRuntimeCache(runtime, paths, output, warnings);
     const interpretationSummary = summarizeInterpretationFlow(
       interpretationMode,
       options.taskModelFile,
@@ -345,6 +546,7 @@ export async function prepareCodeTask(options) {
       },
       compileOutput: output,
       cacheArtifacts,
+      cacheInspection,
       warnings,
     };
     writeSession(sessionPath, session);
@@ -357,6 +559,7 @@ export async function prepareCodeTask(options) {
       trace: output.trace,
       cache: output.cache,
       cacheArtifacts,
+      cacheInspection,
       warnings,
       interpretation: {
         mode: interpretationMode,
@@ -398,7 +601,7 @@ export async function prepareCodeTask(options) {
       },
       fulfillment,
       compileInput: {
-        ...baseCompileInput(paths, { task, interpretationMode }),
+        ...baseCompileInput(paths, { task, interpretationMode, verificationPolicy }),
         ...(options.taskModelFile ? { taskModelFile: resolve(options.taskModelFile) } : {}),
         ...(options.governanceGraphFile ? { governanceGraphFile: resolve(options.governanceGraphFile) } : {}),
       },
@@ -565,6 +768,14 @@ function normalizeGuidanceMode(value) {
   return value;
 }
 
+function normalizeVerificationPolicy(value) {
+  if (value === undefined) return 'task-relevant';
+  if (!VERIFICATION_POLICIES.has(value)) {
+    throw new Error(`Invalid --verification-policy value "${value}". Expected one of: task-relevant, deep, trust-existing.`);
+  }
+  return value;
+}
+
 function validateTaskInputEnums(task, enumSchema) {
   if (!enumSchema) return;
   const fields = [
@@ -634,7 +845,10 @@ async function prepareAutoSemanticContracts({ runtime, paths, task, taskModelArt
     interpretationMode: 'host-agent',
   });
   const bundle = await runtime.prepareSemanticGovernanceGraphContractBundle({
-    compileInput: baseCompileInput(paths, { resolvedTask }),
+    compileInput: baseCompileInput(paths, {
+      resolvedTask,
+      verificationPolicy: normalizeVerificationPolicy(options.verificationPolicy),
+    }),
     artifactPath: buildGovernanceGraphPath(paths.projectRoot, task),
   });
   return [{
@@ -674,12 +888,13 @@ function preparePostCompileContracts(runtime, paths, task, prepared, policy) {
   }];
 }
 
-function buildContractsRequiredResult({ paths, plan, task, taskModelArtifact, contracts, guidanceMode }) {
+function buildContractsRequiredResult({ paths, plan, task, taskModelArtifact, contracts, guidanceMode, verificationPolicy }) {
   const agentLoop = buildAgentLoopPlan({
     phase: 'pre-compile',
     paths,
     task,
     guidanceMode,
+    verificationPolicy,
     contracts,
     taskModelFile: taskModelArtifact.path,
   });
@@ -715,11 +930,15 @@ function buildAgentLoopPlan({
   paths,
   task,
   guidanceMode,
+  verificationPolicy,
   contracts,
   taskModelFile,
   governanceGraphFile,
   sessionPath,
+  contextAcquisition,
 }) {
+  const inferredContextAcquisition = contextAcquisition
+    ?? (contracts.some((item) => item.kind === 'context-acquisition') ? buildContextAcquisitionRecommendation(paths, task) : null);
   return {
     phase,
     pendingContracts: contracts.map((item) => {
@@ -735,12 +954,17 @@ function buildAgentLoopPlan({
           paths,
           task,
           guidanceMode,
+          verificationPolicy,
           taskModelFile,
           governanceGraphFile,
           sessionPath,
         }),
+        ...(item.kind === 'context-acquisition' && inferredContextAcquisition
+          ? { lifecycle: inferredContextAcquisition.lifecycle }
+          : {}),
       };
     }),
+    ...(inferredContextAcquisition ? { contextAcquisition: inferredContextAcquisition } : {}),
     maxAttempts: AGENT_LOOP_MAX_ATTEMPTS,
     repairPolicy: {
       source: 'runtime-diagnostics-only',
@@ -761,6 +985,7 @@ function buildAgentLoopResumeCommand({
   paths,
   task,
   guidanceMode,
+  verificationPolicy,
   taskModelFile,
   governanceGraphFile,
   sessionPath,
@@ -778,6 +1003,8 @@ function buildAgentLoopResumeCommand({
     shellArg(paths.projectRoot),
     '--mode',
     shellArg(guidanceMode),
+    '--verification-policy',
+    shellArg(verificationPolicy ?? 'task-relevant'),
     '--task',
     shellArg(task.description),
     ...taskFlagArgs(task),
@@ -890,10 +1117,10 @@ function summarizeCompactGuidance(ego) {
 
 function summarizeAutoContracts(taskModelArtifact, options) {
   return {
-    agentCapability: summarizeArtifact(buildAcceptedAgentCapabilityArtifact()),
+    agentCapability: summarizeArtifact(buildAssumedAgentCapabilityArtifact()),
     taskModel: summarizeArtifact(taskModelArtifact),
     semanticGovernanceGraph: options.governanceGraphFile
-      ? { kind: 'semantic-governance-graph', provided: true, path: resolve(options.governanceGraphFile), status: 'provided' }
+      ? { kind: 'semantic-governance-graph', provided: true, path: resolve(options.governanceGraphFile), status: 'provided-unvalidated' }
       : { kind: 'semantic-governance-graph', provided: false, path: null, status: 'absent' },
   };
 }
@@ -938,19 +1165,31 @@ function loadAdherenceArtifact(adherenceFile, runtime, packet, evidenceContext) 
   };
 }
 
+function resolveRequiredArtifact(filePath, message) {
+  if (!filePath) throw new Error(message);
+  return resolve(filePath);
+}
+
 function buildEvidenceContext(projectRoot, observations = []) {
   return {
     projectRoot,
     observations: observations.map((observation) => ({
       id: observation.id,
       evidence: observation.evidence ?? [],
+      verification: {
+        evidence_status: observation.verification?.evidenceStatus ?? observation.verification?.evidence_status ?? null,
+        disposition: observation.verification?.disposition ?? null,
+      },
     })),
   };
 }
 
 function buildAdherenceEvidenceContext(session, sessionPath) {
   const projectRoot = session.paths?.projectRoot;
-  const observations = session.compileInput?.preloadedSources?.rccl?.observations ?? [];
+  const observations = [
+    ...(session.compileInput?.preloadedSources?.rccl?.observations ?? []),
+    ...buildRcclEvidenceObservationsFromPacket(session.compileOutput?.packet),
+  ];
   return {
     ...(projectRoot ? { projectRoot } : {}),
     ...(observations.length ? { observations } : {}),
@@ -961,6 +1200,111 @@ function buildAdherenceEvidenceContext(session, sessionPath) {
       session.compileOutput?.packet?.governance?.trace?.trace_id,
     ].filter(Boolean),
   };
+}
+
+function buildAdherenceEvidenceAvailability(session, sessionPath) {
+  const evidenceContext = buildAdherenceEvidenceContext(session, sessionPath);
+  const packet = session.compileOutput?.packet;
+  const taskInput = packet?.task?.input ?? session.taskInput ?? {};
+  const runtimeTraceRefs = evidenceContext.runtimeTraceRefs ?? [];
+  const changedFiles = taskInput.changedFiles ?? [];
+  const targetFile = taskInput.targetFile ?? null;
+  const implementationFiles = unique([
+    ...(targetFile ? [targetFile] : []),
+    ...changedFiles,
+  ]);
+  const rcclEvidenceRefs = unique((evidenceContext.observations ?? [])
+    .flatMap((observation) => observation.evidence.map((evidence) => `${observation.id}:${evidence.file}:${evidence.line_range[0]}-${evidence.line_range[1]}`)));
+  return {
+    sessionPath,
+    runtimeTraceRefs,
+    changedFiles,
+    targetFile,
+    rcclEvidenceRefs,
+    evidenceCandidates: {
+      file: implementationFiles.map((file) => ({
+        file,
+        refTemplate: `${file}:<start-line>-<end-line>`,
+        supportsFollowRate: true,
+        requirement: 'Use exact current line ranges that show the implemented behavior.',
+      })),
+      runtimeTrace: runtimeTraceRefs.map((ref) => ({
+        ref,
+        supportsFollowRate: false,
+        requirement: 'Runtime trace evidence can prove workflow provenance, but not implementation adherence by itself.',
+      })),
+      rccl: rcclEvidenceRefs.map((ref) => ({
+        ref,
+        supportsFollowRate: true,
+        requirement: 'RCCL evidence must resolve to a concrete verified observation file range.',
+      })),
+    },
+    unavailable: {
+      diffSnapshotHashes: {
+        status: 'unavailable',
+        reason: 'not captured by current code workflow',
+        effect: 'diff-hash evidence will be downgraded unless a future workflow records it',
+      },
+      commandOutputHashes: {
+        status: 'unavailable',
+        reason: 'not captured by current code workflow',
+        effect: 'command-hash evidence will be downgraded unless a future workflow records it',
+      },
+    },
+  };
+}
+
+function buildRcclEvidenceObservationsFromPacket(packet) {
+  const byObservation = new Map();
+  for (const relation of packet?.governance?.semantic_merge?.relations ?? []) {
+    if (!relation.observation_id) continue;
+    const current = byObservation.get(relation.observation_id) ?? [];
+    for (const ref of relation.evidence_refs ?? []) {
+      const parsed = parseEvidenceLocation(ref, relation.observation_id);
+      if (parsed) current.push({ ...parsed, snippet: '' });
+    }
+    if (current.length) byObservation.set(relation.observation_id, current);
+  }
+  return [...byObservation.entries()].map(([id, evidence]) => ({
+    id,
+    evidence: uniqueEvidence(evidence),
+    verification: packetObservationVerification(packet, id),
+  }));
+}
+
+function packetObservationVerification(packet, observationId) {
+  const state = (packet?.governance?.semantic_merge?.observation_states ?? [])
+    .find((item) => item.observation_id === observationId);
+  return {
+    evidence_status: null,
+    disposition: state?.disposition ?? null,
+  };
+}
+
+function parseEvidenceLocation(ref, observationId) {
+  const raw = String(ref);
+  const normalized = observationId && raw.startsWith(`${observationId}:`) ? raw.slice(observationId.length + 1) : raw;
+  const match = /^(.*):(\d+)-(\d+)$/.exec(normalized);
+  if (!match) return null;
+  const start = Number(match[2]);
+  const end = Number(match[3]);
+  if (!Number.isInteger(start) || !Number.isInteger(end) || start < 1 || end < start) return null;
+  return {
+    file: match[1],
+    line_range: [start, end],
+  };
+}
+
+function uniqueEvidence(evidence) {
+  const seen = new Set();
+  const result = [];
+  for (const item of evidence) {
+    const key = `${item.file}:${item.line_range[0]}-${item.line_range[1]}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    result.push(item);
+  }
+  return result;
 }
 
 function artifactProposalList(artifact) {
@@ -985,18 +1329,18 @@ function buildAbsentArtifact(kind, recommendedPath) {
   };
 }
 
-function buildAcceptedAgentCapabilityArtifact() {
+function buildAssumedAgentCapabilityArtifact() {
   return {
     kind: 'agent-capability-profile',
-    provided: true,
+    provided: false,
     path: null,
-    status: 'accepted',
+    status: 'assumed',
     diagnostics: null,
   };
 }
 
 function buildFulfillmentDiagnostics({ taskModel, semanticGovernanceGraph, adherenceEvidence }) {
-  const agentCapability = buildAcceptedAgentCapabilityArtifact();
+  const agentCapability = buildAssumedAgentCapabilityArtifact();
   const artifacts = [
     agentCapability,
     taskModel,
@@ -1025,18 +1369,23 @@ function summarizeArtifact(artifact) {
 
 function summarizeDiagnosticStatus(diagnostics) {
   if (!diagnostics) return 'absent';
-  if (diagnostics.summary.accepted > 0 && diagnostics.summary.rejected === 0 && diagnostics.summary.unused === 0) return 'accepted';
-  if (diagnostics.summary.accepted > 0) return 'partially-accepted';
   if (diagnostics.summary.rejected > 0) return 'rejected';
+  if (diagnostics.summary.accepted > 0
+    && diagnostics.summary.downgraded === 0
+    && diagnostics.summary.unused === 0) return 'accepted';
+  if (diagnostics.summary.accepted > 0 || diagnostics.summary.downgraded > 0) return 'partially-accepted';
   return 'unused';
 }
 
 function summarizeFulfillmentStatus(artifacts) {
   const provided = artifacts.filter((artifact) => artifact.provided);
-  if (!provided.length) return 'absent';
+  if (provided.some((artifact) => artifact.status === 'rejected')) {
+    return 'rejected';
+  }
   if (provided.some((artifact) => artifact.status === 'partially-accepted')) return 'partially-accepted';
   if (provided.some((artifact) => artifact.status === 'accepted')) return 'accepted';
-  if (provided.some((artifact) => artifact.status === 'rejected')) return 'rejected';
+  if (!provided.length && artifacts.some((artifact) => artifact.status === 'assumed')) return 'assumed';
+  if (!provided.length) return 'absent';
   return 'unused';
 }
 
@@ -1075,13 +1424,47 @@ function buildPrepareNextStep(mode, taskModelFile, diagnostics, recommendationPa
   return 'Proceed with the compiled packet.';
 }
 
-function buildContextAcquisitionRecommendation(paths) {
+function buildContextAcquisitionRecommendation(paths, task = {}) {
+  const lifecycle = buildContextAcquisitionLifecycle(paths, {
+    mode: task.changedFiles?.length ? 'changed-files' : 'task-scoped',
+    target_files: task.targetFile ? [task.targetFile] : [],
+    changed_files: task.changedFiles ?? [],
+  });
   return {
     kind: 'context-acquisition',
     status: 'recommended',
     reason: 'RCCL is absent, so semantic governance graph coverage is limited to deterministic fallback recall.',
-    nextCommand: `node skills/calibrate-repo-context/scripts/calibrate-repo-context.mjs prepare-incremental ${paths.projectRoot}`,
+    nextCommand: lifecycle.prepareCommand,
+    lifecycle,
   };
+}
+
+function buildContextAcquisitionLifecycle(paths, request = {}) {
+  const prepareCommand = buildContextAcquisitionCommandFromRequest(paths.projectRoot, request);
+  const commitMode = paths.rcclPath ? 'commit-refresh' : 'commit';
+  return {
+    prepareCommand,
+    commitMode,
+    commitCommandTemplate: `node skills/calibrate-repo-context/scripts/calibrate-repo-context.mjs ${commitMode} ${shellArg(paths.projectRoot)} --input <artifact-yaml>`,
+    commitCommandReason: paths.rcclPath
+      ? 'Existing RCCL is present; commit the accepted refresh proposal through commit-refresh.'
+      : 'No RCCL is present; commit accepted candidate observations through commit.',
+    resumeAfterCommit: 'Re-run code auto with the same task once RCCL commit or commit-refresh succeeds.',
+  };
+}
+
+function buildContextAcquisitionCommandFromRequest(projectRoot, request = {}) {
+  const args = [
+    'node',
+    'skills/calibrate-repo-context/scripts/calibrate-repo-context.mjs',
+    'prepare-incremental',
+    shellArg(projectRoot),
+  ];
+  for (const file of request.target_files ?? []) args.push('--target-file', shellArg(file));
+  for (const file of request.changed_files ?? []) args.push('--changed-file', shellArg(file));
+  if (request.scope) args.push('--scope', shellArg(request.scope));
+  args.push('--mode', shellArg(request.mode ?? ((request.changed_files ?? []).length ? 'changed-files' : 'task-scoped')));
+  return args.join(' ');
 }
 
 function persistRuntimeCache(runtime, paths, output, warnings) {
@@ -1097,9 +1480,39 @@ function persistRuntimeCache(runtime, paths, output, warnings) {
   }
 }
 
+function inspectRuntimeCache(runtime, paths, output, warnings) {
+  if (typeof runtime.inspectCompileCache !== 'function') {
+    return {
+      status: 'unavailable',
+      reason: 'Runtime cache inspection API is unavailable.',
+    };
+  }
+  try {
+    return runtime.inspectCompileCache({
+      projectRoot: paths.projectRoot,
+      cache: output.cache,
+    });
+  } catch (cacheError) {
+    warnings.push(`Runtime cache inspection failed: ${formatError(cacheError)}`);
+    return {
+      status: 'unavailable',
+      reason: formatError(cacheError),
+    };
+  }
+}
+
 function countAdherenceVerdicts(verdicts) {
   const counts = { followed: 0, ignored: 0, partial: 0, unverified: 0 };
   for (const verdict of verdicts) counts[verdict.verdict] += 1;
+  return counts;
+}
+
+function countBy(items, keyFn) {
+  const counts = {};
+  for (const item of items) {
+    const key = keyFn(item);
+    counts[key] = (counts[key] ?? 0) + 1;
+  }
   return counts;
 }
 
@@ -1282,7 +1695,7 @@ async function buildDefaultModeProbe(runtime, paths) {
       mode: 'standard',
       agentCapabilityProfile: DEFAULT_AGENT_CAPABILITY_PROFILE,
       providedContracts: {
-        agentCapability: true,
+        agentCapability: false,
       },
       artifactPaths: {
         agentCapabilityProfile: buildAgentCapabilityPath(paths.projectRoot, task),
@@ -1324,10 +1737,10 @@ function buildStatusDiagnostics(sourceStatus, gitignore, plugin, defaultModeProb
   const items = [];
   if (sourceStatus.localAugment === 'absent') {
     items.push({
-      severity: 'warning',
+      severity: 'info',
       code: 'local-augment-absent',
       message: 'Local augment is absent; Runtime will use built-in playbook layers only.',
-      action: 'Run init prepare/commit when project-specific durable guidance is worth the setup cost.',
+      action: 'Run init prepare/commit only when project-specific local guidance is worth maintaining as local runtime state.',
       command: `node skills/init/scripts/init.mjs prepare ${JSON.stringify(paths.projectRoot)}`,
     });
   }
@@ -1340,15 +1753,32 @@ function buildStatusDiagnostics(sourceStatus, gitignore, plugin, defaultModeProb
       command: `node skills/calibrate-repo-context/scripts/calibrate-repo-context.mjs prepare-incremental ${JSON.stringify(paths.projectRoot)}`,
     });
   }
-  if (gitignore.broadResonantIgnore) {
+  if (sourceStatus.rccl === 'unverified') {
     items.push({
-      severity: 'warning',
-      code: 'broad-resonant-ignore',
-      message: '.gitignore ignores all of .resonant-code; durable artifacts such as local-augment.yaml cannot be committed.',
-      action: 'Replace the broad .resonant-code/ ignore with .resonant-code/context/ only.',
+      severity: 'info',
+      code: 'rccl-unverified',
+      message: 'RCCL exists but has incomplete verification metadata; Runtime will reverify task-relevant observations at compile time.',
+      action: 'Use task-scoped compile normally, or call Runtime with verificationPolicy: "deep" for a full verification pass.',
     });
   }
-  if (!gitignore.contextIgnored) {
+  if (sourceStatus.rccl === 'stale') {
+    items.push({
+      severity: 'info',
+      code: 'rccl-stale',
+      message: 'RCCL contains stale or superseded lifecycle records; Runtime will keep stale signals ambient after adjudication.',
+      action: 'Run incremental calibration refresh when stale observations are relevant to the task.',
+      command: `node skills/calibrate-repo-context/scripts/calibrate-repo-context.mjs prepare-incremental ${JSON.stringify(paths.projectRoot)}`,
+    });
+  }
+  if (gitignore.broadResonantIgnore) {
+    items.push({
+      severity: 'info',
+      code: 'resonant-local-only',
+      message: '.gitignore ignores all of .resonant-code; Runtime artifacts are treated as local-only state.',
+      action: 'No repository commit action is required unless the project intentionally changes its artifact lifecycle policy.',
+    });
+  }
+  if (!gitignore.broadResonantIgnore && !gitignore.contextIgnored) {
     items.push({
       severity: 'info',
       code: 'context-not-ignored',
@@ -1362,7 +1792,7 @@ function buildStatusDiagnostics(sourceStatus, gitignore, plugin, defaultModeProb
       code: 'plugin-incomplete',
       message: `Plugin root is missing or has empty required runtime files: ${[...plugin.missing, ...plugin.emptyDirectories].join(', ')}`,
       action: 'Run pnpm -r build and verify the plugin package before installing or publishing.',
-      command: 'pnpm -r build && pnpm verify:plugin',
+      command: 'pnpm -r build',
     });
   }
   if (defaultModeProbe.status === 'ok' && defaultModeProbe.wouldBlock) {

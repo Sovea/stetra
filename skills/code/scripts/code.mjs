@@ -7,8 +7,11 @@ import {
   getCodeStatus,
   prepareAdherenceEvaluation,
   prepareCodeTask,
+  prepareGovernanceEvolution,
   prepareInterpretation,
   prepareRelations,
+  reportContextAcquisition,
+  reportGovernanceEvolution,
 } from '../internal/workflow.mjs';
 
 export {
@@ -18,14 +21,17 @@ export {
   getCodeStatus,
   prepareAdherenceEvaluation,
   prepareCodeTask,
+  prepareGovernanceEvolution,
   prepareInterpretation,
   prepareRelations,
+  reportContextAcquisition,
+  reportGovernanceEvolution,
 } from '../internal/workflow.mjs';
 
 function parseCli(argv) {
   const [command, ...rest] = argv;
   if (!command) {
-    throw new Error('Expected a command: auto, status, doctor, explain, prepare-interpretation, prepare-relations, prepare, prepare-adherence, or complete.');
+    throw new Error('Expected a command: auto, status, doctor, explain, prepare-interpretation, prepare-relations, prepare, prepare-governance-evolution, report-context-acquisition, report-governance-evolution, prepare-adherence, or complete.');
   }
 
   if (command === 'auto' || command === 'prepare-interpretation' || command === 'prepare-relations' || command === 'prepare') {
@@ -44,6 +50,7 @@ function parseCli(argv) {
         guidanceMode: readSingleFlag(flags, 'mode'),
         taskModelFile: readSingleFlag(flags, 'task-model-file'),
         governanceGraphFile: readSingleFlag(flags, 'governance-graph-file'),
+        verificationPolicy: readSingleFlag(flags, 'verification-policy'),
         targetFile: readSingleFlag(flags, 'target-file'),
         changedFiles: readMultiFlag(flags, 'changed-file'),
         techStack: readMultiFlag(flags, 'tech'),
@@ -116,6 +123,50 @@ function parseCli(argv) {
     };
   }
 
+  if (command === 'prepare-governance-evolution') {
+    const { positionals, flags } = parseFlags(rest);
+    const projectRoot = positionals[0];
+    if (!projectRoot) throw new Error('prepare-governance-evolution requires <project-root>.');
+    return {
+      command,
+      options: {
+        projectRoot,
+        pluginRoot: readSingleFlag(flags, 'plugin-root'),
+        artifactPath: readSingleFlag(flags, 'artifact-path'),
+      },
+    };
+  }
+
+  if (command === 'report-context-acquisition') {
+    const { positionals, flags } = parseFlags(rest);
+    const projectRoot = positionals[0];
+    if (!projectRoot) throw new Error('report-context-acquisition requires <project-root>.');
+    return {
+      command,
+      options: {
+        projectRoot,
+        pluginRoot: readSingleFlag(flags, 'plugin-root'),
+        contextAcquisitionFile: readSingleFlag(flags, 'context-acquisition-file'),
+        sessionPath: readSingleFlag(flags, 'session'),
+      },
+    };
+  }
+
+  if (command === 'report-governance-evolution') {
+    const { positionals, flags } = parseFlags(rest);
+    const projectRoot = positionals[0];
+    if (!projectRoot) throw new Error('report-governance-evolution requires <project-root>.');
+    return {
+      command,
+      options: {
+        projectRoot,
+        pluginRoot: readSingleFlag(flags, 'plugin-root'),
+        proposalFile: readSingleFlag(flags, 'proposal-file'),
+        sessionPath: readSingleFlag(flags, 'session'),
+      },
+    };
+  }
+
   throw new Error(`Unknown command: ${command}`);
 }
 
@@ -174,21 +225,18 @@ function formatError(error) {
 
 async function main() {
   const parsed = parseCli(process.argv.slice(2));
-  const result = parsed.command === 'prepare-interpretation'
-    ? await prepareInterpretation(parsed.options)
-    : parsed.command === 'auto'
-      ? await autoCodeTask(parsed.options)
-      : parsed.command === 'status' || parsed.command === 'doctor'
-        ? await getCodeStatus(parsed.options)
-        : parsed.command === 'explain'
-          ? await explainCodeSession(parsed.options)
-          : parsed.command === 'prepare-relations'
-      ? await prepareRelations(parsed.options)
-      : parsed.command === 'prepare'
-          ? await prepareCodeTask(parsed.options)
-          : parsed.command === 'prepare-adherence'
-            ? await prepareAdherenceEvaluation(parsed.options)
-            : await completeCodeTask(parsed.options);
+  let result;
+  if (parsed.command === 'prepare-interpretation') result = await prepareInterpretation(parsed.options);
+  else if (parsed.command === 'auto') result = await autoCodeTask(parsed.options);
+  else if (parsed.command === 'status' || parsed.command === 'doctor') result = await getCodeStatus(parsed.options);
+  else if (parsed.command === 'prepare-governance-evolution') result = await prepareGovernanceEvolution(parsed.options);
+  else if (parsed.command === 'report-context-acquisition') result = await reportContextAcquisition(parsed.options);
+  else if (parsed.command === 'report-governance-evolution') result = await reportGovernanceEvolution(parsed.options);
+  else if (parsed.command === 'explain') result = await explainCodeSession(parsed.options);
+  else if (parsed.command === 'prepare-relations') result = await prepareRelations(parsed.options);
+  else if (parsed.command === 'prepare') result = await prepareCodeTask(parsed.options);
+  else if (parsed.command === 'prepare-adherence') result = await prepareAdherenceEvaluation(parsed.options);
+  else result = await completeCodeTask(parsed.options);
   process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
 }
 

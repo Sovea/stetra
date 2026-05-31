@@ -2,7 +2,7 @@ import { resolveCompileTask } from '../compile-input.ts';
 import { activatedDirectiveIdsIR, resolveActivationDecisionsIR } from '../ir/activation/resolve-activation.ts';
 import { buildGovernanceIR } from '../ir/build-ir.ts';
 import { SEMANTIC_RELATION_POLICY } from '../ir/relations/policy.ts';
-import { loadCompileSources } from '../load/compile-sources.ts';
+import { loadOrVerifyCompileSources } from '../load/compile-sources.ts';
 import { buildContractPayloadDiagnostics } from './diagnostics.ts';
 import { verifyEvidenceRefs } from './evidence.ts';
 import { contractVersionDiagnostic, isRecord, normalizeEvidenceRefs, validConfidence, validEvidenceRefs } from './shared.ts';
@@ -23,6 +23,7 @@ import type {
   SemanticProposalObservationSummary,
 } from './types.ts';
 import type { DirectiveIR, HostProposalIR, ObservationIR } from '../ir/types.ts';
+import type { CompileSources } from '../load/compile-sources.ts';
 
 const SEMANTIC_GRAPH_SCHEMA = {
   type: 'object',
@@ -37,7 +38,7 @@ const SEMANTIC_GRAPH_SCHEMA = {
 export async function prepareSemanticContractContext(input: SemanticContractContextInput): Promise<SemanticContractContextOutput> {
   const resolvedTask = resolveCompileTask(input.compileInput);
   const compileInput = { ...input.compileInput, resolvedTask };
-  const sources = compileInput.preloadedSources ?? await loadCompileSources(compileInput);
+  const sources = await loadOrVerifyCompileSources(compileInput, compileInput.preloadedSources);
   const governanceIR = await buildGovernanceIR(compileInput, sources);
   const activationDecisions = resolveActivationDecisionsIR(governanceIR);
   const activatedDirectiveIds = activatedDirectiveIdsIR(activationDecisions);
@@ -45,7 +46,9 @@ export async function prepareSemanticContractContext(input: SemanticContractCont
   return {
     resolvedTask,
     directives: activeDirectives.map(summarizeDirectiveForProposal),
-    observations: governanceIR.observations.map(summarizeObservationForProposal),
+    observations: governanceIR.observations
+      .filter((observation) => !skippedObservationIds(sources).has(observation.id))
+      .map(summarizeObservationForProposal),
     loadedSources: sources,
   };
 }
@@ -298,6 +301,12 @@ function summarizeObservationForProposal(observation: ObservationIR): SemanticPr
       snippet: evidence.snippet,
     })),
   };
+}
+
+function skippedObservationIds(sources: CompileSources): Set<string> {
+  return new Set((sources.rcclVerificationSummary?.records ?? [])
+    .filter((record) => record.action === 'skipped-not-task-relevant')
+    .map((record) => record.observation_id));
 }
 
 function buildGraphPrompt(input: SemanticGovernanceGraphContractInput): string {

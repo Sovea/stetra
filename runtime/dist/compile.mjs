@@ -2,7 +2,7 @@ import { resolveTask } from "./interpret/normalize-candidate.mjs";
 import { toResolvedCompileInput } from "./compile-input.mjs";
 import { projectIRActivationToPublic } from "./ir/activation/public-adapter.mjs";
 import { activatedDirectiveIdsIR, resolveActivationDecisionsIR } from "./ir/activation/resolve-activation.mjs";
-import { loadCompileSources } from "./load/compile-sources.mjs";
+import { loadOrVerifyCompileSources } from "./load/compile-sources.mjs";
 import { stableHash } from "./utils/hash.mjs";
 import { buildGovernanceIR } from "./ir/build-ir.mjs";
 import { projectIREgoToPublic } from "./ir/ego/public-adapter.mjs";
@@ -80,7 +80,7 @@ async function compile(input) {
 		stage: "Context Profile Resolution",
 		lines: resolved.input_provenance.context_resolution.length ? resolved.input_provenance.context_resolution.map((item) => `${item.field}: ${formatContextValue(item.value)} source=${item.source} confidence=${item.confidence} status=${item.status} influence=${item.influence.join(", ") || "(none)"}`) : ["no context profile resolution records"]
 	});
-	const sources = normalizedInput.preloadedSources ?? await loadCompileSources(normalizedInput);
+	const sources = await loadOrVerifyCompileSources(normalizedInput, normalizedInput.preloadedSources);
 	const governanceIR = await buildGovernanceIR(normalizedInput, sources);
 	traceSteps.push({
 		stage: "Governance IR",
@@ -128,13 +128,15 @@ async function compile(input) {
 	});
 	traceSteps.push({
 		stage: "RCCL Verify Gate",
-		lines: rccl?.observations.length ? rccl.observations.map((observation) => {
+		lines: rccl?.observations.length ? [...summarizeRcclVerificationPolicy(sources.rcclVerificationSummary), ...rccl.observations.map((observation) => {
+			const record = sources.rcclVerificationSummary?.records.find((item) => item.observation_id === observation.id);
 			const evidenceStatus = observation.verification.evidence_status ?? "pending";
 			const inductionStatus = observation.verification.induction_status ?? "pending";
 			const disposition = observation.verification.disposition ?? "pending";
 			const lifecycleStatus = observation.lifecycle?.status ?? "unknown";
-			return `${observation.id}: evidence=${evidenceStatus} induction=${inductionStatus} disposition=${disposition} lifecycle=${lifecycleStatus} support=${observation.support.scope_basis}/${observation.support.file_count}f/${observation.support.cluster_count}c`;
-		}) : ["no rccl loaded"]
+			const verificationAction = record ? ` verification_action=${record.action} task_relevant=${record.task_relevant}` : "";
+			return `${observation.id}: evidence=${evidenceStatus} induction=${inductionStatus} disposition=${disposition} lifecycle=${lifecycleStatus} support=${observation.support.scope_basis}/${observation.support.file_count}f/${observation.support.cluster_count}c${verificationAction}`;
+		})] : ["no rccl loaded"]
 	});
 	const executionDecisionsIR = resolveExecutionDecisionsIR(activatedGovernanceIR, semanticRelationsIR);
 	const semanticMergeResult = projectIRSemanticMergeToPublic(activeDirectives, rccl?.observations ?? [], semanticRelationsIR, executionDecisionsIR, contextProfile);
@@ -192,7 +194,9 @@ async function compile(input) {
 		rcclPath: normalizedInput.rcclPath,
 		task: resolved.task,
 		builtinLayers: sources.builtinLayers,
-		hostProposalsFingerprint: governanceIR.fingerprints.hostProposals
+		hostProposalsFingerprint: governanceIR.fingerprints.hostProposals,
+		verificationPolicy: normalizedInput.verificationPolicy ?? "task-relevant",
+		rcclVerificationSummary: sources.rcclVerificationSummary
 	}, selectedLayerIds, rccl);
 	return compileResolvedOutput({
 		version: "1.0",
@@ -289,6 +293,16 @@ function summarizeHostFulfillment(hostFulfillment) {
 		`evidence_coverage: ${formatEvidenceCoverage(hostFulfillment)}`
 	];
 }
+function summarizeRcclVerificationPolicy(summary) {
+	if (!summary) return ["verification_policy: none"];
+	return [
+		`verification_policy: ${summary.policy}`,
+		`reverified_count: ${summary.reverified_count}`,
+		`reused_count: ${summary.reused_count}`,
+		`demoted_count: ${summary.demoted_count}`,
+		`skipped_not_task_relevant_count: ${summary.skipped_not_task_relevant_count}`
+	];
+}
 function formatHostFulfillmentArtifact(label, artifact) {
 	const diagnostics = artifact.diagnostics?.summary;
 	return `${label}: provided=${artifact.provided} status=${artifact.status} accepted=${diagnostics?.accepted ?? 0} rejected=${diagnostics?.rejected ?? 0} downgraded=${diagnostics?.downgraded ?? 0} unused=${diagnostics?.unused ?? 0}`;
@@ -351,11 +365,14 @@ function buildCacheKeys(input, selectedLayerIds, rccl) {
 		item.verification.evidence_status,
 		item.verification.disposition
 	])) : "";
+	const rcclVerificationKey = fingerprintRcclVerificationSummary(input.rcclVerificationSummary);
 	const l1Key = stableHash(builtinFingerprints);
 	const l2Key = stableHash([
 		l1Key,
 		localSource,
-		rcclSource
+		rcclSource,
+		input.verificationPolicy,
+		rcclVerificationKey
 	]);
 	return {
 		l1Key,
@@ -364,8 +381,31 @@ function buildCacheKeys(input, selectedLayerIds, rccl) {
 			l2Key,
 			input.task,
 			input.hostProposalsFingerprint
-		])
+		]),
+		verificationPolicy: input.verificationPolicy,
+		rcclVerificationKey
 	};
+}
+function fingerprintRcclVerificationSummary(summary) {
+	if (!summary) return stableHash(["no-rccl-verification"]);
+	return stableHash([
+		summary.policy,
+		summary.reverified_count,
+		summary.reused_count,
+		summary.demoted_count,
+		summary.skipped_not_task_relevant_count,
+		summary.records.map((record) => [
+			record.observation_id,
+			record.action,
+			record.task_relevant,
+			record.before.evidence_status,
+			record.before.induction_status,
+			record.before.disposition,
+			record.after.evidence_status,
+			record.after.induction_status,
+			record.after.disposition
+		])
+	]);
 }
 //#endregion
 export { compile, resolveTask };

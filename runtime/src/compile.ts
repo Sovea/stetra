@@ -7,7 +7,7 @@ import { projectIREgoToPublic } from './ir/ego/public-adapter.ts';
 import { resolveExecutionDecisionsIR } from './ir/execution/resolve-execution.ts';
 import { buildSemanticRelationsIR } from './ir/relations/build-relations.ts';
 import { projectIRSemanticMergeToPublic } from './ir/semantic-merge/public-adapter.ts';
-import { loadCompileSources, type CompileSources } from './load/compile-sources.ts';
+import { loadOrVerifyCompileSources, type CompileSources } from './load/compile-sources.ts';
 import { stableHash } from './utils/hash.ts';
 import type {
   ChangeDecisionPacket,
@@ -106,7 +106,7 @@ export async function compile(input: CompileInput): Promise<CompileOutput> {
       : ['no context profile resolution records'],
   });
 
-  const sources = normalizedInput.preloadedSources ?? await loadCompileSources(normalizedInput);
+  const sources = await loadOrVerifyCompileSources(normalizedInput, normalizedInput.preloadedSources);
   const governanceIR = await buildGovernanceIR(normalizedInput, sources);
   traceSteps.push({
     stage: 'Governance IR',
@@ -160,13 +160,20 @@ export async function compile(input: CompileInput): Promise<CompileOutput> {
   traceSteps.push({
     stage: 'RCCL Verify Gate',
     lines: rccl?.observations.length
-      ? rccl.observations.map((observation) => {
-          const evidenceStatus = observation.verification.evidence_status ?? 'pending';
-          const inductionStatus = observation.verification.induction_status ?? 'pending';
-          const disposition = observation.verification.disposition ?? 'pending';
-          const lifecycleStatus = observation.lifecycle?.status ?? 'unknown';
-          return `${observation.id}: evidence=${evidenceStatus} induction=${inductionStatus} disposition=${disposition} lifecycle=${lifecycleStatus} support=${observation.support.scope_basis}/${observation.support.file_count}f/${observation.support.cluster_count}c`;
-        })
+      ? [
+          ...summarizeRcclVerificationPolicy(sources.rcclVerificationSummary),
+          ...rccl.observations.map((observation) => {
+            const record = sources.rcclVerificationSummary?.records.find((item) => item.observation_id === observation.id);
+            const evidenceStatus = observation.verification.evidence_status ?? 'pending';
+            const inductionStatus = observation.verification.induction_status ?? 'pending';
+            const disposition = observation.verification.disposition ?? 'pending';
+            const lifecycleStatus = observation.lifecycle?.status ?? 'unknown';
+            const verificationAction = record
+              ? ` verification_action=${record.action} task_relevant=${record.task_relevant}`
+              : '';
+            return `${observation.id}: evidence=${evidenceStatus} induction=${inductionStatus} disposition=${disposition} lifecycle=${lifecycleStatus} support=${observation.support.scope_basis}/${observation.support.file_count}f/${observation.support.cluster_count}c${verificationAction}`;
+          }),
+        ]
       : ['no rccl loaded'],
   });
 
@@ -236,6 +243,8 @@ export async function compile(input: CompileInput): Promise<CompileOutput> {
     task: resolved.task,
     builtinLayers: sources.builtinLayers,
     hostProposalsFingerprint: governanceIR.fingerprints.hostProposals,
+    verificationPolicy: normalizedInput.verificationPolicy ?? 'task-relevant',
+    rcclVerificationSummary: sources.rcclVerificationSummary,
   }, selectedLayerIds, rccl);
 
   const packet: ChangeDecisionPacket = {
@@ -362,6 +371,17 @@ function summarizeHostFulfillment(hostFulfillment: CompileInput['hostFulfillment
   ];
 }
 
+function summarizeRcclVerificationPolicy(summary: CompileSources['rcclVerificationSummary']): string[] {
+  if (!summary) return ['verification_policy: none'];
+  return [
+    `verification_policy: ${summary.policy}`,
+    `reverified_count: ${summary.reverified_count}`,
+    `reused_count: ${summary.reused_count}`,
+    `demoted_count: ${summary.demoted_count}`,
+    `skipped_not_task_relevant_count: ${summary.skipped_not_task_relevant_count}`,
+  ];
+}
+
 function formatHostFulfillmentArtifact(label: string, artifact: NonNullable<CompileInput['hostFulfillment']>['taskModel']): string {
   const diagnostics = artifact.diagnostics?.summary;
   return `${label}: provided=${artifact.provided} status=${artifact.status} accepted=${diagnostics?.accepted ?? 0} rejected=${diagnostics?.rejected ?? 0} downgraded=${diagnostics?.downgraded ?? 0} unused=${diagnostics?.unused ?? 0}`;
@@ -421,6 +441,8 @@ function buildCacheKeys(
     task: ResolvedTaskOutput['task'];
     builtinLayers: CompileSources['builtinLayers'];
     hostProposalsFingerprint: string;
+    verificationPolicy: NonNullable<ResolvedCompileInput['verificationPolicy']>;
+    rcclVerificationSummary: CompileSources['rcclVerificationSummary'];
   },
   selectedLayerIds: string[],
   rccl: RcclDocument | null,
@@ -433,10 +455,39 @@ function buildCacheKeys(
   const rcclSource = input.rcclPath && rccl
     ? JSON.stringify(rccl.observations.map((item) => [item.id, item.verification.evidence_status, item.verification.disposition]))
     : '';
+  const rcclVerificationKey = fingerprintRcclVerificationSummary(input.rcclVerificationSummary);
   const l1Key = stableHash(builtinFingerprints);
-  const l2Key = stableHash([l1Key, localSource, rcclSource]);
+  const l2Key = stableHash([l1Key, localSource, rcclSource, input.verificationPolicy, rcclVerificationKey]);
   const l3Key = stableHash([l2Key, input.task, input.hostProposalsFingerprint]);
-  return { l1Key, l2Key, l3Key };
+  return {
+    l1Key,
+    l2Key,
+    l3Key,
+    verificationPolicy: input.verificationPolicy,
+    rcclVerificationKey,
+  };
+}
+
+function fingerprintRcclVerificationSummary(summary: CompileSources['rcclVerificationSummary']): string {
+  if (!summary) return stableHash(['no-rccl-verification']);
+  return stableHash([
+    summary.policy,
+    summary.reverified_count,
+    summary.reused_count,
+    summary.demoted_count,
+    summary.skipped_not_task_relevant_count,
+    summary.records.map((record) => [
+      record.observation_id,
+      record.action,
+      record.task_relevant,
+      record.before.evidence_status,
+      record.before.induction_status,
+      record.before.disposition,
+      record.after.evidence_status,
+      record.after.induction_status,
+      record.after.disposition,
+    ]),
+  ]);
 }
 
 export { resolveTask } from './interpret/normalize-candidate.ts';

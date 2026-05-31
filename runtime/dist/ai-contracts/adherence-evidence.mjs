@@ -113,12 +113,12 @@ function validateAdherenceEvidencePayload(raw, allowedDirectiveIds, evidenceCont
 			const evidence = verifyEvidenceRefs(evidenceRefs, evidenceContext);
 			if (evidence.conversationOnly) {
 				verdicts.push(toUnverified(item, evidenceRefs));
-				entries.push(downgraded(path, "conversation-only-evidence", "Conversation-only adherence evidence cannot update follow rate; recorded as unverified.", item));
+				entries.push(downgraded(path, "conversation-only-evidence", `Conversation-only adherence evidence cannot update follow rate; recorded as unverified. Evidence verification: ${summarizeEvidenceVerification(evidence)}.`, item));
 				return;
 			}
 			if (!evidence.hasStaticEvidence) {
 				verdicts.push(toUnverified(item, evidenceRefs));
-				entries.push(downgraded(path, "insufficient-static-evidence", "Adherence verdict lacks statically verified file, diff, command, or runtime trace evidence; recorded as unverified.", item));
+				entries.push(downgraded(path, "insufficient-static-evidence", `Adherence verdict lacks statically verified file, diff, command, or runtime trace evidence; recorded as unverified. Evidence verification: ${summarizeEvidenceVerification(evidence)}.`, item));
 				return;
 			}
 		}
@@ -159,6 +159,9 @@ function toUnverified(item, evidenceRefs) {
 		evidence_refs: evidenceRefs,
 		reason: item.reason
 	};
+}
+function summarizeEvidenceVerification(evidence) {
+	return evidence.entries.map((entry) => `${entry.ref.kind}:${entry.status}:${entry.reason}`).join("; ") || "none";
 }
 function isAdherencePayload(value) {
 	return isRecord(value) && Array.isArray(value.verdicts);

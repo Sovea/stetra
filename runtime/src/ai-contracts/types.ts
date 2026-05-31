@@ -130,6 +130,10 @@ export interface EvidenceRefVerificationContext {
       line_range: [number, number];
       snippet: string;
     }>;
+    verification?: {
+      evidence_status?: string | null;
+      disposition?: string | null;
+    };
   }>;
   runtimeTraceRefs?: readonly string[];
   commandOutputHashes?: readonly string[];
@@ -433,5 +437,24 @@ export interface GovernanceEvolutionProposal {
     reason: string;
     evidence_refs: EvidenceRef[];
     confidence: number;
+  }>;
+}
+
+export interface GovernanceEvolutionProposalContractInput {
+  lockfilePath?: string;
+  lockfileSummary?: unknown;
+  artifactPath?: string;
+}
+
+export interface GovernanceEvolutionProposalContractOutput {
+  proposalPrompt: string;
+  proposalSchema: string;
+  proposalArtifact: AIContractArtifact;
+  contract: AIContractEnvelope;
+  lockfileSummary: unknown;
+  reviewGroups: Array<{
+    group: 'playbook-candidate' | 'rccl-candidate' | 'no-action';
+    proposalKinds: GovernanceEvolutionProposal['proposals'][number]['kind'][];
+    reviewRule: string;
   }>;
 }

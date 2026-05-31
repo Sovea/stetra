@@ -29,10 +29,10 @@ Host-agent semantic judgment enters only through `ai-contract/v2` artifacts:
 Start with:
 
 ```sh
-node <this-skill-directory>/scripts/code.mjs auto <project-root> --task "<user task>" [--mode <fast|standard|strict>] [--target-file <path>] [--changed-file <path>] [--tech <name>] [--tag <name>] [--operation <create|modify|bugfix|refactor>]
+node <this-skill-directory>/scripts/code.mjs auto <project-root> --task "<user task>" [--mode <fast|standard|strict>] [--verification-policy <task-relevant|deep|trust-existing>] [--target-file <path>] [--changed-file <path>] [--tech <name>] [--tag <name>] [--operation <create|modify|bugfix|refactor>]
 ```
 
-`standard` is the default and should compile guidance directly for low-risk, clearly scoped work. Use `fast` to force deterministic fallback with no blocking host-agent contracts. Use `strict` for migration, public API, high-risk, cross-module, or audit-heavy work; strict preserves the full task-model, semantic-governance-graph, and adherence-evidence lifecycle.
+`standard` is the default and should compile guidance directly for low-risk, clearly scoped work. Use `fast` to force deterministic fallback with no blocking host-agent contracts. Use `strict` for migration, public API, high-risk, cross-module, or audit-heavy work; strict preserves the full task-model, semantic-governance-graph, and adherence-evidence lifecycle. RCCL verification defaults to `task-relevant`; use `deep` for an explicit full verification pass and `trust-existing` only for trusted local debugging.
 
 Deterministic fallback uses neutral defaults for compatibility, migration, sensitive-interface, and similar governance semantics. Confirm those concerns through explicit CLI fields or a task-model artifact when they should affect governance.
 
@@ -61,9 +61,12 @@ Useful supporting commands:
 node <this-skill-directory>/scripts/code.mjs status <project-root>
 node <this-skill-directory>/scripts/code.mjs doctor <project-root>
 node <this-skill-directory>/scripts/code.mjs explain --session <session-path>
+node <this-skill-directory>/scripts/code.mjs report-context-acquisition <project-root> --context-acquisition-file <path> [--session <session-path>]
+node <this-skill-directory>/scripts/code.mjs report-governance-evolution <project-root> --proposal-file <path> [--session <session-path>]
 ```
 
 `doctor` is an alias for `status`. It reports local augment, RCCL, lockfile, generated cache volume, gitignore lifecycle state, plugin completeness, and a low-risk single-file `standard`-mode probe that shows whether the default flow would unexpectedly block. Prefer the `readiness.status` and `readiness.nextActions` fields for user-facing guidance; detailed diagnostics remain available under `diagnostics.items`.
+The report commands validate review-only contract payloads and may append bounded diagnostics to an existing session; they do not write authoritative RCCL, playbook, or lockfile state.
 
 ## Manual Contract Flow
 
@@ -78,7 +81,7 @@ This prints a Runtime-owned `task-model` contract. Every modeled field must use 
 To request semantic governance:
 
 ```sh
-node <this-skill-directory>/scripts/code.mjs prepare-relations <project-root> --task "<user task>" [--task-model-file <path>] [--target-file <path>] [--changed-file <path>] [--tech <name>] [--tag <name>] [--operation <create|modify|bugfix|refactor>]
+node <this-skill-directory>/scripts/code.mjs prepare-relations <project-root> --task "<user task>" [--task-model-file <path>] [--verification-policy <task-relevant|deep|trust-existing>] [--target-file <path>] [--changed-file <path>] [--tech <name>] [--tag <name>] [--operation <create|modify|bugfix|refactor>]
 ```
 
 This prints a Runtime-owned `semantic-governance-graph` contract with allowed directive and observation ids. Host output may propose edges with relation, impact, execution intent, review priority, confidence, reason, and `evidence_refs`; Runtime still decides final relation and execution mode. Edges that affect execution mode require at least one statically verifiable evidence ref; conversation-only execution evidence is rejected or downgraded before adjudication.
@@ -86,7 +89,7 @@ This prints a Runtime-owned `semantic-governance-graph` contract with allowed di
 To compile manually:
 
 ```sh
-node <this-skill-directory>/scripts/code.mjs prepare <project-root> --task "<user task>" [--task-model-file <path>] [--governance-graph-file <path>] [--target-file <path>] [--changed-file <path>] [--tech <name>] [--tag <name>] [--operation <create|modify|bugfix|refactor>]
+node <this-skill-directory>/scripts/code.mjs prepare <project-root> --task "<user task>" [--task-model-file <path>] [--governance-graph-file <path>] [--verification-policy <task-relevant|deep|trust-existing>] [--target-file <path>] [--changed-file <path>] [--tech <name>] [--tag <name>] [--operation <create|modify|bugfix|refactor>]
 ```
 
 Read `interpretation.summary`, `interpretation.nextStep`, and `fulfillment` before implementation. If host artifacts are rejected or partially accepted, use Runtime diagnostics to repair malformed payloads, invalid ids, missing evidence, low confidence, or duplicate graph edges.

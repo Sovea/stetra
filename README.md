@@ -104,8 +104,17 @@ What is implemented today:
 - The runtime also exports `planGuidance`, `resolveContractPolicy`, and Runtime-owned `task-model`, `semantic-governance-graph`, and `adherence-evidence` contract helpers for low-friction contract orchestration.
 - Interpretation supports host-agent task models plus deterministic fallback fields marked as defaulted.
 - Task models, governance graphs, adherence evidence, and runtime sessions are written under `.resonant-code/context/`.
-- Runtime compile cache artifacts are written under `.resonant-code/context/cache/runtime/`.
+- Runtime compile cache artifacts are written under `.resonant-code/context/cache/runtime/`; cache metadata records the invalidation inputs for each level and includes task-time RCCL verification policy/summary fingerprints. Cache reads are inspection-only and never replace Runtime compile or RCCL task-time verification.
 - Completion consumes adherence evidence when supplied and records followed, ignored, partial, and unverified signals without counting unverified directives in follow rate. Lightweight summary-only completion is available for low-friction flows.
+
+## Development verification
+
+```sh
+pnpm -r build
+pnpm verify:plugin
+```
+
+`verify:plugin` uses the existing build plus the lightweight `code doctor` probe. It does not create repository test files.
 
 ## Design constraints
 

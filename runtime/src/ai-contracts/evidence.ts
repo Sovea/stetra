@@ -35,7 +35,7 @@ function verifyEvidenceRef(
   }
   if (ref.kind === 'file') return verifyFileEvidence(ref, context);
   if (ref.kind === 'rccl-evidence') return verifyRcclEvidence(ref, context);
-  if (ref.kind === 'runtime-trace') return verifyListedRef(ref, context.runtimeTraceRefs, 'runtime trace reference');
+  if (ref.kind === 'runtime-trace') return verifyListedRef(ref, context.runtimeTraceRefs, 'runtime trace reference', false);
   if (ref.kind === 'command') return verifyHashEvidence(ref, context.commandOutputHashes, 'command output hash');
   if (ref.kind === 'diff') return verifyHashEvidence(ref, context.diffSnapshotHashes, 'diff snapshot hash');
   return { ref, status: 'unverified', static: false, reason: 'unsupported evidence kind' };
@@ -77,11 +77,14 @@ function verifyRcclEvidence(
   const parsed = parseRefLocation(ref.ref);
   const file = ref.file ?? parsed.file;
   const lineRange = ref.line_range ?? parsed.line_range;
-  const matches = observations.some((observation) => observation.evidence.some((evidence) => {
+  if (!file || !lineRange) {
+    return { ref, status: 'unverified', static: false, reason: 'rccl-evidence must reference a concrete evidence file and line range' };
+  }
+  const matches = observations.some((observation) => observationCanSupportRcclEvidence(observation)
+    && observation.evidence.some((evidence) => {
     const evidenceRef = `${evidence.file}:${evidence.line_range[0]}-${evidence.line_range[1]}`;
-    const sameRef = ref.ref === evidenceRef || ref.ref === observation.id || ref.ref === `${observation.id}:${evidenceRef}`;
-    const sameLocation = Boolean(file && lineRange)
-      && normalizePath(file) === normalizePath(evidence.file)
+    const sameRef = ref.ref === evidenceRef || ref.ref === `${observation.id}:${evidenceRef}`;
+    const sameLocation = normalizePath(file) === normalizePath(evidence.file)
       && lineRange[0] === evidence.line_range[0]
       && lineRange[1] === evidence.line_range[1];
     return sameRef || sameLocation;
@@ -94,8 +97,10 @@ function verifyListedRef(
   ref: EvidenceRef,
   refs: readonly string[] | undefined,
   label: string,
+  isStatic = true,
 ): EvidenceRefVerificationEntry {
-  if (refs?.includes(ref.ref)) return { ref, status: 'verified', static: true, reason: `${label} verified` };
+  if (refs?.includes(ref.ref)) return { ref, status: 'verified', static: isStatic, reason: `${label} verified` };
+  if (!refs) return { ref, status: 'unverified', static: false, reason: `${label} is unavailable in the current workflow` };
   return { ref, status: 'unverified', static: false, reason: `${label} was not captured by workflow` };
 }
 
@@ -109,6 +114,9 @@ function verifyHashEvidence(
   }
   if (!ref.output_hash) {
     return { ref, status: 'unverified', static: false, reason: `${label} missing output_hash` };
+  }
+  if (!hashes) {
+    return { ref, status: 'unverified', static: false, reason: `${label} is unavailable in the current workflow` };
   }
   return { ref, status: 'unverified', static: false, reason: `${label} was not captured by workflow` };
 }
@@ -133,4 +141,13 @@ function hash(algorithm: 'sha1' | 'sha256', value: string): string {
 
 function normalizePath(value: string): string {
   return value.replace(/\\/g, '/');
+}
+
+function observationCanSupportRcclEvidence(
+  observation: NonNullable<EvidenceRefVerificationContext['observations']>[number],
+): boolean {
+  const verification = observation.verification;
+  if (!verification) return true;
+  if (verification.disposition === 'demote-to-ambient') return false;
+  return verification.evidence_status !== 'failed' && verification.evidence_status !== 'unverifiable';
 }

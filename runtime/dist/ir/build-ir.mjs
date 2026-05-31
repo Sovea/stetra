@@ -1,5 +1,5 @@
 import { resolveCompileTask } from "../compile-input.mjs";
-import { loadCompileSources } from "../load/compile-sources.mjs";
+import { loadOrVerifyCompileSources } from "../load/compile-sources.mjs";
 import { feedbackToIR } from "./adapters/feedback.mjs";
 import { directivesToIR } from "./adapters/playbook.mjs";
 import { observationsToIR } from "./adapters/rccl.mjs";
@@ -9,7 +9,10 @@ import { buildIRFingerprints } from "./fingerprint.mjs";
 //#region src/ir/build-ir.ts
 async function buildGovernanceIR(input, sources) {
 	const resolvedTask = resolveCompileTask(input);
-	const loadedSources = sources ?? await loadCompileSources(input);
+	const loadedSources = sources?.rcclVerificationSummary ? sources : await loadOrVerifyCompileSources({
+		...input,
+		resolvedTask
+	}, sources);
 	const bundleWithoutFingerprints = {
 		irVersion: "governance-ir/v1",
 		task: taskToIR(resolvedTask),

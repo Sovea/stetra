@@ -1,6 +1,6 @@
 export { compile, resolveTask } from './compile.ts';
 export { evaluateGuidance } from './feedback.ts';
-export { persistCompileCache } from './cache.ts';
+export { inspectCompileCache, persistCompileCache } from './cache.ts';
 export { resolveContractPolicy } from './contract-policy.ts';
 export { planGuidance, resolveSourceStatus } from './plan-guidance.ts';
 export {
@@ -27,7 +27,10 @@ export {
   prepareAdherenceEvidenceContract,
   validateAdherenceEvidencePayload,
 } from './ai-contracts/adherence-evidence.ts';
-export { validateGovernanceEvolutionProposalPayload } from './ai-contracts/governance-evolution-proposal.ts';
+export {
+  prepareGovernanceEvolutionProposalContract,
+  validateGovernanceEvolutionProposalPayload,
+} from './ai-contracts/governance-evolution-proposal.ts';
 export { resolveActivationDecisionsIR, activatedDirectiveIdsIR } from './ir/activation/resolve-activation.ts';
 export { buildGovernanceIR } from './ir/build-ir.ts';
 export { resolveExecutionDecisionsIR } from './ir/execution/resolve-execution.ts';
@@ -123,4 +126,6 @@ export type {
   SemanticMergeResult,
   TaskIntent,
   TaskKind,
+  RuntimeRcclVerificationPolicy,
+  RuntimeRcclVerificationSummary,
 } from './types.ts';

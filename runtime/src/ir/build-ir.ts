@@ -1,5 +1,5 @@
 import { resolveCompileTask } from '../compile-input.ts';
-import { loadCompileSources } from '../load/compile-sources.ts';
+import { loadOrVerifyCompileSources } from '../load/compile-sources.ts';
 import type { CompileInput } from '../types.ts';
 import type { CompileSources } from '../load/compile-sources.ts';
 import { feedbackToIR } from './adapters/feedback.ts';
@@ -13,7 +13,9 @@ import type { GovernanceIRBundle } from './types.ts';
 export async function buildGovernanceIR(input: CompileInput, sources?: CompileSources): Promise<GovernanceIRBundle> {
   const resolvedTask = resolveCompileTask(input);
 
-  const loadedSources = sources ?? await loadCompileSources(input);
+  const loadedSources = sources?.rcclVerificationSummary
+    ? sources
+    : await loadOrVerifyCompileSources({ ...input, resolvedTask }, sources);
 
   const bundleWithoutFingerprints: Omit<GovernanceIRBundle, 'fingerprints'> = {
     irVersion: 'governance-ir/v1',

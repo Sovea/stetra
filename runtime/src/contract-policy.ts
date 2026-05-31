@@ -54,10 +54,12 @@ export function resolveContractPolicy(input: ContractPolicyInput): ContractPolic
   const skipped: ContractPolicyDecision['skipped'] = [];
   const reasons: string[] = [];
 
-  if (!input.agentCapabilityProfile && !provided.agentCapability) {
-    required.push('agent-capability-profile');
-  } else {
-    skipped.push({ kind: 'agent-capability-profile', reason_id: 'already-provided' });
+  skipped.push({
+    kind: 'agent-capability-profile',
+    reason_id: provided.agentCapability ? 'already-provided' : 'runtime-assumption',
+  });
+  if (!provided.agentCapability) {
+    reasons.push('agent capability profile is a Runtime assumption for policy selection, not a host artifact.');
   }
 
   if (provided.taskModel) {
