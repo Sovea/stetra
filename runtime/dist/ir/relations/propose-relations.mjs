@@ -1,4 +1,5 @@
-import { minimatch } from "../../utils/glob.mjs";
+import { pathMatchesScope } from "../../utils/paths.mjs";
+import { GOVERNANCE_IR_VERSION } from "../types.mjs";
 import { stableHash } from "../../utils/hash.mjs";
 import { proposeFeedbackRelations } from "./propose-feedback-relations.mjs";
 //#region src/ir/relations/propose-relations.ts
@@ -26,7 +27,7 @@ function proposeRuntimeStructuralRelation(directive, observation, task) {
 	const signals = buildRuntimeSignals(observation, taskScoped, semanticKey, relation);
 	const conflictClass = inferConflictClass(directive, observation, relation);
 	return {
-		irVersion: "governance-ir/v1",
+		irVersion: GOVERNANCE_IR_VERSION,
 		id: stableHash([
 			"semantic-relation-ir",
 			"runtime-structural",
@@ -96,7 +97,7 @@ function toHostGraphRelationIR(proposal, edge, bundle) {
 	const reviewPriority = edge.review_priority ?? defaultReviewPriority(directive, relation);
 	const evidenceRefs = edge.evidence_refs.map((ref) => ref.ref);
 	return {
-		irVersion: "governance-ir/v1",
+		irVersion: GOVERNANCE_IR_VERSION,
 		id: stableHash([
 			"semantic-relation-ir",
 			proposal.source.id,
@@ -267,11 +268,6 @@ function clampConfidence(value) {
 function scopeMatchesTask(scope, task) {
 	if (task.targets.length === 0) return true;
 	return task.targets.some((target) => pathMatchesScope(target.path, scope));
-}
-function pathMatchesScope(path, scope) {
-	if (scope === "*" || scope === "**/*") return true;
-	if (scope.includes("*") || scope.includes("?") || scope.includes("{")) return minimatch(path, scope);
-	return path === scope || path.startsWith(`${scope}/`);
 }
 //#endregion
 export { proposeSemanticRelations };

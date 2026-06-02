@@ -1,13 +1,15 @@
-import type {
-  ContractPayloadDiagnosticEntry,
-  ContextAcquisitionContractInput,
-  ContextAcquisitionContractOutput,
-  ContextAcquisitionPayload,
-  ContextAcquisitionRequest,
-  ContextAcquisitionValidationResult,
+import {
+  AI_CONTRACT_VERSION,
+  type ContractPayloadDiagnosticEntry,
+  type ContextAcquisitionContractInput,
+  type ContextAcquisitionContractOutput,
+  type ContextAcquisitionPayload,
+  type ContextAcquisitionRequest,
+  type ContextAcquisitionValidationResult,
 } from './types.ts';
 import { buildContractPayloadDiagnostics } from './diagnostics.ts';
 import { contractVersionDiagnostic, isRecord, unique, validConfidence, validEvidenceRefs } from './shared.ts';
+import { normalizePath } from '../utils/paths.ts';
 
 const CONTEXT_ACQUISITION_SCHEMA = {
   type: 'object',
@@ -59,7 +61,7 @@ export function prepareContextAcquisitionContract(input: ContextAcquisitionContr
     acquisitionSchema: JSON.stringify(CONTEXT_ACQUISITION_SCHEMA, null, 2),
     acquisitionArtifact: artifact,
     contract: {
-      contractVersion: 'ai-contract/v2',
+      contractVersion: AI_CONTRACT_VERSION,
       kind: 'context-acquisition',
       schemaId: 'runtime.context-acquisition',
       schemaVersion: '2.0',
@@ -96,8 +98,8 @@ export function validateContextAcquisitionPayload(raw: unknown): ContextAcquisit
       entries.push(rejected(path, 'malformed-payload', 'Request must be a bounded rccl-incremental request with mode, target_files, changed_files, reason, confidence, and evidence_refs.'));
       return;
     }
-    const targetFiles = unique(request.target_files.filter((file) => file.trim()).map(normalizePath));
-    const changedFiles = unique(request.changed_files.filter((file) => file.trim()).map(normalizePath));
+    const targetFiles = unique(request.target_files.filter((file) => file.trim()).map((file) => normalizePath(file.trim())));
+    const changedFiles = unique(request.changed_files.filter((file) => file.trim()).map((file) => normalizePath(file.trim())));
     const totalFiles = unique([...targetFiles, ...changedFiles]);
     if (request.mode !== 'full' && totalFiles.length === 0) {
       entries.push(rejected(path, 'missing-required-field', 'Task-scoped and changed-files context acquisition requires at least one target or changed file.'));
@@ -162,10 +164,6 @@ function isContextAcquisitionRequest(value: unknown): value is ContextAcquisitio
 
 function isContextMode(value: unknown): boolean {
   return value === 'task-scoped' || value === 'changed-files' || value === 'full';
-}
-
-function normalizePath(value: string): string {
-  return value.replace(/\\/g, '/').trim();
 }
 
 function rejected(

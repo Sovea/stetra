@@ -1,5 +1,7 @@
+import { isRecord } from "../utils/common.mjs";
 import { buildContractPayloadDiagnostics } from "./diagnostics.mjs";
-import { contractVersionDiagnostic, isRecord } from "./shared.mjs";
+import { AI_CONTRACT_VERSION } from "./types.mjs";
+import { contractVersionDiagnostic } from "./shared.mjs";
 //#region src/ai-contracts/agent-capability-profile.ts
 const AGENT_CAPABILITY_PROFILE_SCHEMA = {
 	type: "object",
@@ -39,7 +41,7 @@ function prepareAgentCapabilityProfileContract(input) {
 		profileSchema: JSON.stringify(AGENT_CAPABILITY_PROFILE_SCHEMA, null, 2),
 		profileArtifact: artifact,
 		contract: {
-			contractVersion: "ai-contract/v2",
+			contractVersion: AI_CONTRACT_VERSION,
 			kind: "agent-capability-profile",
 			schemaId: "runtime.agent-capability-profile",
 			schemaVersion: "2.0",

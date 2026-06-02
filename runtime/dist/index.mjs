@@ -1,8 +1,11 @@
+import { LOCKFILE_VERSION } from "./types.mjs";
 import { inspectCompileCache, persistCompileCache } from "./cache.mjs";
 import { TASK_INPUT_ENUMS, TASK_INTERPRETATION_ENUMS, TASK_INTERPRETATION_SOURCES } from "./intent/schema.mjs";
 import { DeterministicInterpretationProvider } from "./interpret/deterministic-extractor.mjs";
 import { resolveTask, resolveTaskInput } from "./interpret/normalize-candidate.mjs";
 import { activatedDirectiveIdsIR, resolveActivationDecisionsIR } from "./ir/activation/resolve-activation.mjs";
+import { GOVERNANCE_IR_VERSION } from "./ir/types.mjs";
+import { evaluateGuidance } from "./feedback.mjs";
 import { buildGovernanceIR } from "./ir/build-ir.mjs";
 import { resolveExecutionDecisionsIR } from "./ir/execution/resolve-execution.mjs";
 import { adjudicateSemanticRelations } from "./ir/relations/adjudicate-relations.mjs";
@@ -11,7 +14,7 @@ import { buildSemanticRelationsIR } from "./ir/relations/build-relations.mjs";
 import { semanticRelationIRToPublic, semanticRelationsIRToPublic } from "./ir/relations/public-mapping.mjs";
 import { compile } from "./compile.mjs";
 import { resolveContractPolicy } from "./contract-policy.mjs";
-import { evaluateGuidance } from "./feedback.mjs";
+import { AI_CONTRACT_VERSION } from "./ai-contracts/types.mjs";
 import { prepareAgentCapabilityProfileContract, validateAgentCapabilityProfilePayload } from "./ai-contracts/agent-capability-profile.mjs";
 import { prepareContextAcquisitionContract, validateContextAcquisitionPayload } from "./ai-contracts/context-acquisition.mjs";
 import { verifyEvidenceRefs } from "./ai-contracts/evidence.mjs";
@@ -20,4 +23,4 @@ import { prepareTaskModelContract, validateTaskModelPayload } from "./ai-contrac
 import { planGuidance, resolveSourceStatus } from "./plan-guidance.mjs";
 import { prepareAdherenceEvidenceContract, validateAdherenceEvidencePayload } from "./ai-contracts/adherence-evidence.mjs";
 import { prepareGovernanceEvolutionProposalContract, validateGovernanceEvolutionProposalPayload } from "./ai-contracts/governance-evolution-proposal.mjs";
-export { DeterministicInterpretationProvider, TASK_INPUT_ENUMS, TASK_INTERPRETATION_ENUMS, TASK_INTERPRETATION_SOURCES, activatedDirectiveIdsIR, adjudicateSemanticRelations, buildGovernanceIR, buildSemanticRelationsIR, compile, evaluateGuidance, inspectCompileCache, loadSemanticGovernanceGraphPayload, persistCompileCache, planGuidance, prepareAdherenceEvidenceContract, prepareAgentCapabilityProfileContract, prepareContextAcquisitionContract, prepareGovernanceEvolutionProposalContract, prepareSemanticContractContext, prepareSemanticGovernanceGraphContract, prepareSemanticGovernanceGraphContractBundle, prepareTaskModelContract, proposeSemanticRelations, resolveActivationDecisionsIR, resolveContractPolicy, resolveExecutionDecisionsIR, resolveSourceStatus, resolveTask, resolveTaskInput, semanticRelationIRToPublic, semanticRelationsIRToPublic, validateAdherenceEvidencePayload, validateAgentCapabilityProfilePayload, validateContextAcquisitionPayload, validateGovernanceEvolutionProposalPayload, validateSemanticGovernanceGraphPayload, validateTaskModelPayload, verifyEvidenceRefs };
+export { AI_CONTRACT_VERSION, DeterministicInterpretationProvider, GOVERNANCE_IR_VERSION, LOCKFILE_VERSION, TASK_INPUT_ENUMS, TASK_INTERPRETATION_ENUMS, TASK_INTERPRETATION_SOURCES, activatedDirectiveIdsIR, adjudicateSemanticRelations, buildGovernanceIR, buildSemanticRelationsIR, compile, evaluateGuidance, inspectCompileCache, loadSemanticGovernanceGraphPayload, persistCompileCache, planGuidance, prepareAdherenceEvidenceContract, prepareAgentCapabilityProfileContract, prepareContextAcquisitionContract, prepareGovernanceEvolutionProposalContract, prepareSemanticContractContext, prepareSemanticGovernanceGraphContract, prepareSemanticGovernanceGraphContractBundle, prepareTaskModelContract, proposeSemanticRelations, resolveActivationDecisionsIR, resolveContractPolicy, resolveExecutionDecisionsIR, resolveSourceStatus, resolveTask, resolveTaskInput, semanticRelationIRToPublic, semanticRelationsIRToPublic, validateAdherenceEvidencePayload, validateAgentCapabilityProfilePayload, validateContextAcquisitionPayload, validateGovernanceEvolutionProposalPayload, validateSemanticGovernanceGraphPayload, validateTaskModelPayload, verifyEvidenceRefs };

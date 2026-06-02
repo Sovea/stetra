@@ -1,6 +1,8 @@
+import { isRecord, validConfidence } from "../utils/common.mjs";
 import { TASK_INTERPRETATION_ENUMS } from "../intent/schema.mjs";
 import { buildContractPayloadDiagnostics } from "./diagnostics.mjs";
-import { contractVersionDiagnostic, isRecord, validConfidence, validEvidenceRefs } from "./shared.mjs";
+import { AI_CONTRACT_VERSION } from "./types.mjs";
+import { contractVersionDiagnostic, validEvidenceRefs } from "./shared.mjs";
 //#region src/ai-contracts/task-model.ts
 const TASK_MODEL_SCHEMA = {
 	type: "object",
@@ -34,7 +36,7 @@ function prepareTaskModelContract(input) {
 		modelArtifact: artifact,
 		clarificationHints: buildClarificationHints(input.task),
 		contract: {
-			contractVersion: "ai-contract/v2",
+			contractVersion: AI_CONTRACT_VERSION,
 			kind: "task-model",
 			schemaId: "runtime.task-model",
 			schemaVersion: "2.0",

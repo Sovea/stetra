@@ -45,6 +45,9 @@ export {
   TASK_INTERPRETATION_ENUMS,
   TASK_INTERPRETATION_SOURCES,
 } from './intent/schema.ts';
+export { GOVERNANCE_IR_VERSION } from './ir/types.ts';
+export { AI_CONTRACT_VERSION } from './ai-contracts/types.ts';
+export { LOCKFILE_VERSION } from './types.ts';
 export type { TaskInterpretationProvider } from './interpret/provider.ts';
 export type * from './ai-contracts/types.ts';
 export type {

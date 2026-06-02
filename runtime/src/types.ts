@@ -28,6 +28,7 @@ export type RuntimeRcclVerificationAction = 'reverified' | 'reused' | 'demoted' 
 export type InductionStatus = 'well-supported' | 'narrowly-supported' | 'overgeneralized' | 'ambiguous';
 export type ScopeBasis = 'single-file' | 'directory-cluster' | 'module-cluster' | 'cross-root';
 export type RcclSchemaVersion = '1.0';
+export const LOCKFILE_VERSION = '1.0' as const;
 export type RcclLifecycleStatus = 'active' | 'stale' | 'superseded';
 export type ExecutionMode = 'enforce' | 'deviation-noted' | 'ambient' | 'suppress';
 export type IgnoredReason = 'not-applicable' | 'conflicts-with-task' | 'too-broad' | 'repo-reality' | 'false-positive' | 'user-corrected' | 'other';

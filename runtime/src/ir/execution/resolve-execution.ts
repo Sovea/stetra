@@ -1,6 +1,7 @@
 import type { ExecutionDecisionIR, GovernanceIRBundle, SemanticRelationIR, DirectiveIR } from '../types.ts';
 import { SEMANTIC_RELATION_POLICY } from '../relations/policy.ts';
 import { applyContextExecutionPolicy, type DirectiveDecision } from './context-policy.ts';
+import { unique } from '../../utils/common.ts';
 
 interface FeedbackEffects {
   labels: string[];
@@ -292,6 +293,3 @@ function feedbackSignalsForDirective(
   };
 }
 
-function unique(values: string[]): string[] {
-  return [...new Set(values)];
-}

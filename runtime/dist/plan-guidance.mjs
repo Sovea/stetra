@@ -1,7 +1,8 @@
+import { isRecord, unique } from "./utils/common.mjs";
 import { resolveTask } from "./interpret/normalize-candidate.mjs";
-import { minimatch } from "./utils/glob.mjs";
 import { parseYaml } from "./utils/yaml.mjs";
 import { loadRccl } from "./load/load-rccl.mjs";
+import { fileOverlapsTarget, normalizePath, scopeOverlapsPath } from "./utils/paths.mjs";
 import { resolveContractPolicy } from "./contract-policy.mjs";
 import { prepareAgentCapabilityProfileContract } from "./ai-contracts/agent-capability-profile.mjs";
 import { prepareContextAcquisitionContract } from "./ai-contracts/context-acquisition.mjs";
@@ -11,14 +12,15 @@ import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 //#region src/plan-guidance.ts
 async function planGuidance(input) {
-	const sourceStatus = resolveSourceStatus(input);
+	const notes = [];
+	const sourceStatus = resolveSourceStatus(input, notes);
 	const guidanceMode = input.mode ?? "standard";
 	const resolvedTask = resolveTask({
 		task: input.task,
 		taskModels: input.taskModels ?? [],
 		interpretationMode: input.taskModels?.length ? "host-agent" : "deterministic-only"
 	});
-	const rcclRelevant = await resolveRcclRelevance(input, sourceStatus, resolvedTask);
+	const rcclRelevant = await resolveRcclRelevance(input, sourceStatus, resolvedTask, notes);
 	const policy = resolveContractPolicy({
 		sourceStatus,
 		providedContracts: input.providedContracts,
@@ -29,7 +31,6 @@ async function planGuidance(input) {
 		rcclRelevant
 	});
 	const requiredContracts = [];
-	const notes = [];
 	if (policy.required.includes("agent-capability-profile")) {
 		const profile = prepareAgentCapabilityProfileContract({
 			task: input.task,
@@ -105,15 +106,15 @@ async function planGuidance(input) {
 		}
 	};
 }
-function resolveSourceStatus(input) {
+function resolveSourceStatus(input, notes) {
 	return {
 		localAugment: input.localAugmentPath && existsSync(input.localAugmentPath) ? "present" : "absent",
-		rccl: resolveRcclSourceStatus(input.rcclPath),
+		rccl: resolveRcclSourceStatus(input.rcclPath, notes),
 		lockfile: input.lockfilePath && existsSync(input.lockfilePath) ? "present" : "absent",
 		cache: resolveCacheStatus(input.projectRoot)
 	};
 }
-function resolveRcclSourceStatus(rcclPath) {
+function resolveRcclSourceStatus(rcclPath, notes) {
 	if (!rcclPath || !existsSync(rcclPath)) return "absent";
 	try {
 		const parsed = parseYaml(readFileSync(rcclPath, "utf-8"));
@@ -130,7 +131,8 @@ function resolveRcclSourceStatus(rcclPath) {
 			const lifecycle = isRecord(observation.lifecycle) ? observation.lifecycle : null;
 			return lifecycle?.status === "stale" || lifecycle?.status === "superseded";
 		}) ? "stale" : "present";
-	} catch {
+	} catch (error) {
+		notes?.push(`RCCL status check failed: ${error instanceof Error ? error.message : String(error)}`);
 		return "unverified";
 	}
 }
@@ -163,14 +165,15 @@ function guidancePlanCompileInput(input) {
 function defaultSemanticGovernanceGraphPath(projectRoot) {
 	return join(projectRoot, ".resonant-code", "context", "semantic-governance-graphs", "semantic-governance-graph.json");
 }
-async function resolveRcclRelevance(input, sourceStatus, resolvedTask) {
+async function resolveRcclRelevance(input, sourceStatus, resolvedTask, notes) {
 	if (sourceStatus.rccl === "absent" || !input.rcclPath) return void 0;
 	const targets = taskTargets(input.task, resolvedTask);
 	if (targets.length === 0) return void 0;
 	let rccl = null;
 	try {
 		rccl = await loadRccl(input.rcclPath);
-	} catch {
+	} catch (error) {
+		notes?.push(`RCCL relevance check failed: ${error instanceof Error ? error.message : String(error)}`);
 		return;
 	}
 	if (!rccl) return void 0;
@@ -184,40 +187,15 @@ function taskTargets(task, resolvedTask) {
 		...resolvedTask.task_intent.changed_files
 	].filter((value) => Boolean(value)).map(normalizePath));
 }
-function pathMatchesScope(path, scope) {
-	if (scope === "*" || scope === "**" || scope === "**/*") return true;
-	if (scope.includes("*") || scope.includes("?") || scope.includes("{")) return minimatch(path, scope);
-	const normalizedScope = scope.replace(/\/$/, "");
-	return path === normalizedScope || path.startsWith(`${normalizedScope}/`);
-}
-function scopeOverlapsPath(scope, path) {
-	const normalizedScope = normalizePath(scope);
-	const normalizedPath = normalizePath(path);
-	return pathMatchesScope(normalizedPath, normalizedScope) || pathMatchesScope(normalizedScope, normalizedPath);
-}
-function fileOverlapsTarget(file, target) {
-	const normalizedFile = normalizePath(file);
-	const normalizedTarget = normalizePath(target);
-	return normalizedFile === normalizedTarget || pathMatchesScope(normalizedFile, normalizedTarget) || pathMatchesScope(normalizedTarget, normalizedFile);
-}
-function normalizePath(value) {
-	return value.replace(/\\/g, "/").replace(/^\.\//, "");
-}
 function hasFiles(directory) {
 	try {
 		return readdirSync(directory).some((entry) => entry.endsWith(".json"));
-	} catch {
+	} catch (_error) {
 		return false;
 	}
 }
-function unique(values) {
-	return [...new Set(values)];
-}
 function hasVerificationValue(record, key) {
 	return record[key] !== void 0 && record[key] !== null && record[key] !== "";
-}
-function isRecord(value) {
-	return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 //#endregion
 export { planGuidance, resolveSourceStatus };

@@ -1,5 +1,7 @@
 import { parseYaml } from "../../utils/yaml.mjs";
+import { GOVERNANCE_IR_VERSION } from "../types.mjs";
 import { SEMANTIC_RELATION_POLICY } from "../relations/policy.mjs";
+import { normalizeIgnoredReasons, validIgnoredReason } from "../../feedback.mjs";
 import { existsSync, readFileSync } from "node:fs";
 //#region src/ir/adapters/feedback.ts
 function feedbackToIR(lockfilePath) {
@@ -8,7 +10,7 @@ function feedbackToIR(lockfilePath) {
 	const observationSignals = Object.entries(parsed.observations ?? {}).map(([observationId, entry]) => observationSignalToIR(observationId, entry));
 	const tensionSignals = Object.entries(parsed.tensions ?? {}).map(([tensionKey, entry]) => tensionSignalToIR(tensionKey, entry));
 	return {
-		irVersion: "governance-ir/v1",
+		irVersion: GOVERNANCE_IR_VERSION,
 		source: {
 			kind: "lockfile",
 			id: "playbook.lock",
@@ -51,18 +53,6 @@ function directiveSignalToIR(directiveId, entry) {
 		...validIgnoredReason(entry.quality_signal?.last_ignored_reason) ? { lastIgnoredReason: entry.quality_signal.last_ignored_reason } : {},
 		lastSeen: entry.quality_signal?.last_seen ?? ""
 	};
-}
-function normalizeIgnoredReasons(value) {
-	if (!value || typeof value !== "object" || Array.isArray(value)) return {};
-	const result = {};
-	for (const [reason, count] of Object.entries(value)) {
-		if (!validIgnoredReason(reason) || typeof count !== "number" || !Number.isFinite(count) || count <= 0) continue;
-		result[reason] = count;
-	}
-	return result;
-}
-function validIgnoredReason(value) {
-	return value === "not-applicable" || value === "conflicts-with-task" || value === "too-broad" || value === "repo-reality" || value === "false-positive" || value === "user-corrected" || value === "other";
 }
 function validSignalConfidence(value) {
 	return value === "implicit" || value === "explicit" || value === "review-confirmed" || value === "user-corrected";

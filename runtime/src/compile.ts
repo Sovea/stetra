@@ -1,31 +1,30 @@
 import { readFileSync } from 'node:fs';
+import { resolveActivatedGovernanceContext } from './compile-input.ts';
 import { projectIRActivationToPublic } from './ir/activation/public-adapter.ts';
-import { resolveActivationDecisionsIR, activatedDirectiveIdsIR } from './ir/activation/resolve-activation.ts';
-import { toResolvedCompileInput } from './compile-input.ts';
-import { buildGovernanceIR } from './ir/build-ir.ts';
 import { projectIREgoToPublic } from './ir/ego/public-adapter.ts';
 import { resolveExecutionDecisionsIR } from './ir/execution/resolve-execution.ts';
 import { buildSemanticRelationsIR } from './ir/relations/build-relations.ts';
 import { projectIRSemanticMergeToPublic } from './ir/semantic-merge/public-adapter.ts';
-import { loadOrVerifyCompileSources, type CompileSources } from './load/compile-sources.ts';
+import type { CompileSources } from './load/compile-sources.ts';
 import { stableHash } from './utils/hash.ts';
-import type {
-  ChangeDecisionPacket,
-  CompileInput,
-  CompileOutput,
-  DecisionTrace,
-  Directive,
-  EffectiveGuidanceObject,
-  FocusView,
-  GovernancePacket,
-  InterpretationPacket,
-  RcclDocument,
-  ResolvedCompileInput,
-  ResolvedTaskOutput,
-  ReviewFocusItem,
-  SemanticMergeResult,
-  TensionView,
-  TraceStep,
+import {
+  LOCKFILE_VERSION,
+  type ChangeDecisionPacket,
+  type CompileInput,
+  type CompileOutput,
+  type DecisionTrace,
+  type Directive,
+  type EffectiveGuidanceObject,
+  type FocusView,
+  type GovernancePacket,
+  type InterpretationPacket,
+  type RcclDocument,
+  type ResolvedCompileInput,
+  type ResolvedTaskOutput,
+  type ReviewFocusItem,
+  type SemanticMergeResult,
+  type TensionView,
+  type TraceStep,
 } from './types.ts';
 import type { SemanticRelationIR } from './ir/types.ts';
 
@@ -67,8 +66,8 @@ function compileResolvedOutput(packet: ChangeDecisionPacket, resolvedTask: Resol
  * Runs the deterministic playbook pipeline and produces a change decision packet.
  */
 export async function compile(input: CompileInput): Promise<CompileOutput> {
-  const normalizedInput = toResolvedCompileInput(input);
-  const resolved = normalizedInput.resolvedTask;
+  const ctx = await resolveActivatedGovernanceContext(input);
+  const { normalizedInput, resolvedTask: resolved, sources, governanceIR, activationDecisions: activationDecisionsIR, activeDirectives: irActiveDirectives } = ctx;
   const traceSteps: TraceStep[] = [];
   const intent = resolved.task_intent;
   const contextProfile = resolved.context_profile;
@@ -106,8 +105,6 @@ export async function compile(input: CompileInput): Promise<CompileOutput> {
       : ['no context profile resolution records'],
   });
 
-  const sources = await loadOrVerifyCompileSources(normalizedInput, normalizedInput.preloadedSources);
-  const governanceIR = await buildGovernanceIR(normalizedInput, sources);
   traceSteps.push({
     stage: 'Governance IR',
     lines: [
@@ -127,12 +124,7 @@ export async function compile(input: CompileInput): Promise<CompileOutput> {
     lines: summarizeHostFulfillment(hostFulfillment),
   });
 
-  const activationDecisionsIR = resolveActivationDecisionsIR(governanceIR);
-  const irActivatedDirectiveIds = activatedDirectiveIdsIR(activationDecisionsIR);
-  const activatedGovernanceIR = {
-    ...governanceIR,
-    directives: governanceIR.directives.filter((directive) => irActivatedDirectiveIds.has(directive.id)),
-  };
+  const activatedGovernanceIR = { ...governanceIR, directives: irActiveDirectives };
   const semanticRelationsIR = buildSemanticRelationsIR(activatedGovernanceIR);
   traceSteps.push({
     stage: 'IR Semantic Relations',
@@ -248,7 +240,7 @@ export async function compile(input: CompileInput): Promise<CompileOutput> {
   }, selectedLayerIds, rccl);
 
   const packet: ChangeDecisionPacket = {
-    version: '1.0',
+    version: LOCKFILE_VERSION,
     task: {
       task_kind: resolved.taskKind,
       input: resolved.task,
@@ -388,11 +380,11 @@ function formatHostFulfillmentArtifact(label: string, artifact: NonNullable<Comp
 }
 
 function formatEvidenceCoverage(hostFulfillment: NonNullable<CompileInput['hostFulfillment']>): string {
-  const artifacts = [
+  const artifacts: Array<NonNullable<CompileInput['hostFulfillment']>['taskModel']> = [
     hostFulfillment.taskModel,
     hostFulfillment.semanticGovernanceGraph,
-    hostFulfillment.adherenceEvidence,
-  ].filter(Boolean);
+    ...(hostFulfillment.adherenceEvidence ? [hostFulfillment.adherenceEvidence] : []),
+  ];
   const totals = artifacts.reduce((acc, artifact) => {
     const summary = artifact.diagnostics?.summary;
     acc.total += summary?.total ?? 0;

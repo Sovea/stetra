@@ -1,15 +1,15 @@
 import { buildContractPayloadDiagnostics } from './diagnostics.ts';
 import { verifyEvidenceRefs } from './evidence.ts';
 import { contractVersionDiagnostic, isRecord, normalizeEvidenceRefs, validConfidence, validEvidenceRefs } from './shared.ts';
-import type {
-  AdherenceEvidenceContractInput,
-  AdherenceEvidenceContractOutput,
-  AdherenceEvidenceValidationResult,
-  ContractPayloadDiagnosticEntry,
-  EvidenceRefVerificationContext,
-  HostAdherenceEvidencePayload,
-  HostAdherenceEvidenceEntry,
-  ValidatedAdherenceEvidenceVerdict,
+import {
+  AI_CONTRACT_VERSION,
+  type AdherenceEvidenceContractInput,
+  type AdherenceEvidenceContractOutput,
+  type AdherenceEvidenceValidationResult,
+  type ContractPayloadDiagnosticEntry,
+  type EvidenceRefVerificationContext,
+  type HostAdherenceEvidenceEntry,
+  type ValidatedAdherenceEvidenceVerdict,
 } from './types.ts';
 import type { IgnoredReason } from '../types.ts';
 
@@ -38,7 +38,7 @@ export function prepareAdherenceEvidenceContract(input: AdherenceEvidenceContrac
     evidenceSchema: JSON.stringify(ADHERENCE_EVIDENCE_SCHEMA, null, 2),
     evidenceArtifact: artifact,
     contract: {
-      contractVersion: 'ai-contract/v2',
+      contractVersion: AI_CONTRACT_VERSION,
       kind: 'adherence-evidence',
       schemaId: 'runtime.adherence-evidence',
       schemaVersion: '2.0',
@@ -176,7 +176,7 @@ function summarizeEvidenceVerification(evidence: ReturnType<typeof verifyEvidenc
   return evidence.entries.map((entry) => `${entry.ref.kind}:${entry.status}:${entry.reason}`).join('; ') || 'none';
 }
 
-function isAdherencePayload(value: unknown): value is HostAdherenceEvidencePayload {
+function isAdherencePayload(value: unknown): value is { verdicts: unknown[] } {
   return isRecord(value) && Array.isArray(value.verdicts);
 }
 

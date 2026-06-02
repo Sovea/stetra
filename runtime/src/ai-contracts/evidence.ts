@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
 import { isAbsolute, resolve } from 'node:path';
+import { normalizePathSeparators } from '../utils/paths.ts';
 import type {
   EvidenceRef,
   EvidenceRefVerificationContext,
@@ -84,7 +85,7 @@ function verifyRcclEvidence(
     && observation.evidence.some((evidence) => {
     const evidenceRef = `${evidence.file}:${evidence.line_range[0]}-${evidence.line_range[1]}`;
     const sameRef = ref.ref === evidenceRef || ref.ref === `${observation.id}:${evidenceRef}`;
-    const sameLocation = normalizePath(file) === normalizePath(evidence.file)
+    const sameLocation = normalizePathSeparators(file) === normalizePathSeparators(evidence.file)
       && lineRange[0] === evidence.line_range[0]
       && lineRange[1] === evidence.line_range[1];
     return sameRef || sameLocation;
@@ -137,10 +138,6 @@ function matchesSnippetHash(snippet: string, expected: string): boolean {
 
 function hash(algorithm: 'sha1' | 'sha256', value: string): string {
   return createHash(algorithm).update(value).digest('hex');
-}
-
-function normalizePath(value: string): string {
-  return value.replace(/\\/g, '/');
 }
 
 function observationCanSupportRcclEvidence(

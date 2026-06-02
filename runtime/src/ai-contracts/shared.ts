@@ -1,13 +1,8 @@
 import { createHash } from 'node:crypto';
-import type { AIContractKind, ContractPayloadDiagnosticEntry, EvidenceRef } from './types.ts';
+import { AI_CONTRACT_VERSION, type AIContractKind, type ContractPayloadDiagnosticEntry, type EvidenceRef } from './types.ts';
+import { isRecord, unique, validConfidence } from '../utils/common.ts';
 
-export function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
-}
-
-export function validConfidence(value: unknown): value is number {
-  return typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= 1;
-}
+export { isRecord, unique, validConfidence };
 
 export function stableRefHash(value: unknown): string {
   return createHash('sha1').update(JSON.stringify(value)).digest('hex').slice(0, 16);
@@ -37,7 +32,7 @@ export function normalizeEvidenceRefs(value: unknown): EvidenceRef[] {
 export function contractVersionDiagnostic(raw: unknown, expectedKind: AIContractKind): ContractPayloadDiagnosticEntry | null {
   if (!isRecord(raw)) return null;
   if (!('contractVersion' in raw) && !('schemaVersion' in raw) && !('kind' in raw)) return null;
-  if (raw.contractVersion !== 'ai-contract/v2') {
+  if (raw.contractVersion !== AI_CONTRACT_VERSION) {
     return {
       status: 'rejected',
       reason: 'unsupported-value',
@@ -81,6 +76,3 @@ function isLineRange(value: unknown): value is [number, number] {
     && value[1] >= value[0];
 }
 
-export function unique<T>(values: T[]): T[] {
-  return [...new Set(values)];
-}

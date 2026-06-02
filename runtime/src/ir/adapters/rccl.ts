@@ -1,9 +1,9 @@
 import type { RcclObservation } from '../../types.ts';
-import type { ObservationIR, ObservationTraitsIR } from '../types.ts';
+import { GOVERNANCE_IR_VERSION, type ObservationIR, type ObservationTraitsIR } from '../types.ts';
 
 export function observationsToIR(observations: RcclObservation[], rcclPath?: string): ObservationIR[] {
   return observations.map((observation) => ({
-    irVersion: 'governance-ir/v1',
+    irVersion: GOVERNANCE_IR_VERSION,
     id: observation.id,
     semanticKey: observation.semantic_key,
     source: {

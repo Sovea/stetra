@@ -1,3 +1,5 @@
+import "./types.mjs";
+import { isRecord } from "./utils/common.mjs";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 //#region src/cache.ts
@@ -101,9 +103,6 @@ function inspectCacheLevel(path, validate, hitReason) {
 function packetCacheMatches(packet, cache) {
 	if (!isRecord(packet) || !isRecord(packet.cache)) return false;
 	return packet.cache.l1Key === cache.l1Key && packet.cache.l2Key === cache.l2Key && packet.cache.l3Key === cache.l3Key && packet.cache.verificationPolicy === cache.verificationPolicy && packet.cache.rcclVerificationKey === cache.rcclVerificationKey;
-}
-function isRecord(value) {
-	return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 function writeJson(path, value) {
 	mkdirSync(dirname(path), { recursive: true });

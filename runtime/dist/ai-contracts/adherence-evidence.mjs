@@ -1,5 +1,7 @@
+import { isRecord, validConfidence } from "../utils/common.mjs";
 import { buildContractPayloadDiagnostics } from "./diagnostics.mjs";
-import { contractVersionDiagnostic, isRecord, normalizeEvidenceRefs, validConfidence, validEvidenceRefs } from "./shared.mjs";
+import { AI_CONTRACT_VERSION } from "./types.mjs";
+import { contractVersionDiagnostic, normalizeEvidenceRefs, validEvidenceRefs } from "./shared.mjs";
 import { verifyEvidenceRefs } from "./evidence.mjs";
 //#region src/ai-contracts/adherence-evidence.ts
 const MINIMUM_ADHERENCE_CONFIDENCE = .5;
@@ -36,7 +38,7 @@ function prepareAdherenceEvidenceContract(input) {
 		evidenceSchema: JSON.stringify(ADHERENCE_EVIDENCE_SCHEMA, null, 2),
 		evidenceArtifact: artifact,
 		contract: {
-			contractVersion: "ai-contract/v2",
+			contractVersion: AI_CONTRACT_VERSION,
 			kind: "adherence-evidence",
 			schemaId: "runtime.adherence-evidence",
 			schemaVersion: "2.0",

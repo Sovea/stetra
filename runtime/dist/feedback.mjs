@@ -1,3 +1,5 @@
+import "./types.mjs";
+import { isRecord, validConfidence } from "./utils/common.mjs";
 import { parseYaml, toYaml } from "./utils/yaml.mjs";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 //#region src/feedback.ts
@@ -101,9 +103,6 @@ function isLockfileDocument(value) {
 function isLockfileVersion(value) {
 	return value === "1.0" || value === 1 || value === 1;
 }
-function isRecord(value) {
-	return Boolean(value) && typeof value === "object" && !Array.isArray(value);
-}
 function normalizeObservationEntries(entries) {
 	return Object.fromEntries(Object.entries(entries).map(([id, entry]) => [id, {
 		...createObservationEntry(),
@@ -131,7 +130,7 @@ function normalizeDirectiveEntries(entries) {
 				ignored_reasons: normalizeIgnoredReasons(entry.quality_signal?.ignored_reasons),
 				...validIgnoredReason(entry.quality_signal?.last_ignored_reason) ? { last_ignored_reason: entry.quality_signal.last_ignored_reason } : {},
 				signal_confidence: validSignalConfidence(entry.quality_signal?.signal_confidence) ? entry.quality_signal.signal_confidence : "implicit",
-				evidence_confidence: validEvidenceConfidence(entry.quality_signal?.evidence_confidence) ? entry.quality_signal.evidence_confidence : void 0,
+				evidence_confidence: validConfidence(entry.quality_signal?.evidence_confidence) ? entry.quality_signal.evidence_confidence : void 0,
 				last_evaluation_source: validEvaluationSource(entry.quality_signal?.last_evaluation_source) ? entry.quality_signal.last_evaluation_source : void 0,
 				last_seen: entry.quality_signal?.last_seen ?? ""
 			}
@@ -322,9 +321,6 @@ function normalizeSignalCountMap(value) {
 function validCount(value) {
 	return typeof value === "number" && Number.isFinite(value) && value >= 0;
 }
-function validEvidenceConfidence(value) {
-	return typeof value === "number" && Number.isFinite(value) && value >= 0 && value <= 1;
-}
 function validEvaluationSource(value) {
 	return value === "no-explicit-evaluation" || value === "explicit-directives" || value === "adherence-evidence";
 }
@@ -395,4 +391,4 @@ function resolveFromAdherencePayload(input, trackedDirectiveIds) {
 	};
 }
 //#endregion
-export { evaluateGuidance };
+export { evaluateGuidance, normalizeIgnoredReasons, validIgnoredReason };

@@ -1,4 +1,5 @@
-import { minimatch } from "../../utils/glob.mjs";
+import { pathMatchesScope } from "../../utils/paths.mjs";
+import { GOVERNANCE_IR_VERSION } from "../types.mjs";
 import { SEMANTIC_RELATION_POLICY } from "./policy.mjs";
 import { stableHash } from "../../utils/hash.mjs";
 //#region src/ir/relations/propose-feedback-relations.ts
@@ -21,7 +22,7 @@ function proposeFeedbackRelations(bundle) {
 function toFeedbackTensionRelation(signal, directive, observation, task, taskScoped) {
 	const signals = buildFeedbackSignals(signal, observation, taskScoped);
 	return {
-		irVersion: "governance-ir/v1",
+		irVersion: GOVERNANCE_IR_VERSION,
 		id: stableHash([
 			"semantic-relation-ir",
 			"feedback",
@@ -119,11 +120,6 @@ function observationEvidenceRefs(observation) {
 function scopeMatchesTask(scope, task) {
 	if (task.targets.length === 0) return true;
 	return task.targets.some((target) => pathMatchesScope(target.path, scope));
-}
-function pathMatchesScope(path, scope) {
-	if (scope === "*" || scope === "**/*") return true;
-	if (scope.includes("*") || scope.includes("?") || scope.includes("{")) return minimatch(path, scope);
-	return path === scope || path.startsWith(`${scope}/`);
 }
 //#endregion
 export { proposeFeedbackRelations };

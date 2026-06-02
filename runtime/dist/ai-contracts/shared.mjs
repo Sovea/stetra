@@ -1,11 +1,7 @@
+import { isRecord, unique, validConfidence } from "../utils/common.mjs";
+import "./types.mjs";
 import { createHash } from "node:crypto";
 //#region src/ai-contracts/shared.ts
-function isRecord(value) {
-	return Boolean(value) && typeof value === "object" && !Array.isArray(value);
-}
-function validConfidence(value) {
-	return typeof value === "number" && Number.isFinite(value) && value >= 0 && value <= 1;
-}
 function stableRefHash(value) {
 	return createHash("sha1").update(JSON.stringify(value)).digest("hex").slice(0, 16);
 }
@@ -57,9 +53,6 @@ function isEvidenceKind(value) {
 }
 function isLineRange(value) {
 	return Array.isArray(value) && value.length === 2 && typeof value[0] === "number" && typeof value[1] === "number" && Number.isInteger(value[0]) && Number.isInteger(value[1]) && value[0] >= 1 && value[1] >= value[0];
-}
-function unique(values) {
-	return [...new Set(values)];
 }
 //#endregion
 export { contractVersionDiagnostic, isEvidenceRef, isRecord, normalizeEvidenceRefs, stableRefHash, unique, validConfidence, validEvidenceRefs };

@@ -1,12 +1,12 @@
 import { stableHash } from '../../utils/hash.ts';
 import type { ResolvedTaskOutput } from '../../types.ts';
-import type { FieldProvenanceIR, TargetIR, TaskIR } from '../types.ts';
+import { GOVERNANCE_IR_VERSION, type FieldProvenanceIR, type TargetIR, type TaskIR } from '../types.ts';
 
 export function taskToIR(resolved: ResolvedTaskOutput): TaskIR {
   const intent = resolved.task_intent;
   const context = resolved.context_profile;
   return {
-    irVersion: 'governance-ir/v1',
+    irVersion: GOVERNANCE_IR_VERSION,
     id: stableHash(['task-ir', resolved.task.description, intent, context]),
     kind: intent.task_kind,
     operation: intent.operation,

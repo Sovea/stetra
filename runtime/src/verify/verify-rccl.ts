@@ -1,6 +1,7 @@
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { minimatch } from '../utils/glob.ts';
+import { unique } from '../utils/common.ts';
+import { normalizePath, pathMatchesScope, scopeOverlapsPath, fileOverlapsTarget } from '../utils/paths.ts';
 import type {
   RcclDocument,
   RcclObservation,
@@ -185,36 +186,6 @@ function reuseReason(policy: RuntimeRcclVerificationPolicy, relevanceReason: str
   if (policy === 'trust-existing') return 'trust-existing policy reused stored RCCL verification; incomplete verification remains ambient downstream';
   if (policy === 'deep') return 'deep policy should not reuse observations';
   return relevanceReason;
-}
-
-function scopeOverlapsPath(scope: string, path: string): boolean {
-  const normalizedScope = normalizePath(scope);
-  const normalizedPath = normalizePath(path);
-  return pathMatchesScope(normalizedPath, normalizedScope)
-    || pathMatchesScope(normalizedScope, normalizedPath);
-}
-
-function fileOverlapsTarget(file: string, target: string): boolean {
-  const normalizedFile = normalizePath(file);
-  const normalizedTarget = normalizePath(target);
-  return normalizedFile === normalizedTarget
-    || pathMatchesScope(normalizedFile, normalizedTarget)
-    || pathMatchesScope(normalizedTarget, normalizedFile);
-}
-
-function pathMatchesScope(path: string, scope: string): boolean {
-  if (scope === '*' || scope === '**' || scope === '**/*') return true;
-  if (scope.includes('*') || scope.includes('?') || scope.includes('{')) return minimatch(path, scope);
-  const normalizedScope = scope.replace(/\/$/, '');
-  return path === normalizedScope || path.startsWith(`${normalizedScope}/`);
-}
-
-function normalizePath(value: string): string {
-  return value.replace(/\\/g, '/').replace(/^\.\//, '');
-}
-
-function unique<T>(values: T[]): T[] {
-  return [...new Set(values)];
 }
 
 async function loadRcclModule(): Promise<RcclModule> {

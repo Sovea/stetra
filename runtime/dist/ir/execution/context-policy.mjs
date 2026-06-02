@@ -1,4 +1,11 @@
+import { hasConstraint, unique } from "../../utils/common.mjs";
 //#region src/ir/execution/context-policy.ts
+const CONSTRAINT_PRESERVE_COMPATIBILITY = "preserve compatibility";
+const CONSTRAINT_AVOID_BREAKING = "avoid breaking changes";
+const CONSTRAINT_PRESERVE_PUBLIC_API = "preserve public api";
+const CONSTRAINT_NARROW_SCOPE = "prefer narrow change scope";
+const AVOID_BROAD_REWRITES = "broad rewrites";
+const AVOID_OVERENGINEERING = "overengineering";
 const AUTHORITATIVE_CONTEXT_SOURCES = new Set([
 	"explicit",
 	"host-agent",
@@ -110,7 +117,7 @@ const CONTEXT_EXECUTION_RULES = [
 			basis: "task-context",
 			reasonSuffix: "Narrow-scope tradeoff guidance keeps broad architectural guidance ambient for this task.",
 			contextApplied: [
-				...hasAuthoritativeConstraint(input, "allowed_tradeoffs", ["prefer narrow change scope"]) ? ["allowed_tradeoffs:prefer narrow change scope"] : [],
+				...hasAuthoritativeConstraint(input, "allowed_tradeoffs", ["prefer narrow change scope"]) ? [`allowed_tradeoffs:${CONSTRAINT_NARROW_SCOPE}`] : [],
 				...input.context.scope_size === "single-file" && hasAuthoritativeScopeEvidence(input) ? ["scope_size:single-file"] : [],
 				...hasAuthoritativeContextField(input, "refactor_tolerance") && (input.context.refactor_tolerance === "none" || input.context.refactor_tolerance === "local-only") ? [`refactor_tolerance:${input.context.refactor_tolerance}`] : []
 			]
@@ -125,7 +132,7 @@ const CONTEXT_EXECUTION_RULES = [
 			mode: "ambient",
 			basis: "task-context",
 			reasonSuffix: "Avoiding broad rewrites or overengineering keeps expansive guidance ambient unless it is already a must-level requirement.",
-			contextApplied: ["avoid:broad rewrites"]
+			contextApplied: [`avoid:${AVOID_BROAD_REWRITES}`]
 		})
 	},
 	{
@@ -193,9 +200,6 @@ function isAuthoritativeProvenance(provenance) {
 function isCompatibilitySensitiveDirective(directive) {
 	return directive.traits.compatibilitySensitive || directive.traits.rcclImmune || directive.prescription === "must";
 }
-function hasConstraint(values, expected) {
-	return expected.some((item) => values.includes(item));
-}
 function hasCompatibilityRequirement(context) {
 	return context.compatibility_requirement === "preserve-api" || context.compatibility_requirement === "preserve-behavior" || context.compatibility_requirement === "migration-compatible";
 }
@@ -208,8 +212,5 @@ function isSensitiveInterface(context) {
 function isMigrationExecutionPhase(context) {
 	return context.migration_phase === "dual-run" || context.migration_phase === "cutover";
 }
-function unique(values) {
-	return [...new Set(values)];
-}
 //#endregion
-export { applyContextExecutionPolicy, contextInfluenceEffect, contextReviewPriorityBoost };
+export { AVOID_BROAD_REWRITES, AVOID_OVERENGINEERING, CONSTRAINT_AVOID_BREAKING, CONSTRAINT_NARROW_SCOPE, CONSTRAINT_PRESERVE_COMPATIBILITY, CONSTRAINT_PRESERVE_PUBLIC_API, applyContextExecutionPolicy, contextInfluenceEffect, contextReviewPriorityBoost };

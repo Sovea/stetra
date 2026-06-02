@@ -1,6 +1,8 @@
+import { isRecord, validConfidence } from "../utils/common.mjs";
 import { parseYaml } from "../utils/yaml.mjs";
 import { buildContractPayloadDiagnostics } from "./diagnostics.mjs";
-import { isRecord, validConfidence, validEvidenceRefs } from "./shared.mjs";
+import { AI_CONTRACT_VERSION } from "./types.mjs";
+import { validEvidenceRefs } from "./shared.mjs";
 import { existsSync, readFileSync } from "node:fs";
 //#region src/ai-contracts/governance-evolution-proposal.ts
 const GOVERNANCE_EVOLUTION_SCHEMA = {
@@ -31,7 +33,7 @@ function prepareGovernanceEvolutionProposalContract(input) {
 		proposalSchema: JSON.stringify(GOVERNANCE_EVOLUTION_SCHEMA, null, 2),
 		proposalArtifact: artifact,
 		contract: {
-			contractVersion: "ai-contract/v2",
+			contractVersion: AI_CONTRACT_VERSION,
 			kind: "governance-evolution-proposal",
 			schemaId: "runtime.governance-evolution-proposal",
 			schemaVersion: "2.0",

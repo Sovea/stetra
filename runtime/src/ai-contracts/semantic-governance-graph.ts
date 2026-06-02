@@ -1,28 +1,26 @@
-import { resolveCompileTask } from '../compile-input.ts';
-import { activatedDirectiveIdsIR, resolveActivationDecisionsIR } from '../ir/activation/resolve-activation.ts';
-import { buildGovernanceIR } from '../ir/build-ir.ts';
+import { resolveActivatedGovernanceContext } from '../compile-input.ts';
 import { SEMANTIC_RELATION_POLICY } from '../ir/relations/policy.ts';
-import { loadOrVerifyCompileSources } from '../load/compile-sources.ts';
 import { buildContractPayloadDiagnostics } from './diagnostics.ts';
 import { verifyEvidenceRefs } from './evidence.ts';
 import { contractVersionDiagnostic, isRecord, normalizeEvidenceRefs, validConfidence, validEvidenceRefs } from './shared.ts';
-import type {
-  ContractPayloadDiagnosticEntry,
-  HostProposalSourceInput,
-  SemanticContractContextInput,
-  SemanticContractContextOutput,
-  SemanticGovernanceGraphContractBundleInput,
-  SemanticGovernanceGraphContractBundleOutput,
-  SemanticGovernanceGraphContractInput,
-  SemanticGovernanceGraphContractOutput,
-  SemanticGovernanceGraphEdge,
-  SemanticGovernanceGraphPayload,
-  SemanticGovernanceGraphValidationInput,
-  SemanticGovernanceGraphValidationResult,
-  SemanticProposalDirectiveSummary,
-  SemanticProposalObservationSummary,
+import {
+  AI_CONTRACT_VERSION,
+  type ContractPayloadDiagnosticEntry,
+  type HostProposalSourceInput,
+  type SemanticContractContextInput,
+  type SemanticContractContextOutput,
+  type SemanticGovernanceGraphContractBundleInput,
+  type SemanticGovernanceGraphContractBundleOutput,
+  type SemanticGovernanceGraphContractInput,
+  type SemanticGovernanceGraphContractOutput,
+  type SemanticGovernanceGraphEdge,
+  type SemanticGovernanceGraphPayload,
+  type SemanticGovernanceGraphValidationInput,
+  type SemanticGovernanceGraphValidationResult,
+  type SemanticProposalDirectiveSummary,
+  type SemanticProposalObservationSummary,
 } from './types.ts';
-import type { DirectiveIR, HostProposalIR, ObservationIR } from '../ir/types.ts';
+import { GOVERNANCE_IR_VERSION, type DirectiveIR, type HostProposalIR, type ObservationIR } from '../ir/types.ts';
 import type { CompileSources } from '../load/compile-sources.ts';
 
 const SEMANTIC_GRAPH_SCHEMA = {
@@ -36,20 +34,14 @@ const SEMANTIC_GRAPH_SCHEMA = {
 };
 
 export async function prepareSemanticContractContext(input: SemanticContractContextInput): Promise<SemanticContractContextOutput> {
-  const resolvedTask = resolveCompileTask(input.compileInput);
-  const compileInput = { ...input.compileInput, resolvedTask };
-  const sources = await loadOrVerifyCompileSources(compileInput, compileInput.preloadedSources);
-  const governanceIR = await buildGovernanceIR(compileInput, sources);
-  const activationDecisions = resolveActivationDecisionsIR(governanceIR);
-  const activatedDirectiveIds = activatedDirectiveIdsIR(activationDecisions);
-  const activeDirectives = governanceIR.directives.filter((directive) => activatedDirectiveIds.has(directive.id));
+  const ctx = await resolveActivatedGovernanceContext(input.compileInput);
   return {
-    resolvedTask,
-    directives: activeDirectives.map(summarizeDirectiveForProposal),
-    observations: governanceIR.observations
-      .filter((observation) => !skippedObservationIds(sources).has(observation.id))
+    resolvedTask: ctx.resolvedTask,
+    directives: ctx.activeDirectives.map(summarizeDirectiveForProposal),
+    observations: ctx.governanceIR.observations
+      .filter((observation) => !skippedObservationIds(ctx.sources).has(observation.id))
       .map(summarizeObservationForProposal),
-    loadedSources: sources,
+    loadedSources: ctx.sources,
   };
 }
 
@@ -78,7 +70,7 @@ export function prepareSemanticGovernanceGraphContract(input: SemanticGovernance
     graphSchema: JSON.stringify(SEMANTIC_GRAPH_SCHEMA, null, 2),
     graphArtifact: artifact,
     contract: {
-      contractVersion: 'ai-contract/v2',
+      contractVersion: AI_CONTRACT_VERSION,
       kind: 'semantic-governance-graph',
       schemaId: 'runtime.semantic-governance-graph',
       schemaVersion: '2.0',
@@ -240,7 +232,7 @@ function isExecutionIntent(value: unknown): boolean {
 
 function buildHostProposal(source: HostProposalSourceInput, payload: SemanticGovernanceGraphPayload): HostProposalIR {
   return {
-    irVersion: 'governance-ir/v1',
+    irVersion: GOVERNANCE_IR_VERSION,
     source: {
       kind: 'host-proposal',
       id: source.id,

@@ -19,6 +19,7 @@ import type {
 } from '../types.ts';
 
 export type GovernanceIRVersion = 'governance-ir/v1';
+export const GOVERNANCE_IR_VERSION: GovernanceIRVersion = 'governance-ir/v1';
 
 export interface SourceRefIR {
   kind: 'builtin-playbook' | 'local-playbook' | 'rccl' | 'task-input' | 'lockfile' | 'host-proposal' | 'runtime';

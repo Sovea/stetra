@@ -1,5 +1,8 @@
+import { isRecord, unique, validConfidence } from "../utils/common.mjs";
+import { normalizePath } from "../utils/paths.mjs";
 import { buildContractPayloadDiagnostics } from "./diagnostics.mjs";
-import { contractVersionDiagnostic, isRecord, unique, validConfidence, validEvidenceRefs } from "./shared.mjs";
+import { AI_CONTRACT_VERSION } from "./types.mjs";
+import { contractVersionDiagnostic, validEvidenceRefs } from "./shared.mjs";
 //#region src/ai-contracts/context-acquisition.ts
 const CONTEXT_ACQUISITION_SCHEMA = {
 	type: "object",
@@ -71,7 +74,7 @@ function prepareContextAcquisitionContract(input) {
 		acquisitionSchema: JSON.stringify(CONTEXT_ACQUISITION_SCHEMA, null, 2),
 		acquisitionArtifact: artifact,
 		contract: {
-			contractVersion: "ai-contract/v2",
+			contractVersion: AI_CONTRACT_VERSION,
 			kind: "context-acquisition",
 			schemaId: "runtime.context-acquisition",
 			schemaVersion: "2.0",
@@ -115,8 +118,8 @@ function validateContextAcquisitionPayload(raw) {
 			entries.push(rejected(path, "malformed-payload", "Request must be a bounded rccl-incremental request with mode, target_files, changed_files, reason, confidence, and evidence_refs."));
 			return;
 		}
-		const targetFiles = unique(request.target_files.filter((file) => file.trim()).map(normalizePath));
-		const changedFiles = unique(request.changed_files.filter((file) => file.trim()).map(normalizePath));
+		const targetFiles = unique(request.target_files.filter((file) => file.trim()).map((file) => normalizePath(file.trim())));
+		const changedFiles = unique(request.changed_files.filter((file) => file.trim()).map((file) => normalizePath(file.trim())));
 		const totalFiles = unique([...targetFiles, ...changedFiles]);
 		if (request.mode !== "full" && totalFiles.length === 0) {
 			entries.push(rejected(path, "missing-required-field", "Task-scoped and changed-files context acquisition requires at least one target or changed file."));
@@ -172,9 +175,6 @@ function isContextAcquisitionRequest(value) {
 }
 function isContextMode(value) {
 	return value === "task-scoped" || value === "changed-files" || value === "full";
-}
-function normalizePath(value) {
-	return value.replace(/\\/g, "/").trim();
 }
 function rejected(path, reason, message) {
 	return {

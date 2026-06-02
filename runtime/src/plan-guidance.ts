@@ -7,7 +7,8 @@ import { prepareTaskModelContract } from './ai-contracts/task-model.ts';
 import { resolveContractPolicy } from './contract-policy.ts';
 import { resolveTask } from './interpret/normalize-candidate.ts';
 import { loadRccl } from './load/load-rccl.ts';
-import { minimatch } from './utils/glob.ts';
+import { unique, isRecord } from './utils/common.ts';
+import { normalizePath, pathMatchesScope, scopeOverlapsPath, fileOverlapsTarget } from './utils/paths.ts';
 import { parseYaml } from './utils/yaml.ts';
 import type {
   CompileInput,
@@ -21,14 +22,15 @@ import type {
 } from './types.ts';
 
 export async function planGuidance(input: GuidancePlanInput): Promise<GuidancePlan> {
-  const sourceStatus = resolveSourceStatus(input);
+  const notes: string[] = [];
+  const sourceStatus = resolveSourceStatus(input, notes);
   const guidanceMode = input.mode ?? 'standard';
   const resolvedTask = resolveTask({
     task: input.task,
     taskModels: input.taskModels ?? [],
     interpretationMode: input.taskModels?.length ? 'host-agent' : 'deterministic-only',
   });
-  const rcclRelevant = await resolveRcclRelevance(input, sourceStatus, resolvedTask);
+  const rcclRelevant = await resolveRcclRelevance(input, sourceStatus, resolvedTask, notes);
   const policy = resolveContractPolicy({
     sourceStatus,
     providedContracts: input.providedContracts,
@@ -39,7 +41,6 @@ export async function planGuidance(input: GuidancePlanInput): Promise<GuidancePl
     rcclRelevant,
   });
   const requiredContracts: RuntimeContractRequest[] = [];
-  const notes: string[] = [];
 
   if (policy.required.includes('agent-capability-profile')) {
     const profile = prepareAgentCapabilityProfileContract({
@@ -132,16 +133,19 @@ export async function planGuidance(input: GuidancePlanInput): Promise<GuidancePl
   };
 }
 
-export function resolveSourceStatus(input: Pick<GuidancePlanInput, 'localAugmentPath' | 'rcclPath' | 'lockfilePath' | 'projectRoot'>): GuidancePlanSourceStatus {
+export function resolveSourceStatus(
+  input: Pick<GuidancePlanInput, 'localAugmentPath' | 'rcclPath' | 'lockfilePath' | 'projectRoot'>,
+  notes?: string[],
+): GuidancePlanSourceStatus {
   return {
     localAugment: input.localAugmentPath && existsSync(input.localAugmentPath) ? 'present' : 'absent',
-    rccl: resolveRcclSourceStatus(input.rcclPath),
+    rccl: resolveRcclSourceStatus(input.rcclPath, notes),
     lockfile: input.lockfilePath && existsSync(input.lockfilePath) ? 'present' : 'absent',
     cache: resolveCacheStatus(input.projectRoot),
   };
 }
 
-function resolveRcclSourceStatus(rcclPath?: string): GuidancePlanSourceStatus['rccl'] {
+function resolveRcclSourceStatus(rcclPath: string | undefined, notes?: string[]): GuidancePlanSourceStatus['rccl'] {
   if (!rcclPath || !existsSync(rcclPath)) return 'absent';
   try {
     const parsed = parseYaml(readFileSync(rcclPath, 'utf-8'));
@@ -166,7 +170,8 @@ function resolveRcclSourceStatus(rcclPath?: string): GuidancePlanSourceStatus['r
       return lifecycle?.status === 'stale' || lifecycle?.status === 'superseded';
     });
     return hasStaleLifecycle ? 'stale' : 'present';
-  } catch {
+  } catch (error) {
+    notes?.push(`RCCL status check failed: ${error instanceof Error ? error.message : String(error)}`);
     return 'unverified';
   }
 }
@@ -203,6 +208,7 @@ async function resolveRcclRelevance(
   input: GuidancePlanInput,
   sourceStatus: GuidancePlanSourceStatus,
   resolvedTask: ResolvedTaskOutput,
+  notes?: string[],
 ): Promise<boolean | undefined> {
   if (sourceStatus.rccl === 'absent' || !input.rcclPath) return undefined;
   const targets = taskTargets(input.task, resolvedTask);
@@ -210,7 +216,8 @@ async function resolveRcclRelevance(
   let rccl: RcclDocument | null = null;
   try {
     rccl = await loadRccl(input.rcclPath);
-  } catch {
+  } catch (error) {
+    notes?.push(`RCCL relevance check failed: ${error instanceof Error ? error.message : String(error)}`);
     return undefined;
   }
   if (!rccl) return undefined;
@@ -229,48 +236,14 @@ function taskTargets(task: CompileTaskInput, resolvedTask: ResolvedTaskOutput): 
   ].filter((value): value is string => Boolean(value)).map(normalizePath));
 }
 
-function pathMatchesScope(path: string, scope: string): boolean {
-  if (scope === '*' || scope === '**' || scope === '**/*') return true;
-  if (scope.includes('*') || scope.includes('?') || scope.includes('{')) return minimatch(path, scope);
-  const normalizedScope = scope.replace(/\/$/, '');
-  return path === normalizedScope || path.startsWith(`${normalizedScope}/`);
-}
-
-function scopeOverlapsPath(scope: string, path: string): boolean {
-  const normalizedScope = normalizePath(scope);
-  const normalizedPath = normalizePath(path);
-  return pathMatchesScope(normalizedPath, normalizedScope)
-    || pathMatchesScope(normalizedScope, normalizedPath);
-}
-
-function fileOverlapsTarget(file: string, target: string): boolean {
-  const normalizedFile = normalizePath(file);
-  const normalizedTarget = normalizePath(target);
-  return normalizedFile === normalizedTarget
-    || pathMatchesScope(normalizedFile, normalizedTarget)
-    || pathMatchesScope(normalizedTarget, normalizedFile);
-}
-
-function normalizePath(value: string): string {
-  return value.replace(/\\/g, '/').replace(/^\.\//, '');
-}
-
 function hasFiles(directory: string): boolean {
   try {
     return readdirSync(directory).some((entry) => entry.endsWith('.json'));
-  } catch {
+  } catch (_error) {
     return false;
   }
 }
 
-function unique<T>(values: T[]): T[] {
-  return [...new Set(values)];
-}
-
 function hasVerificationValue(record: Record<string, unknown>, key: string): boolean {
   return record[key] !== undefined && record[key] !== null && record[key] !== '';
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 }

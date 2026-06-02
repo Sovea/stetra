@@ -1,3 +1,4 @@
+import { GOVERNANCE_IR_VERSION } from "../types.mjs";
 import { getDirectiveLayerRank } from "../../select/activation-plan.mjs";
 //#region src/ir/adapters/playbook.ts
 const WEIGHT_RANKS = {
@@ -21,7 +22,7 @@ function directivesToIR(directives, local) {
 		const prescription = override?.prescription ?? directive.prescription;
 		const weight = override?.weight ?? directive.weight;
 		return {
-			irVersion: "governance-ir/v1",
+			irVersion: GOVERNANCE_IR_VERSION,
 			id: directive.id,
 			semanticKey: toSemanticKey(directive.id),
 			source: {

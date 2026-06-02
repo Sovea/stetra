@@ -1,11 +1,12 @@
 import { buildContractPayloadDiagnostics } from './diagnostics.ts';
 import { contractVersionDiagnostic, isRecord } from './shared.ts';
-import type {
-  AgentCapabilityProfile,
-  AgentCapabilityProfileContractInput,
-  AgentCapabilityProfileContractOutput,
-  AgentCapabilityProfileValidationResult,
-  ContractPayloadDiagnosticEntry,
+import {
+  AI_CONTRACT_VERSION,
+  type AgentCapabilityProfile,
+  type AgentCapabilityProfileContractInput,
+  type AgentCapabilityProfileContractOutput,
+  type AgentCapabilityProfileValidationResult,
+  type ContractPayloadDiagnosticEntry,
 } from './types.ts';
 
 const AGENT_CAPABILITY_PROFILE_SCHEMA = {
@@ -41,7 +42,7 @@ export function prepareAgentCapabilityProfileContract(input: AgentCapabilityProf
     profileSchema: JSON.stringify(AGENT_CAPABILITY_PROFILE_SCHEMA, null, 2),
     profileArtifact: artifact,
     contract: {
-      contractVersion: 'ai-contract/v2',
+      contractVersion: AI_CONTRACT_VERSION,
       kind: 'agent-capability-profile',
       schemaId: 'runtime.agent-capability-profile',
       schemaVersion: '2.0',

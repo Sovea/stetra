@@ -1,12 +1,13 @@
 import { TASK_INTERPRETATION_ENUMS } from '../intent/schema.ts';
 import { buildContractPayloadDiagnostics } from './diagnostics.ts';
 import { contractVersionDiagnostic, isRecord, validConfidence, validEvidenceRefs } from './shared.ts';
-import type {
-  ContractPayloadDiagnosticEntry,
-  TaskModelContractInput,
-  TaskModelContractOutput,
-  TaskModelProposal,
-  TaskModelValidationResult,
+import {
+  AI_CONTRACT_VERSION,
+  type ContractPayloadDiagnosticEntry,
+  type TaskModelContractInput,
+  type TaskModelContractOutput,
+  type TaskModelProposal,
+  type TaskModelValidationResult,
 } from './types.ts';
 
 const TASK_MODEL_SCHEMA = {
@@ -35,7 +36,7 @@ export function prepareTaskModelContract(input: TaskModelContractInput): TaskMod
     modelArtifact: artifact,
     clarificationHints: buildClarificationHints(input.task),
     contract: {
-      contractVersion: 'ai-contract/v2',
+      contractVersion: AI_CONTRACT_VERSION,
       kind: 'task-model',
       schemaId: 'runtime.task-model',
       schemaVersion: '2.0',

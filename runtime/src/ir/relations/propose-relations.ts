@@ -1,16 +1,17 @@
 import { stableHash } from '../../utils/hash.ts';
-import { minimatch } from '../../utils/glob.ts';
+import { pathMatchesScope } from '../../utils/paths.ts';
 import type { SemanticGovernanceGraphEdge, SemanticGovernanceGraphPayload } from '../../ai-contracts/types.ts';
-import type {
-  DirectiveIR,
-  GovernanceIRBundle,
-  HostProposalIR,
-  ObservationIR,
-  SemanticRelationIR,
-  SemanticRelationImpactIR,
-  SemanticRelationReviewPriorityIR,
-  SemanticRelationSignalIR,
-  TaskIR,
+import {
+  GOVERNANCE_IR_VERSION,
+  type DirectiveIR,
+  type GovernanceIRBundle,
+  type HostProposalIR,
+  type ObservationIR,
+  type SemanticRelationIR,
+  type SemanticRelationImpactIR,
+  type SemanticRelationReviewPriorityIR,
+  type SemanticRelationSignalIR,
+  type TaskIR,
 } from '../types.ts';
 import { proposeFeedbackRelations } from './propose-feedback-relations.ts';
 
@@ -47,7 +48,7 @@ function proposeRuntimeStructuralRelation(
   const signals = buildRuntimeSignals(observation, taskScoped, semanticKey, relation);
   const conflictClass = inferConflictClass(directive, observation, relation);
   return {
-    irVersion: 'governance-ir/v1',
+    irVersion: GOVERNANCE_IR_VERSION,
     id: stableHash(['semantic-relation-ir', 'runtime-structural', directive.id, observation.id, relation, signals]),
     directiveId: directive.id,
     observationId: observation.id,
@@ -125,7 +126,7 @@ function toHostGraphRelationIR(
   const evidenceRefs = edge.evidence_refs.map((ref) => ref.ref);
 
   return {
-    irVersion: 'governance-ir/v1',
+    irVersion: GOVERNANCE_IR_VERSION,
     id: stableHash(['semantic-relation-ir', proposal.source.id, edge.directive_id, edge.observation_id, relation, edge.reason, edge.evidence_refs, edge.execution_intent, edge.group_id]),
     directiveId: edge.directive_id,
     observationId: edge.observation_id,
@@ -331,10 +332,4 @@ function clampConfidence(value: number): number {
 function scopeMatchesTask(scope: string, task: TaskIR): boolean {
   if (task.targets.length === 0) return true;
   return task.targets.some((target) => pathMatchesScope(target.path, scope));
-}
-
-function pathMatchesScope(path: string, scope: string): boolean {
-  if (scope === '*' || scope === '**/*') return true;
-  if (scope.includes('*') || scope.includes('?') || scope.includes('{')) return minimatch(path, scope);
-  return path === scope || path.startsWith(`${scope}/`);
 }

@@ -1,4 +1,7 @@
 import { resolveTask } from "./interpret/normalize-candidate.mjs";
+import { activatedDirectiveIdsIR, resolveActivationDecisionsIR } from "./ir/activation/resolve-activation.mjs";
+import { loadOrVerifyCompileSources } from "./load/compile-sources.mjs";
+import { buildGovernanceIR } from "./ir/build-ir.mjs";
 //#region src/compile-input.ts
 function hasResolvedTask(input) {
 	return "resolvedTask" in input;
@@ -19,5 +22,22 @@ function toResolvedCompileInput(input) {
 		resolvedTask: resolveCompileTask(input)
 	};
 }
+async function resolveActivatedGovernanceContext(input) {
+	const normalizedInput = toResolvedCompileInput(input);
+	const resolvedTask = normalizedInput.resolvedTask;
+	const sources = await loadOrVerifyCompileSources(normalizedInput, normalizedInput.preloadedSources);
+	const governanceIR = await buildGovernanceIR(normalizedInput, sources);
+	const activationDecisions = resolveActivationDecisionsIR(governanceIR);
+	const activatedDirectiveIds = activatedDirectiveIdsIR(activationDecisions);
+	return {
+		normalizedInput,
+		resolvedTask,
+		sources,
+		governanceIR,
+		activationDecisions,
+		activatedDirectiveIds,
+		activeDirectives: governanceIR.directives.filter((directive) => activatedDirectiveIds.has(directive.id))
+	};
+}
 //#endregion
-export { hasResolvedTask, resolveCompileTask, toResolvedCompileInput };
+export { hasResolvedTask, resolveActivatedGovernanceContext, resolveCompileTask, toResolvedCompileInput };

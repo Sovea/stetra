@@ -15,6 +15,7 @@ import {
 import type { CompileTaskInput, ContextProfile, Operation, ResolveTaskRequest, ResolvedTaskOutput, TaskIntent, TaskKind } from '../types.ts';
 import type { TaskModelListField, TaskModelProposal, TaskModelScalarField } from '../ai-contracts/types.ts';
 import { DeterministicInterpretationProvider } from './deterministic-extractor.ts';
+import { uniqueCompact } from '../utils/common.ts';
 import type {
   CandidateField,
   CandidateListField,
@@ -32,6 +33,194 @@ import type {
 const deterministicProvider = new DeterministicInterpretationProvider();
 const MIN_ASSISTIVE_CONTEXT_CONFIDENCE = 0.5;
 
+interface ScalarFieldSpec {
+  field: string;
+  section: 'intent' | 'context';
+  candidateKey: string;
+  explicitValue: (input: ResolveTaskRequest) => unknown;
+  fallbackValue: (det: ParsedTaskCandidate) => unknown;
+  defaultConfidence: (det: ParsedTaskCandidate) => number;
+  allowedValues?: readonly unknown[];
+  minimumCandidateConfidence?: number;
+}
+
+interface ListFieldSpec {
+  field: string;
+  section: 'intent' | 'context';
+  candidateKey: string;
+  explicitValues: (input: ResolveTaskRequest) => unknown[] | undefined;
+  fallbackValues: (det: ParsedTaskCandidate) => unknown[];
+  defaultConfidence: (det: ParsedTaskCandidate) => number;
+}
+
+const SCALAR_FIELD_SPECS: ScalarFieldSpec[] = [
+  {
+    field: 'intent.task_kind',
+    section: 'intent',
+    candidateKey: 'task_kind',
+    explicitValue: (input) => input.taskKind ?? input.task.taskKind,
+    fallbackValue: (det) => det.intent.task_kind?.value ?? 'code',
+    defaultConfidence: (det) => det.intent.task_kind?.confidence ?? 0.85,
+    allowedValues: TASK_KINDS,
+  },
+  {
+    field: 'intent.operation',
+    section: 'intent',
+    candidateKey: 'operation',
+    explicitValue: (input) => input.task.operation,
+    fallbackValue: (det) => det.intent.operation?.value ?? 'modify',
+    defaultConfidence: (det) => det.intent.operation?.confidence ?? 0.5,
+    allowedValues: OPERATIONS,
+  },
+  {
+    field: 'intent.target_file',
+    section: 'intent',
+    candidateKey: 'target_file',
+    explicitValue: (input) => input.task.targetFile,
+    fallbackValue: (det) => det.intent.target_file?.value,
+    defaultConfidence: (det) => det.intent.target_file?.confidence ?? 0.65,
+  },
+  {
+    field: 'context.project_stage',
+    section: 'context',
+    candidateKey: 'project_stage',
+    explicitValue: (input) => input.task.projectStage,
+    fallbackValue: (det) => det.context.project_stage?.value,
+    defaultConfidence: (det) => det.context.project_stage?.confidence ?? 0.5,
+    allowedValues: PROJECT_STAGES,
+  },
+  {
+    field: 'context.optimization_target',
+    section: 'context',
+    candidateKey: 'optimization_target',
+    explicitValue: (input) => input.task.optimizationTarget,
+    fallbackValue: (det) => det.context.optimization_target?.value,
+    defaultConfidence: (det) => det.context.optimization_target?.confidence ?? 0.55,
+    allowedValues: OPTIMIZATION_TARGETS,
+  },
+  {
+    field: 'context.risk_level',
+    section: 'context',
+    candidateKey: 'risk_level',
+    explicitValue: (input) => input.task.riskLevel,
+    fallbackValue: (det) => det.context.risk_level?.value ?? 'medium',
+    defaultConfidence: (det) => det.context.risk_level?.confidence ?? 0.65,
+    allowedValues: RISK_LEVELS,
+    minimumCandidateConfidence: MIN_ASSISTIVE_CONTEXT_CONFIDENCE,
+  },
+  {
+    field: 'context.scope_size',
+    section: 'context',
+    candidateKey: 'scope_size',
+    explicitValue: (input) => input.task.scopeSize,
+    fallbackValue: (det) => det.context.scope_size?.value ?? 'unknown',
+    defaultConfidence: (det) => det.context.scope_size?.confidence ?? 0.35,
+    allowedValues: SCOPE_SIZES,
+    minimumCandidateConfidence: MIN_ASSISTIVE_CONTEXT_CONFIDENCE,
+  },
+  {
+    field: 'context.compatibility_requirement',
+    section: 'context',
+    candidateKey: 'compatibility_requirement',
+    explicitValue: (input) => input.task.compatibilityRequirement,
+    fallbackValue: (det) => det.context.compatibility_requirement?.value ?? 'none',
+    defaultConfidence: (det) => det.context.compatibility_requirement?.confidence ?? 0.5,
+    allowedValues: COMPATIBILITY_REQUIREMENTS,
+    minimumCandidateConfidence: MIN_ASSISTIVE_CONTEXT_CONFIDENCE,
+  },
+  {
+    field: 'context.interface_sensitivity',
+    section: 'context',
+    candidateKey: 'interface_sensitivity',
+    explicitValue: (input) => input.task.interfaceSensitivity,
+    fallbackValue: (det) => det.context.interface_sensitivity?.value ?? 'unknown',
+    defaultConfidence: (det) => det.context.interface_sensitivity?.confidence ?? 0.35,
+    allowedValues: INTERFACE_SENSITIVITIES,
+    minimumCandidateConfidence: MIN_ASSISTIVE_CONTEXT_CONFIDENCE,
+  },
+  {
+    field: 'context.refactor_tolerance',
+    section: 'context',
+    candidateKey: 'refactor_tolerance',
+    explicitValue: (input) => input.task.refactorTolerance,
+    fallbackValue: (det) => det.context.refactor_tolerance?.value ?? 'local-only',
+    defaultConfidence: (det) => det.context.refactor_tolerance?.confidence ?? 0.65,
+    allowedValues: REFACTOR_TOLERANCES,
+    minimumCandidateConfidence: MIN_ASSISTIVE_CONTEXT_CONFIDENCE,
+  },
+  {
+    field: 'context.migration_phase',
+    section: 'context',
+    candidateKey: 'migration_phase',
+    explicitValue: (input) => input.task.migrationPhase,
+    fallbackValue: (det) => det.context.migration_phase?.value ?? 'none',
+    defaultConfidence: (det) => det.context.migration_phase?.confidence ?? 0.45,
+    allowedValues: MIGRATION_PHASES,
+    minimumCandidateConfidence: MIN_ASSISTIVE_CONTEXT_CONFIDENCE,
+  },
+  {
+    field: 'context.review_goal',
+    section: 'context',
+    candidateKey: 'review_goal',
+    explicitValue: (input) => input.task.reviewGoal,
+    fallbackValue: (det) => det.context.review_goal?.value ?? 'maintainability',
+    defaultConfidence: (det) => det.context.review_goal?.confidence ?? 0.65,
+    allowedValues: REVIEW_GOALS,
+    minimumCandidateConfidence: MIN_ASSISTIVE_CONTEXT_CONFIDENCE,
+  },
+];
+
+const LIST_FIELD_SPECS: ListFieldSpec[] = [
+  {
+    field: 'intent.changed_files',
+    section: 'intent',
+    candidateKey: 'changed_files',
+    explicitValues: (input) => input.task.changedFiles,
+    fallbackValues: (det) => det.intent.changed_files?.values ?? [],
+    defaultConfidence: (det) => det.intent.changed_files?.confidence ?? 0.2,
+  },
+  {
+    field: 'intent.tech_stack',
+    section: 'intent',
+    candidateKey: 'tech_stack',
+    explicitValues: (input) => input.task.techStack,
+    fallbackValues: (det) => det.intent.tech_stack?.values ?? [],
+    defaultConfidence: (det) => det.intent.tech_stack?.confidence ?? 0.3,
+  },
+  {
+    field: 'intent.tags',
+    section: 'intent',
+    candidateKey: 'tags',
+    explicitValues: (input) => input.task.tags,
+    fallbackValues: (det) => det.intent.tags?.values ?? [],
+    defaultConfidence: (det) => det.intent.tags?.confidence ?? 0.3,
+  },
+  {
+    field: 'context.hard_constraints',
+    section: 'context',
+    candidateKey: 'hard_constraints',
+    explicitValues: (input) => input.task.hardConstraints,
+    fallbackValues: (det) => det.context.hard_constraints?.values ?? [],
+    defaultConfidence: (det) => det.context.hard_constraints?.confidence ?? 0.2,
+  },
+  {
+    field: 'context.allowed_tradeoffs',
+    section: 'context',
+    candidateKey: 'allowed_tradeoffs',
+    explicitValues: (input) => input.task.allowedTradeoffs,
+    fallbackValues: (det) => det.context.allowed_tradeoffs?.values ?? [],
+    defaultConfidence: (det) => det.context.allowed_tradeoffs?.confidence ?? 0.2,
+  },
+  {
+    field: 'context.avoid',
+    section: 'context',
+    candidateKey: 'avoid',
+    explicitValues: (input) => input.task.avoid,
+    fallbackValues: (det) => det.context.avoid?.values ?? [],
+    defaultConfidence: (det) => det.context.avoid?.confidence ?? 0.2,
+  },
+];
+
 export function resolveTask(input: ResolveTaskRequest): ResolvedTaskOutput {
   const deterministicCandidate = deterministicProvider.interpret(input.task);
   const modelCandidates = (input.taskModels ?? []).map(taskModelToCandidate);
@@ -39,291 +228,119 @@ export function resolveTask(input: ResolveTaskRequest): ResolvedTaskOutput {
   const conflicts: InterpretationConflict[] = [];
   const discardedInputs: DiscardedInterpretationInput[] = [];
 
-  const taskKindResolution = resolveField<TaskKind>({
-    field: 'intent.task_kind',
-    explicitValue: input.taskKind ?? input.task.taskKind,
-    candidates: candidates.map((candidate) => candidate.intent.task_kind),
-    fallbackValue: deterministicCandidate.intent.task_kind?.value ?? 'code',
-    defaultSource: 'deterministic',
-    defaultConfidence: deterministicCandidate.intent.task_kind?.confidence ?? 0.85,
-    allowedValues: TASK_KINDS,
-    conflicts,
-    discardedInputs,
-  });
+  const scalarResults = new Map<string, ScalarResolution<unknown>>();
+  for (const spec of SCALAR_FIELD_SPECS) {
+    scalarResults.set(spec.field, resolveField({
+      field: spec.field,
+      explicitValue: spec.explicitValue(input),
+      candidates: candidates.map((candidate) => {
+        const section = spec.section === 'intent' ? candidate.intent : candidate.context;
+        return (section as Record<string, CandidateField<unknown> | undefined>)[spec.candidateKey];
+      }),
+      fallbackValue: spec.fallbackValue(deterministicCandidate),
+      defaultSource: 'deterministic',
+      defaultConfidence: spec.defaultConfidence(deterministicCandidate),
+      ...(spec.allowedValues ? { allowedValues: spec.allowedValues } : {}),
+      ...(spec.minimumCandidateConfidence !== undefined ? { minimumCandidateConfidence: spec.minimumCandidateConfidence } : {}),
+      conflicts,
+      discardedInputs,
+    }));
+  }
 
-  const operationResolution = resolveField<Operation>({
-    field: 'intent.operation',
-    explicitValue: input.task.operation,
-    candidates: candidates.map((candidate) => candidate.intent.operation),
-    fallbackValue: deterministicCandidate.intent.operation?.value ?? 'modify',
-    defaultSource: 'deterministic',
-    defaultConfidence: deterministicCandidate.intent.operation?.confidence ?? 0.5,
-    allowedValues: OPERATIONS,
-    conflicts,
-    discardedInputs,
-  });
+  const listResults = new Map<string, ListResolution<unknown>>();
+  for (const spec of LIST_FIELD_SPECS) {
+    listResults.set(spec.field, resolveListField({
+      field: spec.field,
+      explicitValues: spec.explicitValues(input),
+      candidates: candidates.map((candidate) => {
+        const section = spec.section === 'intent' ? candidate.intent : candidate.context;
+        return (section as Record<string, CandidateListField<unknown> | undefined>)[spec.candidateKey];
+      }),
+      fallbackValues: spec.fallbackValues(deterministicCandidate),
+      defaultSource: 'deterministic',
+      defaultConfidence: spec.defaultConfidence(deterministicCandidate),
+      conflicts,
+    }));
+  }
 
-  const targetFileResolution = resolveField<string>({
-    field: 'intent.target_file',
-    explicitValue: input.task.targetFile,
-    candidates: candidates.map((candidate) => candidate.intent.target_file),
-    fallbackValue: deterministicCandidate.intent.target_file?.value,
-    defaultSource: 'deterministic',
-    defaultConfidence: deterministicCandidate.intent.target_file?.confidence ?? 0.65,
-    conflicts,
-    discardedInputs,
-  });
-
-  const changedFilesResolution = resolveListField<string>({
-    field: 'intent.changed_files',
-    explicitValues: input.task.changedFiles,
-    candidates: candidates.map((candidate) => candidate.intent.changed_files),
-    fallbackValues: deterministicCandidate.intent.changed_files?.values ?? [],
-    defaultSource: 'deterministic',
-    defaultConfidence: deterministicCandidate.intent.changed_files?.confidence ?? 0.2,
-    conflicts,
-  });
-
-  const techStackResolution = resolveListField<string>({
-    field: 'intent.tech_stack',
-    explicitValues: input.task.techStack,
-    candidates: candidates.map((candidate) => candidate.intent.tech_stack),
-    fallbackValues: deterministicCandidate.intent.tech_stack?.values ?? [],
-    defaultSource: 'deterministic',
-    defaultConfidence: deterministicCandidate.intent.tech_stack?.confidence ?? 0.3,
-    conflicts,
-  });
-
-  const tagsResolution = resolveListField<string>({
-    field: 'intent.tags',
-    explicitValues: input.task.tags,
-    candidates: candidates.map((candidate) => candidate.intent.tags),
-    fallbackValues: deterministicCandidate.intent.tags?.values ?? [],
-    defaultSource: 'deterministic',
-    defaultConfidence: deterministicCandidate.intent.tags?.confidence ?? 0.3,
-    conflicts,
-  });
-
-  const projectStageResolution = resolveField<ContextProfile['project_stage']>({
-    field: 'context.project_stage',
-    explicitValue: input.task.projectStage,
-    candidates: candidates.map((candidate) => candidate.context.project_stage),
-    fallbackValue: deterministicCandidate.context.project_stage?.value,
-    defaultSource: 'deterministic',
-    defaultConfidence: deterministicCandidate.context.project_stage?.confidence ?? 0.5,
-    allowedValues: PROJECT_STAGES,
-    conflicts,
-    discardedInputs,
-  });
-
-  const optimizationTargetResolution = resolveField<ContextProfile['optimization_target']>({
-    field: 'context.optimization_target',
-    explicitValue: input.task.optimizationTarget,
-    candidates: candidates.map((candidate) => candidate.context.optimization_target),
-    fallbackValue: deterministicCandidate.context.optimization_target?.value,
-    defaultSource: 'deterministic',
-    defaultConfidence: deterministicCandidate.context.optimization_target?.confidence ?? 0.55,
-    allowedValues: OPTIMIZATION_TARGETS,
-    conflicts,
-    discardedInputs,
-  });
-
-  const hardConstraintsResolution = resolveListField<string>({
-    field: 'context.hard_constraints',
-    explicitValues: input.task.hardConstraints,
-    candidates: candidates.map((candidate) => candidate.context.hard_constraints),
-    fallbackValues: deterministicCandidate.context.hard_constraints?.values ?? [],
-    defaultSource: 'deterministic',
-    defaultConfidence: deterministicCandidate.context.hard_constraints?.confidence ?? 0.2,
-    conflicts,
-  });
-
-  const allowedTradeoffsResolution = resolveListField<string>({
-    field: 'context.allowed_tradeoffs',
-    explicitValues: input.task.allowedTradeoffs,
-    candidates: candidates.map((candidate) => candidate.context.allowed_tradeoffs),
-    fallbackValues: deterministicCandidate.context.allowed_tradeoffs?.values ?? [],
-    defaultSource: 'deterministic',
-    defaultConfidence: deterministicCandidate.context.allowed_tradeoffs?.confidence ?? 0.2,
-    conflicts,
-  });
-
-  const avoidResolution = resolveListField<string>({
-    field: 'context.avoid',
-    explicitValues: input.task.avoid,
-    candidates: candidates.map((candidate) => candidate.context.avoid),
-    fallbackValues: deterministicCandidate.context.avoid?.values ?? [],
-    defaultSource: 'deterministic',
-    defaultConfidence: deterministicCandidate.context.avoid?.confidence ?? 0.2,
-    conflicts,
-  });
-
-  const riskLevelResolution = resolveField<ContextProfile['risk_level']>({
-    field: 'context.risk_level',
-    explicitValue: input.task.riskLevel,
-    candidates: candidates.map((candidate) => candidate.context.risk_level),
-    fallbackValue: deterministicCandidate.context.risk_level?.value ?? 'medium',
-    defaultSource: 'deterministic',
-    defaultConfidence: deterministicCandidate.context.risk_level?.confidence ?? 0.65,
-    allowedValues: RISK_LEVELS,
-    minimumCandidateConfidence: MIN_ASSISTIVE_CONTEXT_CONFIDENCE,
-    conflicts,
-    discardedInputs,
-  });
-
-  const scopeSizeResolution = resolveField<ContextProfile['scope_size']>({
-    field: 'context.scope_size',
-    explicitValue: input.task.scopeSize,
-    candidates: candidates.map((candidate) => candidate.context.scope_size),
-    fallbackValue: deterministicCandidate.context.scope_size?.value ?? 'unknown',
-    defaultSource: 'deterministic',
-    defaultConfidence: deterministicCandidate.context.scope_size?.confidence ?? 0.35,
-    allowedValues: SCOPE_SIZES,
-    minimumCandidateConfidence: MIN_ASSISTIVE_CONTEXT_CONFIDENCE,
-    conflicts,
-    discardedInputs,
-  });
-
-  const compatibilityRequirementResolution = resolveField<ContextProfile['compatibility_requirement']>({
-    field: 'context.compatibility_requirement',
-    explicitValue: input.task.compatibilityRequirement,
-    candidates: candidates.map((candidate) => candidate.context.compatibility_requirement),
-    fallbackValue: deterministicCandidate.context.compatibility_requirement?.value ?? 'none',
-    defaultSource: 'deterministic',
-    defaultConfidence: deterministicCandidate.context.compatibility_requirement?.confidence ?? 0.5,
-    allowedValues: COMPATIBILITY_REQUIREMENTS,
-    minimumCandidateConfidence: MIN_ASSISTIVE_CONTEXT_CONFIDENCE,
-    conflicts,
-    discardedInputs,
-  });
-
-  const interfaceSensitivityResolution = resolveField<ContextProfile['interface_sensitivity']>({
-    field: 'context.interface_sensitivity',
-    explicitValue: input.task.interfaceSensitivity,
-    candidates: candidates.map((candidate) => candidate.context.interface_sensitivity),
-    fallbackValue: deterministicCandidate.context.interface_sensitivity?.value ?? 'unknown',
-    defaultSource: 'deterministic',
-    defaultConfidence: deterministicCandidate.context.interface_sensitivity?.confidence ?? 0.35,
-    allowedValues: INTERFACE_SENSITIVITIES,
-    minimumCandidateConfidence: MIN_ASSISTIVE_CONTEXT_CONFIDENCE,
-    conflicts,
-    discardedInputs,
-  });
-
-  const refactorToleranceResolution = resolveField<ContextProfile['refactor_tolerance']>({
-    field: 'context.refactor_tolerance',
-    explicitValue: input.task.refactorTolerance,
-    candidates: candidates.map((candidate) => candidate.context.refactor_tolerance),
-    fallbackValue: deterministicCandidate.context.refactor_tolerance?.value ?? 'local-only',
-    defaultSource: 'deterministic',
-    defaultConfidence: deterministicCandidate.context.refactor_tolerance?.confidence ?? 0.65,
-    allowedValues: REFACTOR_TOLERANCES,
-    minimumCandidateConfidence: MIN_ASSISTIVE_CONTEXT_CONFIDENCE,
-    conflicts,
-    discardedInputs,
-  });
-
-  const migrationPhaseResolution = resolveField<ContextProfile['migration_phase']>({
-    field: 'context.migration_phase',
-    explicitValue: input.task.migrationPhase,
-    candidates: candidates.map((candidate) => candidate.context.migration_phase),
-    fallbackValue: deterministicCandidate.context.migration_phase?.value ?? 'none',
-    defaultSource: 'deterministic',
-    defaultConfidence: deterministicCandidate.context.migration_phase?.confidence ?? 0.45,
-    allowedValues: MIGRATION_PHASES,
-    minimumCandidateConfidence: MIN_ASSISTIVE_CONTEXT_CONFIDENCE,
-    conflicts,
-    discardedInputs,
-  });
-
-  const reviewGoalResolution = resolveField<ContextProfile['review_goal']>({
-    field: 'context.review_goal',
-    explicitValue: input.task.reviewGoal,
-    candidates: candidates.map((candidate) => candidate.context.review_goal),
-    fallbackValue: deterministicCandidate.context.review_goal?.value ?? 'maintainability',
-    defaultSource: 'deterministic',
-    defaultConfidence: deterministicCandidate.context.review_goal?.confidence ?? 0.65,
-    allowedValues: REVIEW_GOALS,
-    minimumCandidateConfidence: MIN_ASSISTIVE_CONTEXT_CONFIDENCE,
-    conflicts,
-    discardedInputs,
-  });
+  const scalar = <T>(field: string) => scalarResults.get(field)! as ScalarResolution<T>;
+  const list = (field: string) => listResults.get(field)! as ListResolution<string>;
 
   const task: CompileTaskInput = {
     description: input.task.description,
-    taskKind: taskKindResolution.value,
-    operation: operationResolution.value,
-    targetFile: targetFileResolution.value,
-    changedFiles: changedFilesResolution.values,
-    techStack: techStackResolution.values,
-    tags: tagsResolution.values,
-    projectStage: projectStageResolution.value,
-    optimizationTarget: optimizationTargetResolution.value,
-    hardConstraints: hardConstraintsResolution.values,
-    allowedTradeoffs: allowedTradeoffsResolution.values,
-    avoid: avoidResolution.values,
-    riskLevel: riskLevelResolution.value,
-    scopeSize: scopeSizeResolution.value,
-    compatibilityRequirement: compatibilityRequirementResolution.value,
-    interfaceSensitivity: interfaceSensitivityResolution.value,
-    refactorTolerance: refactorToleranceResolution.value,
-    migrationPhase: migrationPhaseResolution.value,
-    reviewGoal: reviewGoalResolution.value,
+    taskKind: scalar<TaskKind>('intent.task_kind').value,
+    operation: scalar<Operation>('intent.operation').value,
+    targetFile: scalar<string | undefined>('intent.target_file').value,
+    changedFiles: list('intent.changed_files').values,
+    techStack: list('intent.tech_stack').values,
+    tags: list('intent.tags').values,
+    projectStage: scalar<ContextProfile['project_stage']>('context.project_stage').value,
+    optimizationTarget: scalar<ContextProfile['optimization_target']>('context.optimization_target').value,
+    hardConstraints: list('context.hard_constraints').values,
+    allowedTradeoffs: list('context.allowed_tradeoffs').values,
+    avoid: list('context.avoid').values,
+    riskLevel: scalar<ContextProfile['risk_level']>('context.risk_level').value,
+    scopeSize: scalar<ContextProfile['scope_size']>('context.scope_size').value,
+    compatibilityRequirement: scalar<ContextProfile['compatibility_requirement']>('context.compatibility_requirement').value,
+    interfaceSensitivity: scalar<ContextProfile['interface_sensitivity']>('context.interface_sensitivity').value,
+    refactorTolerance: scalar<ContextProfile['refactor_tolerance']>('context.refactor_tolerance').value,
+    migrationPhase: scalar<ContextProfile['migration_phase']>('context.migration_phase').value,
+    reviewGoal: scalar<ContextProfile['review_goal']>('context.review_goal').value,
   };
 
-  const resolvedTargetFile = targetFileResolution.value;
+  const resolvedTargetFile = scalar<string | undefined>('intent.target_file').value;
   const intent: TaskIntent = {
-    task_kind: taskKindResolution.value,
-    operation: operationResolution.value,
+    task_kind: scalar<TaskKind>('intent.task_kind').value,
+    operation: scalar<Operation>('intent.operation').value,
     target_layer: inferTargetLayer(resolvedTargetFile),
-    tech_stack: unique(techStackResolution.values),
+    tech_stack: uniqueCompact(list('intent.tech_stack').values),
     target_file: resolvedTargetFile,
-    changed_files: unique(changedFilesResolution.values),
-    tags: unique(tagsResolution.values),
+    changed_files: uniqueCompact(list('intent.changed_files').values),
+    tags: uniqueCompact(list('intent.tags').values),
   };
 
   const contextProfile: ContextProfile = {
-    project_stage: projectStageResolution.value,
-    change_type: operationResolution.value,
-    optimization_target: optimizationTargetResolution.value,
-    hard_constraints: unique(hardConstraintsResolution.values),
-    allowed_tradeoffs: unique(allowedTradeoffsResolution.values),
-    avoid: unique(avoidResolution.values),
-    risk_level: riskLevelResolution.value,
-    scope_size: scopeSizeResolution.value,
-    compatibility_requirement: compatibilityRequirementResolution.value,
-    interface_sensitivity: interfaceSensitivityResolution.value,
-    refactor_tolerance: refactorToleranceResolution.value,
-    migration_phase: migrationPhaseResolution.value,
-    review_goal: reviewGoalResolution.value,
+    project_stage: scalar<ContextProfile['project_stage']>('context.project_stage').value,
+    change_type: scalar<Operation>('intent.operation').value,
+    optimization_target: scalar<ContextProfile['optimization_target']>('context.optimization_target').value,
+    hard_constraints: uniqueCompact(list('context.hard_constraints').values),
+    allowed_tradeoffs: uniqueCompact(list('context.allowed_tradeoffs').values),
+    avoid: uniqueCompact(list('context.avoid').values),
+    risk_level: scalar<ContextProfile['risk_level']>('context.risk_level').value,
+    scope_size: scalar<ContextProfile['scope_size']>('context.scope_size').value,
+    compatibility_requirement: scalar<ContextProfile['compatibility_requirement']>('context.compatibility_requirement').value,
+    interface_sensitivity: scalar<ContextProfile['interface_sensitivity']>('context.interface_sensitivity').value,
+    refactor_tolerance: scalar<ContextProfile['refactor_tolerance']>('context.refactor_tolerance').value,
+    migration_phase: scalar<ContextProfile['migration_phase']>('context.migration_phase').value,
+    review_goal: scalar<ContextProfile['review_goal']>('context.review_goal').value,
   };
 
   const provenance = buildProvenance(input, {
-    task_kind: taskKindResolution,
-    operation: operationResolution,
-    target_file: targetFileResolution,
-    changed_files: changedFilesResolution,
-    tech_stack: techStackResolution,
-    tags: tagsResolution,
-    project_stage: projectStageResolution,
-    optimization_target: optimizationTargetResolution,
-    hard_constraints: hardConstraintsResolution,
-    allowed_tradeoffs: allowedTradeoffsResolution,
-    avoid: avoidResolution,
-    risk_level: riskLevelResolution,
-    scope_size: scopeSizeResolution,
-    compatibility_requirement: compatibilityRequirementResolution,
-    interface_sensitivity: interfaceSensitivityResolution,
-    refactor_tolerance: refactorToleranceResolution,
-    migration_phase: migrationPhaseResolution,
-    review_goal: reviewGoalResolution,
+    task_kind: scalar<TaskKind>('intent.task_kind'),
+    operation: scalar<Operation>('intent.operation'),
+    target_file: scalar<string | undefined>('intent.target_file'),
+    changed_files: list('intent.changed_files'),
+    tech_stack: list('intent.tech_stack'),
+    tags: list('intent.tags'),
+    project_stage: scalar<ContextProfile['project_stage']>('context.project_stage'),
+    optimization_target: scalar<ContextProfile['optimization_target']>('context.optimization_target'),
+    hard_constraints: list('context.hard_constraints'),
+    allowed_tradeoffs: list('context.allowed_tradeoffs'),
+    avoid: list('context.avoid'),
+    risk_level: scalar<ContextProfile['risk_level']>('context.risk_level'),
+    scope_size: scalar<ContextProfile['scope_size']>('context.scope_size'),
+    compatibility_requirement: scalar<ContextProfile['compatibility_requirement']>('context.compatibility_requirement'),
+    interface_sensitivity: scalar<ContextProfile['interface_sensitivity']>('context.interface_sensitivity'),
+    refactor_tolerance: scalar<ContextProfile['refactor_tolerance']>('context.refactor_tolerance'),
+    migration_phase: scalar<ContextProfile['migration_phase']>('context.migration_phase'),
+    review_goal: scalar<ContextProfile['review_goal']>('context.review_goal'),
   }, conflicts);
   const trace = buildTrace(input, candidates, provenance, conflicts);
   const diagnostics = buildDiagnostics(input, candidates, provenance, conflicts, discardedInputs);
 
   return {
     task,
-    taskKind: taskKindResolution.value,
+    taskKind: scalar<TaskKind>('intent.task_kind').value,
     task_models: input.taskModels ?? [],
     task_intent: intent,
     context_profile: contextProfile,
@@ -424,16 +441,16 @@ function resolveListField<T>({
 }): ListResolution<T> {
   if (explicitValues?.length) {
     registerConflict(field, 'explicit', candidates.filter(Boolean).map((candidate) => candidate?.source ?? 'deterministic'), conflicts, 'explicit task input takes precedence');
-    return { values: unique(explicitValues), source: 'explicit', confidence: 1, status: 'resolved' };
+    return { values: uniqueCompact(explicitValues), source: 'explicit', confidence: 1, status: 'resolved' };
   }
   const resolvedCandidates = candidates.filter((candidate): candidate is CandidateListField<T> => candidate !== undefined && candidate.status === 'resolved' && candidate.values.length > 0);
   if (resolvedCandidates.length > 0) {
     const ordered = resolvedCandidates.slice().sort(compareCandidateListField);
     const winner = ordered[0];
     registerConflict(field, winner.source, ordered.slice(1).map((candidate) => candidate.source), conflicts, 'field-level evidence/confidence policy selected the strongest candidate');
-    return { values: unique(winner.values), source: winner.source, confidence: winner.confidence, status: 'resolved' };
+    return { values: uniqueCompact(winner.values), source: winner.source, confidence: winner.confidence, status: 'resolved' };
   }
-  const fallback = unique(fallbackValues);
+  const fallback = uniqueCompact(fallbackValues);
   return {
     values: fallback,
     source: defaultSource,
@@ -853,8 +870,4 @@ function registerConflict(
   const uniqueDiscarded = [...new Set(discarded.filter((source) => source !== winner))];
   if (!uniqueDiscarded.length) return;
   conflicts.push({ field, winner, discarded: uniqueDiscarded, rationale });
-}
-
-function unique<T>(values: T[]): T[] {
-  return [...new Set((values ?? []).filter((value) => value !== undefined && value !== null))];
 }

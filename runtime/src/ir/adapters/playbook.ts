@@ -1,6 +1,6 @@
 import { getDirectiveLayerRank } from '../../select/activation-plan.ts';
 import type { Directive, LocalPlaybook } from '../../types.ts';
-import type { DirectiveIR, DirectivePriorityIR, DirectiveTraitsIR } from '../types.ts';
+import { GOVERNANCE_IR_VERSION, type DirectiveIR, type DirectivePriorityIR, type DirectiveTraitsIR } from '../types.ts';
 
 const WEIGHT_RANKS = { low: 0, normal: 1, high: 2, critical: 3 } as const;
 const PRESCRIPTION_RANKS = { should: 0, must: 1 } as const;
@@ -16,7 +16,7 @@ export function directivesToIR(directives: Directive[], local: LocalPlaybook | n
     const prescription = override?.prescription ?? directive.prescription;
     const weight = override?.weight ?? directive.weight;
     return {
-      irVersion: 'governance-ir/v1',
+      irVersion: GOVERNANCE_IR_VERSION,
       id: directive.id,
       semanticKey: toSemanticKey(directive.id),
       source: {

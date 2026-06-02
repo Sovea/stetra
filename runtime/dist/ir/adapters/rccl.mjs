@@ -1,7 +1,8 @@
+import { GOVERNANCE_IR_VERSION } from "../types.mjs";
 //#region src/ir/adapters/rccl.ts
 function observationsToIR(observations, rcclPath) {
 	return observations.map((observation) => ({
-		irVersion: "governance-ir/v1",
+		irVersion: GOVERNANCE_IR_VERSION,
 		id: observation.id,
 		semanticKey: observation.semantic_key,
 		source: {

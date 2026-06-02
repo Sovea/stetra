@@ -1,10 +1,8 @@
+import "./types.mjs";
 import { resolveTask } from "./interpret/normalize-candidate.mjs";
-import { toResolvedCompileInput } from "./compile-input.mjs";
-import { projectIRActivationToPublic } from "./ir/activation/public-adapter.mjs";
-import { activatedDirectiveIdsIR, resolveActivationDecisionsIR } from "./ir/activation/resolve-activation.mjs";
-import { loadOrVerifyCompileSources } from "./load/compile-sources.mjs";
 import { stableHash } from "./utils/hash.mjs";
-import { buildGovernanceIR } from "./ir/build-ir.mjs";
+import { resolveActivatedGovernanceContext } from "./compile-input.mjs";
+import { projectIRActivationToPublic } from "./ir/activation/public-adapter.mjs";
 import { projectIREgoToPublic } from "./ir/ego/public-adapter.mjs";
 import { resolveExecutionDecisionsIR } from "./ir/execution/resolve-execution.mjs";
 import { buildSemanticRelationsIR } from "./ir/relations/build-relations.mjs";
@@ -46,8 +44,7 @@ function compileResolvedOutput(packet, resolvedTask) {
 * Runs the deterministic playbook pipeline and produces a change decision packet.
 */
 async function compile(input) {
-	const normalizedInput = toResolvedCompileInput(input);
-	const resolved = normalizedInput.resolvedTask;
+	const { normalizedInput, resolvedTask: resolved, sources, governanceIR, activationDecisions: activationDecisionsIR, activeDirectives: irActiveDirectives } = await resolveActivatedGovernanceContext(input);
 	const traceSteps = [];
 	const intent = resolved.task_intent;
 	const contextProfile = resolved.context_profile;
@@ -80,8 +77,6 @@ async function compile(input) {
 		stage: "Context Profile Resolution",
 		lines: resolved.input_provenance.context_resolution.length ? resolved.input_provenance.context_resolution.map((item) => `${item.field}: ${formatContextValue(item.value)} source=${item.source} confidence=${item.confidence} status=${item.status} influence=${item.influence.join(", ") || "(none)"}`) : ["no context profile resolution records"]
 	});
-	const sources = await loadOrVerifyCompileSources(normalizedInput, normalizedInput.preloadedSources);
-	const governanceIR = await buildGovernanceIR(normalizedInput, sources);
 	traceSteps.push({
 		stage: "Governance IR",
 		lines: [
@@ -100,11 +95,9 @@ async function compile(input) {
 		stage: "Host Fulfillment",
 		lines: summarizeHostFulfillment(hostFulfillment)
 	});
-	const activationDecisionsIR = resolveActivationDecisionsIR(governanceIR);
-	const irActivatedDirectiveIds = activatedDirectiveIdsIR(activationDecisionsIR);
 	const activatedGovernanceIR = {
 		...governanceIR,
-		directives: governanceIR.directives.filter((directive) => irActivatedDirectiveIds.has(directive.id))
+		directives: irActiveDirectives
 	};
 	const semanticRelationsIR = buildSemanticRelationsIR(activatedGovernanceIR);
 	traceSteps.push({
@@ -311,8 +304,8 @@ function formatEvidenceCoverage(hostFulfillment) {
 	const totals = [
 		hostFulfillment.taskModel,
 		hostFulfillment.semanticGovernanceGraph,
-		hostFulfillment.adherenceEvidence
-	].filter(Boolean).reduce((acc, artifact) => {
+		...hostFulfillment.adherenceEvidence ? [hostFulfillment.adherenceEvidence] : []
+	].reduce((acc, artifact) => {
 		const summary = artifact.diagnostics?.summary;
 		acc.total += summary?.total ?? 0;
 		acc.accepted += summary?.accepted ?? 0;

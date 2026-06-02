@@ -13,7 +13,17 @@ import type {
 import type { ExecutionDecisionIR, SemanticRelationIR } from '../types.ts';
 import { semanticRelationsIRToPublic } from '../relations/public-mapping.ts';
 import { semanticRelationPolicyTraceRecord } from '../relations/policy.ts';
-import { contextInfluenceEffect, contextReviewPriorityBoost } from '../execution/context-policy.ts';
+import {
+  AVOID_BROAD_REWRITES,
+  AVOID_OVERENGINEERING,
+  CONSTRAINT_AVOID_BREAKING,
+  CONSTRAINT_NARROW_SCOPE,
+  CONSTRAINT_PRESERVE_COMPATIBILITY,
+  CONSTRAINT_PRESERVE_PUBLIC_API,
+  contextInfluenceEffect,
+  contextReviewPriorityBoost,
+} from '../execution/context-policy.ts';
+import { hasConstraint } from '../../utils/common.ts';
 
 export function projectIRSemanticMergeToPublic(
   directives: Directive[],
@@ -376,20 +386,16 @@ function buildTensionResolution(
   contextProfile: ContextProfile,
   observation: RcclObservation,
 ): string {
-  if (hasConstraint(contextProfile.hard_constraints, ['preserve compatibility', 'avoid breaking changes', 'preserve public api'])) {
+  if (hasConstraint(contextProfile.hard_constraints, [CONSTRAINT_PRESERVE_COMPATIBILITY, CONSTRAINT_AVOID_BREAKING, CONSTRAINT_PRESERVE_PUBLIC_API])) {
     return `Follow ${directiveId} for new code, but preserve compatibility with the observed ${observation.category} repository pattern at touched interfaces.`;
   }
-  if (hasConstraint(contextProfile.allowed_tradeoffs, ['prefer narrow change scope'])) {
+  if (hasConstraint(contextProfile.allowed_tradeoffs, [CONSTRAINT_NARROW_SCOPE])) {
     return `Follow ${directiveId} for the touched code, but contain the change to the local boundary instead of broad cleanup around the observed repository pattern.`;
   }
-  if (hasConstraint(contextProfile.avoid, ['broad rewrites', 'overengineering'])) {
+  if (hasConstraint(contextProfile.avoid, [AVOID_BROAD_REWRITES, AVOID_OVERENGINEERING])) {
     return `Follow ${directiveId} in the local change, but avoid turning this tension into a broad rewrite of the observed repository pattern.`;
   }
   return `Follow ${directiveId} for new code, but preserve compatibility with the observed repository pattern where interfaces depend on it.`;
-}
-
-function hasConstraint(values: string[], expected: string[]): boolean {
-  return expected.some((item) => values.includes(item));
 }
 
 function uniqueFocus(items: ReviewFocusSeed[]): ReviewFocusSeed[] {

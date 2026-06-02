@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
-import type { CompileOutput } from './types.ts';
+import { LOCKFILE_VERSION, type CompileOutput } from './types.ts';
+import { isRecord } from './utils/common.ts';
 
 export interface PersistCompileCacheInput {
   projectRoot: string;
@@ -48,7 +49,7 @@ export function persistCompileCache(input: PersistCompileCacheInput): {
   };
 
   writeJson(paths.l1Path, {
-    version: '1.0',
+    version: LOCKFILE_VERSION,
     kind: 'runtime-cache-l1',
     key: input.output.cache.l1Key,
     invalidates_on: [
@@ -57,7 +58,7 @@ export function persistCompileCache(input: PersistCompileCacheInput): {
     selected_layers: input.output.trace.activation.selected_layers,
   });
   writeJson(paths.l2Path, {
-    version: '1.0',
+    version: LOCKFILE_VERSION,
     kind: 'runtime-cache-l2',
     key: input.output.cache.l2Key,
     l1Key: input.output.cache.l1Key,
@@ -74,7 +75,7 @@ export function persistCompileCache(input: PersistCompileCacheInput): {
     observation_links: input.output.trace.observation_links,
   });
   writeJson(paths.l3Path, {
-    version: '1.0',
+    version: LOCKFILE_VERSION,
     kind: 'runtime-cache-l3',
     key: input.output.cache.l3Key,
     l1Key: input.output.cache.l1Key,
@@ -96,13 +97,13 @@ export function inspectCompileCache(input: InspectCompileCacheInput): CompileCac
   const paths = compileCachePaths(input.projectRoot, input.cache);
   const l1 = inspectCacheLevel(paths.l1Path, (value) => (
     isRecord(value)
-      && value.version === '1.0'
+      && value.version === LOCKFILE_VERSION
       && value.kind === 'runtime-cache-l1'
       && value.key === input.cache.l1Key
   ), 'runtime-cache-l1 key matched');
   const l2 = inspectCacheLevel(paths.l2Path, (value) => (
     isRecord(value)
-      && value.version === '1.0'
+      && value.version === LOCKFILE_VERSION
       && value.kind === 'runtime-cache-l2'
       && value.key === input.cache.l2Key
       && value.l1Key === input.cache.l1Key
@@ -111,7 +112,7 @@ export function inspectCompileCache(input: InspectCompileCacheInput): CompileCac
   ), 'runtime-cache-l2 key, parent key, and RCCL verification fingerprint matched');
   const l3 = inspectCacheLevel(paths.l3Path, (value) => (
     isRecord(value)
-      && value.version === '1.0'
+      && value.version === LOCKFILE_VERSION
       && value.kind === 'runtime-cache-l3'
       && value.key === input.cache.l3Key
       && value.l1Key === input.cache.l1Key
@@ -182,10 +183,6 @@ function packetCacheMatches(packet: unknown, cache: CompileOutput['cache']): boo
     && packet.cache.l3Key === cache.l3Key
     && packet.cache.verificationPolicy === cache.verificationPolicy
     && packet.cache.rcclVerificationKey === cache.rcclVerificationKey;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 }
 
 function writeJson(path: string, value: unknown): void {

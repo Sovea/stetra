@@ -8,6 +8,7 @@ import { observationsToIR } from './adapters/rccl.ts';
 import { taskToIR } from './adapters/task.ts';
 import { buildIRFingerprints } from './fingerprint.ts';
 import { stableHash } from '../utils/hash.ts';
+import { GOVERNANCE_IR_VERSION } from './types.ts';
 import type { GovernanceIRBundle } from './types.ts';
 
 export async function buildGovernanceIR(input: CompileInput, sources?: CompileSources): Promise<GovernanceIRBundle> {
@@ -18,7 +19,7 @@ export async function buildGovernanceIR(input: CompileInput, sources?: CompileSo
     : await loadOrVerifyCompileSources({ ...input, resolvedTask }, sources);
 
   const bundleWithoutFingerprints: Omit<GovernanceIRBundle, 'fingerprints'> = {
-    irVersion: 'governance-ir/v1',
+    irVersion: GOVERNANCE_IR_VERSION,
     task: taskToIR(resolvedTask),
     directives: directivesToIR(loadedSources.allDirectives, loadedSources.local),
     observations: observationsToIR(loadedSources.rccl?.observations ?? [], input.rcclPath),

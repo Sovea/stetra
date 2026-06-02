@@ -1,10 +1,11 @@
+import { GOVERNANCE_IR_VERSION } from "../types.mjs";
 import { stableHash } from "../../utils/hash.mjs";
 //#region src/ir/adapters/task.ts
 function taskToIR(resolved) {
 	const intent = resolved.task_intent;
 	const context = resolved.context_profile;
 	return {
-		irVersion: "governance-ir/v1",
+		irVersion: GOVERNANCE_IR_VERSION,
 		id: stableHash([
 			"task-ir",
 			resolved.task.description,

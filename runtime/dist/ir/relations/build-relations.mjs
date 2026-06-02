@@ -1,3 +1,4 @@
+import { GOVERNANCE_IR_VERSION } from "../types.mjs";
 import { stableHash } from "../../utils/hash.mjs";
 import { adjudicateSemanticRelations } from "./adjudicate-relations.mjs";
 import { proposeSemanticRelations } from "./propose-relations.mjs";
@@ -43,7 +44,7 @@ function mergeRelationGroup(group) {
 		feedback: group.some((item) => item.basis.feedback)
 	};
 	return {
-		irVersion: "governance-ir/v1",
+		irVersion: GOVERNANCE_IR_VERSION,
 		id: stableHash([
 			"semantic-relation-ir",
 			"merged",

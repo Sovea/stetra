@@ -1,16 +1,18 @@
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { isRecord, validConfidence } from './utils/common.ts';
 import { parseYaml, toYaml } from './utils/yaml.ts';
-import type {
-  EvaluateInput,
-  ExecutionMode,
-  FeedbackSignalConfidence,
-  HostFulfillmentArtifactSummary,
-  HostFulfillmentFeedbackSummary,
-  IgnoredReason,
-  LockfileDirectiveEntry,
-  LockfileDocument,
-  LockfileObservationEntry,
-  LockfileTensionEntry,
+import {
+  LOCKFILE_VERSION,
+  type EvaluateInput,
+  type ExecutionMode,
+  type FeedbackSignalConfidence,
+  type HostFulfillmentArtifactSummary,
+  type HostFulfillmentFeedbackSummary,
+  type IgnoredReason,
+  type LockfileDirectiveEntry,
+  type LockfileDocument,
+  type LockfileObservationEntry,
+  type LockfileTensionEntry,
 } from './types.ts';
 
 export function evaluateGuidance(input: EvaluateInput): LockfileDocument {
@@ -48,7 +50,7 @@ export function evaluateGuidance(input: EvaluateInput): LockfileDocument {
   updateTensionFeedback(existing, input, now);
 
   if (!hasExplicitDirectiveSignal) {
-    writeFileSync(input.lockfilePath, toYaml(existing as never), 'utf-8');
+    writeFileSync(input.lockfilePath, toYaml(existing), 'utf-8');
     return existing;
   }
 
@@ -102,7 +104,7 @@ export function evaluateGuidance(input: EvaluateInput): LockfileDocument {
     existing.directives[directiveId] = entry;
   }
 
-  writeFileSync(input.lockfilePath, toYaml(existing as never), 'utf-8');
+  writeFileSync(input.lockfilePath, toYaml(existing), 'utf-8');
   return existing;
 }
 
@@ -111,7 +113,7 @@ function loadLockfile(filePath: string): LockfileDocument {
   const parsed = parseYaml(readFileSync(filePath, 'utf-8')) as unknown;
   if (!isLockfileDocument(parsed)) return createDocument();
   return {
-    version: '1.0',
+    version: LOCKFILE_VERSION,
     directives: normalizeDirectiveEntries(parsed.directives),
     observations: normalizeObservationEntries(parsed.observations),
     tensions: normalizeTensionEntries(parsed.tensions),
@@ -134,11 +136,7 @@ function isLockfileDocument(value: unknown): value is LockfileDocument {
 }
 
 function isLockfileVersion(value: unknown): boolean {
-  return value === '1.0' || value === 1 || value === 1.0;
-}
-
-function isRecord(value: unknown): value is Record<string, never> {
-  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+  return value === LOCKFILE_VERSION || value === 1 || value === 1.0;
 }
 
 function normalizeObservationEntries(entries: Record<string, LockfileObservationEntry>): Record<string, LockfileObservationEntry> {
@@ -173,7 +171,7 @@ function normalizeDirectiveEntries(entries: Record<string, LockfileDirectiveEntr
         signal_confidence: validSignalConfidence(entry.quality_signal?.signal_confidence)
           ? entry.quality_signal.signal_confidence
           : 'implicit',
-        evidence_confidence: validEvidenceConfidence(entry.quality_signal?.evidence_confidence)
+        evidence_confidence: validConfidence(entry.quality_signal?.evidence_confidence)
           ? entry.quality_signal.evidence_confidence
           : undefined,
         last_evaluation_source: validEvaluationSource(entry.quality_signal?.last_evaluation_source)
@@ -301,7 +299,7 @@ function createTensionEntry(directiveId: string, observationId: string, executio
 
 function createDocument(): LockfileDocument {
   return {
-    version: '1.0',
+    version: LOCKFILE_VERSION,
     directives: {},
     observations: {},
     tensions: {},
@@ -399,10 +397,6 @@ function validCount(value: unknown): value is number {
   return typeof value === 'number' && Number.isFinite(value) && value >= 0;
 }
 
-function validEvidenceConfidence(value: unknown): value is number {
-  return typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= 1;
-}
-
 function validEvaluationSource(value: unknown): value is HostFulfillmentFeedbackSummary['completion_source'] {
   return value === 'no-explicit-evaluation'
     || value === 'explicit-directives'
@@ -432,7 +426,7 @@ function resolveSignalConfidence(input: EvaluateInput, ignored: boolean): Feedba
   return input.followedDirectiveIds?.length || input.ignoredDirectiveIds?.length ? 'explicit' : 'implicit';
 }
 
-function normalizeIgnoredReasons(value: unknown): Partial<Record<IgnoredReason, number>> {
+export function normalizeIgnoredReasons(value: unknown): Partial<Record<IgnoredReason, number>> {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
   const result: Partial<Record<IgnoredReason, number>> = {};
   for (const [reason, count] of Object.entries(value)) {
@@ -442,7 +436,7 @@ function normalizeIgnoredReasons(value: unknown): Partial<Record<IgnoredReason, 
   return result;
 }
 
-function validIgnoredReason(value: unknown): value is IgnoredReason {
+export function validIgnoredReason(value: unknown): value is IgnoredReason {
   return value === 'not-applicable'
     || value === 'conflicts-with-task'
     || value === 'too-broad'

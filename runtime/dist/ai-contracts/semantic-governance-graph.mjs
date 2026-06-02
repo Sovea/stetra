@@ -1,10 +1,10 @@
-import { resolveCompileTask } from "../compile-input.mjs";
-import { activatedDirectiveIdsIR, resolveActivationDecisionsIR } from "../ir/activation/resolve-activation.mjs";
-import { loadOrVerifyCompileSources } from "../load/compile-sources.mjs";
+import { isRecord, validConfidence } from "../utils/common.mjs";
+import { GOVERNANCE_IR_VERSION } from "../ir/types.mjs";
 import { SEMANTIC_RELATION_POLICY } from "../ir/relations/policy.mjs";
-import { buildGovernanceIR } from "../ir/build-ir.mjs";
+import { resolveActivatedGovernanceContext } from "../compile-input.mjs";
 import { buildContractPayloadDiagnostics } from "./diagnostics.mjs";
-import { contractVersionDiagnostic, isRecord, normalizeEvidenceRefs, validConfidence, validEvidenceRefs } from "./shared.mjs";
+import { AI_CONTRACT_VERSION } from "./types.mjs";
+import { contractVersionDiagnostic, normalizeEvidenceRefs, validEvidenceRefs } from "./shared.mjs";
 import { verifyEvidenceRefs } from "./evidence.mjs";
 //#region src/ai-contracts/semantic-governance-graph.ts
 const SEMANTIC_GRAPH_SCHEMA = {
@@ -17,19 +17,12 @@ const SEMANTIC_GRAPH_SCHEMA = {
 	required: ["edges"]
 };
 async function prepareSemanticContractContext(input) {
-	const resolvedTask = resolveCompileTask(input.compileInput);
-	const compileInput = {
-		...input.compileInput,
-		resolvedTask
-	};
-	const sources = await loadOrVerifyCompileSources(compileInput, compileInput.preloadedSources);
-	const governanceIR = await buildGovernanceIR(compileInput, sources);
-	const activatedDirectiveIds = activatedDirectiveIdsIR(resolveActivationDecisionsIR(governanceIR));
+	const ctx = await resolveActivatedGovernanceContext(input.compileInput);
 	return {
-		resolvedTask,
-		directives: governanceIR.directives.filter((directive) => activatedDirectiveIds.has(directive.id)).map(summarizeDirectiveForProposal),
-		observations: governanceIR.observations.filter((observation) => !skippedObservationIds(sources).has(observation.id)).map(summarizeObservationForProposal),
-		loadedSources: sources
+		resolvedTask: ctx.resolvedTask,
+		directives: ctx.activeDirectives.map(summarizeDirectiveForProposal),
+		observations: ctx.governanceIR.observations.filter((observation) => !skippedObservationIds(ctx.sources).has(observation.id)).map(summarizeObservationForProposal),
+		loadedSources: ctx.sources
 	};
 }
 async function prepareSemanticGovernanceGraphContractBundle(input) {
@@ -56,7 +49,7 @@ function prepareSemanticGovernanceGraphContract(input) {
 		graphSchema: JSON.stringify(SEMANTIC_GRAPH_SCHEMA, null, 2),
 		graphArtifact: artifact,
 		contract: {
-			contractVersion: "ai-contract/v2",
+			contractVersion: AI_CONTRACT_VERSION,
 			kind: "semantic-governance-graph",
 			schemaId: "runtime.semantic-governance-graph",
 			schemaVersion: "2.0",
@@ -223,7 +216,7 @@ function isExecutionIntent(value) {
 }
 function buildHostProposal(source, payload) {
 	return {
-		irVersion: "governance-ir/v1",
+		irVersion: GOVERNANCE_IR_VERSION,
 		source: {
 			kind: "host-proposal",
 			id: source.id,

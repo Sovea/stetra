@@ -2,11 +2,12 @@ import { existsSync, readFileSync } from 'node:fs';
 import { parseYaml } from '../utils/yaml.ts';
 import { buildContractPayloadDiagnostics } from './diagnostics.ts';
 import { isRecord, validConfidence, validEvidenceRefs } from './shared.ts';
-import type {
-  ContractPayloadDiagnosticEntry,
-  GovernanceEvolutionProposal,
-  GovernanceEvolutionProposalContractInput,
-  GovernanceEvolutionProposalContractOutput,
+import {
+  AI_CONTRACT_VERSION,
+  type ContractPayloadDiagnosticEntry,
+  type GovernanceEvolutionProposal,
+  type GovernanceEvolutionProposalContractInput,
+  type GovernanceEvolutionProposalContractOutput,
 } from './types.ts';
 
 const GOVERNANCE_EVOLUTION_SCHEMA = {
@@ -44,7 +45,7 @@ export function prepareGovernanceEvolutionProposalContract(
     proposalSchema: JSON.stringify(GOVERNANCE_EVOLUTION_SCHEMA, null, 2),
     proposalArtifact: artifact,
     contract: {
-      contractVersion: 'ai-contract/v2',
+      contractVersion: AI_CONTRACT_VERSION,
       kind: 'governance-evolution-proposal',
       schemaId: 'runtime.governance-evolution-proposal',
       schemaVersion: '2.0',

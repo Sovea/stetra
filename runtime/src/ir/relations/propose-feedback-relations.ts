@@ -1,13 +1,14 @@
 import { stableHash } from '../../utils/hash.ts';
-import { minimatch } from '../../utils/glob.ts';
-import type {
-  DirectiveIR,
-  GovernanceIRBundle,
-  ObservationIR,
-  ObservationFeedbackSignalIR,
-  SemanticRelationIR,
-  SemanticRelationSignalIR,
-  TaskIR,
+import { pathMatchesScope } from '../../utils/paths.ts';
+import {
+  GOVERNANCE_IR_VERSION,
+  type DirectiveIR,
+  type GovernanceIRBundle,
+  type ObservationIR,
+  type ObservationFeedbackSignalIR,
+  type SemanticRelationIR,
+  type SemanticRelationSignalIR,
+  type TaskIR,
 } from '../types.ts';
 import { SEMANTIC_RELATION_POLICY } from './policy.ts';
 
@@ -39,7 +40,7 @@ function toFeedbackTensionRelation(
 ): SemanticRelationIR {
   const signals = buildFeedbackSignals(signal, observation, taskScoped);
   return {
-    irVersion: 'governance-ir/v1',
+    irVersion: GOVERNANCE_IR_VERSION,
     id: stableHash(['semantic-relation-ir', 'feedback', signal.tensionKey, signal.seenCount, directive.id, observation.id, signals]),
     directiveId: directive.id,
     observationId: observation.id,
@@ -146,10 +147,4 @@ function observationEvidenceRefs(observation: ObservationIR): string[] {
 function scopeMatchesTask(scope: string, task: TaskIR): boolean {
   if (task.targets.length === 0) return true;
   return task.targets.some((target) => pathMatchesScope(target.path, scope));
-}
-
-function pathMatchesScope(path: string, scope: string): boolean {
-  if (scope === '*' || scope === '**/*') return true;
-  if (scope.includes('*') || scope.includes('?') || scope.includes('{')) return minimatch(path, scope);
-  return path === scope || path.startsWith(`${scope}/`);
 }

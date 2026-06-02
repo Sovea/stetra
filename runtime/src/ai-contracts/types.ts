@@ -20,6 +20,7 @@ import type {
 } from '../ir/types.ts';
 
 export type AIContractVersion = 'ai-contract/v2';
+export const AI_CONTRACT_VERSION: AIContractVersion = 'ai-contract/v2';
 export type AIContractSchemaVersion = '2.0';
 export type AIContractKind =
   | 'agent-capability-profile'

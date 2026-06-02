@@ -1,3 +1,4 @@
+import { unique } from "../../utils/common.mjs";
 import { SEMANTIC_RELATION_POLICY } from "../relations/policy.mjs";
 import { applyContextExecutionPolicy } from "./context-policy.mjs";
 //#region src/ir/execution/resolve-execution.ts
@@ -204,9 +205,6 @@ function feedbackSignalsForDirective(bundle, directive, relations) {
 		recurringTension,
 		noisyObservation
 	};
-}
-function unique(values) {
-	return [...new Set(values)];
 }
 //#endregion
 export { resolveExecutionDecisionsIR };

@@ -14,6 +14,7 @@ import type {
   ResolvedTaskOutput,
   RiskLevel,
 } from './types.ts';
+import { unique } from './utils/common.ts';
 
 export interface ContractPolicyInput {
   sourceStatus: GuidancePlanSourceStatus;
@@ -280,8 +281,4 @@ function policyRiskLevel(input: ContractPolicyInput): RiskLevel | undefined {
 
 function isHighRisk(value: RiskLevel | undefined): boolean {
   return value === 'high' || value === 'critical';
-}
-
-function unique<T>(values: T[]): T[] {
-  return [...new Set(values)];
 }

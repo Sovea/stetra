@@ -1,3 +1,4 @@
+import { hasConstraint } from "../../utils/common.mjs";
 import { semanticRelationPolicyTraceRecord } from "../relations/policy.mjs";
 import { contextInfluenceEffect, contextReviewPriorityBoost } from "../execution/context-policy.mjs";
 import { semanticRelationsIRToPublic } from "../relations/public-mapping.mjs";
@@ -288,9 +289,6 @@ function buildTensionResolution(directiveId, contextProfile, observation) {
 	if (hasConstraint(contextProfile.allowed_tradeoffs, ["prefer narrow change scope"])) return `Follow ${directiveId} for the touched code, but contain the change to the local boundary instead of broad cleanup around the observed repository pattern.`;
 	if (hasConstraint(contextProfile.avoid, ["broad rewrites", "overengineering"])) return `Follow ${directiveId} in the local change, but avoid turning this tension into a broad rewrite of the observed repository pattern.`;
 	return `Follow ${directiveId} for new code, but preserve compatibility with the observed repository pattern where interfaces depend on it.`;
-}
-function hasConstraint(values, expected) {
-	return expected.some((item) => values.includes(item));
 }
 function uniqueFocus(items) {
 	const seen = /* @__PURE__ */ new Set();

@@ -1,3 +1,4 @@
+import { unique } from "./utils/common.mjs";
 import { resolveTask } from "./interpret/normalize-candidate.mjs";
 //#region src/contract-policy.ts
 const DEFAULT_CAPABILITIES = {
@@ -218,9 +219,6 @@ function policyRiskLevel(input) {
 }
 function isHighRisk(value) {
 	return value === "high" || value === "critical";
-}
-function unique(values) {
-	return [...new Set(values)];
 }
 //#endregion
 export { resolveContractPolicy };

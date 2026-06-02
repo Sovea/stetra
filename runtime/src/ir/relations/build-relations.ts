@@ -1,4 +1,4 @@
-import type { GovernanceIRBundle, SemanticRelationIR } from '../types.ts';
+import { GOVERNANCE_IR_VERSION, type GovernanceIRBundle, type SemanticRelationIR } from '../types.ts';
 import { adjudicateSemanticRelations } from './adjudicate-relations.ts';
 import { proposeSemanticRelations } from './propose-relations.ts';
 import { stableHash } from '../../utils/hash.ts';
@@ -60,7 +60,7 @@ function mergeRelationGroup(group: SemanticRelationIR[]): SemanticRelationIR {
   };
 
   return {
-    irVersion: 'governance-ir/v1',
+    irVersion: GOVERNANCE_IR_VERSION,
     id: stableHash(['semantic-relation-ir', 'merged', directiveId, observationId, relation, proposedBy, signals, evidenceRefs, impact, reviewPriority, executionIntent, mergeIntent, groupId]),
     directiveId,
     observationId,

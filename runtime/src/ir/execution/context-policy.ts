@@ -1,5 +1,13 @@
 import type { ExecutionMode } from '../../types.ts';
 import type { DirectiveIR, FieldProvenanceIR, GovernanceIRBundle, SemanticRelationIR } from '../types.ts';
+import { hasConstraint, unique } from '../../utils/common.ts';
+
+export const CONSTRAINT_PRESERVE_COMPATIBILITY = 'preserve compatibility';
+export const CONSTRAINT_AVOID_BREAKING = 'avoid breaking changes';
+export const CONSTRAINT_PRESERVE_PUBLIC_API = 'preserve public api';
+export const CONSTRAINT_NARROW_SCOPE = 'prefer narrow change scope';
+export const AVOID_BROAD_REWRITES = 'broad rewrites';
+export const AVOID_OVERENGINEERING = 'overengineering';
 
 export interface DirectiveDecision {
   mode: ExecutionMode;
@@ -148,7 +156,7 @@ const CONTEXT_EXECUTION_RULES: ContextExecutionRule[] = [
     field: 'compatibility_requirement',
     effect: 'mode-adjustment',
     matches: (input) =>
-      (hasAuthoritativeConstraint(input, 'hard_constraints', ['preserve compatibility', 'avoid breaking changes', 'preserve public api'])
+      (hasAuthoritativeConstraint(input, 'hard_constraints', [CONSTRAINT_PRESERVE_COMPATIBILITY, CONSTRAINT_AVOID_BREAKING, CONSTRAINT_PRESERVE_PUBLIC_API])
         || (hasAuthoritativeContextField(input, 'compatibility_requirement') && hasCompatibilityRequirement(input.context)))
       && input.directive.prescription === 'must'
       && input.decision.mode === 'enforce'
@@ -169,7 +177,7 @@ const CONTEXT_EXECUTION_RULES: ContextExecutionRule[] = [
     field: 'scope_size',
     effect: 'ambienting',
     matches: (input) =>
-      (hasAuthoritativeConstraint(input, 'allowed_tradeoffs', ['prefer narrow change scope'])
+      (hasAuthoritativeConstraint(input, 'allowed_tradeoffs', [CONSTRAINT_NARROW_SCOPE])
         || (input.context.scope_size === 'single-file' && hasAuthoritativeScopeEvidence(input))
         || (hasAuthoritativeContextField(input, 'refactor_tolerance') && (input.context.refactor_tolerance === 'none' || input.context.refactor_tolerance === 'local-only')))
       && input.directive.prescription === 'should'
@@ -179,7 +187,7 @@ const CONTEXT_EXECUTION_RULES: ContextExecutionRule[] = [
       basis: 'task-context',
       reasonSuffix: 'Narrow-scope tradeoff guidance keeps broad architectural guidance ambient for this task.',
       contextApplied: [
-        ...(hasAuthoritativeConstraint(input, 'allowed_tradeoffs', ['prefer narrow change scope']) ? ['allowed_tradeoffs:prefer narrow change scope'] : []),
+        ...(hasAuthoritativeConstraint(input, 'allowed_tradeoffs', [CONSTRAINT_NARROW_SCOPE]) ? [`allowed_tradeoffs:${CONSTRAINT_NARROW_SCOPE}`] : []),
         ...(input.context.scope_size === 'single-file' && hasAuthoritativeScopeEvidence(input) ? ['scope_size:single-file'] : []),
         ...(hasAuthoritativeContextField(input, 'refactor_tolerance') && (input.context.refactor_tolerance === 'none' || input.context.refactor_tolerance === 'local-only') ? [`refactor_tolerance:${input.context.refactor_tolerance}`] : []),
       ],
@@ -190,14 +198,14 @@ const CONTEXT_EXECUTION_RULES: ContextExecutionRule[] = [
     field: 'avoid',
     effect: 'ambienting',
     matches: (input) =>
-      hasAuthoritativeConstraint(input, 'avoid', ['broad rewrites', 'overengineering'])
+      hasAuthoritativeConstraint(input, 'avoid', [AVOID_BROAD_REWRITES, AVOID_OVERENGINEERING])
       && input.directive.prescription === 'should'
       && input.directive.traits.broadScope,
     apply: () => ({
       mode: 'ambient',
       basis: 'task-context',
       reasonSuffix: 'Avoiding broad rewrites or overengineering keeps expansive guidance ambient unless it is already a must-level requirement.',
-      contextApplied: ['avoid:broad rewrites'],
+      contextApplied: [`avoid:${AVOID_BROAD_REWRITES}`],
     }),
   },
   {
@@ -299,10 +307,6 @@ function isCompatibilitySensitiveDirective(directive: DirectiveIR): boolean {
   return directive.traits.compatibilitySensitive || directive.traits.rcclImmune || directive.prescription === 'must';
 }
 
-function hasConstraint(values: string[], expected: string[]): boolean {
-  return expected.some((item) => values.includes(item));
-}
-
 function hasCompatibilityRequirement(context: GovernanceIRBundle['task']['context']): boolean {
   return context.compatibility_requirement === 'preserve-api'
     || context.compatibility_requirement === 'preserve-behavior'
@@ -322,8 +326,4 @@ function isSensitiveInterface(context: GovernanceIRBundle['task']['context']): b
 
 function isMigrationExecutionPhase(context: GovernanceIRBundle['task']['context']): boolean {
   return context.migration_phase === 'dual-run' || context.migration_phase === 'cutover';
-}
-
-function unique(values: string[]): string[] {
-  return [...new Set(values)];
 }
