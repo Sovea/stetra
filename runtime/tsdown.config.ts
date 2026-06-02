@@ -1,11 +1,9 @@
 export default {
-  entry: ['./src/index.ts', './src/**/*.ts'],
+  entry: ['./src/index.ts'],
   format: 'esm',
   outDir: 'dist',
   platform: 'node',
   target: 'node22',
-  unbundle: true,
-  root: 'src',
   clean: true,
   dts: false,
   sourcemap: false,
