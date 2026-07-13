@@ -4,10 +4,39 @@ export function buildRepresentation(indexedFiles: IndexedFile[]): RepoRepresenta
   return {
     roots: buildRoots(indexedFiles),
     modules: buildModules(indexedFiles),
-    boundaries: [],
-    migrations: [],
-    style_clusters: [],
+    boundaries: buildRoleZones(indexedFiles, 'boundary'),
+    migrations: buildRoleZones(indexedFiles, 'migration'),
+    style_clusters: buildStyleClusters(indexedFiles),
   };
+}
+
+function buildRoleZones(indexedFiles: IndexedFile[], kind: 'boundary' | 'migration') {
+  const files = indexedFiles.filter((file) => kind === 'migration'
+    ? file.role_hints.includes('schema-or-migration')
+    : file.role_hints.some((role) => role === 'config' || role === 'infra') || /(^|\/)(api|public|adapters?|integrations?)(\/|$)/.test(file.path));
+  if (!files.length) return [];
+  return [{
+    id: `${kind}:repository-${kind}`,
+    file_paths: files.map((file) => file.path).sort(),
+    reason: kind === 'migration'
+      ? 'Schema and migration files form compatibility-sensitive change zones.'
+      : 'Configuration, infrastructure, public API, and integration files form repository boundaries.',
+  }];
+}
+
+function buildStyleClusters(indexedFiles: IndexedFile[]) {
+  const grouped = new Map<string, IndexedFile[]>();
+  for (const file of indexedFiles) {
+    const role = file.is_test ? 'tests' : file.role_hints.includes('documentation') ? 'documentation' : file.language;
+    const list = grouped.get(role) ?? [];
+    list.push(file);
+    grouped.set(role, list);
+  }
+  return [...grouped.entries()].map(([role, files]) => ({
+    id: `style:${role.replace(/[^a-z0-9]+/gi, '-')}`,
+    file_paths: files.map((file) => file.path).sort(),
+    reason: `Representative ${role} files for local structure and style calibration.`,
+  })).sort((a, b) => a.id.localeCompare(b.id));
 }
 
 function buildRoots(indexedFiles: IndexedFile[]): RepoRootSummary[] {

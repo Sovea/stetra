@@ -1,7 +1,6 @@
 import { createRequire } from "node:module";
-import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
-import { dirname, isAbsolute, join, relative, resolve } from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, readdirSync, realpathSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { dirname, isAbsolute, join, relative, resolve, win32 } from "node:path";
 import { createHash } from "node:crypto";
 //#region \0rolldown/runtime.js
 var __create = Object.create;
@@ -27,19 +26,426 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
 }) : target, mod));
 var __require = /* @__PURE__ */ createRequire(import.meta.url);
 //#endregion
+//#region src/ai-contracts/diagnostics.ts
+function buildContractPayloadDiagnostics(kind, entries, source) {
+	const summary = {
+		total: entries.length,
+		accepted: 0,
+		rejected: 0,
+		downgraded: 0,
+		unused: 0
+	};
+	for (const entry of entries) summary[entry.status] += 1;
+	return {
+		kind,
+		...source ? { source } : {},
+		summary,
+		entries
+	};
+}
+//#endregion
+//#region src/ai-contracts/types.ts
+const AI_CONTRACT_VERSION = "ai-contract/v1";
+//#endregion
+//#region src/utils/common.ts
+function unique(values) {
+	return [...new Set(values)];
+}
+function uniqueCompact(values) {
+	return [...new Set((values ?? []).filter((value) => value !== void 0 && value !== null))];
+}
+function isRecord$1(value) {
+	return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+function validConfidence(value) {
+	return typeof value === "number" && Number.isFinite(value) && value >= 0 && value <= 1;
+}
+function hasConstraint(values, expected) {
+	return expected.some((item) => values.includes(item));
+}
+//#endregion
+//#region src/ai-contracts/shared.ts
+function stableRefHash(value) {
+	return createHash("sha1").update(JSON.stringify(value)).digest("hex").slice(0, 16);
+}
+function artifactIdentity(kind, cacheKeyMaterial) {
+	const contextFingerprint = stableRefHash({
+		kind,
+		cacheKeyMaterial
+	});
+	return {
+		requestId: `${kind}:${contextFingerprint}`,
+		contextFingerprint
+	};
+}
+function unwrapHostArtifactEnvelope(raw, expected) {
+	if (!isRecord$1(raw)) return {
+		payload: null,
+		diagnostic: {
+			status: "rejected",
+			reason: "malformed-payload",
+			path: "artifact",
+			message: "Host artifact must use the v1 envelope: schema_version, kind, request_id, context_fingerprint, payload."
+		}
+	};
+	if (raw.schema_version !== 1) return {
+		payload: null,
+		diagnostic: {
+			status: "rejected",
+			reason: "unsupported-schema-version",
+			path: "schema_version",
+			message: `UNSUPPORTED_SCHEMA_VERSION: expected schema_version 1; found ${String(raw.schema_version)}. Re-run init and calibrate-repo-context. Existing data was not modified.`
+		}
+	};
+	if (raw.kind !== expected.kind) return rejectedEnvelope("kind", `Artifact kind "${String(raw.kind)}" does not match ${expected.kind}.`);
+	if (raw.request_id !== expected.requestId) return rejectedEnvelope("request_id", "Artifact request_id does not match the contract issued for this compile context.");
+	if (raw.context_fingerprint !== expected.contextFingerprint) return rejectedEnvelope("context_fingerprint", "Artifact context_fingerprint does not match current task and allowed-ID context.");
+	if (!("payload" in raw)) return rejectedEnvelope("payload", "Artifact envelope is missing payload.");
+	return {
+		payload: raw.payload,
+		diagnostic: null
+	};
+}
+function rejectedEnvelope(path, message) {
+	return {
+		payload: null,
+		diagnostic: {
+			status: "rejected",
+			reason: path === "kind" ? "unsupported-value" : "invalid-id",
+			path,
+			message
+		}
+	};
+}
+function isEvidenceRef(value) {
+	if (!isRecord$1(value)) return false;
+	if (!isEvidenceKind(value.kind)) return false;
+	if (typeof value.ref !== "string" || !value.ref.trim()) return false;
+	if (value.line_range !== void 0 && !isLineRange(value.line_range)) return false;
+	if (value.file !== void 0 && typeof value.file !== "string") return false;
+	if (value.snippet_hash !== void 0 && typeof value.snippet_hash !== "string") return false;
+	if (value.command !== void 0 && typeof value.command !== "string") return false;
+	if (value.output_hash !== void 0 && typeof value.output_hash !== "string") return false;
+	return true;
+}
+function validEvidenceRefs(value) {
+	return Array.isArray(value) && value.length > 0 && value.every(isEvidenceRef);
+}
+function normalizeEvidenceRefs(value) {
+	if (!Array.isArray(value)) return [];
+	return value.filter(isEvidenceRef).map((ref) => ({
+		...ref,
+		ref: ref.ref.trim()
+	}));
+}
+function contractVersionDiagnostic(raw, expectedKind) {
+	if (!isRecord$1(raw)) return null;
+	if (!("contractVersion" in raw) && !("schemaVersion" in raw) && !("kind" in raw)) return null;
+	if (raw.contractVersion !== "ai-contract/v1") return {
+		status: "rejected",
+		reason: "unsupported-value",
+		path: "contractVersion",
+		message: `UNSUPPORTED_SCHEMA_VERSION: unsupported contractVersion "${String(raw.contractVersion)}"; expected ${AI_CONTRACT_VERSION} ${expectedKind} payload. Re-run init and calibrate-repo-context for v1 artifacts.`
+	};
+	if (raw.kind !== expectedKind) return {
+		status: "rejected",
+		reason: "unsupported-value",
+		path: "kind",
+		message: `Unsupported contract kind "${String(raw.kind)}"; expected ${expectedKind}.`
+	};
+	return {
+		status: "rejected",
+		reason: "malformed-payload",
+		path: "payload",
+		message: `Received a contract envelope for ${expectedKind}; provide the artifact payload body, not the contract metadata envelope.`
+	};
+}
+function isEvidenceKind(value) {
+	return value === "file" || value === "diff" || value === "command" || value === "rccl-evidence" || value === "runtime-trace" || value === "conversation";
+}
+function isLineRange(value) {
+	return Array.isArray(value) && value.length === 2 && typeof value[0] === "number" && typeof value[1] === "number" && Number.isInteger(value[0]) && Number.isInteger(value[1]) && value[0] >= 1 && value[1] >= value[0];
+}
+//#endregion
+//#region src/ai-contracts/agent-capability-profile.ts
+const AGENT_CAPABILITY_PROFILE_SCHEMA = {
+	type: "object",
+	additionalProperties: false,
+	properties: {
+		can_read_files: { type: "boolean" },
+		can_search_files: { type: "boolean" },
+		can_run_commands: { type: "boolean" },
+		can_inspect_diff: { type: "boolean" },
+		can_request_context: { type: "boolean" },
+		max_context_files: { type: "number" },
+		max_command_count: { type: "number" }
+	},
+	required: [
+		"can_read_files",
+		"can_search_files",
+		"can_run_commands",
+		"can_inspect_diff",
+		"can_request_context"
+	]
+};
+function prepareAgentCapabilityProfileContract(input) {
+	const prompt = [
+		"Produce an AgentCapabilityProfile for this host environment.",
+		"This profile is used by Runtime to decide which semantic contracts are safe and useful.",
+		"Return JSON only. Do not include free-form guidance.",
+		"",
+		`Task description: ${input.task.description}`
+	].join("\n");
+	const artifact = {
+		suggestedPath: input.artifactPath,
+		format: "json",
+		usage: `Write a v1 envelope to ${input.artifactPath}: schema_version 1, kind agent-capability-profile, the issued requestId/contextFingerprint as request_id/context_fingerprint, and the profile under payload; then pass it back through Runtime artifacts.agentCapabilityProfile.`
+	};
+	return {
+		profilePrompt: prompt,
+		profileSchema: JSON.stringify(AGENT_CAPABILITY_PROFILE_SCHEMA, null, 2),
+		profileArtifact: artifact,
+		contract: {
+			contractVersion: AI_CONTRACT_VERSION,
+			kind: "agent-capability-profile",
+			...artifactIdentity("agent-capability-profile", {
+				task: input.task,
+				schemaId: "runtime.agent-capability-profile"
+			}),
+			schemaId: "runtime.agent-capability-profile",
+			schemaVersion: "1.0",
+			prompt,
+			schema: AGENT_CAPABILITY_PROFILE_SCHEMA,
+			artifact,
+			provenance: {
+				owner: "runtime",
+				deterministic: true
+			},
+			cacheKeyMaterial: {
+				task: input.task,
+				schemaId: "runtime.agent-capability-profile"
+			}
+		}
+	};
+}
+function validateAgentCapabilityProfilePayload(raw) {
+	const entries = [];
+	const versionDiagnostic = contractVersionDiagnostic(raw, "agent-capability-profile");
+	if (versionDiagnostic) return {
+		profile: null,
+		diagnostics: buildContractPayloadDiagnostics("agent-capability-profile", [versionDiagnostic])
+	};
+	if (!isCapabilityProfile(raw)) {
+		entries.push({
+			status: raw == null ? "unused" : "rejected",
+			reason: raw == null ? "empty-payload" : "malformed-payload",
+			path: "profile",
+			message: "Agent capability profile must include boolean capability fields."
+		});
+		return {
+			profile: null,
+			diagnostics: buildContractPayloadDiagnostics("agent-capability-profile", entries)
+		};
+	}
+	entries.push({
+		status: "accepted",
+		reason: "accepted",
+		path: "profile",
+		message: "Agent capability profile accepted for Runtime contract policy."
+	});
+	return {
+		profile: raw,
+		diagnostics: buildContractPayloadDiagnostics("agent-capability-profile", entries)
+	};
+}
+function isCapabilityProfile(value) {
+	if (!isRecord$1(value)) return false;
+	return typeof value.can_read_files === "boolean" && typeof value.can_search_files === "boolean" && typeof value.can_run_commands === "boolean" && typeof value.can_inspect_diff === "boolean" && typeof value.can_request_context === "boolean" && (value.max_context_files === void 0 || typeof value.max_context_files === "number") && (value.max_command_count === void 0 || typeof value.max_command_count === "number");
+}
+//#endregion
+//#region src/utils/glob.ts
+/**
+* Lightweight glob matcher for the subset used by playbook scopes and RCCL scopes.
+*/
+function minimatch(filepath, pattern) {
+	return globToRegex(pattern).test(filepath.replace(/\\/g, "/"));
+}
+function globToRegex(pattern) {
+	let i = 0;
+	let regex = "^";
+	while (i < pattern.length) {
+		const c = pattern[i];
+		if (c === "*") if (pattern[i + 1] === "*") {
+			i += 2;
+			if (pattern[i] === "/") {
+				i += 1;
+				regex += "(?:.+/)?";
+			} else regex += ".*";
+		} else {
+			i += 1;
+			regex += "[^/]*";
+		}
+		else if (c === "?") {
+			i += 1;
+			regex += "[^/]";
+		} else if (c === "{") {
+			const closeIndex = pattern.indexOf("}", i + 1);
+			if (closeIndex === -1) {
+				regex += "\\{";
+				i += 1;
+				continue;
+			}
+			const options = pattern.slice(i + 1, closeIndex).split(",").map((option) => option.trim()).filter(Boolean).map(escapeRegex);
+			regex += options.length ? `(?:${options.join("|")})` : "\\{\\}";
+			i = closeIndex + 1;
+		} else if (c === ".") {
+			i += 1;
+			regex += "\\.";
+		} else {
+			regex += escapeRegex(c);
+			i += 1;
+		}
+	}
+	return new RegExp(`${regex}$`);
+}
+function escapeRegex(value) {
+	return value.replace(/[|\\{}()[\]^$+*?.]/g, "\\$&");
+}
+//#endregion
+//#region src/utils/paths.ts
+function normalizePath$1(value) {
+	return value.replace(/\\/g, "/").replace(/^\.\//, "");
+}
+function normalizePathSeparators(value) {
+	return value.replace(/\\/g, "/");
+}
+function pathMatchesScope(path, scope) {
+	if (scope === "*" || scope === "**" || scope === "**/*") return true;
+	if (scope.includes("*") || scope.includes("?") || scope.includes("{")) return minimatch(path, scope);
+	const normalizedScope = scope.replace(/\/$/, "");
+	return path === normalizedScope || path.startsWith(`${normalizedScope}/`);
+}
+function scopeOverlapsPath(scope, path) {
+	const normalizedScope = normalizePath$1(scope);
+	const normalizedPath = normalizePath$1(path);
+	return pathMatchesScope(normalizedPath, normalizedScope) || pathMatchesScope(normalizedScope, normalizedPath);
+}
+function fileOverlapsTarget(file, target) {
+	const normalizedFile = normalizePath$1(file);
+	const normalizedTarget = normalizePath$1(target);
+	return normalizedFile === normalizedTarget || pathMatchesScope(normalizedFile, normalizedTarget) || pathMatchesScope(normalizedTarget, normalizedFile);
+}
+//#endregion
+//#region src/ai-contracts/context-acquisition.ts
+const CONTEXT_ACQUISITION_SCHEMA = {
+	type: "object",
+	additionalProperties: false,
+	properties: { requests: {
+		type: "array",
+		items: {
+			type: "object",
+			additionalProperties: false,
+			properties: {
+				kind: { const: "rccl-incremental" },
+				mode: { enum: [
+					"task-scoped",
+					"changed-files",
+					"full"
+				] },
+				target_files: {
+					type: "array",
+					items: { type: "string" },
+					maxItems: 4
+				},
+				changed_files: {
+					type: "array",
+					items: { type: "string" },
+					maxItems: 4
+				},
+				scope: { type: "string" },
+				reason: { type: "string" },
+				confidence: {
+					type: "number",
+					minimum: 0,
+					maximum: 1
+				},
+				evidence_refs: { type: "array" }
+			},
+			required: [
+				"kind",
+				"mode",
+				"target_files",
+				"changed_files",
+				"reason",
+				"confidence",
+				"evidence_refs"
+			]
+		}
+	} },
+	required: ["requests"]
+};
+function prepareContextAcquisitionContract(input) {
+	const prompt = [
+		"Acquire repository context needed before semantic governance graph generation.",
+		"Use this only to request bounded file windows, changed files, tests, or calibration slices that materially affect Runtime guidance.",
+		"Runtime/RCCL will decide whether the requested context becomes authoritative repository observation data.",
+		"Return JSON only.",
+		"",
+		`Task description: ${input.task.description}`,
+		`Target file: ${input.task.targetFile ?? "(none)"}`,
+		`Changed files: ${input.task.changedFiles?.join(", ") || "(none)"}`
+	].join("\n");
+	const artifact = {
+		suggestedPath: input.artifactPath,
+		format: "json",
+		usage: `Write a v1 envelope to ${input.artifactPath}: schema_version 1, kind context-acquisition, the issued requestId/contextFingerprint as request_id/context_fingerprint, and bounded requests under payload; use them to drive calibrate-repo-context prepare-incremental before semantic graph compilation.`
+	};
+	return {
+		acquisitionPrompt: prompt,
+		acquisitionSchema: JSON.stringify(CONTEXT_ACQUISITION_SCHEMA, null, 2),
+		acquisitionArtifact: artifact,
+		contract: {
+			contractVersion: AI_CONTRACT_VERSION,
+			kind: "context-acquisition",
+			...artifactIdentity("context-acquisition", {
+				task: input.task,
+				schemaId: "runtime.context-acquisition"
+			}),
+			schemaId: "runtime.context-acquisition",
+			schemaVersion: "1.0",
+			prompt,
+			schema: CONTEXT_ACQUISITION_SCHEMA,
+			artifact,
+			provenance: {
+				owner: "runtime",
+				deterministic: true
+			},
+			cacheKeyMaterial: {
+				task: input.task,
+				schemaId: "runtime.context-acquisition"
+			}
+		}
+	};
+}
+//#endregion
 //#region src/intent/schema.ts
-const TASK_KINDS = [
+const WORKFLOWS = [
 	"code",
 	"review",
-	"analysis",
-	"migration"
+	"analysis"
+];
+const CHANGE_TYPES = [
+	"feature",
+	"bugfix",
+	"refactor",
+	"migration",
+	"unknown"
 ];
 const OPERATIONS = [
 	"create",
 	"modify",
-	"review",
-	"refactor",
-	"bugfix"
+	"delete",
+	"mixed"
 ];
 const PROJECT_STAGES = [
 	"prototype",
@@ -102,15 +508,14 @@ const REVIEW_GOALS = [
 	"security",
 	"performance"
 ];
-const TASK_INTERPRETATION_SOURCES = ["host-agent", "assistive-ai"];
 const TASK_INTERPRETATION_ENUMS = {
 	intent: {
-		task_kind: TASK_KINDS,
+		workflow: WORKFLOWS,
+		change_type: CHANGE_TYPES,
 		operation: OPERATIONS
 	},
 	context: {
 		project_stage: PROJECT_STAGES,
-		change_type: OPERATIONS,
 		optimization_target: OPTIMIZATION_TARGETS,
 		risk_level: RISK_LEVELS,
 		scope_size: SCOPE_SIZES,
@@ -121,33 +526,19 @@ const TASK_INTERPRETATION_ENUMS = {
 		review_goal: REVIEW_GOALS
 	}
 };
-const TASK_INPUT_ENUMS = {
-	operation: OPERATIONS,
-	taskKind: TASK_KINDS,
-	projectStage: PROJECT_STAGES,
-	optimizationTarget: OPTIMIZATION_TARGETS,
-	riskLevel: RISK_LEVELS,
-	scopeSize: SCOPE_SIZES,
-	compatibilityRequirement: COMPATIBILITY_REQUIREMENTS,
-	interfaceSensitivity: INTERFACE_SENSITIVITIES,
-	refactorTolerance: REFACTOR_TOLERANCES,
-	migrationPhase: MIGRATION_PHASES,
-	reviewGoal: REVIEW_GOALS
-};
-function enumValue(value, allowedValues) {
+function enumValue$1(value, allowedValues) {
 	return typeof value === "string" && allowedValues.includes(value) ? value : void 0;
 }
 function hasEnumValue(value, allowedValues) {
-	return enumValue(value, allowedValues) !== void 0;
+	return enumValue$1(value, allowedValues) !== void 0;
 }
 //#endregion
 //#region src/intent/parse-intent.ts
 const DEFAULT_OPTIMIZATION_TARGET = {
 	create: "maintainability",
 	modify: "maintainability",
-	review: "reviewability",
-	refactor: "maintainability",
-	bugfix: "safety"
+	delete: "safety",
+	mixed: "maintainability"
 };
 /**
 * Produces a deterministic task intent from user task input without using an LLM.
@@ -156,9 +547,11 @@ function parseIntent(task) {
 	const targetFile = task.targetFile?.replace(/\\/g, "/");
 	const changedFiles = (task.changedFiles ?? []).map((file) => file.replace(/\\/g, "/"));
 	const techStack = [...new Set([...task.techStack ?? [], ...inferTechStackFromFile(targetFile)])];
-	const operation = enumValue(task.operation, OPERATIONS) ?? "modify";
+	const operation = enumValue$1(task.operation, OPERATIONS) ?? "modify";
+	const changeType = enumValue$1(task.changeType, CHANGE_TYPES) ?? inferChangeType(operation);
 	return {
-		task_kind: enumValue(task.taskKind, TASK_KINDS) ?? "code",
+		workflow: enumValue$1(task.workflow, WORKFLOWS) ?? "code",
+		change_type: changeType,
 		operation,
 		target_layer: inferTargetLayer(targetFile),
 		tech_stack: techStack,
@@ -166,6 +559,9 @@ function parseIntent(task) {
 		changed_files: changedFiles,
 		tags: [...new Set(task.tags ?? inferTags(targetFile, changedFiles))]
 	};
+}
+function inferChangeType(operation) {
+	return operation === "create" ? "feature" : "unknown";
 }
 function inferTechStackFromFile(targetFile) {
 	if (!targetFile) return [];
@@ -205,19 +601,18 @@ function inferAvoid() {
 */
 function buildContextProfile(task, intent) {
 	return {
-		project_stage: enumValue(task.projectStage, PROJECT_STAGES),
-		change_type: intent.operation,
-		optimization_target: enumValue(task.optimizationTarget, OPTIMIZATION_TARGETS) ?? inferOptimizationTarget(intent.operation),
+		project_stage: enumValue$1(task.projectStage, PROJECT_STAGES),
+		optimization_target: enumValue$1(task.optimizationTarget, OPTIMIZATION_TARGETS) ?? inferOptimizationTarget(intent.operation),
 		hard_constraints: [...new Set(task.hardConstraints ?? inferHardConstraints())],
 		allowed_tradeoffs: [...new Set(task.allowedTradeoffs ?? inferAllowedTradeoffs())],
 		avoid: [...new Set(task.avoid ?? inferAvoid())],
-		risk_level: enumValue(task.riskLevel, RISK_LEVELS) ?? inferRiskLevel(task, intent),
-		scope_size: enumValue(task.scopeSize, SCOPE_SIZES) ?? inferScopeSize(intent),
-		compatibility_requirement: enumValue(task.compatibilityRequirement, COMPATIBILITY_REQUIREMENTS) ?? inferCompatibilityRequirement(task),
-		interface_sensitivity: enumValue(task.interfaceSensitivity, INTERFACE_SENSITIVITIES) ?? inferInterfaceSensitivity(intent),
-		refactor_tolerance: enumValue(task.refactorTolerance, REFACTOR_TOLERANCES) ?? inferRefactorTolerance(task, intent),
-		migration_phase: enumValue(task.migrationPhase, MIGRATION_PHASES) ?? inferMigrationPhase(task),
-		review_goal: enumValue(task.reviewGoal, REVIEW_GOALS) ?? inferReviewGoal(task, intent)
+		risk_level: enumValue$1(task.riskLevel, RISK_LEVELS) ?? inferRiskLevel(task, intent),
+		scope_size: enumValue$1(task.scopeSize, SCOPE_SIZES) ?? inferScopeSize(intent),
+		compatibility_requirement: enumValue$1(task.compatibilityRequirement, COMPATIBILITY_REQUIREMENTS) ?? inferCompatibilityRequirement(task),
+		interface_sensitivity: enumValue$1(task.interfaceSensitivity, INTERFACE_SENSITIVITIES) ?? inferInterfaceSensitivity(intent),
+		refactor_tolerance: enumValue$1(task.refactorTolerance, REFACTOR_TOLERANCES) ?? inferRefactorTolerance(task, intent),
+		migration_phase: enumValue$1(task.migrationPhase, MIGRATION_PHASES) ?? inferMigrationPhase(task),
+		review_goal: enumValue$1(task.reviewGoal, REVIEW_GOALS) ?? inferReviewGoal(task, intent)
 	};
 }
 function inferRiskLevel(task, intent) {
@@ -239,15 +634,15 @@ function inferInterfaceSensitivity(intent) {
 	return intent.target_file || intent.changed_files.length || intent.tags.length || intent.tech_stack.length ? "internal" : "unknown";
 }
 function inferRefactorTolerance(_task, intent) {
-	if (intent.operation === "refactor") return "bounded";
+	if (intent.change_type === "refactor") return "bounded";
 	return "local-only";
 }
 function inferMigrationPhase(_task) {
 	return "none";
 }
 function inferReviewGoal(task, intent) {
-	if (intent.operation === "bugfix" || task.optimizationTarget === "safety") return "regression-risk";
-	if (intent.operation === "review") return "correctness";
+	if (intent.change_type === "bugfix" || task.optimizationTarget === "safety") return "regression-risk";
+	if (intent.workflow === "review") return "correctness";
 	return "maintainability";
 }
 //#endregion
@@ -257,7 +652,8 @@ var DeterministicInterpretationProvider = class {
 	interpret(task) {
 		const intent = parseIntent(task);
 		const context = buildContextProfile(task, intent);
-		const explicitTaskKind = hasEnumValue(task.taskKind, TASK_KINDS);
+		const explicitWorkflow = hasEnumValue(task.workflow, WORKFLOWS);
+		const explicitChangeType = hasEnumValue(task.changeType, CHANGE_TYPES);
 		const explicitOperation = hasEnumValue(task.operation, OPERATIONS);
 		const explicitProjectStage = hasEnumValue(task.projectStage, PROJECT_STAGES);
 		const explicitOptimizationTarget = hasEnumValue(task.optimizationTarget, OPTIMIZATION_TARGETS);
@@ -270,7 +666,8 @@ var DeterministicInterpretationProvider = class {
 		const explicitReviewGoal = hasEnumValue(task.reviewGoal, REVIEW_GOALS);
 		return {
 			intent: {
-				task_kind: toField(intent.task_kind, explicitTaskKind ? "explicit" : "deterministic", explicitTaskKind ? 1 : .85, explicitTaskKind ? "provided directly via task input" : "derived from operation and task shape"),
+				workflow: toField(intent.workflow, explicitWorkflow ? "explicit" : "deterministic", explicitWorkflow ? 1 : .85, explicitWorkflow ? "provided directly via task input" : "default code workflow"),
+				change_type: toField(intent.change_type, explicitChangeType ? "explicit" : "deterministic", explicitChangeType ? 1 : intent.change_type === "unknown" ? .35 : .6, explicitChangeType ? "provided directly via task input" : "conservative deterministic change-type fallback"),
 				operation: toField(intent.operation, explicitOperation ? "explicit" : "deterministic", explicitOperation ? 1 : .5, explicitOperation ? "provided directly via task input" : "neutral deterministic default applied because no explicit operation was provided"),
 				target_layer: toField(intent.target_layer, task.targetFile ? "explicit" : "deterministic", task.targetFile ? 1 : .6, task.targetFile ? "derived from explicit target file path" : "fallback module-level layer because no target file was provided"),
 				tech_stack: toListField(intent.tech_stack, task.techStack?.length ? "explicit" : "deterministic", task.techStack?.length ? 1 : intent.tech_stack.length ? .55 : .2, task.techStack?.length ? "provided directly via task input" : "derived from explicit target file extension when available"),
@@ -280,7 +677,6 @@ var DeterministicInterpretationProvider = class {
 			},
 			context: {
 				project_stage: context.project_stage ? toField(context.project_stage, explicitProjectStage ? "explicit" : "deterministic", explicitProjectStage ? 1 : .5, explicitProjectStage ? "provided directly via task input" : "not inferred strongly; carried through when available") : unresolvedField(explicitProjectStage ? "explicit" : "deterministic", "project stage not resolved"),
-				change_type: toField(context.change_type, explicitOperation ? "explicit" : "deterministic", explicitOperation ? 1 : .5, explicitOperation ? "provided directly via task input" : "mirrors the neutral deterministic operation default"),
 				optimization_target: toField(context.optimization_target, explicitOptimizationTarget ? "explicit" : "deterministic", explicitOptimizationTarget ? 1 : .55, explicitOptimizationTarget ? "provided directly via task input" : "stable fallback derived from resolved operation, not free-text policy extraction"),
 				hard_constraints: toListField(context.hard_constraints, task.hardConstraints?.length ? "explicit" : "deterministic", task.hardConstraints?.length ? 1 : 0, task.hardConstraints?.length ? "provided directly via task input" : "left unresolved unless explicit constraints are provided"),
 				allowed_tradeoffs: toListField(context.allowed_tradeoffs, task.allowedTradeoffs?.length ? "explicit" : "deterministic", task.allowedTradeoffs?.length ? 1 : 0, task.allowedTradeoffs?.length ? "provided directly via task input" : "left unresolved unless explicit tradeoffs are provided"),
@@ -324,35 +720,27 @@ function toListField(values, source, confidence, rationale) {
 	};
 }
 //#endregion
-//#region src/utils/common.ts
-function unique(values) {
-	return [...new Set(values)];
-}
-function uniqueCompact(values) {
-	return [...new Set((values ?? []).filter((value) => value !== void 0 && value !== null))];
-}
-function isRecord(value) {
-	return Boolean(value) && typeof value === "object" && !Array.isArray(value);
-}
-function validConfidence(value) {
-	return typeof value === "number" && Number.isFinite(value) && value >= 0 && value <= 1;
-}
-function hasConstraint(values, expected) {
-	return expected.some((item) => values.includes(item));
-}
-//#endregion
 //#region src/interpret/normalize-candidate.ts
 const deterministicProvider = new DeterministicInterpretationProvider();
 const MIN_ASSISTIVE_CONTEXT_CONFIDENCE = .5;
 const SCALAR_FIELD_SPECS = [
 	{
-		field: "intent.task_kind",
+		field: "intent.workflow",
 		section: "intent",
-		candidateKey: "task_kind",
-		explicitValue: (input) => input.taskKind ?? input.task.taskKind,
-		fallbackValue: (det) => det.intent.task_kind?.value ?? "code",
-		defaultConfidence: (det) => det.intent.task_kind?.confidence ?? .85,
-		allowedValues: TASK_KINDS
+		candidateKey: "workflow",
+		explicitValue: (input) => input.task.workflow,
+		fallbackValue: (det) => det.intent.workflow?.value ?? "code",
+		defaultConfidence: (det) => det.intent.workflow?.confidence ?? .85,
+		allowedValues: WORKFLOWS
+	},
+	{
+		field: "intent.change_type",
+		section: "intent",
+		candidateKey: "change_type",
+		explicitValue: (input) => input.task.changeType,
+		fallbackValue: (det) => det.intent.change_type?.value ?? "unknown",
+		defaultConfidence: (det) => det.intent.change_type?.confidence ?? .4,
+		allowedValues: CHANGE_TYPES
 	},
 	{
 		field: "intent.operation",
@@ -546,7 +934,8 @@ function resolveTask(input) {
 	const list = (field) => listResults.get(field);
 	const task = {
 		description: input.task.description,
-		taskKind: scalar("intent.task_kind").value,
+		workflow: scalar("intent.workflow").value,
+		changeType: scalar("intent.change_type").value,
 		operation: scalar("intent.operation").value,
 		targetFile: scalar("intent.target_file").value,
 		changedFiles: list("intent.changed_files").values,
@@ -567,7 +956,8 @@ function resolveTask(input) {
 	};
 	const resolvedTargetFile = scalar("intent.target_file").value;
 	const intent = {
-		task_kind: scalar("intent.task_kind").value,
+		workflow: scalar("intent.workflow").value,
+		change_type: scalar("intent.change_type").value,
 		operation: scalar("intent.operation").value,
 		target_layer: inferTargetLayer(resolvedTargetFile),
 		tech_stack: uniqueCompact(list("intent.tech_stack").values),
@@ -577,7 +967,6 @@ function resolveTask(input) {
 	};
 	const contextProfile = {
 		project_stage: scalar("context.project_stage").value,
-		change_type: scalar("intent.operation").value,
 		optimization_target: scalar("context.optimization_target").value,
 		hard_constraints: uniqueCompact(list("context.hard_constraints").values),
 		allowed_tradeoffs: uniqueCompact(list("context.allowed_tradeoffs").values),
@@ -591,7 +980,8 @@ function resolveTask(input) {
 		review_goal: scalar("context.review_goal").value
 	};
 	const provenance = buildProvenance$1(input, {
-		task_kind: scalar("intent.task_kind"),
+		workflow: scalar("intent.workflow"),
+		change_type: scalar("intent.change_type"),
 		operation: scalar("intent.operation"),
 		target_file: scalar("intent.target_file"),
 		changed_files: list("intent.changed_files"),
@@ -614,7 +1004,7 @@ function resolveTask(input) {
 	const diagnostics = buildDiagnostics(input, candidates, provenance, conflicts, discardedInputs);
 	return {
 		task,
-		taskKind: scalar("intent.task_kind").value,
+		workflow: scalar("intent.workflow").value,
 		task_models: input.taskModels ?? [],
 		task_intent: intent,
 		context_profile: contextProfile,
@@ -623,7 +1013,6 @@ function resolveTask(input) {
 		trace
 	};
 }
-const resolveTaskInput = resolveTask;
 function resolveField({ field, explicitValue, candidates, fallbackValue, defaultSource, defaultConfidence, allowedValues, minimumCandidateConfidence = 0, conflicts, discardedInputs }) {
 	const resolvedCandidates = candidates.filter((candidate) => {
 		if (candidate === void 0 || candidate.status !== "resolved") return false;
@@ -701,7 +1090,8 @@ function resolveListField({ field, explicitValues, candidates, fallbackValues, d
 }
 function buildProvenance$1(input, resolved, conflicts) {
 	const resolved_fields = [
-		summarizeScalarField("intent.task_kind", resolved.task_kind),
+		summarizeScalarField("intent.workflow", resolved.workflow),
+		summarizeScalarField("intent.change_type", resolved.change_type),
 		summarizeScalarField("intent.operation", resolved.operation),
 		summarizeScalarField("intent.target_file", resolved.target_file),
 		summarizeListField("intent.changed_files", resolved.changed_files),
@@ -722,7 +1112,11 @@ function buildProvenance$1(input, resolved, conflicts) {
 	].filter((item) => Boolean(item));
 	return {
 		resolved_fields,
-		unresolved_fields: [...resolved.target_file.value ? [] : ["intent.target_file"], ...resolved.project_stage.value ? [] : ["context.project_stage"]],
+		unresolved_fields: [
+			...resolved.change_type.value === "unknown" ? ["intent.change_type"] : [],
+			...resolved.target_file.value ? [] : ["intent.target_file"],
+			...resolved.project_stage.value ? [] : ["context.project_stage"]
+		],
 		context_resolution: buildContextResolution(resolved, conflicts),
 		interpretation_mode: input.interpretationMode ?? (input.taskModels?.length ? "host-agent" : "deterministic-only"),
 		resolution_quality: determineResolutionQuality(resolved_fields)
@@ -838,12 +1232,12 @@ function uniqueDiscardedInputs(items) {
 }
 function summarizeCandidate(candidate) {
 	const scalarFields = [
-		["intent.task_kind", candidate.intent.task_kind],
+		["intent.workflow", candidate.intent.workflow],
+		["intent.change_type", candidate.intent.change_type],
 		["intent.operation", candidate.intent.operation],
 		["intent.target_layer", candidate.intent.target_layer],
 		["intent.target_file", candidate.intent.target_file],
 		["context.project_stage", candidate.context.project_stage],
-		["context.change_type", candidate.context.change_type],
 		["context.optimization_target", candidate.context.optimization_target],
 		["context.risk_level", candidate.context.risk_level],
 		["context.scope_size", candidate.context.scope_size],
@@ -863,9 +1257,10 @@ function summarizeCandidate(candidate) {
 	];
 	const resolved_fields = [...scalarFields.filter(([, field]) => field?.status === "resolved").map(([name]) => name), ...listFields.filter(([, field]) => field?.status === "resolved" && field.values.length > 0).map(([name]) => name)];
 	const unresolved_fields = [...scalarFields.filter(([, field]) => !field || field.status !== "resolved").map(([name]) => name), ...listFields.filter(([, field]) => !field || field.status !== "resolved" || field.values.length === 0).map(([name]) => name)];
-	const source = candidate.intent.task_kind?.source ?? candidate.intent.operation?.source ?? candidate.intent.target_file?.source ?? candidate.context.optimization_target?.source ?? "deterministic";
+	const source = candidate.intent.workflow?.source ?? candidate.intent.change_type?.source ?? candidate.intent.operation?.source ?? candidate.intent.target_file?.source ?? candidate.context.optimization_target?.source ?? "deterministic";
 	const confidenceValues = [
-		candidate.intent.task_kind?.confidence,
+		candidate.intent.workflow?.confidence,
+		candidate.intent.change_type?.confidence,
 		candidate.intent.operation?.confidence,
 		candidate.intent.target_layer?.confidence,
 		candidate.intent.target_file?.confidence,
@@ -873,7 +1268,6 @@ function summarizeCandidate(candidate) {
 		candidate.intent.changed_files?.confidence,
 		candidate.intent.tags?.confidence,
 		candidate.context.project_stage?.confidence,
-		candidate.context.change_type?.confidence,
 		candidate.context.optimization_target?.confidence,
 		candidate.context.hard_constraints?.confidence,
 		candidate.context.allowed_tradeoffs?.confidence,
@@ -896,7 +1290,8 @@ function summarizeCandidate(candidate) {
 function taskModelToCandidate(model) {
 	return {
 		intent: {
-			task_kind: scalarField(model.intent.task_kind),
+			workflow: scalarField(model.intent.workflow),
+			change_type: scalarField(model.intent.change_type),
 			operation: scalarField(model.intent.operation),
 			target_layer: scalarField(model.intent.target_layer),
 			target_file: scalarField(model.intent.target_file),
@@ -906,7 +1301,6 @@ function taskModelToCandidate(model) {
 		},
 		context: {
 			project_stage: scalarField(model.context.project_stage),
-			change_type: void 0,
 			optimization_target: scalarField(model.context.optimization_target),
 			hard_constraints: listField(model.context.hard_constraints),
 			allowed_tradeoffs: listField(model.context.allowed_tradeoffs),
@@ -991,55 +1385,6 @@ function registerConflict(field, winner, discarded, conflicts, rationale) {
 	});
 }
 //#endregion
-//#region src/utils/glob.ts
-/**
-* Lightweight glob matcher for the subset used by playbook scopes and RCCL scopes.
-*/
-function minimatch(filepath, pattern) {
-	return globToRegex(pattern).test(filepath.replace(/\\/g, "/"));
-}
-function globToRegex(pattern) {
-	let i = 0;
-	let regex = "^";
-	while (i < pattern.length) {
-		const c = pattern[i];
-		if (c === "*") if (pattern[i + 1] === "*") {
-			i += 2;
-			if (pattern[i] === "/") {
-				i += 1;
-				regex += "(?:.+/)?";
-			} else regex += ".*";
-		} else {
-			i += 1;
-			regex += "[^/]*";
-		}
-		else if (c === "?") {
-			i += 1;
-			regex += "[^/]";
-		} else if (c === "{") {
-			const closeIndex = pattern.indexOf("}", i + 1);
-			if (closeIndex === -1) {
-				regex += "\\{";
-				i += 1;
-				continue;
-			}
-			const options = pattern.slice(i + 1, closeIndex).split(",").map((option) => option.trim()).filter(Boolean).map(escapeRegex);
-			regex += options.length ? `(?:${options.join("|")})` : "\\{\\}";
-			i = closeIndex + 1;
-		} else if (c === ".") {
-			i += 1;
-			regex += "\\.";
-		} else {
-			regex += escapeRegex(c);
-			i += 1;
-		}
-	}
-	return new RegExp(`${regex}$`);
-}
-function escapeRegex(value) {
-	return value.replace(/[|\\{}()[\]^$+*?.]/g, "\\$&");
-}
-//#endregion
 //#region src/ir/activation/resolve-activation.ts
 function resolveActivationDecisionsIR(bundle) {
 	return sortActivationDecisions(bundle.directives.map((directive) => resolveDirectiveActivation(directive, bundle.task)));
@@ -1079,7 +1424,7 @@ function buildSkippedDecision(directive, reason, note) {
 	};
 }
 function buildActivationNote(directive, task) {
-	const reasons = [`directive matched task intent for ${task.operation}`];
+	const reasons = [`directive matched ${task.workflow}/${task.changeType}/${task.operation} task context`];
 	if (directive.source.kind === "local-playbook") reasons.push("local directive addition applied");
 	if (directive.local.overrideApplied) reasons.push("local override applied");
 	if (directive.local.augmentApplied) reasons.push("local examples augment applied");
@@ -1089,7 +1434,7 @@ function buildActivationNote(directive, task) {
 function layerMatchesTask(directive, task) {
 	const sourceLayer = directive.layer.id;
 	if (sourceLayer === "builtin/core" || directive.source.kind === "local-playbook" || sourceLayer.startsWith("local")) return true;
-	if (sourceLayer.startsWith("builtin/task-types/")) return sourceLayer.endsWith(`/${task.operation}`);
+	if (sourceLayer.startsWith("builtin/task-types/")) return task.changeType !== "unknown" && sourceLayer.endsWith(`/${task.changeType}`);
 	if (sourceLayer.startsWith("builtin/languages/")) return task.techStack.some((tech) => sourceLayer.endsWith(`/${tech}`));
 	if (sourceLayer.startsWith("builtin/frameworks/")) return task.techStack.some((tech) => sourceLayer.endsWith(`/${tech}`));
 	return true;
@@ -1101,15 +1446,15 @@ function scopeMatchesTask$2(scope, task) {
 function sortActivationDecisions(items) {
 	return [...items].sort((a, b) => {
 		if (a.status !== b.status) return a.status === "activated" ? -1 : 1;
-		if (a.priority.layerRank !== b.priority.layerRank) return b.priority.layerRank - a.priority.layerRank;
 		if (a.priority.prescriptionRank !== b.priority.prescriptionRank) return b.priority.prescriptionRank - a.priority.prescriptionRank;
+		if (a.priority.layerRank !== b.priority.layerRank) return b.priority.layerRank - a.priority.layerRank;
 		if (a.priority.weightRank !== b.priority.weightRank) return b.priority.weightRank - a.priority.weightRank;
 		if (a.priority.localOverrideRank !== b.priority.localOverrideRank) return b.priority.localOverrideRank - a.priority.localOverrideRank;
 		return a.directiveId.localeCompare(b.directiveId);
 	});
 }
 //#endregion
-//#region ../node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/nodes/identity.js
+//#region ../node_modules/yaml/dist/nodes/identity.js
 var require_identity = /* @__PURE__ */ __commonJSMin(((exports) => {
 	const ALIAS = Symbol.for("yaml.alias");
 	const DOC = Symbol.for("yaml.document");
@@ -1159,7 +1504,7 @@ var require_identity = /* @__PURE__ */ __commonJSMin(((exports) => {
 	exports.isSeq = isSeq;
 }));
 //#endregion
-//#region ../node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/visit.js
+//#region ../node_modules/yaml/dist/visit.js
 var require_visit = /* @__PURE__ */ __commonJSMin(((exports) => {
 	var identity = require_identity();
 	const BREAK = Symbol("break visit");
@@ -1349,7 +1694,7 @@ var require_visit = /* @__PURE__ */ __commonJSMin(((exports) => {
 	exports.visitAsync = visitAsync;
 }));
 //#endregion
-//#region ../node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/doc/directives.js
+//#region ../node_modules/yaml/dist/doc/directives.js
 var require_directives = /* @__PURE__ */ __commonJSMin(((exports) => {
 	var identity = require_identity();
 	var visit = require_visit();
@@ -1514,7 +1859,7 @@ var require_directives = /* @__PURE__ */ __commonJSMin(((exports) => {
 	exports.Directives = Directives;
 }));
 //#endregion
-//#region ../node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/doc/anchors.js
+//#region ../node_modules/yaml/dist/doc/anchors.js
 var require_anchors = /* @__PURE__ */ __commonJSMin(((exports) => {
 	var identity = require_identity();
 	var visit = require_visit();
@@ -1576,7 +1921,7 @@ var require_anchors = /* @__PURE__ */ __commonJSMin(((exports) => {
 	exports.findNewAnchor = findNewAnchor;
 }));
 //#endregion
-//#region ../node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/doc/applyReviver.js
+//#region ../node_modules/yaml/dist/doc/applyReviver.js
 var require_applyReviver = /* @__PURE__ */ __commonJSMin(((exports) => {
 	/**
 	* Applies the JSON.parse reviver algorithm as defined in the ECMA-262 spec,
@@ -1616,7 +1961,7 @@ var require_applyReviver = /* @__PURE__ */ __commonJSMin(((exports) => {
 	exports.applyReviver = applyReviver;
 }));
 //#endregion
-//#region ../node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/nodes/toJS.js
+//#region ../node_modules/yaml/dist/nodes/toJS.js
 var require_toJS = /* @__PURE__ */ __commonJSMin(((exports) => {
 	var identity = require_identity();
 	/**
@@ -1653,7 +1998,7 @@ var require_toJS = /* @__PURE__ */ __commonJSMin(((exports) => {
 	exports.toJS = toJS;
 }));
 //#endregion
-//#region ../node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/nodes/Node.js
+//#region ../node_modules/yaml/dist/nodes/Node.js
 var require_Node = /* @__PURE__ */ __commonJSMin(((exports) => {
 	var applyReviver = require_applyReviver();
 	var identity = require_identity();
@@ -1687,7 +2032,7 @@ var require_Node = /* @__PURE__ */ __commonJSMin(((exports) => {
 	exports.NodeBase = NodeBase;
 }));
 //#endregion
-//#region ../node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/nodes/Alias.js
+//#region ../node_modules/yaml/dist/nodes/Alias.js
 var require_Alias = /* @__PURE__ */ __commonJSMin(((exports) => {
 	var anchors = require_anchors();
 	var visit = require_visit();
@@ -1781,7 +2126,7 @@ var require_Alias = /* @__PURE__ */ __commonJSMin(((exports) => {
 	exports.Alias = Alias;
 }));
 //#endregion
-//#region ../node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/nodes/Scalar.js
+//#region ../node_modules/yaml/dist/nodes/Scalar.js
 var require_Scalar = /* @__PURE__ */ __commonJSMin(((exports) => {
 	var identity = require_identity();
 	var Node = require_Node();
@@ -1808,7 +2153,7 @@ var require_Scalar = /* @__PURE__ */ __commonJSMin(((exports) => {
 	exports.isScalarValue = isScalarValue;
 }));
 //#endregion
-//#region ../node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/doc/createNode.js
+//#region ../node_modules/yaml/dist/doc/createNode.js
 var require_createNode = /* @__PURE__ */ __commonJSMin(((exports) => {
 	var Alias = require_Alias();
 	var identity = require_identity();
@@ -1871,7 +2216,7 @@ var require_createNode = /* @__PURE__ */ __commonJSMin(((exports) => {
 	exports.createNode = createNode;
 }));
 //#endregion
-//#region ../node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/nodes/Collection.js
+//#region ../node_modules/yaml/dist/nodes/Collection.js
 var require_Collection = /* @__PURE__ */ __commonJSMin(((exports) => {
 	var createNode = require_createNode();
 	var identity = require_identity();
@@ -1992,7 +2337,7 @@ var require_Collection = /* @__PURE__ */ __commonJSMin(((exports) => {
 	exports.isEmptyPath = isEmptyPath;
 }));
 //#endregion
-//#region ../node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/stringify/stringifyComment.js
+//#region ../node_modules/yaml/dist/stringify/stringifyComment.js
 var require_stringifyComment = /* @__PURE__ */ __commonJSMin(((exports) => {
 	/**
 	* Stringifies a comment.
@@ -2012,7 +2357,7 @@ var require_stringifyComment = /* @__PURE__ */ __commonJSMin(((exports) => {
 	exports.stringifyComment = stringifyComment;
 }));
 //#endregion
-//#region ../node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/stringify/foldFlowLines.js
+//#region ../node_modules/yaml/dist/stringify/foldFlowLines.js
 var require_foldFlowLines = /* @__PURE__ */ __commonJSMin(((exports) => {
 	const FOLD_FLOW = "flow";
 	const FOLD_BLOCK = "block";
@@ -2128,7 +2473,7 @@ var require_foldFlowLines = /* @__PURE__ */ __commonJSMin(((exports) => {
 	exports.foldFlowLines = foldFlowLines;
 }));
 //#endregion
-//#region ../node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/stringify/stringifyString.js
+//#region ../node_modules/yaml/dist/stringify/stringifyString.js
 var require_stringifyString = /* @__PURE__ */ __commonJSMin(((exports) => {
 	var Scalar = require_Scalar();
 	var foldFlowLines = require_foldFlowLines();
@@ -2352,7 +2697,7 @@ var require_stringifyString = /* @__PURE__ */ __commonJSMin(((exports) => {
 	exports.stringifyString = stringifyString;
 }));
 //#endregion
-//#region ../node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/stringify/stringify.js
+//#region ../node_modules/yaml/dist/stringify/stringify.js
 var require_stringify = /* @__PURE__ */ __commonJSMin(((exports) => {
 	var anchors = require_anchors();
 	var identity = require_identity();
@@ -2460,7 +2805,7 @@ var require_stringify = /* @__PURE__ */ __commonJSMin(((exports) => {
 	exports.stringify = stringify;
 }));
 //#endregion
-//#region ../node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/stringify/stringifyPair.js
+//#region ../node_modules/yaml/dist/stringify/stringifyPair.js
 var require_stringifyPair = /* @__PURE__ */ __commonJSMin(((exports) => {
 	var identity = require_identity();
 	var Scalar = require_Scalar();
@@ -2557,7 +2902,7 @@ var require_stringifyPair = /* @__PURE__ */ __commonJSMin(((exports) => {
 	exports.stringifyPair = stringifyPair;
 }));
 //#endregion
-//#region ../node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/log.js
+//#region ../node_modules/yaml/dist/log.js
 var require_log = /* @__PURE__ */ __commonJSMin(((exports) => {
 	var node_process$2 = __require("process");
 	function debug(logLevel, ...messages) {
@@ -2571,7 +2916,7 @@ var require_log = /* @__PURE__ */ __commonJSMin(((exports) => {
 	exports.warn = warn;
 }));
 //#endregion
-//#region ../node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/schema/yaml-1.1/merge.js
+//#region ../node_modules/yaml/dist/schema/yaml-1.1/merge.js
 var require_merge = /* @__PURE__ */ __commonJSMin(((exports) => {
 	var identity = require_identity();
 	var Scalar = require_Scalar();
@@ -2614,7 +2959,7 @@ var require_merge = /* @__PURE__ */ __commonJSMin(((exports) => {
 	exports.merge = merge;
 }));
 //#endregion
-//#region ../node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/nodes/addPairToJSMap.js
+//#region ../node_modules/yaml/dist/nodes/addPairToJSMap.js
 var require_addPairToJSMap = /* @__PURE__ */ __commonJSMin(((exports) => {
 	var log = require_log();
 	var merge = require_merge();
@@ -2665,7 +3010,7 @@ var require_addPairToJSMap = /* @__PURE__ */ __commonJSMin(((exports) => {
 	exports.addPairToJSMap = addPairToJSMap;
 }));
 //#endregion
-//#region ../node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/nodes/Pair.js
+//#region ../node_modules/yaml/dist/nodes/Pair.js
 var require_Pair = /* @__PURE__ */ __commonJSMin(((exports) => {
 	var createNode = require_createNode();
 	var stringifyPair = require_stringifyPair();
@@ -2698,7 +3043,7 @@ var require_Pair = /* @__PURE__ */ __commonJSMin(((exports) => {
 	exports.createPair = createPair;
 }));
 //#endregion
-//#region ../node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/stringify/stringifyCollection.js
+//#region ../node_modules/yaml/dist/stringify/stringifyCollection.js
 var require_stringifyCollection = /* @__PURE__ */ __commonJSMin(((exports) => {
 	var identity = require_identity();
 	var stringify = require_stringify();
@@ -2816,7 +3161,7 @@ var require_stringifyCollection = /* @__PURE__ */ __commonJSMin(((exports) => {
 	exports.stringifyCollection = stringifyCollection;
 }));
 //#endregion
-//#region ../node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/nodes/YAMLMap.js
+//#region ../node_modules/yaml/dist/nodes/YAMLMap.js
 var require_YAMLMap = /* @__PURE__ */ __commonJSMin(((exports) => {
 	var stringifyCollection = require_stringifyCollection();
 	var addPairToJSMap = require_addPairToJSMap();
@@ -2925,7 +3270,7 @@ var require_YAMLMap = /* @__PURE__ */ __commonJSMin(((exports) => {
 	exports.findPair = findPair;
 }));
 //#endregion
-//#region ../node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/schema/common/map.js
+//#region ../node_modules/yaml/dist/schema/common/map.js
 var require_map = /* @__PURE__ */ __commonJSMin(((exports) => {
 	var identity = require_identity();
 	var YAMLMap = require_YAMLMap();
@@ -2942,7 +3287,7 @@ var require_map = /* @__PURE__ */ __commonJSMin(((exports) => {
 	};
 }));
 //#endregion
-//#region ../node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/nodes/YAMLSeq.js
+//#region ../node_modules/yaml/dist/nodes/YAMLSeq.js
 var require_YAMLSeq = /* @__PURE__ */ __commonJSMin(((exports) => {
 	var createNode = require_createNode();
 	var stringifyCollection = require_stringifyCollection();
@@ -3048,7 +3393,7 @@ var require_YAMLSeq = /* @__PURE__ */ __commonJSMin(((exports) => {
 	exports.YAMLSeq = YAMLSeq;
 }));
 //#endregion
-//#region ../node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/schema/common/seq.js
+//#region ../node_modules/yaml/dist/schema/common/seq.js
 var require_seq = /* @__PURE__ */ __commonJSMin(((exports) => {
 	var identity = require_identity();
 	var YAMLSeq = require_YAMLSeq();
@@ -3065,7 +3410,7 @@ var require_seq = /* @__PURE__ */ __commonJSMin(((exports) => {
 	};
 }));
 //#endregion
-//#region ../node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/schema/common/string.js
+//#region ../node_modules/yaml/dist/schema/common/string.js
 var require_string = /* @__PURE__ */ __commonJSMin(((exports) => {
 	var stringifyString = require_stringifyString();
 	exports.string = {
@@ -3080,7 +3425,7 @@ var require_string = /* @__PURE__ */ __commonJSMin(((exports) => {
 	};
 }));
 //#endregion
-//#region ../node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/schema/common/null.js
+//#region ../node_modules/yaml/dist/schema/common/null.js
 var require_null = /* @__PURE__ */ __commonJSMin(((exports) => {
 	var Scalar = require_Scalar();
 	const nullTag = {
@@ -3095,7 +3440,7 @@ var require_null = /* @__PURE__ */ __commonJSMin(((exports) => {
 	exports.nullTag = nullTag;
 }));
 //#endregion
-//#region ../node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/schema/core/bool.js
+//#region ../node_modules/yaml/dist/schema/core/bool.js
 var require_bool$1 = /* @__PURE__ */ __commonJSMin(((exports) => {
 	var Scalar = require_Scalar();
 	const boolTag = {
@@ -3114,7 +3459,7 @@ var require_bool$1 = /* @__PURE__ */ __commonJSMin(((exports) => {
 	exports.boolTag = boolTag;
 }));
 //#endregion
-//#region ../node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/stringify/stringifyNumber.js
+//#region ../node_modules/yaml/dist/stringify/stringifyNumber.js
 var require_stringifyNumber = /* @__PURE__ */ __commonJSMin(((exports) => {
 	function stringifyNumber({ format, minFractionDigits, tag, value }) {
 		if (typeof value === "bigint") return String(value);
@@ -3135,7 +3480,7 @@ var require_stringifyNumber = /* @__PURE__ */ __commonJSMin(((exports) => {
 	exports.stringifyNumber = stringifyNumber;
 }));
 //#endregion
-//#region ../node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/schema/core/float.js
+//#region ../node_modules/yaml/dist/schema/core/float.js
 var require_float$1 = /* @__PURE__ */ __commonJSMin(((exports) => {
 	var Scalar = require_Scalar();
 	var stringifyNumber = require_stringifyNumber();
@@ -3176,7 +3521,7 @@ var require_float$1 = /* @__PURE__ */ __commonJSMin(((exports) => {
 	exports.floatNaN = floatNaN;
 }));
 //#endregion
-//#region ../node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/schema/core/int.js
+//#region ../node_modules/yaml/dist/schema/core/int.js
 var require_int$1 = /* @__PURE__ */ __commonJSMin(((exports) => {
 	var stringifyNumber = require_stringifyNumber();
 	const intIdentify = (value) => typeof value === "bigint" || Number.isInteger(value);
@@ -3217,7 +3562,7 @@ var require_int$1 = /* @__PURE__ */ __commonJSMin(((exports) => {
 	exports.intOct = intOct;
 }));
 //#endregion
-//#region ../node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/schema/core/schema.js
+//#region ../node_modules/yaml/dist/schema/core/schema.js
 var require_schema$2 = /* @__PURE__ */ __commonJSMin(((exports) => {
 	var map = require_map();
 	var _null = require_null();
@@ -3241,7 +3586,7 @@ var require_schema$2 = /* @__PURE__ */ __commonJSMin(((exports) => {
 	];
 }));
 //#endregion
-//#region ../node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/schema/json/schema.js
+//#region ../node_modules/yaml/dist/schema/json/schema.js
 var require_schema$1 = /* @__PURE__ */ __commonJSMin(((exports) => {
 	var Scalar = require_Scalar();
 	var map = require_map();
@@ -3303,7 +3648,7 @@ var require_schema$1 = /* @__PURE__ */ __commonJSMin(((exports) => {
 	});
 }));
 //#endregion
-//#region ../node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/schema/yaml-1.1/binary.js
+//#region ../node_modules/yaml/dist/schema/yaml-1.1/binary.js
 var require_binary = /* @__PURE__ */ __commonJSMin(((exports) => {
 	var node_buffer = __require("buffer");
 	var Scalar = require_Scalar();
@@ -3351,7 +3696,7 @@ var require_binary = /* @__PURE__ */ __commonJSMin(((exports) => {
 	};
 }));
 //#endregion
-//#region ../node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/schema/yaml-1.1/pairs.js
+//#region ../node_modules/yaml/dist/schema/yaml-1.1/pairs.js
 var require_pairs = /* @__PURE__ */ __commonJSMin(((exports) => {
 	var identity = require_identity();
 	var Pair = require_Pair();
@@ -3411,7 +3756,7 @@ var require_pairs = /* @__PURE__ */ __commonJSMin(((exports) => {
 	exports.resolvePairs = resolvePairs;
 }));
 //#endregion
-//#region ../node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/schema/yaml-1.1/omap.js
+//#region ../node_modules/yaml/dist/schema/yaml-1.1/omap.js
 var require_omap = /* @__PURE__ */ __commonJSMin(((exports) => {
 	var identity = require_identity();
 	var toJS = require_toJS();
@@ -3474,7 +3819,7 @@ var require_omap = /* @__PURE__ */ __commonJSMin(((exports) => {
 	exports.omap = omap;
 }));
 //#endregion
-//#region ../node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/schema/yaml-1.1/bool.js
+//#region ../node_modules/yaml/dist/schema/yaml-1.1/bool.js
 var require_bool = /* @__PURE__ */ __commonJSMin(((exports) => {
 	var Scalar = require_Scalar();
 	function boolStringify({ value, source }, ctx) {
@@ -3501,7 +3846,7 @@ var require_bool = /* @__PURE__ */ __commonJSMin(((exports) => {
 	exports.trueTag = trueTag;
 }));
 //#endregion
-//#region ../node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/schema/yaml-1.1/float.js
+//#region ../node_modules/yaml/dist/schema/yaml-1.1/float.js
 var require_float = /* @__PURE__ */ __commonJSMin(((exports) => {
 	var Scalar = require_Scalar();
 	var stringifyNumber = require_stringifyNumber();
@@ -3545,7 +3890,7 @@ var require_float = /* @__PURE__ */ __commonJSMin(((exports) => {
 	exports.floatNaN = floatNaN;
 }));
 //#endregion
-//#region ../node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/schema/yaml-1.1/int.js
+//#region ../node_modules/yaml/dist/schema/yaml-1.1/int.js
 var require_int = /* @__PURE__ */ __commonJSMin(((exports) => {
 	var stringifyNumber = require_stringifyNumber();
 	const intIdentify = (value) => typeof value === "bigint" || Number.isInteger(value);
@@ -3620,7 +3965,7 @@ var require_int = /* @__PURE__ */ __commonJSMin(((exports) => {
 	exports.intOct = intOct;
 }));
 //#endregion
-//#region ../node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/schema/yaml-1.1/set.js
+//#region ../node_modules/yaml/dist/schema/yaml-1.1/set.js
 var require_set = /* @__PURE__ */ __commonJSMin(((exports) => {
 	var identity = require_identity();
 	var Pair = require_Pair();
@@ -3688,7 +4033,7 @@ var require_set = /* @__PURE__ */ __commonJSMin(((exports) => {
 	exports.set = set;
 }));
 //#endregion
-//#region ../node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/schema/yaml-1.1/timestamp.js
+//#region ../node_modules/yaml/dist/schema/yaml-1.1/timestamp.js
 var require_timestamp = /* @__PURE__ */ __commonJSMin(((exports) => {
 	var stringifyNumber = require_stringifyNumber();
 	/** Internal types handle bigint as number, because TS can't figure it out. */
@@ -3771,7 +4116,7 @@ var require_timestamp = /* @__PURE__ */ __commonJSMin(((exports) => {
 	exports.timestamp = timestamp;
 }));
 //#endregion
-//#region ../node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/schema/yaml-1.1/schema.js
+//#region ../node_modules/yaml/dist/schema/yaml-1.1/schema.js
 var require_schema = /* @__PURE__ */ __commonJSMin(((exports) => {
 	var map = require_map();
 	var _null = require_null();
@@ -3811,7 +4156,7 @@ var require_schema = /* @__PURE__ */ __commonJSMin(((exports) => {
 	];
 }));
 //#endregion
-//#region ../node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/schema/tags.js
+//#region ../node_modules/yaml/dist/schema/tags.js
 var require_tags = /* @__PURE__ */ __commonJSMin(((exports) => {
 	var map = require_map();
 	var _null = require_null();
@@ -3895,7 +4240,7 @@ var require_tags = /* @__PURE__ */ __commonJSMin(((exports) => {
 	exports.getTags = getTags;
 }));
 //#endregion
-//#region ../node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/schema/Schema.js
+//#region ../node_modules/yaml/dist/schema/Schema.js
 var require_Schema = /* @__PURE__ */ __commonJSMin(((exports) => {
 	var identity = require_identity();
 	var map = require_map();
@@ -3923,7 +4268,7 @@ var require_Schema = /* @__PURE__ */ __commonJSMin(((exports) => {
 	};
 }));
 //#endregion
-//#region ../node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/stringify/stringifyDocument.js
+//#region ../node_modules/yaml/dist/stringify/stringifyDocument.js
 var require_stringifyDocument = /* @__PURE__ */ __commonJSMin(((exports) => {
 	var identity = require_identity();
 	var stringify = require_stringify();
@@ -3984,7 +4329,7 @@ var require_stringifyDocument = /* @__PURE__ */ __commonJSMin(((exports) => {
 	exports.stringifyDocument = stringifyDocument;
 }));
 //#endregion
-//#region ../node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/doc/Document.js
+//#region ../node_modules/yaml/dist/doc/Document.js
 var require_Document = /* @__PURE__ */ __commonJSMin(((exports) => {
 	var Alias = require_Alias();
 	var Collection = require_Collection();
@@ -4265,7 +4610,7 @@ var require_Document = /* @__PURE__ */ __commonJSMin(((exports) => {
 	exports.Document = Document;
 }));
 //#endregion
-//#region ../node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/errors.js
+//#region ../node_modules/yaml/dist/errors.js
 var require_errors = /* @__PURE__ */ __commonJSMin(((exports) => {
 	var YAMLError = class extends Error {
 		constructor(name, pos, code, message) {
@@ -4318,7 +4663,7 @@ var require_errors = /* @__PURE__ */ __commonJSMin(((exports) => {
 	exports.prettifyError = prettifyError;
 }));
 //#endregion
-//#region ../node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/compose/resolve-props.js
+//#region ../node_modules/yaml/dist/compose/resolve-props.js
 var require_resolve_props = /* @__PURE__ */ __commonJSMin(((exports) => {
 	function resolveProps(tokens, { flow, indicator, next, offset, onError, parentIndent, startOnNewline }) {
 		let spaceBefore = false;
@@ -4425,7 +4770,7 @@ var require_resolve_props = /* @__PURE__ */ __commonJSMin(((exports) => {
 	exports.resolveProps = resolveProps;
 }));
 //#endregion
-//#region ../node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/compose/util-contains-newline.js
+//#region ../node_modules/yaml/dist/compose/util-contains-newline.js
 var require_util_contains_newline = /* @__PURE__ */ __commonJSMin(((exports) => {
 	function containsNewline(key) {
 		if (!key) return null;
@@ -4454,7 +4799,7 @@ var require_util_contains_newline = /* @__PURE__ */ __commonJSMin(((exports) => 
 	exports.containsNewline = containsNewline;
 }));
 //#endregion
-//#region ../node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/compose/util-flow-indent-check.js
+//#region ../node_modules/yaml/dist/compose/util-flow-indent-check.js
 var require_util_flow_indent_check = /* @__PURE__ */ __commonJSMin(((exports) => {
 	var utilContainsNewline = require_util_contains_newline();
 	function flowIndentCheck(indent, fc, onError) {
@@ -4466,7 +4811,7 @@ var require_util_flow_indent_check = /* @__PURE__ */ __commonJSMin(((exports) =>
 	exports.flowIndentCheck = flowIndentCheck;
 }));
 //#endregion
-//#region ../node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/compose/util-map-includes.js
+//#region ../node_modules/yaml/dist/compose/util-map-includes.js
 var require_util_map_includes = /* @__PURE__ */ __commonJSMin(((exports) => {
 	var identity = require_identity();
 	function mapIncludes(ctx, items, search) {
@@ -4478,7 +4823,7 @@ var require_util_map_includes = /* @__PURE__ */ __commonJSMin(((exports) => {
 	exports.mapIncludes = mapIncludes;
 }));
 //#endregion
-//#region ../node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/compose/resolve-block-map.js
+//#region ../node_modules/yaml/dist/compose/resolve-block-map.js
 var require_resolve_block_map = /* @__PURE__ */ __commonJSMin(((exports) => {
 	var Pair = require_Pair();
 	var YAMLMap = require_YAMLMap();
@@ -4562,7 +4907,7 @@ var require_resolve_block_map = /* @__PURE__ */ __commonJSMin(((exports) => {
 	exports.resolveBlockMap = resolveBlockMap;
 }));
 //#endregion
-//#region ../node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/compose/resolve-block-seq.js
+//#region ../node_modules/yaml/dist/compose/resolve-block-seq.js
 var require_resolve_block_seq = /* @__PURE__ */ __commonJSMin(((exports) => {
 	var YAMLSeq = require_YAMLSeq();
 	var resolveProps = require_resolve_props();
@@ -4604,7 +4949,7 @@ var require_resolve_block_seq = /* @__PURE__ */ __commonJSMin(((exports) => {
 	exports.resolveBlockSeq = resolveBlockSeq;
 }));
 //#endregion
-//#region ../node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/compose/resolve-end.js
+//#region ../node_modules/yaml/dist/compose/resolve-end.js
 var require_resolve_end = /* @__PURE__ */ __commonJSMin(((exports) => {
 	function resolveEnd(end, offset, reqSpace, onError) {
 		let comment = "";
@@ -4642,7 +4987,7 @@ var require_resolve_end = /* @__PURE__ */ __commonJSMin(((exports) => {
 	exports.resolveEnd = resolveEnd;
 }));
 //#endregion
-//#region ../node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/compose/resolve-flow-collection.js
+//#region ../node_modules/yaml/dist/compose/resolve-flow-collection.js
 var require_resolve_flow_collection = /* @__PURE__ */ __commonJSMin(((exports) => {
 	var identity = require_identity();
 	var Pair = require_Pair();
@@ -4797,7 +5142,7 @@ var require_resolve_flow_collection = /* @__PURE__ */ __commonJSMin(((exports) =
 	exports.resolveFlowCollection = resolveFlowCollection;
 }));
 //#endregion
-//#region ../node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/compose/compose-collection.js
+//#region ../node_modules/yaml/dist/compose/compose-collection.js
 var require_compose_collection = /* @__PURE__ */ __commonJSMin(((exports) => {
 	var identity = require_identity();
 	var Scalar = require_Scalar();
@@ -4849,7 +5194,7 @@ var require_compose_collection = /* @__PURE__ */ __commonJSMin(((exports) => {
 	exports.composeCollection = composeCollection;
 }));
 //#endregion
-//#region ../node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/compose/resolve-block-scalar.js
+//#region ../node_modules/yaml/dist/compose/resolve-block-scalar.js
 var require_resolve_block_scalar = /* @__PURE__ */ __commonJSMin(((exports) => {
 	var Scalar = require_Scalar();
 	function resolveBlockScalar(ctx, scalar, onError) {
@@ -5025,7 +5370,7 @@ var require_resolve_block_scalar = /* @__PURE__ */ __commonJSMin(((exports) => {
 	exports.resolveBlockScalar = resolveBlockScalar;
 }));
 //#endregion
-//#region ../node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/compose/resolve-flow-scalar.js
+//#region ../node_modules/yaml/dist/compose/resolve-flow-scalar.js
 var require_resolve_flow_scalar = /* @__PURE__ */ __commonJSMin(((exports) => {
 	var Scalar = require_Scalar();
 	var resolveEnd = require_resolve_end();
@@ -5230,7 +5575,7 @@ var require_resolve_flow_scalar = /* @__PURE__ */ __commonJSMin(((exports) => {
 	exports.resolveFlowScalar = resolveFlowScalar;
 }));
 //#endregion
-//#region ../node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/compose/compose-scalar.js
+//#region ../node_modules/yaml/dist/compose/compose-scalar.js
 var require_compose_scalar = /* @__PURE__ */ __commonJSMin(((exports) => {
 	var identity = require_identity();
 	var Scalar = require_Scalar();
@@ -5289,7 +5634,7 @@ var require_compose_scalar = /* @__PURE__ */ __commonJSMin(((exports) => {
 	exports.composeScalar = composeScalar;
 }));
 //#endregion
-//#region ../node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/compose/util-empty-scalar-position.js
+//#region ../node_modules/yaml/dist/compose/util-empty-scalar-position.js
 var require_util_empty_scalar_position = /* @__PURE__ */ __commonJSMin(((exports) => {
 	function emptyScalarPosition(offset, before, pos) {
 		if (before) {
@@ -5316,7 +5661,7 @@ var require_util_empty_scalar_position = /* @__PURE__ */ __commonJSMin(((exports
 	exports.emptyScalarPosition = emptyScalarPosition;
 }));
 //#endregion
-//#region ../node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/compose/compose-node.js
+//#region ../node_modules/yaml/dist/compose/compose-node.js
 var require_compose_node = /* @__PURE__ */ __commonJSMin(((exports) => {
 	var Alias = require_Alias();
 	var identity = require_identity();
@@ -5405,7 +5750,7 @@ var require_compose_node = /* @__PURE__ */ __commonJSMin(((exports) => {
 	exports.composeNode = composeNode;
 }));
 //#endregion
-//#region ../node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/compose/compose-doc.js
+//#region ../node_modules/yaml/dist/compose/compose-doc.js
 var require_compose_doc = /* @__PURE__ */ __commonJSMin(((exports) => {
 	var Document = require_Document();
 	var composeNode = require_compose_node();
@@ -5447,7 +5792,7 @@ var require_compose_doc = /* @__PURE__ */ __commonJSMin(((exports) => {
 	exports.composeDoc = composeDoc;
 }));
 //#endregion
-//#region ../node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/compose/composer.js
+//#region ../node_modules/yaml/dist/compose/composer.js
 var require_composer = /* @__PURE__ */ __commonJSMin(((exports) => {
 	var node_process$1 = __require("process");
 	var directives = require_directives();
@@ -5645,7 +5990,7 @@ var require_composer = /* @__PURE__ */ __commonJSMin(((exports) => {
 	exports.Composer = Composer;
 }));
 //#endregion
-//#region ../node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/parse/cst-scalar.js
+//#region ../node_modules/yaml/dist/parse/cst-scalar.js
 var require_cst_scalar = /* @__PURE__ */ __commonJSMin(((exports) => {
 	var resolveBlockScalar = require_resolve_block_scalar();
 	var resolveFlowScalar = require_resolve_flow_scalar();
@@ -5912,7 +6257,7 @@ var require_cst_scalar = /* @__PURE__ */ __commonJSMin(((exports) => {
 	exports.setScalarValue = setScalarValue;
 }));
 //#endregion
-//#region ../node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/parse/cst-stringify.js
+//#region ../node_modules/yaml/dist/parse/cst-stringify.js
 var require_cst_stringify = /* @__PURE__ */ __commonJSMin(((exports) => {
 	/**
 	* Stringify a CST document, token, or collection item
@@ -5963,7 +6308,7 @@ var require_cst_stringify = /* @__PURE__ */ __commonJSMin(((exports) => {
 	exports.stringify = stringify;
 }));
 //#endregion
-//#region ../node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/parse/cst-visit.js
+//#region ../node_modules/yaml/dist/parse/cst-visit.js
 var require_cst_visit = /* @__PURE__ */ __commonJSMin(((exports) => {
 	const BREAK = Symbol("break visit");
 	const SKIP = Symbol("skip children");
@@ -6054,7 +6399,7 @@ var require_cst_visit = /* @__PURE__ */ __commonJSMin(((exports) => {
 	exports.visit = visit;
 }));
 //#endregion
-//#region ../node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/parse/cst.js
+//#region ../node_modules/yaml/dist/parse/cst.js
 var require_cst = /* @__PURE__ */ __commonJSMin(((exports) => {
 	var cstScalar = require_cst_scalar();
 	var cstStringify = require_cst_stringify();
@@ -6133,7 +6478,7 @@ var require_cst = /* @__PURE__ */ __commonJSMin(((exports) => {
 	exports.tokenType = tokenType;
 }));
 //#endregion
-//#region ../node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/parse/lexer.js
+//#region ../node_modules/yaml/dist/parse/lexer.js
 var require_lexer = /* @__PURE__ */ __commonJSMin(((exports) => {
 	var cst = require_cst();
 	function isEmpty(ch) {
@@ -6664,7 +7009,7 @@ var require_lexer = /* @__PURE__ */ __commonJSMin(((exports) => {
 	exports.Lexer = Lexer;
 }));
 //#endregion
-//#region ../node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/parse/line-counter.js
+//#region ../node_modules/yaml/dist/parse/line-counter.js
 var require_line_counter = /* @__PURE__ */ __commonJSMin(((exports) => {
 	/**
 	* Tracks newlines during parsing in order to provide an efficient API for
@@ -6711,7 +7056,7 @@ var require_line_counter = /* @__PURE__ */ __commonJSMin(((exports) => {
 	exports.LineCounter = LineCounter;
 }));
 //#endregion
-//#region ../node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/parse/parser.js
+//#region ../node_modules/yaml/dist/parse/parser.js
 var require_parser = /* @__PURE__ */ __commonJSMin(((exports) => {
 	var node_process = __require("process");
 	var cst = require_cst();
@@ -7574,7 +7919,7 @@ var require_parser = /* @__PURE__ */ __commonJSMin(((exports) => {
 	exports.Parser = Parser;
 }));
 //#endregion
-//#region ../node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/public-api.js
+//#region ../node_modules/yaml/dist/public-api.js
 var require_public_api = /* @__PURE__ */ __commonJSMin(((exports) => {
 	var composer = require_composer();
 	var Document = require_Document();
@@ -7708,7 +8053,7 @@ var import_dist = /* @__PURE__ */ __toESM((/* @__PURE__ */ __commonJSMin(((expor
 	exports.visit = visit.visit;
 	exports.visitAsync = visit.visitAsync;
 })))(), 1);
-function parseYaml(text) {
+function parseYaml$1(text) {
 	return import_dist.parse(text);
 }
 function toYaml(value) {
@@ -7767,43 +8112,63 @@ function resolveExtendedLayers(extendsEntries, layers) {
 * Loads directives for one built-in layer file.
 */
 function loadDirectiveFile(filePath, layerId) {
-	const parsed = parseYaml(readFileSync(filePath, "utf-8"));
+	const parsed = parseYaml$1(readFileSync(filePath, "utf-8"));
 	if (!Array.isArray(parsed)) throw new Error(`Directive file must contain a top-level array: ${filePath}`);
-	return parsed.map((item) => normalizeDirective(item, layerId, filePath, "builtin"));
+	return parsed.map((item, index) => normalizeDirective(assertRecord(item, `${filePath}[${index}]`), layerId, filePath, "builtin"));
 }
 /**
 * Loads the optional local playbook and normalizes all local sections.
 */
 function loadLocalPlaybook(filePath) {
 	if (!filePath || !existsSync(filePath)) return null;
-	const parsed = parseYaml(readFileSync(filePath, "utf-8"));
+	const parsed = assertRecord(parseYaml$1(readFileSync(filePath, "utf-8")), filePath);
+	if (parsed.version !== 1 && parsed.version !== "1.0") throw new Error(`UNSUPPORTED_SCHEMA_VERSION: ${filePath} must use local playbook schema 1. Re-run init; existing data was not modified.`);
 	const meta = parsed.meta ?? {};
 	return {
-		version: String(parsed.version ?? "1.0"),
+		version: "1.0",
 		meta: {
 			name: typeof meta.name === "string" ? meta.name : void 0,
 			extends: Array.isArray(meta.extends) ? meta.extends.map(String) : []
 		},
-		overrides: Array.isArray(parsed.overrides) ? parsed.overrides.map((item) => item) : [],
-		augments: Array.isArray(parsed.augments) ? parsed.augments.map((item) => item) : [],
-		suppresses: Array.isArray(parsed.suppresses) ? parsed.suppresses.map((item) => item) : [],
+		overrides: arrayField(parsed.overrides, "overrides", filePath).map((item, index) => normalizeOverride(item, `${filePath}.overrides[${index}]`)),
+		augments: arrayField(parsed.augments, "augments", filePath).map((item, index) => normalizeAugment(item, `${filePath}.augments[${index}]`)),
+		suppresses: arrayField(parsed.suppresses, "suppresses", filePath).map((item, index) => normalizeSuppress(item, `${filePath}.suppresses[${index}]`)),
 		additions: Array.isArray(parsed.additions) ? parsed.additions.map((item) => normalizeDirective(item, "local", filePath, "local-addition")) : []
 	};
 }
 function normalizeDirective(input, layerId, filePath, kind) {
+	rejectConditionalBranching(input, filePath);
+	const id = nonEmptyString(input.id, "id", filePath);
+	const type = enumValue(input.type, [
+		"constraint",
+		"preference",
+		"convention",
+		"architecture",
+		"anti-pattern"
+	], "type", filePath);
+	const prescription = enumValue(input.prescription, ["must", "should"], "prescription", filePath);
+	const weight = enumValue(input.weight ?? "normal", [
+		"low",
+		"normal",
+		"high",
+		"critical"
+	], "weight", filePath);
+	const description = nonEmptyString(input.description, "description", filePath);
+	const rationale = nonEmptyString(input.rationale, "rationale", filePath);
+	const examples = normalizeExamples(input.examples, filePath);
 	return {
-		id: String(input.id),
-		type: String(input.type),
+		id,
+		type,
 		layer: typeof input.layer === "string" ? input.layer : layerId,
-		scope: normalizeScope(input.scope),
-		prescription: String(input.prescription),
-		weight: input.weight ?? "normal",
-		description: String(input.description ?? ""),
-		rationale: String(input.rationale ?? ""),
+		scope: normalizeScope$1(input.scope),
+		prescription,
+		weight,
+		description,
+		rationale,
 		exceptions: Array.isArray(input.exceptions) ? input.exceptions.map(String) : [],
-		examples: normalizeExamples(input.examples),
+		examples,
 		rccl_immune: Boolean(input.rccl_immune),
-		traits: normalizeTraits(input.traits),
+		traits: normalizeTraits$1(input.traits),
 		source: {
 			kind,
 			layerId,
@@ -7811,35 +8176,532 @@ function normalizeDirective(input, layerId, filePath, kind) {
 		}
 	};
 }
-function normalizeScope(input) {
-	if (typeof input === "string") return { path: input };
+function normalizeScope$1(input) {
+	if (typeof input === "string" && input.trim()) return { path: input.trim() };
 	if (input && typeof input === "object" && typeof input.path === "string") return { path: String(input.path) };
-	return { path: "**/*" };
+	throw new Error("Invalid playbook directive scope: expected a non-empty path string or { path }.");
 }
-function normalizeExamples(input) {
-	if (!Array.isArray(input)) return [];
-	return input.map((example) => {
-		const item = example;
+function normalizeExamples(input, location) {
+	if (!Array.isArray(input) || input.length === 0) throw new Error(`Invalid playbook directive at ${location}: examples must be a non-empty array.`);
+	return input.map((example, index) => {
+		const item = assertRecord(example, `${location}.examples[${index}]`);
+		if (typeof item.note !== "string" || !item.note.trim()) throw new Error(`Invalid playbook directive at ${location}: every example requires a non-empty note.`);
 		return {
 			avoid: item.avoid && typeof item.avoid === "object" ? { code: String(item.avoid.code ?? "") } : void 0,
 			good: item.good && typeof item.good === "object" ? { code: String(item.good.code ?? "") } : void 0,
-			note: String(item.note ?? "")
+			note: item.note.trim()
 		};
 	});
+}
+function assertUniqueDirectiveIds(directives) {
+	const seen = /* @__PURE__ */ new Map();
+	for (const directive of directives) {
+		const prior = seen.get(directive.id);
+		if (prior) throw new Error(`Duplicate directive id "${directive.id}" in ${prior} and ${directive.source.filePath}.`);
+		seen.set(directive.id, directive.source.filePath);
+	}
+}
+function validateLocalReferences(local, builtins) {
+	if (!local) return;
+	const byId = new Map(builtins.map((directive) => [directive.id, directive]));
+	for (const override of local.overrides) {
+		const target = byId.get(override.supersedes);
+		if (!target) throw new Error(`Local override supersedes unknown directive "${override.supersedes}".`);
+		if (override.scope && override.scope.path !== target.scope.path) throw new Error(`Local override scope "${override.scope.path}" is incompatible with ${override.supersedes} scope "${target.scope.path}".`);
+	}
+	for (const item of [...local.augments, ...local.suppresses]) if (!byId.has(item.id)) throw new Error(`Local playbook references unknown directive "${item.id}".`);
+}
+function normalizeOverride(value, location) {
+	const item = assertRecord(value, location);
+	if ("id" in item && !("supersedes" in item)) throw new Error(`Invalid local override at ${location}: use explicit supersedes instead of id.`);
+	return {
+		supersedes: nonEmptyString(item.supersedes, "supersedes", location),
+		...item.scope !== void 0 ? { scope: normalizeScope$1(item.scope) } : {},
+		...item.prescription !== void 0 ? { prescription: enumValue(item.prescription, ["must", "should"], "prescription", location) } : {},
+		...item.weight !== void 0 ? { weight: enumValue(item.weight, [
+			"low",
+			"normal",
+			"high",
+			"critical"
+		], "weight", location) } : {},
+		...item.rationale !== void 0 ? { rationale: nonEmptyString(item.rationale, "rationale", location) } : {},
+		...item.exceptions !== void 0 ? { exceptions: stringArray(item.exceptions, "exceptions", location) } : {}
+	};
+}
+function normalizeAugment(value, location) {
+	const item = assertRecord(value, location);
+	return {
+		id: nonEmptyString(item.id, "id", location),
+		examples: normalizeExamples(item.examples, location)
+	};
+}
+function normalizeSuppress(value, location) {
+	const item = assertRecord(value, location);
+	return {
+		id: nonEmptyString(item.id, "id", location),
+		reason: nonEmptyString(item.reason, "reason", location)
+	};
+}
+function assertRecord(value, location) {
+	if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error(`Expected object at ${location}.`);
+	return value;
+}
+function nonEmptyString(value, field, location) {
+	if (typeof value !== "string" || !value.trim()) throw new Error(`Invalid ${field} at ${location}: expected a non-empty string.`);
+	return value.trim();
+}
+function enumValue(value, allowed, field, location) {
+	if (typeof value !== "string" || !allowed.includes(value)) throw new Error(`Invalid ${field} at ${location}: expected one of ${allowed.join(", ")}.`);
+	return value;
+}
+function stringArray(value, field, location) {
+	if (!Array.isArray(value) || !value.every((item) => typeof item === "string")) throw new Error(`Invalid ${field} at ${location}: expected a string array.`);
+	return value.map((item) => item.trim()).filter(Boolean);
+}
+function arrayField(value, field, location) {
+	if (value === void 0) return [];
+	if (!Array.isArray(value)) throw new Error(`Invalid ${field} at ${location}: expected an array.`);
+	return value;
+}
+function rejectConditionalBranching(input, location) {
+	for (const key of [
+		"if",
+		"when",
+		"condition",
+		"conditions",
+		"then",
+		"else"
+	]) if (key in input) throw new Error(`Invalid directive at ${location}: internal conditional branch "${key}" is not allowed.`);
+}
+function normalizeTraits$1(input) {
+	if (!input || typeof input !== "object" || Array.isArray(input)) return void 0;
+	const value = input;
+	const traits = {
+		safety_critical: booleanTrait$1(value.safety_critical),
+		broad_scope: booleanTrait$1(value.broad_scope),
+		compatibility_sensitive: booleanTrait$1(value.compatibility_sensitive),
+		migration_sensitive: booleanTrait$1(value.migration_sensitive)
+	};
+	return Object.values(traits).some((item) => item !== void 0) ? traits : void 0;
+}
+function booleanTrait$1(input) {
+	return typeof input === "boolean" ? input : void 0;
+}
+//#endregion
+//#region ../rccl/src/utils/yaml.ts
+function parseYaml(text) {
+	return import_dist.parse(text);
+}
+//#endregion
+//#region ../rccl/src/validate-observation.ts
+const RCCL_OBSERVATION_ID_PATTERN = /^obs-[a-z0-9-]+$/;
+const RCCL_CATEGORIES = new Set([
+	"style",
+	"architecture",
+	"pattern",
+	"constraint",
+	"legacy",
+	"anti-pattern",
+	"migration"
+]);
+const RCCL_ADHERENCE_QUALITIES = new Set([
+	"good",
+	"inconsistent",
+	"poor"
+]);
+const RCCL_SCOPE_BASES = new Set([
+	"single-file",
+	"directory-cluster",
+	"module-cluster",
+	"cross-root"
+]);
+function validateEvidenceSnippet(snippet, prefix, index) {
+	if (typeof snippet !== "string") return [];
+	const normalized = snippet.replace(/\r\n/g, "\n").trim();
+	if (!normalized) return [`${prefix}.evidence[${index}]: snippet must not be empty`];
+	const lines = normalized.split("\n").map((line) => line.trim()).filter(Boolean);
+	const tokenMatches = normalized.match(/[A-Za-z_][A-Za-z0-9_]*|\d+|==|!=|<=|>=|=>|&&|\|\||[()[\]{}.,;:+\-*/%<>!=?]/g) ?? [];
+	const identifierCount = tokenMatches.filter((token) => /^[A-Za-z_][A-Za-z0-9_]*$/.test(token)).length;
+	const punctuationCount = tokenMatches.length - identifierCount;
+	const hasDistinctiveStructure = /[{}();=>]|\b(import|export|return|const|let|var|function|class|interface|type|if|for|while|switch|case|await|async)\b/.test(normalized);
+	if (lines.length >= 2 || hasDistinctiveStructure) return [];
+	if (tokenMatches.length < 4) return [`${prefix}.evidence[${index}]: snippet is too short to verify reliably; include at least a distinctive statement or 2+ lines of code`];
+	if (identifierCount <= 2 && punctuationCount === 0) return [`${prefix}.evidence[${index}]: snippet looks like an identifier or label, not a verifiable code fragment`];
+	return [];
+}
+function validateTraitsRecord(value, prefix) {
+	if (value == null) return [];
+	const errors = [];
+	if (!isRecord(value)) return [`${prefix}: must be an object when present`];
+	const allowed = new Set([
+		"legacy",
+		"migration_boundary",
+		"anti_pattern",
+		"compatibility_boundary"
+	]);
+	for (const [key, item] of Object.entries(value)) {
+		if (item === void 0) continue;
+		if (!allowed.has(key)) errors.push(`${prefix}.${key}: unsupported trait`);
+		else if (typeof item !== "boolean") errors.push(`${prefix}.${key}: must be boolean`);
+	}
+	return errors;
+}
+function isRecord(value) {
+	return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+//#endregion
+//#region ../rccl/src/io/parse-rccl.ts
+const RCCL_VERSION = "1.0";
+function isRcclVersion(value) {
+	return value === RCCL_VERSION || value === 1;
+}
+const REQUIRED_VERIFICATION_FIELDS = [
+	"evidence_status",
+	"evidence_verified_count",
+	"evidence_confidence",
+	"induction_status",
+	"induction_confidence",
+	"checked_at",
+	"disposition"
+];
+function parseRccl(yamlText, options = {}) {
+	const allowVerifiedFields = options.allowVerifiedFields === true;
+	const parsed = parseRawRcclDocument(yamlText);
+	if (!parsed.valid || !parsed.doc) return {
+		valid: false,
+		errors: parsed.errors
+	};
+	const errors = validateFinalRcclDocument(parsed.doc, allowVerifiedFields);
+	if (errors.length > 0) return {
+		valid: false,
+		errors
+	};
+	return {
+		valid: true,
+		data: normalizeDocument(parsed.doc)
+	};
+}
+function parseRawRcclDocument(yamlText) {
+	let cleaned = yamlText.trim();
+	if (cleaned.startsWith("```")) cleaned = cleaned.replace(/^```(?:yaml|yml)?\s*\n?/, "").replace(/\n?```\s*$/, "");
+	let doc;
+	try {
+		doc = parseYaml(cleaned);
+	} catch (err) {
+		return {
+			valid: false,
+			errors: [`YAML parse error: ${err instanceof Error ? err.message : String(err)}`]
+		};
+	}
+	if (!doc || typeof doc !== "object" || Array.isArray(doc)) return {
+		valid: false,
+		errors: ["Document must be a YAML object"]
+	};
+	return {
+		valid: true,
+		doc
+	};
+}
+function validateFinalRcclDocument(doc, allowVerifiedFields) {
+	const errors = validateDocumentEnvelope(doc);
+	if (errors.length > 0) return errors;
+	const observations = doc.observations;
+	const ids = /* @__PURE__ */ new Set();
+	for (let i = 0; i < observations.length; i += 1) {
+		const obs = observations[i];
+		const rawId = String(obs.id ?? "");
+		if (rawId) {
+			if (ids.has(rawId)) errors.push(`Duplicate observation id: "${rawId}"`);
+			ids.add(rawId);
+		}
+		errors.push(...validateFinalObservation(obs, i, allowVerifiedFields));
+	}
+	return errors;
+}
+function validateDocumentEnvelope(doc) {
+	const errors = [];
+	if (!isRcclVersion(doc.version)) errors.push(`'version' must be "${RCCL_VERSION}", got "${doc.version}"`);
+	if (!Array.isArray(doc.observations) || doc.observations.length === 0) errors.push("'observations' must be a non-empty array");
+	return errors;
+}
+function validateFinalObservation(obs, index, allowVerifiedFields) {
+	const errors = validateObservationCore(obs, index, "id", "scope");
+	const prefix = `observations[${index}]`;
+	if ("provisional_id" in obs) errors.push(`${prefix}: final RCCL observations must use 'id', not 'provisional_id'`);
+	if ("scope_hint" in obs) errors.push(`${prefix}: final RCCL observations must use 'scope', not 'scope_hint'`);
+	if ("source_slice_ids" in obs) errors.push(`${prefix}: final RCCL observations must store source slices in 'support.source_slices'`);
+	if ("support_hint" in obs) errors.push(`${prefix}: final RCCL observations must use 'support', not 'support_hint'`);
+	errors.push(...validateTraitsRecord(obs.traits, `${prefix}.traits`));
+	const support = obs.support;
+	if (!support || typeof support !== "object" || Array.isArray(support)) errors.push(`${prefix}: missing or invalid 'support'`);
+	else errors.push(...validateSupport(support, `${prefix}.support`));
+	const verification = obs.verification;
+	if (!verification || typeof verification !== "object" || Array.isArray(verification)) errors.push(`${prefix}: missing or invalid 'verification'`);
+	else errors.push(...validateVerification(verification, prefix, allowVerifiedFields));
+	errors.push(...validateLifecycle(obs.lifecycle, prefix));
+	return errors;
+}
+function validateObservationCore(obs, index, idField, scopeField) {
+	const errors = [];
+	const prefix = `observations[${index}]`;
+	const id = obs[idField];
+	const scope = obs[scopeField];
+	if (!id || typeof id !== "string") errors.push(`${prefix}: missing or invalid '${idField}'`);
+	else if (!RCCL_OBSERVATION_ID_PATTERN.test(String(id))) errors.push(`${prefix}: '${idField}' "${id}" does not match /^obs-[a-z0-9-]+$/`);
+	if (!RCCL_CATEGORIES.has(String(obs.category))) errors.push(`${prefix}: 'category' is invalid`);
+	if (!obs.semantic_key || typeof obs.semantic_key !== "string") errors.push(`${prefix}: missing or invalid 'semantic_key'`);
+	if (!scope || typeof scope !== "string") errors.push(`${prefix}: missing or invalid '${scopeField}'`);
+	if (!obs.pattern || typeof obs.pattern !== "string") errors.push(`${prefix}: missing or invalid 'pattern'`);
+	if (typeof obs.confidence !== "number" || Number.isNaN(obs.confidence) || obs.confidence < 0 || obs.confidence > 1) errors.push(`${prefix}: 'confidence' must be a number between 0 and 1, got ${obs.confidence}`);
+	if (!RCCL_ADHERENCE_QUALITIES.has(String(obs.adherence_quality))) errors.push(`${prefix}: 'adherence_quality' is invalid`);
+	if (!Array.isArray(obs.evidence) || obs.evidence.length === 0) errors.push(`${prefix}: 'evidence' must be a non-empty array`);
+	else for (let i = 0; i < obs.evidence.length; i += 1) {
+		const evidence = obs.evidence[i];
+		if (!evidence.file || typeof evidence.file !== "string") errors.push(`${prefix}.evidence[${i}]: missing or invalid 'file'`);
+		if (!Array.isArray(evidence.line_range) || evidence.line_range.length !== 2) errors.push(`${prefix}.evidence[${i}]: invalid 'line_range'`);
+		if (!evidence.snippet || typeof evidence.snippet !== "string") errors.push(`${prefix}.evidence[${i}]: missing or invalid 'snippet'`);
+		else errors.push(...validateEvidenceSnippet(evidence.snippet, prefix, i));
+	}
+	return errors;
+}
+function validateSupport(support, prefix) {
+	const errors = [];
+	if (!Array.isArray(support.source_slices)) errors.push(`${prefix}.source_slices: must be an array`);
+	if (typeof support.file_count !== "number") errors.push(`${prefix}.file_count: must be a number`);
+	if (typeof support.cluster_count !== "number") errors.push(`${prefix}.cluster_count: must be a number`);
+	if (!RCCL_SCOPE_BASES.has(String(support.scope_basis))) errors.push(`${prefix}.scope_basis: invalid value`);
+	return errors;
+}
+function validateVerification(verification, prefix, allowVerifiedFields) {
+	const errors = [];
+	for (const field of REQUIRED_VERIFICATION_FIELDS) if (!(field in verification)) errors.push(`${prefix}.verification.${field}: missing required field`);
+	if (!allowVerifiedFields) {
+		for (const field of REQUIRED_VERIFICATION_FIELDS) if (verification[field] !== null && verification[field] !== void 0) errors.push(`${prefix}.verification.${field}: must be null (runtime fills this), got "${verification[field]}"`);
+	}
+	return errors;
+}
+function validateLifecycle(lifecycle, prefix) {
+	if (lifecycle == null) return [];
+	const errors = [];
+	if (lifecycle.status != null && lifecycle.status !== "active" && lifecycle.status !== "stale" && lifecycle.status !== "superseded") errors.push(`${prefix}.lifecycle.status: invalid value`);
+	if (lifecycle.content_fingerprint != null && typeof lifecycle.content_fingerprint !== "string") errors.push(`${prefix}.lifecycle.content_fingerprint: must be a string`);
+	if (lifecycle.supersedes != null) {
+		if (!Array.isArray(lifecycle.supersedes)) errors.push(`${prefix}.lifecycle.supersedes: must be an array`);
+		else for (const id of lifecycle.supersedes) if (typeof id !== "string" || !RCCL_OBSERVATION_ID_PATTERN.test(id)) errors.push(`${prefix}.lifecycle.supersedes: contains invalid observation id`);
+	}
+	if (lifecycle.superseded_by != null && (typeof lifecycle.superseded_by !== "string" || !RCCL_OBSERVATION_ID_PATTERN.test(lifecycle.superseded_by))) errors.push(`${prefix}.lifecycle.superseded_by: must be a valid observation id`);
+	return errors;
+}
+function normalizeDocument(input) {
+	return {
+		version: RCCL_VERSION,
+		generated_at: typeof input.generated_at === "string" ? input.generated_at : null,
+		git_ref: typeof input.git_ref === "string" ? input.git_ref : null,
+		observations: Array.isArray(input.observations) ? input.observations.map(normalizeObservation) : []
+	};
+}
+function normalizeObservation(input) {
+	const item = input;
+	return {
+		id: String(item.id),
+		semantic_key: normalizeSemanticKey(String(item.semantic_key)),
+		category: item.category,
+		scope: normalizeScope(String(item.scope)),
+		pattern: String(item.pattern),
+		confidence: Number(item.confidence),
+		adherence_quality: item.adherence_quality,
+		evidence: Array.isArray(item.evidence) ? item.evidence.map(normalizeEvidence) : [],
+		support: normalizeSupport(item.support),
+		verification: normalizeVerification(item.verification),
+		lifecycle: normalizeLifecycle(item.lifecycle),
+		traits: normalizeTraits(item.traits)
+	};
+}
+function normalizeEvidence(input) {
+	const value = input;
+	const lineRange = value.line_range;
+	return {
+		file: normalizePath(String(value.file)),
+		line_range: [Number(lineRange[0]), Number(lineRange[1])],
+		snippet: String(value.snippet ?? "")
+	};
+}
+function normalizeSupport(input) {
+	return {
+		source_slices: Array.isArray(input.source_slices) ? Array.from(new Set(input.source_slices.map(String))).sort() : [],
+		file_count: Number(input.file_count),
+		cluster_count: Number(input.cluster_count),
+		scope_basis: normalizeScopeBasis(String(input.scope_basis))
+	};
+}
+function normalizeVerification(input) {
+	return {
+		evidence_status: input.evidence_status ?? null,
+		evidence_verified_count: input.evidence_verified_count == null ? null : Number(input.evidence_verified_count),
+		evidence_confidence: input.evidence_confidence == null ? null : Number(input.evidence_confidence),
+		induction_status: input.induction_status ?? null,
+		induction_confidence: input.induction_confidence == null ? null : Number(input.induction_confidence),
+		checked_at: typeof input.checked_at === "string" ? input.checked_at : null,
+		disposition: input.disposition ?? null
+	};
+}
+function normalizeLifecycle(input) {
+	if (!input) return void 0;
+	const status = input.status === "stale" || input.status === "superseded" ? input.status : "active";
+	return {
+		first_seen_git_ref: typeof input.first_seen_git_ref === "string" ? input.first_seen_git_ref : null,
+		last_seen_git_ref: typeof input.last_seen_git_ref === "string" ? input.last_seen_git_ref : null,
+		last_verified_at: typeof input.last_verified_at === "string" ? input.last_verified_at : null,
+		content_fingerprint: typeof input.content_fingerprint === "string" ? input.content_fingerprint : "",
+		status,
+		supersedes: Array.isArray(input.supersedes) ? input.supersedes.map(String).sort() : void 0,
+		superseded_by: typeof input.superseded_by === "string" ? input.superseded_by : void 0,
+		stale_since_git_ref: typeof input.stale_since_git_ref === "string" ? input.stale_since_git_ref : null,
+		superseded_at_git_ref: typeof input.superseded_at_git_ref === "string" ? input.superseded_at_git_ref : null
+	};
 }
 function normalizeTraits(input) {
 	if (!input || typeof input !== "object" || Array.isArray(input)) return void 0;
 	const value = input;
 	const traits = {
-		safety_critical: booleanTrait(value.safety_critical),
-		broad_scope: booleanTrait(value.broad_scope),
-		compatibility_sensitive: booleanTrait(value.compatibility_sensitive),
-		migration_sensitive: booleanTrait(value.migration_sensitive)
+		legacy: booleanTrait(value.legacy),
+		migration_boundary: booleanTrait(value.migration_boundary),
+		anti_pattern: booleanTrait(value.anti_pattern),
+		compatibility_boundary: booleanTrait(value.compatibility_boundary)
 	};
 	return Object.values(traits).some((item) => item !== void 0) ? traits : void 0;
 }
 function booleanTrait(input) {
 	return typeof input === "boolean" ? input : void 0;
+}
+function normalizeScopeBasis(value) {
+	if (value === "single-file" || value === "directory-cluster" || value === "module-cluster" || value === "cross-root") return value;
+	return "module-cluster";
+}
+function normalizeScope(scope) {
+	const trimmed = scope.trim();
+	return trimmed.length > 0 ? trimmed : "**";
+}
+function normalizePath(filePath) {
+	return filePath.replace(/\\/g, "/").replace(/^\.\//, "");
+}
+function normalizeSemanticKey(value) {
+	return value.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "") || "unknown";
+}
+//#endregion
+//#region ../rccl/src/policies.ts
+const DEFAULT_VERIFICATION_POLICY = {
+	snippet_similarity_threshold: .75,
+	min_evidence_for_directory_scope: 2,
+	min_evidence_for_cross_root_scope: 3,
+	anti_pattern_min_evidence: 2,
+	migration_min_evidence: 2
+};
+//#endregion
+//#region ../rccl/src/verify/verify-evidence.ts
+function verifyObservationEvidence(observation, projectRoot, checkedAt, policy = DEFAULT_VERIFICATION_POLICY) {
+	if (observation.evidence.length === 0) return applyEvidenceVerification(observation, "unverifiable", 0, 0, checkedAt, "demote-to-ambient");
+	const results = observation.evidence.map((item) => verifyEvidence(item, projectRoot, policy));
+	const verifiedCount = results.filter((result) => result.status === "match").length;
+	const ratio = verifiedCount / results.length;
+	if (verifiedCount === results.length) return applyEvidenceVerification(observation, "verified", verifiedCount, observation.confidence, checkedAt, "keep");
+	if (verifiedCount > 0) {
+		const confidence = Math.max(observation.confidence * ratio, .3);
+		return applyEvidenceVerification(observation, "partial", verifiedCount, confidence, checkedAt, confidence < .7 ? "keep-with-reduced-confidence" : "keep");
+	}
+	return applyEvidenceVerification(observation, "failed", 0, 0, checkedAt, "demote-to-ambient");
+}
+function applyEvidenceVerification(observation, status, verifiedCount, evidenceConfidence, checkedAt, disposition) {
+	return {
+		...observation,
+		verification: {
+			...observation.verification,
+			evidence_status: status,
+			evidence_verified_count: verifiedCount,
+			evidence_confidence: Number(evidenceConfidence.toFixed(2)),
+			checked_at: checkedAt,
+			disposition
+		}
+	};
+}
+function verifyEvidence(evidence, projectRoot, policy = DEFAULT_VERIFICATION_POLICY) {
+	if (!safeRelativeEvidencePath(evidence.file)) return { status: "path-outside-project" };
+	const root = realpathSync(resolve(projectRoot));
+	const fullPath = resolve(root, evidence.file);
+	if (!existsSync(fullPath)) return { status: "file-not-found" };
+	let realFile;
+	try {
+		realFile = realpathSync(fullPath);
+	} catch {
+		return { status: "file-not-found" };
+	}
+	const rel = relative(root, realFile);
+	if (!rel || rel === ".." || rel.startsWith(`..${process.platform === "win32" ? "\\" : "/"}`) || isAbsolute(rel)) return { status: "path-outside-project" };
+	const lines = readFileSync(realFile, "utf-8").replace(/\r\n/g, "\n").split("\n");
+	const [start, end] = evidence.line_range;
+	if (start < 1 || end < start || end > lines.length) return { status: "range-out-of-bounds" };
+	return tokenOverlapSimilarity(lines.slice(start - 1, end).join("\n"), evidence.snippet) >= policy.snippet_similarity_threshold ? { status: "match" } : { status: "mismatch" };
+}
+function safeRelativeEvidencePath(file) {
+	if (!file || isAbsolute(file) || win32.isAbsolute(file)) return false;
+	const normalized = file.replace(/\\/g, "/");
+	return !normalized.split("/").some((segment) => segment === "..") && !normalized.startsWith("/");
+}
+function tokenOverlapSimilarity(a, b) {
+	const aTokens = tokenize(a);
+	const bTokens = tokenize(b);
+	if (aTokens.length === 0 || bTokens.length === 0) return 0;
+	const counts = /* @__PURE__ */ new Map();
+	for (const token of aTokens) counts.set(token, (counts.get(token) ?? 0) + 1);
+	let overlap = 0;
+	for (const token of bTokens) {
+		const count = counts.get(token) ?? 0;
+		if (count > 0) {
+			overlap += 1;
+			counts.set(token, count - 1);
+		}
+	}
+	return overlap / Math.max(aTokens.length, bTokens.length);
+}
+function tokenize(text) {
+	return text.replace(/\r\n/g, "\n").replace(/['"`]/g, "\"").replace(/\s+/g, " ").trim().match(/[A-Za-z_][A-Za-z0-9_]*|\d+|==|!=|<=|>=|=>|&&|\|\||[()[\]{}.,;:+\-*/%<>!=?]/g) ?? [];
+}
+//#endregion
+//#region ../rccl/src/verify/verify-induction.ts
+function verifyObservationInduction(observation, policy = DEFAULT_VERIFICATION_POLICY) {
+	const evidenceCount = observation.verification.evidence_verified_count ?? 0;
+	const minRequired = minimumEvidence(observation, policy);
+	const distinctFiles = new Set(observation.evidence.map((item) => item.file.replace(/\\/g, "/"))).size;
+	const distinctRoots = new Set(observation.evidence.map((item) => item.file.replace(/\\/g, "/").split("/")[0])).size;
+	let induction_status = "well-supported";
+	let induction_confidence = observation.verification.evidence_confidence ?? 0;
+	if (observation.support.scope_basis === "cross-root" && (evidenceCount < 3 || distinctFiles < 3 || distinctRoots < 2)) {
+		induction_status = "overgeneralized";
+		induction_confidence = Math.min(induction_confidence, .35);
+	} else if ((observation.support.scope_basis === "directory-cluster" || observation.support.scope_basis === "module-cluster") && (evidenceCount < 2 || distinctFiles < 2)) {
+		induction_status = "overgeneralized";
+		induction_confidence = Math.min(induction_confidence, .35);
+	} else if (evidenceCount < minRequired) {
+		induction_status = "narrowly-supported";
+		induction_confidence = Math.min(induction_confidence, .55);
+	}
+	let disposition = observation.verification.disposition ?? "keep";
+	if (induction_status === "overgeneralized") disposition = "demote-to-ambient";
+	else if (induction_status === "narrowly-supported" && disposition === "keep") disposition = "keep-with-reduced-confidence";
+	return {
+		...observation,
+		verification: {
+			...observation.verification,
+			induction_status,
+			induction_confidence: Number(induction_confidence.toFixed(2)),
+			disposition
+		}
+	};
+}
+function minimumEvidence(observation, policy) {
+	if (observation.category === "anti-pattern") return policy.anti_pattern_min_evidence;
+	if (observation.category === "migration") return policy.migration_min_evidence;
+	return 1;
 }
 //#endregion
 //#region src/load/load-rccl.ts
@@ -7848,36 +8710,12 @@ function booleanTrait(input) {
 */
 async function loadRccl(filePath) {
 	if (!filePath || !existsSync(filePath)) return null;
-	const parsed = (await loadRcclModule$1()).parseRccl(readFileSync(filePath, "utf-8"), { allowVerifiedFields: true });
-	if (!parsed.valid || !parsed.data) throw new Error(`Failed to parse RCCL document: ${parsed.errors?.join("; ") || "unknown parse error"}`);
+	const parsed = parseRccl(readFileSync(filePath, "utf-8"), { allowVerifiedFields: true });
+	if (!parsed.valid || !parsed.data) {
+		if (parsed.errors?.some((error) => error.includes("'version' must be"))) throw new Error(`UNSUPPORTED_SCHEMA_VERSION: RCCL must use schema 1. Re-run calibrate-repo-context; ${filePath} was not modified.`);
+		throw new Error(`Failed to parse RCCL document: ${parsed.errors?.join("; ") || "unknown parse error"}`);
+	}
 	return parsed.data;
-}
-async function loadRcclModule$1() {
-	return import(pathToFileURL(resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "..", "rccl", "dist", "index.mjs")).href);
-}
-//#endregion
-//#region src/utils/paths.ts
-function normalizePath(value) {
-	return value.replace(/\\/g, "/").replace(/^\.\//, "");
-}
-function normalizePathSeparators(value) {
-	return value.replace(/\\/g, "/");
-}
-function pathMatchesScope(path, scope) {
-	if (scope === "*" || scope === "**" || scope === "**/*") return true;
-	if (scope.includes("*") || scope.includes("?") || scope.includes("{")) return minimatch(path, scope);
-	const normalizedScope = scope.replace(/\/$/, "");
-	return path === normalizedScope || path.startsWith(`${normalizedScope}/`);
-}
-function scopeOverlapsPath(scope, path) {
-	const normalizedScope = normalizePath(scope);
-	const normalizedPath = normalizePath(path);
-	return pathMatchesScope(normalizedPath, normalizedScope) || pathMatchesScope(normalizedScope, normalizedPath);
-}
-function fileOverlapsTarget(file, target) {
-	const normalizedFile = normalizePath(file);
-	const normalizedTarget = normalizePath(target);
-	return normalizedFile === normalizedTarget || pathMatchesScope(normalizedFile, normalizedTarget) || pathMatchesScope(normalizedTarget, normalizedFile);
 }
 //#endregion
 //#region src/verify/verify-rccl.ts
@@ -7886,7 +8724,6 @@ function fileOverlapsTarget(file, target) {
 */
 async function verifyRcclDocumentWithSummary(rccl, options) {
 	const checkedAt = (options.now ?? /* @__PURE__ */ new Date()).toISOString();
-	const rcclModule = await loadRcclModule();
 	const policy = options.policy ?? "task-relevant";
 	const targets = taskTargets$1(options.resolvedTask);
 	const records = [];
@@ -7905,7 +8742,7 @@ async function verifyRcclDocumentWithSummary(rccl, options) {
 			});
 			return observation;
 		}
-		const verified = rcclModule.verifyObservationInduction(rcclModule.verifyObservationEvidence(observation, options.projectRoot, checkedAt));
+		const verified = verifyObservationInduction(verifyObservationEvidence(observation, options.projectRoot, checkedAt));
 		const after = verificationSnapshot(verified);
 		records.push({
 			observation_id: observation.id,
@@ -7948,7 +8785,7 @@ function taskTargets$1(resolvedTask) {
 		...resolvedTask.task.changedFiles ?? [],
 		resolvedTask.task_intent.target_file,
 		...resolvedTask.task_intent.changed_files
-	].filter((value) => Boolean(value)).map(normalizePath));
+	].filter((value) => Boolean(value)).map(normalizePath$1));
 }
 function observationTaskRelevance(observation, targets) {
 	if (targets.length === 0) return {
@@ -7996,19 +8833,21 @@ function reuseReason(policy, relevanceReason) {
 	if (policy === "deep") return "deep policy should not reuse observations";
 	return relevanceReason;
 }
-async function loadRcclModule() {
-	return import(pathToFileURL(resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "..", "rccl", "dist", "index.mjs")).href);
-}
 //#endregion
 //#region src/load/compile-sources.ts
 async function loadCompileSources(input) {
 	const builtinLayers = discoverBuiltinLayers(input.builtinRoot);
 	const local = loadLocalPlaybook(input.localAugmentPath);
-	const selectedLayerIds = local?.meta.extends.length ? resolveExtendedLayers(local.meta.extends, builtinLayers) : ["builtin/core"];
+	const configuredLayerIds = local?.meta.extends.length ? resolveExtendedLayers(local.meta.extends, builtinLayers) : ["builtin/core"];
+	const inferredLayerIds = inferTaskLayers(input.resolvedTask, builtinLayers);
+	const selectedLayerIds = [...new Set([...configuredLayerIds, ...inferredLayerIds])];
 	const builtinDirectives = selectedLayerIds.flatMap((layerId) => {
 		const filePath = builtinLayers.get(layerId);
 		return filePath ? loadDirectiveFile(filePath, layerId) : [];
 	});
+	const allBuiltinDirectives = [...builtinLayers.entries()].flatMap(([layerId, filePath]) => loadDirectiveFile(filePath, layerId));
+	assertUniqueDirectiveIds([...allBuiltinDirectives, ...local?.additions ?? []]);
+	validateLocalReferences(local, allBuiltinDirectives);
 	return verifyCompileSourcesRccl(input, {
 		builtinLayers,
 		local,
@@ -8017,6 +8856,20 @@ async function loadCompileSources(input) {
 		allDirectives: [...builtinDirectives, ...local?.additions ?? []],
 		rccl: await loadRccl(input.rcclPath)
 	});
+}
+function inferTaskLayers(task, layers) {
+	if (!task) return [];
+	const result = [];
+	const changeType = task.task_intent.change_type;
+	if (changeType !== "unknown") {
+		const taskLayer = `builtin/task-types/${changeType}`;
+		if (layers.has(taskLayer)) result.push(taskLayer);
+	}
+	for (const tech of task.task_intent.tech_stack) for (const prefix of ["builtin/languages/", "builtin/frameworks/"]) {
+		const layer = `${prefix}${tech}`;
+		if (layers.has(layer)) result.push(layer);
+	}
+	return result.sort();
 }
 async function loadOrVerifyCompileSources(input, preloadedSources) {
 	return preloadedSources ? verifyCompileSourcesRccl(input, preloadedSources) : loadCompileSources(input);
@@ -8069,21 +8922,453 @@ function semanticRelationPolicyTraceRecord() {
 	};
 }
 //#endregion
-//#region src/types.ts
-const LOCKFILE_VERSION = "1.0";
+//#region src/ai-contracts/evidence.ts
+function verifyEvidenceRefs(refs, context = {}) {
+	const entries = refs.map((ref) => verifyEvidenceRef(ref, context));
+	const verified = entries.filter((entry) => entry.status === "verified").length;
+	const staticVerified = entries.filter((entry) => entry.status === "verified" && entry.static).length;
+	const conversationCount = entries.filter((entry) => entry.ref.kind === "conversation").length;
+	return {
+		total: entries.length,
+		verified,
+		staticVerified,
+		conversationOnly: entries.length > 0 && conversationCount === entries.length,
+		hasStaticEvidence: staticVerified > 0,
+		entries
+	};
+}
+function verifyEvidenceRef(ref, context) {
+	if (ref.kind === "conversation") return {
+		ref,
+		status: "verified",
+		static: false,
+		reason: "conversation evidence is contextual only"
+	};
+	if (ref.kind === "file") return verifyFileEvidence(ref, context);
+	if (ref.kind === "rccl-evidence") return verifyRcclEvidence(ref, context);
+	if (ref.kind === "runtime-trace") return verifyListedRef(ref, context.runtimeTraceRefs, "runtime trace reference", false);
+	if (ref.kind === "command") return verifyHashEvidence(ref, context.commandOutputHashes, "command output hash");
+	if (ref.kind === "diff") return verifyHashEvidence(ref, context.diffSnapshotHashes, "diff snapshot hash");
+	return {
+		ref,
+		status: "unverified",
+		static: false,
+		reason: "unsupported evidence kind"
+	};
+}
+function verifyFileEvidence(ref, context) {
+	if (!context.projectRoot) return {
+		ref,
+		status: "unverified",
+		static: false,
+		reason: "projectRoot is required for file evidence verification"
+	};
+	const parsed = parseRefLocation(ref.ref);
+	const file = ref.file ?? parsed.file;
+	const lineRange = ref.line_range ?? parsed.line_range;
+	if (!file) return {
+		ref,
+		status: "unverified",
+		static: false,
+		reason: "file evidence must include file or parseable ref"
+	};
+	const filePath = isAbsolute(file) ? file : resolve(context.projectRoot, file);
+	if (!existsSync(filePath)) return {
+		ref,
+		status: "unverified",
+		static: false,
+		reason: `file evidence target does not exist: ${file}`
+	};
+	if (!lineRange) return {
+		ref,
+		status: "unverified",
+		static: false,
+		reason: "file evidence must include line_range"
+	};
+	const lines = readFileSync(filePath, "utf-8").replace(/\r\n/g, "\n").split("\n");
+	if (lineRange[0] < 1 || lineRange[1] < lineRange[0] || lineRange[1] > lines.length) return {
+		ref,
+		status: "unverified",
+		static: false,
+		reason: `line_range ${lineRange[0]}-${lineRange[1]} is outside ${file}`
+	};
+	if (ref.snippet_hash && !matchesSnippetHash(lines.slice(lineRange[0] - 1, lineRange[1]).join("\n"), ref.snippet_hash)) return {
+		ref,
+		status: "unverified",
+		static: false,
+		reason: "snippet_hash does not match file line range"
+	};
+	return {
+		ref,
+		status: "verified",
+		static: true,
+		reason: "file and line range verified"
+	};
+}
+function verifyRcclEvidence(ref, context) {
+	const observations = context.observations ?? [];
+	if (!observations.length) return {
+		ref,
+		status: "unverified",
+		static: false,
+		reason: "RCCL observations are required for rccl-evidence verification"
+	};
+	const parsed = parseRefLocation(ref.ref);
+	const file = ref.file ?? parsed.file;
+	const lineRange = ref.line_range ?? parsed.line_range;
+	if (!file || !lineRange) return {
+		ref,
+		status: "unverified",
+		static: false,
+		reason: "rccl-evidence must reference a concrete evidence file and line range"
+	};
+	if (!observations.some((observation) => observationCanSupportRcclEvidence(observation) && observation.evidence.some((evidence) => {
+		const evidenceRef = `${evidence.file}:${evidence.line_range[0]}-${evidence.line_range[1]}`;
+		const sameRef = ref.ref === evidenceRef || ref.ref === `${observation.id}:${evidenceRef}`;
+		const sameLocation = normalizePathSeparators(file) === normalizePathSeparators(evidence.file) && lineRange[0] === evidence.line_range[0] && lineRange[1] === evidence.line_range[1];
+		return sameRef || sameLocation;
+	}))) return {
+		ref,
+		status: "unverified",
+		static: false,
+		reason: "rccl-evidence ref does not match loaded observation evidence"
+	};
+	return {
+		ref,
+		status: "verified",
+		static: true,
+		reason: "rccl-evidence matches loaded observation evidence"
+	};
+}
+function verifyListedRef(ref, refs, label, isStatic = true) {
+	if (refs?.includes(ref.ref)) return {
+		ref,
+		status: "verified",
+		static: isStatic,
+		reason: `${label} verified`
+	};
+	if (!refs) return {
+		ref,
+		status: "unverified",
+		static: false,
+		reason: `${label} is unavailable in the current workflow`
+	};
+	return {
+		ref,
+		status: "unverified",
+		static: false,
+		reason: `${label} was not captured by workflow`
+	};
+}
+function verifyHashEvidence(ref, hashes, label) {
+	if (ref.output_hash && hashes?.includes(ref.output_hash)) return {
+		ref,
+		status: "verified",
+		static: true,
+		reason: `${label} verified`
+	};
+	if (!ref.output_hash) return {
+		ref,
+		status: "unverified",
+		static: false,
+		reason: `${label} missing output_hash`
+	};
+	if (!hashes) return {
+		ref,
+		status: "unverified",
+		static: false,
+		reason: `${label} is unavailable in the current workflow`
+	};
+	return {
+		ref,
+		status: "unverified",
+		static: false,
+		reason: `${label} was not captured by workflow`
+	};
+}
+function parseRefLocation(ref) {
+	const match = /^(.*):(\d+)-(\d+)$/.exec(ref);
+	if (!match) return {};
+	const start = Number(match[2]);
+	const end = Number(match[3]);
+	if (!Number.isInteger(start) || !Number.isInteger(end) || start < 1 || end < start) return { file: match[1] };
+	return {
+		file: match[1],
+		line_range: [start, end]
+	};
+}
+function matchesSnippetHash(snippet, expected) {
+	const normalizedExpected = expected.replace(/^sha(1|256):/, "");
+	return hash("sha1", snippet) === normalizedExpected || hash("sha256", snippet) === normalizedExpected;
+}
+function hash(algorithm, value) {
+	return createHash(algorithm).update(value).digest("hex");
+}
+function observationCanSupportRcclEvidence(observation) {
+	const verification = observation.verification;
+	if (!verification) return true;
+	if (verification.disposition === "demote-to-ambient") return false;
+	return verification.evidence_status !== "failed" && verification.evidence_status !== "unverifiable";
+}
+//#endregion
+//#region src/ai-contracts/adherence-evidence.ts
+const MINIMUM_ADHERENCE_CONFIDENCE = .5;
+const VERDICTS = new Set([
+	"followed",
+	"ignored",
+	"partial",
+	"unverified"
+]);
+const IGNORED_REASONS = new Set([
+	"not-applicable",
+	"conflicts-with-task",
+	"too-broad",
+	"repo-reality",
+	"false-positive",
+	"user-corrected",
+	"other"
+]);
+const ADHERENCE_EVIDENCE_SCHEMA = {
+	type: "object",
+	additionalProperties: false,
+	properties: { verdicts: { type: "array" } },
+	required: ["verdicts"]
+};
+function prepareAdherenceEvidenceContract(input) {
+	const prompt = buildEvidencePrompt(input.directives, input.taskDescription);
+	const artifact = {
+		suggestedPath: input.artifactPath,
+		format: "json",
+		usage: `Write a v1 envelope to ${input.artifactPath}: schema_version 1, kind adherence-evidence, the issued requestId/contextFingerprint as request_id/context_fingerprint, and verdicts under payload; then pass it to complete with --adherence-file ${input.artifactPath}.`
+	};
+	return {
+		evidencePrompt: prompt,
+		evidenceSchema: JSON.stringify(ADHERENCE_EVIDENCE_SCHEMA, null, 2),
+		evidenceArtifact: artifact,
+		contract: {
+			contractVersion: AI_CONTRACT_VERSION,
+			kind: "adherence-evidence",
+			...artifactIdentity("adherence-evidence", {
+				directiveIds: input.directives.map((directive) => directive.id),
+				schemaId: "runtime.adherence-evidence"
+			}),
+			schemaId: "runtime.adherence-evidence",
+			schemaVersion: "1.0",
+			prompt,
+			schema: ADHERENCE_EVIDENCE_SCHEMA,
+			artifact,
+			allowedIds: { directiveIds: input.directives.map((directive) => directive.id) },
+			provenance: {
+				owner: "runtime",
+				deterministic: true
+			},
+			cacheKeyMaterial: {
+				directiveIds: input.directives.map((directive) => directive.id),
+				schemaId: "runtime.adherence-evidence"
+			}
+		}
+	};
+}
+function validateAdherenceEvidencePayload(raw, allowedDirectiveIds, evidenceContext) {
+	const entries = [];
+	const verdicts = [];
+	const allowedIds = new Set(allowedDirectiveIds);
+	const versionDiagnostic = contractVersionDiagnostic(raw, "adherence-evidence");
+	if (versionDiagnostic) return {
+		verdicts,
+		diagnostics: buildContractPayloadDiagnostics("adherence-evidence", [versionDiagnostic])
+	};
+	if (!isAdherencePayload(raw)) {
+		entries.push({
+			status: raw == null ? "unused" : "rejected",
+			reason: raw == null ? "empty-payload" : "malformed-payload",
+			path: "payload",
+			message: raw == null ? "No adherence evidence payload was provided." : "Adherence evidence payload must be an object with a verdicts array."
+		});
+		return {
+			verdicts,
+			diagnostics: buildContractPayloadDiagnostics("adherence-evidence", entries)
+		};
+	}
+	const seen = /* @__PURE__ */ new Set();
+	raw.verdicts.forEach((item, index) => {
+		const path = `verdicts[${index}]`;
+		if (!isVerdictEntry(item)) {
+			entries.push({
+				status: "rejected",
+				reason: "malformed-payload",
+				path,
+				message: "Verdict must include directive_id, verdict, confidence, evidence_refs, and reason.",
+				directiveId: isRecord$1(item) && typeof item.directive_id === "string" ? item.directive_id : void 0
+			});
+			return;
+		}
+		if (!allowedIds.has(item.directive_id)) {
+			entries.push(rejected$1(path, "invalid-id", `Directive id "${item.directive_id}" is not allowed.`, item));
+			return;
+		}
+		if (seen.has(item.directive_id)) {
+			entries.push(rejected$1(path, "duplicate-id", `Directive id "${item.directive_id}" already has a verdict.`, item));
+			return;
+		}
+		seen.add(item.directive_id);
+		if (item.confidence < MINIMUM_ADHERENCE_CONFIDENCE) {
+			entries.push(rejected$1(path, "low-confidence", `Confidence ${item.confidence} is below ${MINIMUM_ADHERENCE_CONFIDENCE}.`, item));
+			return;
+		}
+		const nonUnverified = item.verdict !== "unverified";
+		const evidenceRefs = validEvidenceRefs(item.evidence_refs) ? normalizeEvidenceRefs(item.evidence_refs) : [];
+		if (nonUnverified && !evidenceRefs.length) {
+			verdicts.push(toUnverified(item, evidenceRefs));
+			entries.push(downgraded(path, "missing-evidence", "Non-unverified adherence verdict lacks evidence_refs; recorded as unverified and excluded from follow rate.", item));
+			return;
+		}
+		if (nonUnverified && evidenceRefs.length) {
+			const evidence = verifyEvidenceRefs(evidenceRefs, evidenceContext);
+			if (evidence.conversationOnly) {
+				verdicts.push(toUnverified(item, evidenceRefs));
+				entries.push(downgraded(path, "conversation-only-evidence", `Conversation-only adherence evidence cannot update follow rate; recorded as unverified. Evidence verification: ${summarizeEvidenceVerification(evidence)}.`, item));
+				return;
+			}
+			if (!evidence.hasStaticEvidence) {
+				verdicts.push(toUnverified(item, evidenceRefs));
+				entries.push(downgraded(path, "insufficient-static-evidence", `Adherence verdict lacks statically verified file, diff, command, or runtime trace evidence; recorded as unverified. Evidence verification: ${summarizeEvidenceVerification(evidence)}.`, item));
+				return;
+			}
+		}
+		const ignoredReason = item.verdict === "ignored" && item.ignored_reason && IGNORED_REASONS.has(item.ignored_reason) ? item.ignored_reason : void 0;
+		verdicts.push({
+			directive_id: item.directive_id,
+			verdict: item.verdict,
+			confidence: item.confidence,
+			evidence_refs: evidenceRefs,
+			reason: item.reason,
+			...ignoredReason ? { ignored_reason: ignoredReason } : {}
+		});
+		entries.push({
+			status: "accepted",
+			reason: "accepted",
+			path,
+			message: `Adherence evidence verdict accepted: ${item.verdict}.`,
+			directiveId: item.directive_id,
+			confidence: item.confidence
+		});
+	});
+	if (!raw.verdicts.length) entries.push({
+		status: "unused",
+		reason: "empty-payload",
+		path: "verdicts",
+		message: "Adherence evidence payload contains no verdicts."
+	});
+	return {
+		verdicts,
+		diagnostics: buildContractPayloadDiagnostics("adherence-evidence", entries)
+	};
+}
+function toUnverified(item, evidenceRefs) {
+	return {
+		directive_id: item.directive_id,
+		verdict: "unverified",
+		confidence: item.confidence,
+		evidence_refs: evidenceRefs,
+		reason: item.reason
+	};
+}
+function summarizeEvidenceVerification(evidence) {
+	return evidence.entries.map((entry) => `${entry.ref.kind}:${entry.status}:${entry.reason}`).join("; ") || "none";
+}
+function isAdherencePayload(value) {
+	return isRecord$1(value) && Array.isArray(value.verdicts);
+}
+function isVerdictEntry(value) {
+	if (!isRecord$1(value)) return false;
+	return typeof value.directive_id === "string" && typeof value.verdict === "string" && VERDICTS.has(value.verdict) && validConfidence(value.confidence) && Array.isArray(value.evidence_refs) && typeof value.reason === "string";
+}
+function rejected$1(path, reason, message, item) {
+	return {
+		status: "rejected",
+		reason,
+		path,
+		message,
+		directiveId: item.directive_id,
+		confidence: item.confidence
+	};
+}
+function downgraded(path, reason, message, item) {
+	return {
+		status: "downgraded",
+		reason,
+		path,
+		message,
+		directiveId: item.directive_id,
+		confidence: item.confidence
+	};
+}
+function buildEvidencePrompt(directives, taskDescription) {
+	return [
+		"Evaluate adherence to compiled directives after implementation.",
+		"Every followed, ignored, or partial verdict must cite evidence_refs from diff, file snippets, test/command output, or implementation evidence.",
+		"Use \"unverified\" when you did not inspect enough evidence. Unverified directives do not update follow rate.",
+		"Return JSON only.",
+		"",
+		`Task description: ${taskDescription}`,
+		"",
+		"Compiled directives:",
+		...directives.map((directive) => `- ${directive.id}: [${directive.prescription}] ${directive.description} (execution_mode: ${directive.execution_mode})`)
+	].join("\n");
+}
 //#endregion
 //#region src/feedback.ts
 function evaluateGuidance(input) {
+	const release = acquireLock(`${input.lockfilePath}.lock`);
+	try {
+		const trackedDirectiveIds = getTrackedDirectiveIds(input);
+		const validation = validatePublicAdherenceArtifact(input, trackedDirectiveIds);
+		const lockfile = evaluateGuidanceUnlocked({
+			...input,
+			adherencePayload: validation.verdicts,
+			followedDirectiveIds: void 0,
+			ignoredDirectiveIds: void 0,
+			ignoredDirectiveReasons: void 0,
+			signalConfidence: void 0,
+			hostFulfillment: void 0
+		});
+		return {
+			status: validation.diagnostics.summary.rejected > 0 ? "needs-attention" : "updated",
+			lockfile,
+			contractDiagnostics: validation.diagnostics,
+			verdictCounts: summarizeCurrentVerdicts(validation.verdicts, trackedDirectiveIds)
+		};
+	} finally {
+		release();
+	}
+}
+function summarizeCurrentVerdicts(verdicts, trackedDirectiveIds) {
+	const counts = {
+		followed: 0,
+		partial: 0,
+		ignored: 0,
+		unverified: 0
+	};
+	const covered = /* @__PURE__ */ new Set();
+	for (const verdict of verdicts) {
+		if (covered.has(verdict.directive_id)) continue;
+		covered.add(verdict.directive_id);
+		counts[verdict.verdict] += 1;
+	}
+	counts.unverified += trackedDirectiveIds.filter((id) => !covered.has(id)).length;
+	return counts;
+}
+function evaluateGuidanceUnlocked(input) {
 	const existing = loadLockfile$1(input.lockfilePath);
 	const trackedDirectiveIds = getTrackedDirectiveIds(input);
 	const adherenceResolved = resolveFromAdherencePayload(input, trackedDirectiveIds);
-	const hasExplicitDirectiveSignal = Boolean(adherenceResolved || input.followedDirectiveIds?.length || input.ignoredDirectiveIds?.length);
-	const followed = adherenceResolved?.followed ?? new Set(input.followedDirectiveIds ?? []);
-	const ignored = adherenceResolved?.ignored ?? new Set(input.ignoredDirectiveIds ?? []);
+	const followed = adherenceResolved?.followed ?? /* @__PURE__ */ new Set();
+	const ignored = adherenceResolved?.ignored ?? /* @__PURE__ */ new Set();
 	const partial = adherenceResolved?.partial ?? /* @__PURE__ */ new Set();
-	const unverified = adherenceResolved?.unverified ?? /* @__PURE__ */ new Set();
-	const ignoredReasons = adherenceResolved?.ignoredReasons ?? input.ignoredDirectiveReasons;
-	const taskType = input.ego.taskIntent.operation;
+	const unverified = adherenceResolved?.unverified ?? new Set(trackedDirectiveIds);
+	const ignoredReasons = adherenceResolved?.ignoredReasons;
+	const taskType = input.ego.taskIntent.change_type;
 	const taskProfile = taskProfileKey(input);
 	const today = (/* @__PURE__ */ new Date()).toISOString().slice(0, 10);
 	const now = (/* @__PURE__ */ new Date()).toISOString();
@@ -8100,10 +9385,6 @@ function evaluateGuidance(input) {
 	existing.governance_summary.last_updated_at = now;
 	updateObservationFeedback(existing, observedRccl, input, now);
 	updateTensionFeedback(existing, input, now);
-	if (!hasExplicitDirectiveSignal) {
-		writeFileSync(input.lockfilePath, toYaml(existing), "utf-8");
-		return existing;
-	}
 	for (const directiveId of trackedDirectiveIds) {
 		const entry = existing.directives[directiveId] ?? createEntry();
 		const counts = entry.quality_signal.by_task_type[taskType] ?? emptySignalCounts();
@@ -8132,7 +9413,10 @@ function evaluateGuidance(input) {
 		}
 		entry.quality_signal.by_task_type[taskType] = counts;
 		entry.quality_signal.by_task_profile[taskProfile] = profileCounts;
+		const coveredVerdict = ignored.has(directiveId) ? "ignored" : partial.has(directiveId) ? "partial" : followed.has(directiveId) ? "followed" : null;
+		if (coveredVerdict) entry.quality_signal.overall.recent_verdicts = [...entry.quality_signal.overall.recent_verdicts, coveredVerdict].slice(-20);
 		entry.quality_signal.overall.follow_rate = computeFollowRate(entry);
+		entry.quality_signal.overall.coverage_rate = computeCoverageRate(entry);
 		entry.quality_signal.overall.trend = computeTrend(entry);
 		entry.quality_signal.signal_confidence = adherenceResolved ? "explicit" : resolveSignalConfidence(input, ignored.has(directiveId));
 		entry.quality_signal.evidence_confidence = adherenceResolved?.evidenceConfidence.get(directiveId);
@@ -8147,13 +9431,50 @@ function evaluateGuidance(input) {
 		} };
 		existing.directives[directiveId] = entry;
 	}
-	writeFileSync(input.lockfilePath, toYaml(existing), "utf-8");
+	atomicWrite(input.lockfilePath, toYaml(existing));
 	return existing;
+}
+function validatePublicAdherenceArtifact(input, trackedDirectiveIds) {
+	const artifact = input.artifacts?.adherenceEvidence;
+	if (!artifact) return {
+		verdicts: [],
+		diagnostics: buildContractPayloadDiagnostics("adherence-evidence", [{
+			status: "unused",
+			reason: "empty-payload",
+			path: "artifact",
+			message: "No adherence artifact was provided; tracked directives are recorded as unverified."
+		}])
+	};
+	const request = input.packet.post_compile_contract_requests.find((item) => item.kind === "adherence-evidence");
+	if (!request) return {
+		verdicts: [],
+		diagnostics: buildContractPayloadDiagnostics("adherence-evidence", [{
+			status: "rejected",
+			reason: "malformed-payload",
+			path: "packet.post_compile_contract_requests",
+			message: "The compiled packet does not contain the Runtime-issued adherence-evidence contract."
+		}], {
+			id: "missing-adherence-contract",
+			path: artifact.path
+		})
+	};
+	const unwrapped = unwrapHostArtifactEnvelope(artifact.raw, request.contract);
+	if (unwrapped.diagnostic) return {
+		verdicts: [],
+		diagnostics: buildContractPayloadDiagnostics("adherence-evidence", [unwrapped.diagnostic], {
+			id: request.contract.requestId,
+			path: artifact.path
+		})
+	};
+	const issuedDirectiveIds = request.contract.allowedIds?.directiveIds ?? [];
+	const trackedSet = new Set(trackedDirectiveIds);
+	return validateAdherenceEvidencePayload(unwrapped.payload, issuedDirectiveIds.filter((id) => trackedSet.has(id)), input.evidenceContext);
 }
 function loadLockfile$1(filePath) {
 	if (!existsSync(filePath)) return createDocument();
-	const parsed = parseYaml(readFileSync(filePath, "utf-8"));
-	if (!isLockfileDocument(parsed)) return createDocument();
+	const parsed = parseYaml$1(readFileSync(filePath, "utf-8"));
+	if (isRecord$1(parsed) && "version" in parsed && parsed.version !== "1.0") throw new Error(`UNSUPPORTED_SCHEMA_VERSION: lockfile ${filePath} must use 1.0; found ${String(parsed.version)}. Re-run init. Existing data was not modified.`);
+	if (!isLockfileDocument(parsed)) throw new Error(`INVALID_LOCKFILE: ${filePath} is malformed and was not modified.`);
 	return {
 		version: "1.0",
 		directives: normalizeDirectiveEntries(parsed.directives),
@@ -8168,10 +9489,10 @@ function loadLockfile$1(filePath) {
 function isLockfileDocument(value) {
 	if (!value || typeof value !== "object" || Array.isArray(value)) return false;
 	const candidate = value;
-	return isLockfileVersion(candidate.version) && isRecord(candidate.directives) && isRecord(candidate.observations) && isRecord(candidate.tensions) && Boolean(candidate.governance_summary) && typeof candidate.governance_summary === "object";
+	return isLockfileVersion(candidate.version) && isRecord$1(candidate.directives) && isRecord$1(candidate.observations) && isRecord$1(candidate.tensions) && Boolean(candidate.governance_summary) && typeof candidate.governance_summary === "object";
 }
 function isLockfileVersion(value) {
-	return value === "1.0" || value === 1 || value === 1;
+	return value === "1.0" || value === 1;
 }
 function normalizeObservationEntries(entries) {
 	return Object.fromEntries(Object.entries(entries).map(([id, entry]) => [id, {
@@ -8193,7 +9514,9 @@ function normalizeDirectiveEntries(entries) {
 					...normalized.quality_signal.overall,
 					...entry.quality_signal?.overall,
 					partial: (entry.quality_signal?.overall)?.partial ?? 0,
-					unverified: (entry.quality_signal?.overall)?.unverified ?? 0
+					unverified: (entry.quality_signal?.overall)?.unverified ?? 0,
+					coverage_rate: (entry.quality_signal?.overall)?.coverage_rate ?? 0,
+					recent_verdicts: normalizeRecentVerdicts((entry.quality_signal?.overall)?.recent_verdicts)
 				},
 				by_task_type: normalizeSignalCountMap(entry.quality_signal?.by_task_type),
 				by_task_profile: normalizeSignalCountMap(entry.quality_signal?.by_task_profile),
@@ -8329,7 +9652,9 @@ function createEntry() {
 				partial: 0,
 				unverified: 0,
 				follow_rate: 0,
-				trend: "stable"
+				coverage_rate: 0,
+				trend: "stable",
+				recent_verdicts: []
 			},
 			by_task_type: {},
 			by_task_profile: {},
@@ -8365,7 +9690,13 @@ function summarizeExecutionModes(input) {
 function computeFollowRate(entry) {
 	const { followed, ignored, partial } = entry.quality_signal.overall;
 	const total = followed + ignored + partial;
-	return total === 0 ? 0 : Number(((followed + partial) / total).toFixed(2));
+	return total === 0 ? 0 : Number((followed / total).toFixed(2));
+}
+function computeCoverageRate(entry) {
+	const { followed, ignored, partial, unverified } = entry.quality_signal.overall;
+	const covered = followed + ignored + partial;
+	const total = covered + unverified;
+	return total === 0 ? 0 : Number((covered / total).toFixed(2));
 }
 function emptySignalCounts() {
 	return {
@@ -8395,15 +9726,63 @@ function validEvaluationSource(value) {
 	return value === "no-explicit-evaluation" || value === "explicit-directives" || value === "adherence-evidence";
 }
 function computeTrend(entry) {
-	const rate = entry.quality_signal.overall.follow_rate;
-	if (rate >= .9) return "stable";
-	if (rate >= .75) return "improving";
-	return "degrading";
+	const verdicts = entry.quality_signal.overall.recent_verdicts;
+	if (verdicts.length < 10) return "stable";
+	const difference = strictWindowRate(verdicts.slice(-5)) - strictWindowRate(verdicts.slice(-10, -5));
+	if (difference >= .1) return "improving";
+	if (difference <= -.1) return "declining";
+	return "stable";
+}
+function strictWindowRate(verdicts) {
+	return verdicts.filter((verdict) => verdict === "followed").length / verdicts.length;
+}
+function normalizeRecentVerdicts(value) {
+	return Array.isArray(value) ? value.filter((item) => item === "followed" || item === "partial" || item === "ignored").slice(-20) : [];
+}
+function acquireLock(lockPath, timeoutMs = 5e3) {
+	mkdirSync(dirname(lockPath), { recursive: true });
+	const deadline = Date.now() + timeoutMs;
+	let fd = null;
+	while (fd === null) try {
+		fd = openSync(lockPath, "wx");
+		writeFileSync(fd, `${process.pid}\n${(/* @__PURE__ */ new Date()).toISOString()}\n`, "utf8");
+		fsyncSync(fd);
+	} catch (error) {
+		if (error.code !== "EEXIST") throw error;
+		if (Date.now() >= deadline) throw new Error(`LOCKFILE_LOCK_TIMEOUT: could not acquire ${lockPath} within ${timeoutMs}ms.`);
+		Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 20);
+	}
+	return () => {
+		if (fd !== null) closeSync(fd);
+		try {
+			unlinkSync(lockPath);
+		} catch {}
+	};
+}
+function atomicWrite(filePath, contents) {
+	mkdirSync(dirname(filePath), { recursive: true });
+	const tempPath = `${filePath}.${process.pid}.${Date.now()}.tmp`;
+	const fd = openSync(tempPath, "wx");
+	try {
+		writeFileSync(fd, contents, "utf8");
+		fsyncSync(fd);
+	} finally {
+		closeSync(fd);
+	}
+	renameSync(tempPath, filePath);
+	try {
+		const directoryFd = openSync(dirname(filePath), "r");
+		try {
+			fsyncSync(directoryFd);
+		} finally {
+			closeSync(directoryFd);
+		}
+	} catch {}
 }
 function taskProfileKey(input) {
 	const context = input.packet.interpretation.resolved.context_profile;
 	return [
-		input.ego.taskIntent.operation,
+		input.ego.taskIntent.change_type,
 		context.risk_level ?? "medium",
 		context.scope_size ?? "unknown",
 		context.compatibility_requirement ?? "none"
@@ -8488,7 +9867,7 @@ function feedbackToIR(lockfilePath) {
 }
 function loadLockfile(lockfilePath) {
 	if (!lockfilePath || !existsSync(lockfilePath)) return {};
-	const parsed = parseYaml(readFileSync(lockfilePath, "utf-8"));
+	const parsed = parseYaml$1(readFileSync(lockfilePath, "utf-8"));
 	if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
 	if ("directives" in parsed || "governance_summary" in parsed) return parsed;
 	const directives = {};
@@ -8568,7 +9947,7 @@ const PRESCRIPTION_RANKS = {
 	must: 1
 };
 function directivesToIR(directives, local) {
-	const overrideById = new Map(local?.overrides.map((item) => [item.id, item]) ?? []);
+	const overrideById = new Map(local?.overrides.map((item) => [item.supersedes, item]) ?? []);
 	const augmentById = new Map(local?.augments.map((item) => [item.id, item]) ?? []);
 	const suppressById = new Map(local?.suppresses.map((item) => [item.id, item]) ?? []);
 	return directives.map((directive) => {
@@ -8707,7 +10086,8 @@ function taskToIR(resolved) {
 			intent,
 			context
 		]),
-		kind: intent.task_kind,
+		workflow: intent.workflow,
+		changeType: intent.change_type,
 		operation: intent.operation,
 		targetLayer: intent.target_layer,
 		targets: buildTargets(intent.target_file, intent.changed_files),
@@ -8877,6 +10257,1132 @@ async function resolveActivatedGovernanceContext(input) {
 	};
 }
 //#endregion
+//#region src/ai-contracts/semantic-governance-graph.ts
+const SEMANTIC_GRAPH_SCHEMA = {
+	type: "object",
+	additionalProperties: false,
+	properties: {
+		nodes: { type: "array" },
+		edges: { type: "array" }
+	},
+	required: ["edges"]
+};
+async function prepareSemanticContractContext(input) {
+	const ctx = await resolveActivatedGovernanceContext(input.compileInput);
+	return {
+		resolvedTask: ctx.resolvedTask,
+		directives: ctx.activeDirectives.map(summarizeDirectiveForProposal),
+		observations: ctx.governanceIR.observations.filter((observation) => !skippedObservationIds(ctx.sources).has(observation.id)).map(summarizeObservationForProposal),
+		loadedSources: ctx.sources
+	};
+}
+async function prepareSemanticGovernanceGraphContractBundle(input) {
+	const context = await prepareSemanticContractContext(input);
+	return {
+		...context,
+		...prepareSemanticGovernanceGraphContract({
+			resolvedTask: context.resolvedTask,
+			directives: context.directives,
+			observations: context.observations,
+			artifactPath: input.artifactPath
+		})
+	};
+}
+function prepareSemanticGovernanceGraphContract(input) {
+	const prompt = buildGraphPrompt(input);
+	const artifact = {
+		suggestedPath: input.artifactPath,
+		format: "json",
+		usage: `Write a v1 envelope to ${input.artifactPath}: schema_version 1, kind semantic-governance-graph, the issued requestId/contextFingerprint as request_id/context_fingerprint, and the graph under payload; then re-run with --governance-graph-file ${input.artifactPath}.`
+	};
+	const cacheKeyMaterial = {
+		taskIntent: input.resolvedTask.task_intent,
+		contextProfile: input.resolvedTask.context_profile,
+		directiveIds: input.directives.map((directive) => directive.id),
+		observationIds: input.observations.map((observation) => observation.id)
+	};
+	return {
+		graphPrompt: prompt,
+		graphSchema: JSON.stringify(SEMANTIC_GRAPH_SCHEMA, null, 2),
+		graphArtifact: artifact,
+		contract: {
+			contractVersion: AI_CONTRACT_VERSION,
+			kind: "semantic-governance-graph",
+			...artifactIdentity("semantic-governance-graph", cacheKeyMaterial),
+			schemaId: "runtime.semantic-governance-graph",
+			schemaVersion: "1.0",
+			prompt,
+			schema: SEMANTIC_GRAPH_SCHEMA,
+			artifact,
+			allowedIds: allowedIds(input),
+			provenance: {
+				owner: "runtime",
+				deterministic: true
+			},
+			context: {
+				resolvedTask: {
+					task_intent: input.resolvedTask.task_intent,
+					context_profile: input.resolvedTask.context_profile
+				},
+				directives: input.directives.map(compactDirectiveForContract),
+				observations: input.observations.map(compactObservationForContract),
+				edgeGuidance: {
+					relations: [
+						"reinforce",
+						"tension",
+						"suppress",
+						"ambient-only",
+						"unrelated"
+					],
+					impacts: [
+						"execution-mode",
+						"review-focus",
+						"ambient-context",
+						"no-effect"
+					],
+					execution_intents: [
+						"enforce",
+						"deviation-noted",
+						"ambient",
+						"suppress",
+						"no-change"
+					],
+					requirement: "Create edges only when the directive and observation meaning materially affect execution, review focus, or ambient context for this task."
+				}
+			},
+			cacheKeyMaterial
+		}
+	};
+}
+function validateSemanticGovernanceGraphPayload(input) {
+	const entries = [];
+	const versionDiagnostic = contractVersionDiagnostic(input.raw, "semantic-governance-graph");
+	if (versionDiagnostic) return {
+		proposal: buildHostProposal(input.source, { edges: [] }),
+		diagnostics: buildContractPayloadDiagnostics("semantic-governance-graph", [versionDiagnostic], input.source)
+	};
+	const allowedDirectiveIds = input.allowedDirectiveIds ? new Set(input.allowedDirectiveIds) : null;
+	const allowedObservationIds = input.allowedObservationIds ? new Set(input.allowedObservationIds) : null;
+	const edges = graphEdges(input.raw, entries);
+	const candidates = [];
+	const seen = /* @__PURE__ */ new Set();
+	edges.forEach((edge, index) => {
+		const path = `edges[${index}]`;
+		if (!isGraphEdge$1(edge)) {
+			entries.push(rejected(path, "malformed-payload", "Graph edge is missing required fields or has unsupported values."));
+			return;
+		}
+		if (allowedDirectiveIds && !allowedDirectiveIds.has(edge.directive_id)) {
+			entries.push(rejected(path, "invalid-id", "Graph edge references a directive id outside allowedIds.", edge));
+			return;
+		}
+		if (allowedObservationIds && !allowedObservationIds.has(edge.observation_id)) {
+			entries.push(rejected(path, "invalid-id", "Graph edge references an observation id outside allowedIds.", edge));
+			return;
+		}
+		const duplicateKey = `${edge.directive_id}::${edge.observation_id}::${edge.relation}`;
+		if (seen.has(duplicateKey)) {
+			entries.push(rejected(path, "duplicate-id", "Duplicate graph edge for directive, observation, and relation.", edge));
+			return;
+		}
+		seen.add(duplicateKey);
+		if (edge.confidence < SEMANTIC_RELATION_POLICY.hostSemantic.minConfidence) {
+			entries.push(rejected(path, "low-confidence", "Graph edge confidence is below Runtime host semantic threshold.", edge));
+			return;
+		}
+		if (!validEvidenceRefs(edge.evidence_refs)) {
+			entries.push(rejected(path, "missing-evidence", "Graph edge must include evidence_refs.", edge));
+			return;
+		}
+		const evidenceRefs = normalizeEvidenceRefs(edge.evidence_refs);
+		const evidence = verifyEvidenceRefs(evidenceRefs, input.evidenceContext);
+		if (isExecutionImpactingEdge(edge) && evidence.conversationOnly) {
+			entries.push(rejected(path, "conversation-only-evidence", "Execution-impacting graph edges cannot be supported only by conversation evidence.", edge));
+			return;
+		}
+		if (isExecutionImpactingEdge(edge) && !evidence.hasStaticEvidence) {
+			entries.push(rejected(path, "insufficient-static-evidence", "Execution-impacting graph edges require at least one statically verified evidence ref.", edge));
+			return;
+		}
+		candidates.push({
+			edge: {
+				...edge,
+				evidence_refs: evidenceRefs
+			},
+			index
+		});
+	});
+	const accepted = [];
+	const byDirective = /* @__PURE__ */ new Map();
+	for (const candidate of candidates) {
+		const group = byDirective.get(candidate.edge.directive_id) ?? [];
+		group.push(candidate);
+		byDirective.set(candidate.edge.directive_id, group);
+	}
+	for (const directiveId of [...byDirective.keys()].sort()) byDirective.get(directiveId).sort((left, right) => compareGraphCandidates(left.edge, right.edge, input.evidenceContext)).forEach((candidate, rank) => {
+		const path = `edges[${candidate.index}]`;
+		if (rank >= SEMANTIC_RELATION_POLICY.hostSemantic.maxCandidatesPerDirective) {
+			entries.push({
+				status: "unused",
+				reason: "capped-by-policy",
+				path,
+				message: `Candidate exceeded maxCandidatesPerDirective=${SEMANTIC_RELATION_POLICY.hostSemantic.maxCandidatesPerDirective}.`,
+				directiveId: candidate.edge.directive_id,
+				observationId: candidate.edge.observation_id,
+				confidence: candidate.edge.confidence
+			});
+			return;
+		}
+		accepted.push(candidate.edge);
+		entries.push({
+			status: "accepted",
+			reason: "accepted",
+			path,
+			message: "Semantic governance graph edge accepted for Runtime adjudication.",
+			directiveId: candidate.edge.directive_id,
+			observationId: candidate.edge.observation_id,
+			confidence: candidate.edge.confidence
+		});
+	});
+	if (!edges.length && !entries.length) entries.push({
+		status: "unused",
+		reason: "empty-payload",
+		path: "edges",
+		message: "No semantic governance graph edges were provided."
+	});
+	return {
+		proposal: buildHostProposal(input.source, { edges: accepted }),
+		diagnostics: buildContractPayloadDiagnostics("semantic-governance-graph", entries, input.source)
+	};
+}
+function compareGraphCandidates(left, right, context) {
+	const dispositionRank = (edge) => {
+		const observation = context?.observations?.find((item) => item.id === edge.observation_id);
+		return observation?.verification?.disposition === "keep" ? 2 : observation?.verification?.disposition === "keep-with-reduced-confidence" ? 1 : 0;
+	};
+	const disposition = dispositionRank(right) - dispositionRank(left);
+	if (disposition) return disposition;
+	if (left.confidence !== right.confidence) return right.confidence - left.confidence;
+	if (left.evidence_refs.length !== right.evidence_refs.length) return right.evidence_refs.length - left.evidence_refs.length;
+	return `${left.observation_id}:${left.relation}:${left.reason}`.localeCompare(`${right.observation_id}:${right.relation}:${right.reason}`);
+}
+function isExecutionImpactingEdge(edge) {
+	return edge.impact === "execution-mode" || edge.execution_intent !== void 0 && edge.execution_intent !== "no-change";
+}
+function graphEdges(raw, entries) {
+	if (Array.isArray(raw)) return raw;
+	if (!raw) return [];
+	if (!isRecord$1(raw)) {
+		entries.push(rejected("payload", "malformed-payload", "Semantic governance graph payload must be an object with an edges array."));
+		return [];
+	}
+	if (!Array.isArray(raw.edges)) {
+		entries.push(rejected("edges", "malformed-payload", "Semantic governance graph edges field must be an array."));
+		return [];
+	}
+	return raw.edges;
+}
+function isGraphEdge$1(value) {
+	if (!isRecord$1(value)) return false;
+	return typeof value.directive_id === "string" && typeof value.observation_id === "string" && isRelation$1(value.relation) && validConfidence(value.confidence) && typeof value.reason === "string" && validEvidenceRefs(value.evidence_refs) && (value.impact === void 0 || isImpact(value.impact)) && (value.review_priority === void 0 || isReviewPriority(value.review_priority)) && (value.execution_intent === void 0 || isExecutionIntent(value.execution_intent));
+}
+function isRelation$1(value) {
+	return value === "reinforce" || value === "tension" || value === "suppress" || value === "ambient-only" || value === "unrelated";
+}
+function isImpact(value) {
+	return value === "execution-mode" || value === "review-focus" || value === "ambient-context" || value === "no-effect";
+}
+function isReviewPriority(value) {
+	return value === "low" || value === "normal" || value === "high" || value === "critical";
+}
+function isExecutionIntent(value) {
+	return value === "enforce" || value === "deviation-noted" || value === "ambient" || value === "suppress" || value === "no-change";
+}
+function buildHostProposal(source, payload) {
+	return {
+		irVersion: GOVERNANCE_IR_VERSION,
+		source: {
+			kind: "host-proposal",
+			id: source.id,
+			...source.path ? { path: source.path } : {}
+		},
+		kind: "semantic-governance-graph",
+		payload
+	};
+}
+function rejected(path, reason, message, edge) {
+	return {
+		status: "rejected",
+		reason,
+		path,
+		message,
+		directiveId: edge?.directive_id,
+		observationId: edge?.observation_id,
+		confidence: edge?.confidence
+	};
+}
+function summarizeDirectiveForProposal(directive) {
+	return {
+		id: directive.id,
+		semanticKey: directive.semanticKey,
+		kind: directive.kind,
+		prescription: directive.prescription,
+		weight: directive.weight,
+		layer: directive.layer.id,
+		scope: directive.scope.path,
+		description: directive.body.description,
+		rationale: directive.body.rationale,
+		traits: directive.traits
+	};
+}
+function summarizeObservationForProposal(observation) {
+	return {
+		id: observation.id,
+		semanticKey: observation.semanticKey,
+		category: observation.category,
+		scope: observation.scope.path,
+		pattern: observation.pattern,
+		adherence: observation.adherence,
+		verification: observation.verification,
+		lifecycle: observation.lifecycle,
+		traits: observation.traits,
+		evidenceRefs: observation.evidence.map((evidence) => `${evidence.file}:${evidence.line_range[0]}-${evidence.line_range[1]}`),
+		evidence: observation.evidence.map((evidence) => ({
+			file: evidence.file,
+			line_range: evidence.line_range,
+			snippet: evidence.snippet
+		}))
+	};
+}
+function skippedObservationIds(sources) {
+	return new Set((sources.rcclVerificationSummary?.records ?? []).filter((record) => record.action === "skipped-not-task-relevant").map((record) => record.observation_id));
+}
+function buildGraphPrompt(input) {
+	const directives = input.directives.map(compactDirectiveForContract);
+	const observations = input.observations.map(compactObservationForContract);
+	return [
+		"Produce a semantic-governance-graph payload for Runtime.",
+		"Edges connect active directives to RCCL observations when repository reality changes how guidance should execute for this task.",
+		"Every edge must include evidence_refs from task context, RCCL evidence, files, diff, commands, or runtime trace.",
+		"Runtime will validate IDs, confidence, scope, verification, lifecycle, and final execution mode deterministically.",
+		"Use the directive and observation summaries below; do not infer relations from IDs alone.",
+		"Return JSON only.",
+		"",
+		`Resolved task intent: ${JSON.stringify(input.resolvedTask.task_intent)}`,
+		`Resolved context profile: ${JSON.stringify(input.resolvedTask.context_profile)}`,
+		`Allowed directive ids: ${input.directives.map((item) => item.id).join(", ") || "(none)"}`,
+		`Allowed observation ids: ${input.observations.map((item) => item.id).join(", ") || "(none)"}`,
+		"",
+		"Directive summaries:",
+		JSON.stringify(directives, null, 2),
+		"",
+		"Observation summaries:",
+		JSON.stringify(observations, null, 2)
+	].join("\n");
+}
+function allowedIds(input) {
+	return {
+		directiveIds: input.directives.map((directive) => directive.id),
+		observationIds: input.observations.map((observation) => observation.id)
+	};
+}
+function compactDirectiveForContract(directive) {
+	return {
+		id: directive.id,
+		semanticKey: directive.semanticKey,
+		kind: directive.kind,
+		prescription: directive.prescription,
+		weight: directive.weight,
+		layer: directive.layer,
+		scope: directive.scope,
+		description: truncate(directive.description, 360),
+		rationale: truncate(directive.rationale, 360),
+		traits: directive.traits
+	};
+}
+function compactObservationForContract(observation) {
+	return {
+		id: observation.id,
+		semanticKey: observation.semanticKey,
+		category: observation.category,
+		scope: observation.scope,
+		pattern: truncate(observation.pattern, 420),
+		adherence: observation.adherence,
+		verification: observation.verification,
+		lifecycle: observation.lifecycle,
+		traits: observation.traits,
+		evidenceRefs: observation.evidenceRefs,
+		evidence: observation.evidence.slice(0, 4).map((evidence) => ({
+			file: evidence.file,
+			line_range: evidence.line_range,
+			snippet: truncate(evidence.snippet, 260)
+		}))
+	};
+}
+function truncate(value, maxLength) {
+	const normalized = value.replace(/\s+/g, " ").trim();
+	if (normalized.length <= maxLength) return normalized;
+	return `${normalized.slice(0, Math.max(0, maxLength - 3))}...`;
+}
+//#endregion
+//#region src/ai-contracts/task-model.ts
+const TASK_MODEL_SCHEMA = {
+	type: "object",
+	additionalProperties: false,
+	properties: {
+		intent: { type: "object" },
+		context: { type: "object" },
+		uncertainties: {
+			type: "array",
+			items: { type: "string" }
+		}
+	},
+	required: [
+		"intent",
+		"context",
+		"uncertainties"
+	]
+};
+function prepareTaskModelContract(input) {
+	const prompt = buildTaskModelPrompt(input);
+	const artifact = {
+		suggestedPath: input.artifactPath,
+		format: "json",
+		usage: `Write a v1 envelope to ${input.artifactPath}: schema_version 1, kind task-model, the issued requestId/contextFingerprint as request_id/context_fingerprint, and the task-model object or array under payload; then re-run with --task-model-file ${input.artifactPath}.`
+	};
+	return {
+		task: input.task,
+		taskModelPrompt: prompt,
+		taskModelSchema: JSON.stringify(TASK_MODEL_SCHEMA, null, 2),
+		ambiguityHints: buildAmbiguityHints(input.task),
+		modelArtifact: artifact,
+		clarificationHints: buildClarificationHints(input.task),
+		contract: {
+			contractVersion: AI_CONTRACT_VERSION,
+			kind: "task-model",
+			...artifactIdentity("task-model", {
+				task: input.task,
+				schemaId: "runtime.task-model"
+			}),
+			schemaId: "runtime.task-model",
+			schemaVersion: "1.0",
+			prompt,
+			schema: TASK_MODEL_SCHEMA,
+			artifact,
+			provenance: {
+				owner: "runtime",
+				deterministic: true
+			},
+			cacheKeyMaterial: {
+				task: input.task,
+				schemaId: "runtime.task-model"
+			}
+		}
+	};
+}
+function validateTaskModelPayload(raw) {
+	const versionDiagnostic = contractVersionDiagnostic(raw, "task-model");
+	if (versionDiagnostic) return {
+		models: [],
+		diagnostics: buildContractPayloadDiagnostics("task-model", [versionDiagnostic])
+	};
+	const values = raw == null ? [] : Array.isArray(raw) ? raw : [raw];
+	const entries = [];
+	const models = [];
+	values.forEach((value, index) => {
+		const path = Array.isArray(raw) ? `models[${index}]` : "model";
+		if (!isTaskModelProposal(value)) {
+			entries.push({
+				status: "rejected",
+				reason: value == null ? "empty-payload" : "malformed-payload",
+				path,
+				message: "Task model must include intent, context, uncertainties, and evidence-backed fields."
+			});
+			return;
+		}
+		const fieldError = firstInvalidField(value);
+		if (fieldError) {
+			entries.push({
+				status: "rejected",
+				reason: fieldError.reason,
+				path: `${path}.${fieldError.field}`,
+				message: fieldError.message,
+				confidence: fieldError.confidence
+			});
+			return;
+		}
+		models.push(value);
+		entries.push({
+			status: "accepted",
+			reason: "accepted",
+			path,
+			message: "Task model accepted for Runtime field-level adjudication."
+		});
+	});
+	if (!values.length) entries.push({
+		status: "unused",
+		reason: "empty-payload",
+		path: "model",
+		message: "No task model payload was provided."
+	});
+	return {
+		models,
+		diagnostics: buildContractPayloadDiagnostics("task-model", entries)
+	};
+}
+function isTaskModelProposal(value) {
+	if (!isRecord$1(value)) return false;
+	return isRecord$1(value.intent) && isRecord$1(value.context) && Array.isArray(value.uncertainties) && value.uncertainties.every((item) => typeof item === "string");
+}
+function firstInvalidField(model) {
+	const fields = [
+		[
+			"intent.workflow",
+			model.intent.workflow,
+			TASK_INTERPRETATION_ENUMS.intent.workflow,
+			"scalar"
+		],
+		[
+			"intent.change_type",
+			model.intent.change_type,
+			TASK_INTERPRETATION_ENUMS.intent.change_type,
+			"scalar"
+		],
+		[
+			"intent.operation",
+			model.intent.operation,
+			TASK_INTERPRETATION_ENUMS.intent.operation,
+			"scalar"
+		],
+		[
+			"intent.target_layer",
+			model.intent.target_layer,
+			null,
+			"scalar"
+		],
+		[
+			"intent.target_file",
+			model.intent.target_file,
+			null,
+			"scalar"
+		],
+		[
+			"intent.changed_files",
+			model.intent.changed_files,
+			null,
+			"list"
+		],
+		[
+			"intent.tech_stack",
+			model.intent.tech_stack,
+			null,
+			"list"
+		],
+		[
+			"intent.tags",
+			model.intent.tags,
+			null,
+			"list"
+		],
+		[
+			"context.project_stage",
+			model.context.project_stage,
+			TASK_INTERPRETATION_ENUMS.context.project_stage,
+			"scalar"
+		],
+		[
+			"context.optimization_target",
+			model.context.optimization_target,
+			TASK_INTERPRETATION_ENUMS.context.optimization_target,
+			"scalar"
+		],
+		[
+			"context.hard_constraints",
+			model.context.hard_constraints,
+			null,
+			"list"
+		],
+		[
+			"context.allowed_tradeoffs",
+			model.context.allowed_tradeoffs,
+			null,
+			"list"
+		],
+		[
+			"context.avoid",
+			model.context.avoid,
+			null,
+			"list"
+		],
+		[
+			"context.risk_level",
+			model.context.risk_level,
+			TASK_INTERPRETATION_ENUMS.context.risk_level,
+			"scalar"
+		],
+		[
+			"context.scope_size",
+			model.context.scope_size,
+			TASK_INTERPRETATION_ENUMS.context.scope_size,
+			"scalar"
+		],
+		[
+			"context.compatibility_requirement",
+			model.context.compatibility_requirement,
+			TASK_INTERPRETATION_ENUMS.context.compatibility_requirement,
+			"scalar"
+		],
+		[
+			"context.interface_sensitivity",
+			model.context.interface_sensitivity,
+			TASK_INTERPRETATION_ENUMS.context.interface_sensitivity,
+			"scalar"
+		],
+		[
+			"context.refactor_tolerance",
+			model.context.refactor_tolerance,
+			TASK_INTERPRETATION_ENUMS.context.refactor_tolerance,
+			"scalar"
+		],
+		[
+			"context.migration_phase",
+			model.context.migration_phase,
+			TASK_INTERPRETATION_ENUMS.context.migration_phase,
+			"scalar"
+		],
+		[
+			"context.review_goal",
+			model.context.review_goal,
+			TASK_INTERPRETATION_ENUMS.context.review_goal,
+			"scalar"
+		]
+	];
+	for (const [field, candidate, allowedValues, kind] of fields) {
+		if (candidate === void 0) continue;
+		if (!isRecord$1(candidate)) return {
+			field,
+			reason: "malformed-payload",
+			message: "Task model field must be an object."
+		};
+		if (!validConfidence(candidate.confidence)) return {
+			field,
+			reason: "malformed-payload",
+			message: "Task model field confidence must be between 0 and 1."
+		};
+		if (candidate.confidence < .5) return {
+			field,
+			reason: "low-confidence",
+			message: "Task model field confidence is below threshold.",
+			confidence: candidate.confidence
+		};
+		if (!validEvidenceRefs(candidate.evidence_refs)) return {
+			field,
+			reason: "missing-evidence",
+			message: "Task model field must include at least one valid evidence_ref.",
+			confidence: candidate.confidence
+		};
+		if (kind === "scalar") {
+			if (typeof candidate.value !== "string") return {
+				field,
+				reason: "missing-required-field",
+				message: "Task model scalar field must include value.",
+				confidence: candidate.confidence
+			};
+			if (allowedValues && !allowedValues.includes(candidate.value)) return {
+				field,
+				reason: "unsupported-value",
+				message: `Unsupported value "${candidate.value}".`,
+				confidence: candidate.confidence
+			};
+		} else if (!Array.isArray(candidate.values) || !candidate.values.every((item) => typeof item === "string")) return {
+			field,
+			reason: "missing-required-field",
+			message: "Task model list field must include string values.",
+			confidence: candidate.confidence
+		};
+	}
+	return null;
+}
+function buildTaskModelPrompt(input) {
+	return [
+		"Produce a task-model payload for Runtime.",
+		"Resolve only fields supported by evidence from the user request, conversation, files, diff, commands, or repository context.",
+		"Every resolved field must include confidence and at least one evidence_ref.",
+		"Runtime will validate enums, evidence shape, confidence, and field-level precedence.",
+		"Return JSON only.",
+		"",
+		`Task description: ${input.task.description}`,
+		`Explicit workflow: ${input.task.workflow ?? "(none)"}`,
+		`Explicit change type: ${input.task.changeType ?? "(none)"}`,
+		`Explicit operation: ${input.task.operation ?? "(none)"}`,
+		`Explicit target file: ${input.task.targetFile ?? "(none)"}`,
+		`Explicit changed files: ${input.task.changedFiles?.join(", ") || "(none)"}`,
+		`Explicit tech stack: ${input.task.techStack?.join(", ") || "(none)"}`,
+		`Allowed task enum values: ${JSON.stringify(TASK_INTERPRETATION_ENUMS)}`
+	].join("\n");
+}
+function buildAmbiguityHints(task) {
+	const hints = [];
+	if (!task.changeType) hints.push("change type is not explicit");
+	if (!task.operation) hints.push("operation is not explicit");
+	if (!task.targetFile && !task.changedFiles?.length) hints.push("no concrete target files are specified");
+	if (!task.techStack?.length) hints.push("tech stack is implicit");
+	if (!task.projectStage) hints.push("project stage is not specified");
+	return hints;
+}
+function buildClarificationHints(task) {
+	return [
+		...!task.changeType ? ["Clarify whether this is feature, bugfix, refactor, migration, or unknown work."] : [],
+		...!task.operation ? ["Clarify whether files are created, modified, deleted, or mixed."] : [],
+		...!task.targetFile && !task.changedFiles?.length ? ["Name the target or changed files when known."] : [],
+		...!task.optimizationTarget ? ["Specify the optimization target when the tradeoff matters."] : []
+	];
+}
+//#endregion
+//#region src/contract-policy.ts
+const DEFAULT_CAPABILITIES = {
+	can_read_files: true,
+	can_search_files: true,
+	can_run_commands: false,
+	can_inspect_diff: false,
+	can_request_context: true,
+	max_context_files: 12,
+	max_command_count: 0
+};
+function resolveContractPolicy(input) {
+	const mode = input.mode ?? "standard";
+	const policyInput = {
+		...input,
+		resolvedTask: input.resolvedTask ?? resolvePolicyTask(input)
+	};
+	const provided = input.providedContracts ?? {};
+	const capability = input.agentCapabilityProfile ?? DEFAULT_CAPABILITIES;
+	const highRiskTask = isHighRisk$1(policyRiskLevel(policyInput));
+	const taskModelRequired = shouldRequireTaskModel(policyInput, mode);
+	const semanticGraphRequired = shouldRequireSemanticGraph(policyInput, mode, taskModelRequired);
+	const deterministicFallbacks = collectDeterministicFallbackGovernance(policyInput);
+	const required = [];
+	const optional = [];
+	const skipped = [];
+	const reasons = [];
+	skipped.push({
+		kind: "agent-capability-profile",
+		reason_id: provided.agentCapability ? "already-provided" : "runtime-assumption"
+	});
+	if (!provided.agentCapability) reasons.push("agent capability profile is a Runtime assumption for policy selection, not a host artifact.");
+	if (provided.taskModel) skipped.push({
+		kind: "task-model",
+		reason_id: "already-provided"
+	});
+	else if (taskModelRequired) {
+		required.push("task-model");
+		reasons.push(mode === "strict" ? "strict mode requires task-model before deterministic compilation." : "task risk, compatibility, migration, or ambiguity requires task-model.");
+	} else {
+		optional.push("task-model");
+		skipped.push({
+			kind: "task-model",
+			reason_id: mode === "fast" ? "mode-fast" : "deterministic-fallback-allowed"
+		});
+		reasons.push("deterministic task interpretation is allowed for this mode and task shape.");
+	}
+	const needsTaskModel = taskModelRequired && !provided.taskModel;
+	if (rcclAvailable(input.sourceStatus)) if (provided.semanticGovernanceGraph) skipped.push({
+		kind: "semantic-governance-graph",
+		reason_id: "already-provided"
+	});
+	else if (!semanticGraphRequired) skipped.push({
+		kind: "semantic-governance-graph",
+		reason_id: mode === "fast" ? "mode-fast" : input.rcclRelevant === false ? "rccl-not-relevant" : "not-required-for-current-policy"
+	});
+	else if (needsTaskModel) {
+		skipped.push({
+			kind: "semantic-governance-graph",
+			reason_id: "waiting-for-task-model"
+		});
+		reasons.push("semantic-governance-graph is deferred until task-model is provided.");
+	} else {
+		required.push("semantic-governance-graph");
+		reasons.push("RCCL is relevant to this task and semantic governance should be host-assisted.");
+	}
+	else if (capability.can_request_context) {
+		if (mode === "strict" && highRiskTask) required.push("context-acquisition");
+		else optional.push("context-acquisition");
+		skipped.push({
+			kind: "semantic-governance-graph",
+			reason_id: "missing-rccl"
+		});
+	} else {
+		skipped.push({
+			kind: "semantic-governance-graph",
+			reason_id: "missing-rccl"
+		});
+		skipped.push({
+			kind: "context-acquisition",
+			reason_id: "insufficient-agent-capability"
+		});
+	}
+	if (!provided.adherenceEvidence && (capability.can_inspect_diff || capability.can_read_files || capability.can_run_commands)) {
+		if (mode === "strict") required.push("adherence-evidence");
+		else optional.push("adherence-evidence");
+		skipped.push({
+			kind: "adherence-evidence",
+			reason_id: "deferred-until-after-compile"
+		});
+	} else if (provided.adherenceEvidence) skipped.push({
+		kind: "adherence-evidence",
+		reason_id: "already-provided"
+	});
+	else skipped.push({
+		kind: "adherence-evidence",
+		reason_id: "insufficient-agent-capability"
+	});
+	if (input.sourceStatus.lockfile === "present") optional.push("governance-evolution-proposal");
+	else skipped.push({
+		kind: "governance-evolution-proposal",
+		reason_id: "not-required-for-current-policy"
+	});
+	return {
+		mode,
+		required: unique(required),
+		optional: unique(optional),
+		skipped,
+		escalation: resolveEscalation(required, optional),
+		diagnostics: {
+			task_model_required: taskModelRequired,
+			semantic_graph_required: semanticGraphRequired,
+			...input.rcclRelevant !== void 0 ? { rccl_relevant: input.rcclRelevant } : {},
+			reasons,
+			deterministic_fallbacks: deterministicFallbacks
+		}
+	};
+}
+function resolveEscalation(required, optional) {
+	if (required.includes("task-model")) return "task-model";
+	if (required.includes("semantic-governance-graph")) return "semantic-governance-graph";
+	if (required.includes("adherence-evidence")) return "adherence-required";
+	if (required.includes("context-acquisition")) return "context-acquisition";
+	return "none";
+}
+function shouldRequireTaskModel(input, mode) {
+	if (mode === "strict") return true;
+	if (mode === "fast") return false;
+	const profile = policyContextProfile(input);
+	const task = policyTask(input);
+	const workflow = input.resolvedTask?.task_intent.workflow ?? task?.workflow;
+	const changeType = input.resolvedTask?.task_intent.change_type ?? task?.changeType;
+	if (isHighRisk$1(policyRiskLevel(input)) && isPolicyAuthoritative(input, "context.risk_level", "riskLevel")) return true;
+	if (profile?.scope_size === "cross-cutting") return true;
+	if (profile?.compatibility_requirement && profile.compatibility_requirement !== "none" && profile.compatibility_requirement !== "breaking-allowed" && isPolicyAuthoritative(input, "context.compatibility_requirement", "compatibilityRequirement")) return true;
+	if (profile?.interface_sensitivity && profile.interface_sensitivity !== "internal" && profile.interface_sensitivity !== "unknown" && isPolicyAuthoritative(input, "context.interface_sensitivity", "interfaceSensitivity")) return true;
+	if (profile?.migration_phase && profile.migration_phase !== "none" && isPolicyAuthoritative(input, "context.migration_phase", "migrationPhase")) return true;
+	if ((profile?.review_goal === "security" || profile?.review_goal === "regression-risk" || profile?.review_goal === "architecture-fit") && isPolicyAuthoritative(input, "context.review_goal", "reviewGoal")) return true;
+	if (changeType === "migration" && isPolicyAuthoritative(input, "intent.change_type", "changeType")) return true;
+	if (workflow === "review" && isPolicyAuthoritative(input, "intent.workflow", "workflow")) return true;
+	return hasAmbiguousTaskResolution(input);
+}
+function shouldRequireSemanticGraph(input, mode, taskModelRequired) {
+	if (!rcclAvailable(input.sourceStatus)) return false;
+	if (mode === "fast") return false;
+	if (mode === "strict") return true;
+	if (input.rcclRelevant !== true) return false;
+	return taskModelRequired || isHighRisk$1(policyRiskLevel(input));
+}
+function hasAmbiguousTaskResolution(input) {
+	const resolved = input.resolvedTask;
+	if (!resolved?.diagnostics.clarification_recommended) return false;
+	if (Boolean(resolved.task_intent.target_file || resolved.task_intent.changed_files.length || input.task?.targetFile || input.task?.changedFiles?.length)) return false;
+	const operationField = resolved.input_provenance.resolved_fields.find((field) => field.field === "intent.operation");
+	return !input.task?.operation && (!operationField || operationField.source === "deterministic" && operationField.confidence <= .5);
+}
+function collectDeterministicFallbackGovernance(input) {
+	const result = [];
+	const profile = policyContextProfile(input);
+	if (!profile) return result;
+	addFallbackGovernance(result, input, "context.risk_level", profile.risk_level ?? "");
+	addFallbackGovernance(result, input, "context.compatibility_requirement", profile.compatibility_requirement ?? "");
+	addFallbackGovernance(result, input, "context.interface_sensitivity", profile.interface_sensitivity ?? "");
+	addFallbackGovernance(result, input, "context.migration_phase", profile.migration_phase ?? "");
+	addFallbackGovernance(result, input, "context.review_goal", profile.review_goal ?? "");
+	return result;
+}
+function addFallbackGovernance(result, input, field, value) {
+	if (!value || !isElevatedFallbackField(field, value)) return;
+	const resolved = resolvedField(input, field);
+	if (resolved?.source !== "deterministic") return;
+	result.push({
+		field,
+		value,
+		confidence: resolved.confidence,
+		action: "ignored-for-policy",
+		reason: "deterministic fallback is trace-only and does not trigger standard-mode governance contracts"
+	});
+}
+function isElevatedFallbackField(field, value) {
+	if (field === "context.risk_level") return value === "high" || value === "critical";
+	if (field === "context.compatibility_requirement") return value !== "none" && value !== "breaking-allowed";
+	if (field === "context.interface_sensitivity") return value !== "internal" && value !== "unknown";
+	if (field === "context.migration_phase") return value !== "none";
+	if (field === "context.review_goal") return value === "security" || value === "regression-risk" || value === "architecture-fit";
+	return false;
+}
+function isPolicyAuthoritative(input, field, rawTaskField) {
+	if (rawTaskField === "riskLevel" && input.taskRisk && isHighRisk$1(input.taskRisk)) return true;
+	return Boolean(input.task?.[rawTaskField]) && isFieldAuthoritative(input, field);
+}
+function isFieldAuthoritative(input, field) {
+	const source = resolvedField(input, field)?.source;
+	return source === "explicit" || source === "host-agent" || source === "assistive-ai" || source === "repo-default";
+}
+function resolvedField(input, field) {
+	return input.resolvedTask?.input_provenance.resolved_fields.find((item) => item.field === field);
+}
+function rcclAvailable(sourceStatus) {
+	return sourceStatus.rccl === "present" || sourceStatus.rccl === "stale" || sourceStatus.rccl === "unverified";
+}
+function resolvePolicyTask(input) {
+	if (!input.task) return void 0;
+	return resolveTask({
+		task: input.task,
+		taskModels: input.taskModels ?? [],
+		interpretationMode: input.taskModels?.length ? "host-agent" : "deterministic-only"
+	});
+}
+function policyTask(input) {
+	return input.resolvedTask?.task ?? input.task;
+}
+function policyContextProfile(input) {
+	return input.resolvedTask?.context_profile;
+}
+function policyRiskLevel(input) {
+	return input.resolvedTask?.context_profile.risk_level ?? input.taskRisk ?? input.task?.riskLevel;
+}
+function isHighRisk$1(value) {
+	return value === "high" || value === "critical";
+}
+//#endregion
+//#region src/plan-guidance.ts
+async function planGuidance(input) {
+	const notes = [];
+	const contractDiagnostics = [];
+	const issuedCapabilityProfile = prepareAgentCapabilityProfileContract({
+		task: input.task,
+		artifactPath: input.artifactPaths.agentCapabilityProfile
+	});
+	let agentCapabilityProfile = null;
+	if (input.artifacts?.agentCapabilityProfile) {
+		const unwrapped = unwrapHostArtifactEnvelope(input.artifacts.agentCapabilityProfile.raw, issuedCapabilityProfile.contract);
+		if (unwrapped.diagnostic) contractDiagnostics.push(buildContractPayloadDiagnostics("agent-capability-profile", [unwrapped.diagnostic], {
+			id: issuedCapabilityProfile.contract.requestId,
+			path: input.artifacts.agentCapabilityProfile.path
+		}));
+		else {
+			const validated = validateAgentCapabilityProfilePayload(unwrapped.payload);
+			contractDiagnostics.push(validated.diagnostics);
+			agentCapabilityProfile = validated.profile;
+		}
+	}
+	const issuedTaskModel = prepareTaskModelContract({
+		task: input.task,
+		artifactPath: input.artifactPaths.taskModel
+	});
+	let taskModels = [];
+	if (input.artifacts?.taskModel) {
+		const unwrapped = unwrapHostArtifactEnvelope(input.artifacts.taskModel.raw, issuedTaskModel.contract);
+		if (unwrapped.diagnostic) contractDiagnostics.push(buildContractPayloadDiagnostics("task-model", [unwrapped.diagnostic], {
+			id: issuedTaskModel.contract.requestId,
+			path: input.artifacts.taskModel.path
+		}));
+		else {
+			const validated = validateTaskModelPayload(unwrapped.payload);
+			contractDiagnostics.push(validated.diagnostics);
+			taskModels = validated.models;
+		}
+	}
+	const sourceStatus = resolveSourceStatus(input, notes);
+	const guidanceMode = input.mode ?? "standard";
+	const resolvedTask = resolveTask({
+		task: input.task,
+		taskModels,
+		interpretationMode: taskModels.length ? "host-agent" : "deterministic-only"
+	});
+	const rcclRelevant = await resolveRcclRelevance(input, sourceStatus, resolvedTask, notes);
+	const policy = resolveContractPolicy({
+		sourceStatus,
+		providedContracts: {
+			...input.providedContracts,
+			agentCapability: Boolean(agentCapabilityProfile),
+			taskModel: taskModels.length > 0,
+			semanticGovernanceGraph: Boolean(input.artifacts?.semanticGovernanceGraph)
+		},
+		agentCapabilityProfile,
+		task: input.task,
+		resolvedTask,
+		mode: guidanceMode,
+		rcclRelevant
+	});
+	const requiredContracts = [];
+	if (policy.required.includes("agent-capability-profile")) {
+		requiredContracts.push({
+			kind: "agent-capability-profile",
+			artifact: issuedCapabilityProfile.profileArtifact,
+			contract: issuedCapabilityProfile.contract
+		});
+		notes.push("Agent capability profile requested so Runtime can select agentic contracts from concrete host capabilities.");
+	}
+	if (policy.required.includes("task-model")) {
+		requiredContracts.push({
+			kind: "task-model",
+			artifact: issuedTaskModel.modelArtifact,
+			contract: issuedTaskModel.contract
+		});
+		notes.push("Task model contract requested; deterministic interpretation is fallback only.");
+	}
+	if (policy.required.includes("context-acquisition")) {
+		const acquisition = prepareContextAcquisitionContract({
+			task: input.task,
+			artifactPath: input.artifactPaths.contextAcquisition ?? input.artifactPaths.taskModel
+		});
+		requiredContracts.push({
+			kind: "context-acquisition",
+			artifact: acquisition.acquisitionArtifact,
+			contract: acquisition.contract
+		});
+		notes.push("Context acquisition is required because task risk is high and RCCL is absent.");
+	}
+	if (policy.required.includes("semantic-governance-graph")) {
+		const graph = await prepareSemanticGovernanceGraphContractBundle({
+			compileInput: guidancePlanCompileInput(input, taskModels),
+			artifactPath: input.artifactPaths.semanticGovernanceGraph ?? defaultSemanticGovernanceGraphPath(input.projectRoot)
+		});
+		requiredContracts.push({
+			kind: "semantic-governance-graph",
+			artifact: graph.graphArtifact,
+			contract: graph.contract,
+			context: {
+				resolvedTask: graph.resolvedTask,
+				directives: graph.directives,
+				observations: graph.observations
+			}
+		});
+		notes.push("Semantic governance graph is required because RCCL is available and host semantic evidence should drive merge relations.");
+	}
+	if (policy.required.includes("adherence-evidence")) notes.push("Adherence evidence is required by strict mode after implementation; it is prepared after guidance compilation.");
+	if (policy.optional.includes("context-acquisition")) notes.push("RCCL is absent; context acquisition or repository calibration is recommended before semantic graph compilation.");
+	if (policy.optional.includes("adherence-evidence")) notes.push("Adherence evidence is optional in this mode; use prepare-adherence and complete when you want directive follow-rate updates.");
+	if (policy.optional.includes("governance-evolution-proposal")) notes.push("Governance evolution proposal is available from lockfile signals, but it is review-only and never writes automatically.");
+	notes.push(...policy.diagnostics.reasons);
+	return {
+		mode: requiredContracts.length ? "contracts-required" : "ready",
+		guidanceMode,
+		requiredContracts,
+		recommendedContracts: unique([...policy.required, ...policy.optional]),
+		sourceStatus,
+		outputPolicy: {
+			stdout: "compact",
+			trace: "session-only"
+		},
+		policy,
+		diagnostics: {
+			policy: requiredContracts.length ? "contracts-required" : "ready",
+			notes
+		},
+		resolvedTask,
+		contractDiagnostics
+	};
+}
+function resolveSourceStatus(input, notes) {
+	return {
+		localAugment: input.localAugmentPath && existsSync(input.localAugmentPath) ? "present" : "absent",
+		rccl: resolveRcclSourceStatus(input.rcclPath, notes),
+		lockfile: input.lockfilePath && existsSync(input.lockfilePath) ? "present" : "absent",
+		cache: resolveCacheStatus(input.projectRoot)
+	};
+}
+function resolveRcclSourceStatus(rcclPath, notes) {
+	if (!rcclPath || !existsSync(rcclPath)) return "absent";
+	try {
+		const parsed = parseYaml$1(readFileSync(rcclPath, "utf-8"));
+		if (!isRecord$1(parsed) || !Array.isArray(parsed.observations)) return "unverified";
+		if (parsed.version !== "1.0" && parsed.version !== 1) {
+			notes?.push("UNSUPPORTED_SCHEMA_VERSION: RCCL must use schema 1; re-run calibrate-repo-context.");
+			return "unverified";
+		}
+		if (parsed.observations.length === 0) return "present";
+		const observations = parsed.observations.filter(isRecord$1);
+		if (observations.length !== parsed.observations.length) return "unverified";
+		if (observations.some((observation) => {
+			const verification = isRecord$1(observation.verification) ? observation.verification : null;
+			if (!verification) return true;
+			return !hasVerificationValue(verification, "evidence_status") || !hasVerificationValue(verification, "evidence_verified_count") || !hasVerificationValue(verification, "evidence_confidence") || !hasVerificationValue(verification, "induction_status") || !hasVerificationValue(verification, "induction_confidence") || !hasVerificationValue(verification, "checked_at") || !hasVerificationValue(verification, "disposition");
+		})) return "unverified";
+		return observations.some((observation) => {
+			const lifecycle = isRecord$1(observation.lifecycle) ? observation.lifecycle : null;
+			return lifecycle?.status === "stale" || lifecycle?.status === "superseded";
+		}) ? "stale" : "present";
+	} catch (error) {
+		notes?.push(`RCCL status check failed: ${error instanceof Error ? error.message : String(error)}`);
+		return "unverified";
+	}
+}
+function resolveCacheStatus(projectRoot) {
+	const cacheRoot = join(projectRoot, ".resonant-code", "context", "cache", "runtime");
+	if (!existsSync(cacheRoot)) return "miss";
+	const populatedLevels = [
+		"l1",
+		"l2",
+		"l3"
+	].filter((level) => hasFiles(join(cacheRoot, level))).length;
+	if (populatedLevels === 3) return "hit";
+	return populatedLevels > 0 ? "partial" : "miss";
+}
+function guidancePlanCompileInput(input, taskModels) {
+	return {
+		builtinRoot: input.builtinRoot,
+		localAugmentPath: input.localAugmentPath,
+		rcclPath: input.rcclPath,
+		projectRoot: input.projectRoot,
+		lockfilePath: input.lockfilePath,
+		verificationPolicy: input.verificationPolicy,
+		task: input.task,
+		taskModels
+	};
+}
+function defaultSemanticGovernanceGraphPath(projectRoot) {
+	return join(projectRoot, ".resonant-code", "context", "semantic-governance-graphs", "semantic-governance-graph.json");
+}
+async function resolveRcclRelevance(input, sourceStatus, resolvedTask, notes) {
+	if (sourceStatus.rccl === "absent" || !input.rcclPath) return void 0;
+	const targets = taskTargets(input.task, resolvedTask);
+	if (targets.length === 0) return void 0;
+	let rccl = null;
+	try {
+		rccl = await loadRccl(input.rcclPath);
+	} catch (error) {
+		notes?.push(`RCCL relevance check failed: ${error instanceof Error ? error.message : String(error)}`);
+		return;
+	}
+	if (!rccl) return void 0;
+	return rccl.observations.some((observation) => targets.some((target) => scopeOverlapsPath(observation.scope, target) || observation.evidence.some((evidence) => fileOverlapsTarget(evidence.file, target))));
+}
+function taskTargets(task, resolvedTask) {
+	return unique([
+		task.targetFile,
+		...task.changedFiles ?? [],
+		resolvedTask.task_intent.target_file,
+		...resolvedTask.task_intent.changed_files
+	].filter((value) => Boolean(value)).map(normalizePath$1));
+}
+function hasFiles(directory) {
+	try {
+		return readdirSync(directory).some((entry) => entry.endsWith(".json"));
+	} catch (_error) {
+		return false;
+	}
+}
+function hasVerificationValue(record, key) {
+	return record[key] !== void 0 && record[key] !== null && record[key] !== "";
+}
+//#endregion
 //#region src/ir/activation/public-adapter.ts
 function projectIRActivationToPublic(bundle, decisions) {
 	const directiveById = new Map(bundle.directives.map((directive) => [directive.id, directive]));
@@ -8989,10 +11495,10 @@ function buildMergeContext(decision) {
 	return `${relation.relation} relation ${relation.relation_id} influenced ${decision.execution_mode}: ${relation.reason}${feedback}`;
 }
 function compareDirectives(a, b, decisionByDirectiveId) {
-	const layerScore = getDirectiveLayerRank(b.layer.id) - getDirectiveLayerRank(a.layer.id);
-	if (layerScore !== 0) return layerScore;
 	const prescriptionScore = a.prescription === b.prescription ? 0 : a.prescription === "must" ? -1 : 1;
 	if (prescriptionScore !== 0) return prescriptionScore;
+	const layerScore = getDirectiveLayerRank(b.layer.id) - getDirectiveLayerRank(a.layer.id);
+	if (layerScore !== 0) return layerScore;
 	const weights = {
 		low: 0,
 		normal: 1,
@@ -9004,6 +11510,139 @@ function compareDirectives(a, b, decisionByDirectiveId) {
 	const contextAppliedScore = (decisionByDirectiveId.get(b.id)?.context_applied.length ?? 0) - (decisionByDirectiveId.get(a.id)?.context_applied.length ?? 0);
 	if (contextAppliedScore !== 0) return contextAppliedScore;
 	return a.id.localeCompare(b.id);
+}
+//#endregion
+//#region src/ir/ego/budget.ts
+const EGO_BUDGET = {
+	totalItems: 32,
+	hardItems: 24,
+	ambientItems: 6,
+	examplesPerDirective: 1,
+	serializedCharacters: 24e3
+};
+function applyEgoBudget(input) {
+	const omissions = [];
+	const must = input.guidance.must_follow.map((item) => ({
+		...item,
+		examples: item.examples.slice(0, EGO_BUDGET.examplesPerDirective)
+	}));
+	const hardMust = must.filter((item) => item.prescription === "must");
+	const soft = must.filter((item) => item.prescription !== "must");
+	const avoid = input.guidance.avoid;
+	const hard = [...hardMust.map((item) => ({
+		kind: "must",
+		id: item.id,
+		value: item,
+		priority: `must:${item.execution_mode}`
+	})), ...avoid.map((item) => ({
+		kind: "avoid",
+		id: item.trigger,
+		value: item,
+		priority: "avoid:verified-anti-pattern"
+	}))];
+	const selectedHard = hard.slice(0, EGO_BUDGET.hardItems);
+	for (const item of hard.slice(EGO_BUDGET.hardItems)) omissions.push({
+		id: item.id,
+		reason: "hard-item-limit",
+		original_priority: item.priority
+	});
+	let remaining = EGO_BUDGET.totalItems - selectedHard.length;
+	const selectedSoft = soft.slice(0, Math.max(0, remaining));
+	remaining -= selectedSoft.length;
+	for (const item of soft.slice(selectedSoft.length)) omissions.push({
+		id: item.id,
+		reason: "total-item-limit",
+		original_priority: `should:${item.execution_mode}`
+	});
+	const selectedTensions = input.guidance.context_tensions.slice(0, Math.max(0, remaining));
+	remaining -= selectedTensions.length;
+	for (const item of input.guidance.context_tensions.slice(selectedTensions.length)) omissions.push({
+		id: `${item.directive_id}:tension`,
+		reason: "total-item-limit",
+		original_priority: `tension:${item.review_priority ?? "normal"}`
+	});
+	const ambientLimit = Math.min(EGO_BUDGET.ambientItems, Math.max(0, remaining));
+	const selectedAmbient = input.guidance.ambient.slice(0, ambientLimit);
+	for (let index = ambientLimit; index < input.guidance.ambient.length; index += 1) omissions.push({
+		id: `ambient:${index}`,
+		reason: index >= EGO_BUDGET.ambientItems ? "ambient-limit" : "total-item-limit",
+		original_priority: "ambient"
+	});
+	const ego = {
+		...input,
+		guidance: {
+			must_follow: [...selectedHard.filter((item) => item.kind === "must").map((item) => item.value), ...selectedSoft],
+			avoid: selectedHard.filter((item) => item.kind === "avoid").map((item) => item.value),
+			context_tensions: selectedTensions,
+			ambient: selectedAmbient
+		}
+	};
+	trimToCharacterBudget(ego, omissions);
+	return {
+		ego,
+		exceeded: hard.length > EGO_BUDGET.hardItems || hardPayloadLength(hard) > EGO_BUDGET.serializedCharacters,
+		omissions,
+		serializedCharacters: JSON.stringify(ego).length
+	};
+}
+function trimToCharacterBudget(ego, omissions) {
+	while (JSON.stringify(ego).length > EGO_BUDGET.serializedCharacters) {
+		if (ego.guidance.ambient.length) {
+			const index = ego.guidance.ambient.length - 1;
+			ego.guidance.ambient.pop();
+			omissions.push({
+				id: `ambient:${index}`,
+				reason: "character-limit",
+				original_priority: "ambient"
+			});
+			continue;
+		}
+		const softIndex = findLastIndex(ego.guidance.must_follow, (item) => item.prescription === "should");
+		if (softIndex >= 0) {
+			const [item] = ego.guidance.must_follow.splice(softIndex, 1);
+			omissions.push({
+				id: item.id,
+				reason: "character-limit",
+				original_priority: `should:${item.execution_mode}`
+			});
+			continue;
+		}
+		if (ego.guidance.context_tensions.length) {
+			const item = ego.guidance.context_tensions.pop();
+			omissions.push({
+				id: `${item.directive_id}:tension`,
+				reason: "character-limit",
+				original_priority: `tension:${item.review_priority ?? "normal"}`
+			});
+			continue;
+		}
+		const item = ego.guidance.must_follow.pop();
+		if (item) {
+			omissions.push({
+				id: item.id,
+				reason: "character-limit",
+				original_priority: `must:${item.execution_mode}`
+			});
+			continue;
+		}
+		const avoid = ego.guidance.avoid.pop();
+		if (avoid) {
+			omissions.push({
+				id: avoid.trigger,
+				reason: "character-limit",
+				original_priority: "avoid:verified-anti-pattern"
+			});
+			continue;
+		}
+		break;
+	}
+}
+function hardPayloadLength(hard) {
+	return JSON.stringify(hard.map((item) => item.value)).length;
+}
+function findLastIndex(items, predicate) {
+	for (let index = items.length - 1; index >= 0; index -= 1) if (predicate(items[index])) return index;
+	return -1;
 }
 const CONSTRAINT_NARROW_SCOPE = "prefer narrow change scope";
 const AVOID_BROAD_REWRITES = "broad rewrites";
@@ -9152,7 +11791,7 @@ const CONTEXT_EXECUTION_RULES = [
 		id: "context.risk.raise-review-attention",
 		field: "risk_level",
 		effect: "review-priority",
-		matches: (input) => hasAuthoritativeContextField(input, "risk_level") && isHighRisk$1(input.context) && (input.directive.prescription === "must" || input.directive.traits.safetyCritical || input.decision.mode === "deviation-noted") && input.decision.mode !== "suppress",
+		matches: (input) => hasAuthoritativeContextField(input, "risk_level") && isHighRisk(input.context) && (input.directive.prescription === "must" || input.directive.traits.safetyCritical || input.decision.mode === "deviation-noted") && input.decision.mode !== "suppress",
 		apply: ({ context, decision }) => ({
 			basis: decision.basis === "prescription" ? "task-context" : decision.basis,
 			reasonSuffix: "High-risk context keeps this directive prominent for execution and review.",
@@ -9204,7 +11843,7 @@ function isCompatibilitySensitiveDirective(directive) {
 function hasCompatibilityRequirement(context) {
 	return context.compatibility_requirement === "preserve-api" || context.compatibility_requirement === "preserve-behavior" || context.compatibility_requirement === "migration-compatible";
 }
-function isHighRisk$1(context) {
+function isHighRisk(context) {
 	return context.risk_level === "high" || context.risk_level === "critical";
 }
 function isSensitiveInterface(context) {
@@ -9407,7 +12046,7 @@ function feedbackSignalsForDirective(bundle, directive, relations) {
 	});
 	if (frequentlyIgnored) labels.push("feedback:frequently-ignored");
 	if (frequentlyIgnored && directive.prescription === "must") labels.push("feedback:frequently-ignored-must-review");
-	if (directiveSignal?.trend === "degrading") labels.push("feedback:degrading");
+	if (directiveSignal?.trend === "declining") labels.push("feedback:declining");
 	if (directiveSignal?.signalConfidence === "user-corrected") labels.push("feedback:user-corrected");
 	if (recurringTension) labels.push("feedback:recurring-tension");
 	if (noisyObservation) labels.push("feedback:noisy-observation");
@@ -9434,8 +12073,8 @@ function adjudicateSemanticRelations(relations, bundle) {
 		if (observation.verification.disposition === "demote-to-ambient") return downgradeRelation(relation, "verify gate demoted the observation, so it can only provide ambient context");
 		switch (relation.relation) {
 			case "suppress": return adjudicateSuppressRelation(relation, {
-				directiveKind: directive.kind,
-				observationAntiPattern: observation.traits.antiPattern
+				observationAntiPattern: observation.traits.antiPattern,
+				observationVerified: observation.verification.evidenceStatus === "verified"
 			});
 			case "tension":
 			case "reinforce": return adjudicateDirectionalRelation(relation);
@@ -9447,7 +12086,7 @@ function adjudicateSemanticRelations(relations, bundle) {
 function adjudicateSuppressRelation(relation, context) {
 	if (!relation.basis.scope) return rejectRelation(relation, "suppression is outside the task scope");
 	if (!hasSemanticBasis(relation)) return rejectRelation(relation, "suppression lacks semantic basis");
-	if (!hasAntiPatternBasis(relation, context)) return rejectRelation(relation, "suppression requires an anti-pattern directive, anti-pattern observation, or anti-pattern conflict class");
+	if (!context.observationAntiPattern || !context.observationVerified) return rejectRelation(relation, "suppression requires a statically verified anti-pattern observation under Runtime policy");
 	if (!relation.basis.evidence) return downgradeRelation(relation, "suppression lacks verified observation evidence");
 	return acceptRelation(relation, acceptedReason(relation, "suppression"));
 }
@@ -9459,9 +12098,6 @@ function adjudicateDirectionalRelation(relation) {
 }
 function hasSemanticBasis(relation) {
 	return relation.basis.hostReasoning || relation.basis.feedback || relation.basis.semanticKey || relation.basis.category || relation.signals.some((signal) => signal.kind === "host-proposal" || signal.kind === "semantic-key");
-}
-function hasAntiPatternBasis(relation, context) {
-	return context.directiveKind === "anti-pattern" || context.observationAntiPattern || relation.conflictClass === "anti-pattern";
 }
 function acceptedReason(relation, label) {
 	return `${label} relation accepted from ${relation.proposedBy === "multi-source" ? "merged semantic relation sources" : relation.proposedBy} after scope, lifecycle, and verification adjudication`;
@@ -9694,12 +12330,12 @@ function graphPayload(proposal) {
 	if (!payload || typeof payload !== "object" || Array.isArray(payload)) return { edges: [] };
 	const edges = payload.edges;
 	if (!Array.isArray(edges)) return { edges: [] };
-	return { edges: edges.filter(isGraphEdge$1) };
+	return { edges: edges.filter(isGraphEdge) };
 }
-function isGraphEdge$1(value) {
+function isGraphEdge(value) {
 	if (!value || typeof value !== "object" || Array.isArray(value)) return false;
 	const edge = value;
-	return typeof edge.directive_id === "string" && typeof edge.observation_id === "string" && isRelation$1(edge.relation) && typeof edge.confidence === "number" && typeof edge.reason === "string" && Array.isArray(edge.evidence_refs);
+	return typeof edge.directive_id === "string" && typeof edge.observation_id === "string" && isRelation(edge.relation) && typeof edge.confidence === "number" && typeof edge.reason === "string" && Array.isArray(edge.evidence_refs);
 }
 function toHostGraphRelationIR(proposal, edge, bundle) {
 	const directive = requiredDirective(bundle.directives, edge.directive_id);
@@ -9819,7 +12455,7 @@ function buildRuntimeSignals(observation, taskScoped, semanticKey, relation) {
 		}] : []
 	];
 }
-function isRelation$1(value) {
+function isRelation(value) {
 	return value === "reinforce" || value === "tension" || value === "suppress" || value === "ambient-only" || value === "unrelated";
 }
 function relationToSignalDirection(relation) {
@@ -9905,90 +12541,21 @@ function mergeRelationProposals(relations) {
 }
 function mergeRelationGroup(group) {
 	if (group.length === 1) return group[0];
-	const relation = chooseMergedRelation(group);
-	const directiveId = group[0].directiveId;
-	const observationId = group[0].observationId;
-	const signals = uniqueSignals(group.flatMap((item) => item.signals));
-	const evidenceRefs = uniqueStrings(group.flatMap((item) => item.evidenceRefs));
-	const proposedBy = group.some((item) => item.proposedBy !== group[0].proposedBy) ? "multi-source" : group[0].proposedBy;
-	const impact = chooseImpact(group, relation);
-	const reviewPriority = chooseReviewPriority(group);
-	const executionIntent = chooseExecutionIntent(group);
-	const mergeIntent = chooseMergeIntent(group);
-	const groupId = chooseGroupId(group);
-	const conflictClass = chooseConflictClass(group, relation);
-	const confidence = Number(Math.max(...group.map((item) => item.confidence)).toFixed(2));
-	const basis = {
-		scope: group.some((item) => item.basis.scope),
-		semanticKey: group.some((item) => item.basis.semanticKey),
-		category: group.some((item) => item.basis.category),
-		evidence: group.some((item) => item.basis.evidence),
-		hostReasoning: group.some((item) => item.basis.hostReasoning),
-		feedback: group.some((item) => item.basis.feedback)
-	};
-	return {
-		irVersion: GOVERNANCE_IR_VERSION,
-		id: stableHash([
-			"semantic-relation-ir",
-			"merged",
-			directiveId,
-			observationId,
-			relation,
-			proposedBy,
-			signals,
-			evidenceRefs,
-			impact,
-			reviewPriority,
-			executionIntent,
-			mergeIntent,
-			groupId
-		]),
-		directiveId,
-		observationId,
-		proposedBy,
-		relation,
-		...conflictClass ? { conflictClass } : {},
-		confidence,
-		basis,
-		signals,
-		evidenceRefs,
-		reasoningSummary: summarizeMergedReasoning(group, relation),
-		...impact ? { impact } : {},
-		...reviewPriority ? { reviewPriority } : {},
-		...executionIntent ? { executionIntent } : {},
-		...mergeIntent ? { mergeIntent } : {},
-		...groupId ? { groupId } : {},
-		adjudication: {
-			status: "accepted",
-			finalRelation: relation,
-			reason: "merged semantic relation proposal before adjudication"
-		}
-	};
+	return [...group].sort(compareWholeProposals)[0];
 }
-function chooseMergedRelation(group) {
-	const relations = group.map((item) => item.relation);
-	if (relations.includes("suppress")) return "suppress";
-	if (relations.includes("tension")) return "tension";
-	if (relations.includes("reinforce")) return "reinforce";
-	if (relations.includes("ambient-only")) return "ambient-only";
-	return "unrelated";
-}
-function chooseImpact(group, relation) {
-	const explicit = group.find((item) => item.impact && item.relation === relation)?.impact ?? group.find((item) => item.impact)?.impact;
-	if (explicit) return explicit;
-	if (relation === "tension" || relation === "suppress") return "execution-mode";
-	if (relation === "reinforce") return "review-focus";
-	if (relation === "ambient-only") return "ambient-context";
-	return "no-effect";
-}
-function chooseReviewPriority(group) {
-	const order = {
-		low: 0,
-		normal: 1,
-		high: 2,
-		critical: 3
+function compareWholeProposals(left, right) {
+	const sourceRank = {
+		"host-agent": 3,
+		feedback: 2,
+		"runtime-structural": 1,
+		"multi-source": 0
 	};
-	return group.map((item) => item.reviewPriority).filter((item) => Boolean(item)).sort((left, right) => order[right] - order[left])[0];
+	const source = sourceRank[right.proposedBy] - sourceRank[left.proposedBy];
+	if (source) return source;
+	if (left.confidence !== right.confidence) return right.confidence - left.confidence;
+	if (left.basis.evidence !== right.basis.evidence) return left.basis.evidence ? -1 : 1;
+	if (left.evidenceRefs.length !== right.evidenceRefs.length) return right.evidenceRefs.length - left.evidenceRefs.length;
+	return left.id.localeCompare(right.id);
 }
 function isAgenticRelationProposal(relation) {
 	return relation.proposedBy === "host-agent" || relation.proposedBy === "feedback";
@@ -9998,44 +12565,6 @@ function effectiveRelationPairs(relations) {
 }
 function relationPairKey(relation) {
 	return `${relation.directiveId}::${relation.observationId}`;
-}
-function chooseExecutionIntent(group) {
-	const order = {
-		suppress: 5,
-		"deviation-noted": 4,
-		enforce: 3,
-		ambient: 2,
-		"no-change": 1
-	};
-	return group.map((item) => item.executionIntent).filter((item) => Boolean(item)).sort((left, right) => order[right] - order[left])[0];
-}
-function chooseMergeIntent(group) {
-	return group.find((item) => item.mergeIntent)?.mergeIntent;
-}
-function chooseGroupId(group) {
-	return group.find((item) => item.groupId)?.groupId;
-}
-function chooseConflictClass(group, relation) {
-	return group.find((item) => item.relation === relation && item.conflictClass)?.conflictClass ?? group.find((item) => item.conflictClass)?.conflictClass;
-}
-function summarizeMergedReasoning(group, relation) {
-	const sources = uniqueStrings(group.map((item) => item.proposedBy)).join(", ");
-	const reasons = uniqueStrings(group.map((item) => item.reasoningSummary)).slice(0, 3).join(" | ");
-	return `merged ${group.length} proposal(s) from ${sources}; selected ${relation}; ${reasons}`;
-}
-function uniqueSignals(signals) {
-	const seen = /* @__PURE__ */ new Set();
-	const result = [];
-	for (const signal of signals) {
-		const key = `${signal.kind}:${signal.strength}:${signal.direction}:${signal.reason}`;
-		if (seen.has(key)) continue;
-		seen.add(key);
-		result.push(signal);
-	}
-	return result;
-}
-function uniqueStrings(values) {
-	return [...new Set(values.filter(Boolean))];
 }
 //#endregion
 //#region src/ir/relations/public-mapping.ts
@@ -10412,20 +12941,23 @@ function buildGovernancePacket(activation, tensions, focus, semantic_merge, ego,
 		trace
 	};
 }
-function compileResolvedOutput(packet, resolvedTask) {
+function compileResolvedOutput(packet, resolvedTask, contractDiagnostics, postCompileContractRequests) {
 	return {
 		packet,
 		resolvedTask,
 		ego: packet.governance.ego,
 		trace: packet.governance.trace,
-		cache: packet.cache
+		cache: packet.cache,
+		contractDiagnostics,
+		postCompileContractRequests
 	};
 }
 /**
 * Runs the deterministic playbook pipeline and produces a change decision packet.
 */
 async function compile(input) {
-	const { normalizedInput, resolvedTask: resolved, sources, governanceIR, activationDecisions: activationDecisionsIR, activeDirectives: irActiveDirectives } = await resolveActivatedGovernanceContext(input);
+	const validated = await validatePublicCompileInput(input);
+	const { normalizedInput, resolvedTask: resolved, sources, governanceIR, activationDecisions: activationDecisionsIR, activeDirectives: irActiveDirectives } = await resolveActivatedGovernanceContext(validated.input);
 	const traceSteps = [];
 	const intent = resolved.task_intent;
 	const contextProfile = resolved.context_profile;
@@ -10436,6 +12968,8 @@ async function compile(input) {
 			`interpretation_mode: ${resolved.input_provenance.interpretation_mode}`,
 			`resolved_fields: ${resolved.input_provenance.resolved_fields.length}`,
 			`unresolved_fields: ${resolved.input_provenance.unresolved_fields.join(", ") || "(none)"}`,
+			`workflow: ${intent.workflow}`,
+			`change_type: ${intent.change_type}`,
 			`operation: ${intent.operation}`,
 			`target_layer: ${intent.target_layer}`,
 			`tech_stack: ${intent.tech_stack.join(", ") || "(none)"}`,
@@ -10539,14 +13073,22 @@ async function compile(input) {
 			`context_influences: ${semanticMergeResult.context_influences.length}`
 		]
 	});
-	const ego = projectIREgoToPublic(activatedGovernanceIR, semanticMergeResult, intent);
+	const egoBudget = applyEgoBudget(projectIREgoToPublic(activatedGovernanceIR, semanticMergeResult, intent));
+	const ego = egoBudget.ego;
+	traceSteps.push({
+		stage: "Contract Diagnostics",
+		lines: validated.diagnostics.length ? validated.diagnostics.map((item) => `${item.kind}: provided=${item.summary.total} accepted=${item.summary.accepted} rejected=${item.summary.rejected} downgraded=${item.summary.downgraded} unused=${item.summary.unused}`) : ["no host artifacts provided"]
+	});
 	traceSteps.push({
 		stage: "EGO Assembly",
 		lines: [
 			`must_follow: ${ego.guidance.must_follow.length}`,
 			`avoid: ${ego.guidance.avoid.length}`,
 			`context_tensions: ${ego.guidance.context_tensions.length}`,
-			`ambient: ${ego.guidance.ambient.length}`
+			`ambient: ${ego.guidance.ambient.length}`,
+			`budget_status: ${egoBudget.exceeded ? "EGO_BUDGET_EXCEEDED" : "within-budget"}`,
+			`serialized_characters: ${egoBudget.serializedCharacters}/${EGO_BUDGET.serializedCharacters}`,
+			`omitted: ${egoBudget.omissions.length}`
 		]
 	});
 	const trace = {
@@ -10560,7 +13102,19 @@ async function compile(input) {
 		directive_decisions: semanticMergeResult.directive_modes,
 		observation_links: semanticMergeResult.observation_links,
 		context_influences: semanticMergeResult.context_influences,
-		...hostFulfillment ? { host_fulfillment: hostFulfillment } : {}
+		...hostFulfillment ? { host_fulfillment: hostFulfillment } : {},
+		ego_budget: {
+			limits: {
+				total_items: EGO_BUDGET.totalItems,
+				hard_items: EGO_BUDGET.hardItems,
+				ambient_items: EGO_BUDGET.ambientItems,
+				examples_per_directive: EGO_BUDGET.examplesPerDirective,
+				serialized_characters: EGO_BUDGET.serializedCharacters
+			},
+			exceeded: egoBudget.exceeded,
+			serialized_characters: egoBudget.serializedCharacters,
+			omitted: egoBudget.omissions
+		}
 	};
 	const cache = buildCacheKeys({
 		builtinRoot: normalizedInput.builtinRoot,
@@ -10572,16 +13126,140 @@ async function compile(input) {
 		verificationPolicy: normalizedInput.verificationPolicy ?? "task-relevant",
 		rcclVerificationSummary: sources.rcclVerificationSummary
 	}, selectedLayerIds, rccl);
-	return compileResolvedOutput({
-		version: "1.0",
+	const packet = {
+		version: "1",
+		status: validated.diagnostics.some((item) => item.summary.rejected > 0) || egoBudget.exceeded ? "needs-attention" : "compiled",
 		task: {
-			task_kind: resolved.taskKind,
+			workflow: resolved.workflow,
+			change_type: intent.change_type,
+			operation: intent.operation,
 			input: resolved.task
 		},
 		interpretation: buildInterpretationPacket(resolved),
 		governance: buildGovernancePacket(activationView, tensions, focus, semanticMergeResult, ego, trace),
-		cache
-	}, resolved);
+		cache,
+		fingerprints: governanceIR.fingerprints,
+		contract_diagnostics: validated.diagnostics,
+		post_compile_contract_requests: []
+	};
+	const adherence = prepareAdherenceEvidenceContract({
+		directives: activeDirectives.map((directive) => ({
+			id: directive.id,
+			description: directive.description,
+			prescription: directive.prescription,
+			execution_mode: semanticMergeResult.directive_modes.find((item) => item.directive_id === directive.id)?.execution_mode ?? "ambient"
+		})),
+		taskDescription: resolved.task.description,
+		artifactPath: join(normalizedInput.projectRoot, ".resonant-code", "context", "adherence-evidence", "code", `${adherenceArtifactName(resolved)}.json`)
+	});
+	const postCompileContractRequests = [{
+		kind: "adherence-evidence",
+		artifact: adherence.evidenceArtifact,
+		contract: adherence.contract
+	}];
+	packet.post_compile_contract_requests = postCompileContractRequests;
+	return compileResolvedOutput(packet, resolved, validated.diagnostics, postCompileContractRequests);
+}
+async function validatePublicCompileInput(input) {
+	if (!("task" in input)) throw new Error("compile() v1 requires a raw task input; pre-resolved task objects are not accepted.");
+	const diagnostics = [];
+	const taskContract = prepareTaskModelContract({
+		task: input.task,
+		artifactPath: input.artifacts?.taskModel?.path ?? join(input.projectRoot, ".resonant-code", "context", "task-models", "code", "task-model.json")
+	});
+	let taskModels = [];
+	if (input.artifacts?.taskModel) {
+		const unwrapped = unwrapHostArtifactEnvelope(input.artifacts.taskModel.raw, taskContract.contract);
+		if (unwrapped.diagnostic) diagnostics.push(buildContractPayloadDiagnostics("task-model", [unwrapped.diagnostic], {
+			id: taskContract.contract.requestId,
+			path: input.artifacts.taskModel.path
+		}));
+		else {
+			const validated = validateTaskModelPayload(unwrapped.payload);
+			diagnostics.push(validated.diagnostics);
+			taskModels = validated.models;
+		}
+	}
+	const preliminary = {
+		...input,
+		taskModels,
+		hostProposals: [],
+		hostFulfillment: void 0
+	};
+	const graphContract = await prepareSemanticGovernanceGraphContractBundle({
+		compileInput: preliminary,
+		artifactPath: input.artifacts?.semanticGovernanceGraph?.path ?? join(input.projectRoot, ".resonant-code", "context", "semantic-governance-graphs", "code", "semantic-governance-graph.json")
+	});
+	const proposals = [];
+	let graphDiagnostics = null;
+	if (input.artifacts?.semanticGovernanceGraph) {
+		const unwrapped = unwrapHostArtifactEnvelope(input.artifacts.semanticGovernanceGraph.raw, graphContract.contract);
+		if (unwrapped.diagnostic) graphDiagnostics = buildContractPayloadDiagnostics("semantic-governance-graph", [unwrapped.diagnostic], {
+			id: graphContract.contract.requestId,
+			path: input.artifacts.semanticGovernanceGraph.path
+		});
+		else {
+			const validated = validateSemanticGovernanceGraphPayload({
+				raw: unwrapped.payload,
+				source: {
+					id: graphContract.contract.requestId,
+					path: input.artifacts.semanticGovernanceGraph.path
+				},
+				allowedDirectiveIds: graphContract.contract.allowedIds?.directiveIds,
+				allowedObservationIds: graphContract.contract.allowedIds?.observationIds,
+				evidenceContext: {
+					projectRoot: input.projectRoot,
+					observations: graphContract.loadedSources?.rccl?.observations
+				}
+			});
+			graphDiagnostics = validated.diagnostics;
+			if ((validated.proposal.payload.edges ?? []).length) proposals.push(validated.proposal);
+		}
+		diagnostics.push(graphDiagnostics);
+	}
+	const taskDiagnostics = diagnostics.find((item) => item.kind === "task-model") ?? null;
+	return {
+		input: {
+			...preliminary,
+			hostProposals: proposals,
+			hostFulfillment: {
+				status: summarizeFulfillment(taskDiagnostics, graphDiagnostics),
+				agentCapability: {
+					kind: "agent-capability-profile",
+					provided: false,
+					path: null,
+					status: "absent",
+					diagnostics: null
+				},
+				taskModel: artifactSummary("task-model", input.artifacts?.taskModel, taskDiagnostics),
+				semanticGovernanceGraph: artifactSummary("semantic-governance-graph", input.artifacts?.semanticGovernanceGraph, graphDiagnostics)
+			}
+		},
+		diagnostics
+	};
+}
+function artifactSummary(kind, artifact, diagnostics) {
+	const summary = diagnostics?.summary;
+	const accepted = (summary?.accepted ?? 0) > 0;
+	const rejected = (summary?.rejected ?? 0) > 0;
+	return {
+		kind,
+		provided: Boolean(artifact),
+		path: artifact?.path ?? null,
+		status: !artifact ? "absent" : accepted && rejected ? "partially-accepted" : accepted ? "accepted" : rejected ? "rejected" : "unused",
+		diagnostics
+	};
+}
+function summarizeFulfillment(task, graph) {
+	const summaries = [task, graph].filter(Boolean).map((item) => item.summary);
+	if (!summaries.length) return "absent";
+	if (summaries.some((item) => item.rejected > 0) && summaries.some((item) => item.accepted > 0)) return "partially-accepted";
+	if (summaries.some((item) => item.rejected > 0)) return "rejected";
+	if (summaries.some((item) => item.accepted > 0)) return "accepted";
+	return "unused";
+}
+function adherenceArtifactName(resolved) {
+	return `adherence-${stableHash([resolved.task_intent, resolved.task.description]).slice(0, 12)}`;
 }
 function summarizeRcclSourceEvolution(rccl) {
 	if (!rccl) return ["no rccl loaded"];
@@ -10782,2092 +13460,4 @@ function fingerprintRcclVerificationSummary(summary) {
 	]);
 }
 //#endregion
-//#region src/cache.ts
-function persistCompileCache(input) {
-	const root = join(input.projectRoot, ".resonant-code", "context", "cache", "runtime");
-	const paths = {
-		l1Path: join(root, "l1", `${input.output.cache.l1Key}.json`),
-		l2Path: join(root, "l2", `${input.output.cache.l2Key}.json`),
-		l3Path: join(root, "l3", `${input.output.cache.l3Key}.json`)
-	};
-	writeJson(paths.l1Path, {
-		version: "1.0",
-		kind: "runtime-cache-l1",
-		key: input.output.cache.l1Key,
-		invalidates_on: ["selected built-in playbook layer content"],
-		selected_layers: input.output.trace.activation.selected_layers
-	});
-	writeJson(paths.l2Path, {
-		version: "1.0",
-		kind: "runtime-cache-l2",
-		key: input.output.cache.l2Key,
-		l1Key: input.output.cache.l1Key,
-		verificationPolicy: input.output.cache.verificationPolicy,
-		rcclVerificationKey: input.output.cache.rcclVerificationKey,
-		invalidates_on: [
-			"runtime-cache-l1 key",
-			"local augment content",
-			"RCCL observation verification status and disposition",
-			"task-time RCCL verification policy and summary"
-		],
-		activated_directives: input.output.trace.activated_directives,
-		suppressed_directives: input.output.trace.suppressed_directives,
-		observation_links: input.output.trace.observation_links
-	});
-	writeJson(paths.l3Path, {
-		version: "1.0",
-		kind: "runtime-cache-l3",
-		key: input.output.cache.l3Key,
-		l1Key: input.output.cache.l1Key,
-		l2Key: input.output.cache.l2Key,
-		verificationPolicy: input.output.cache.verificationPolicy,
-		rcclVerificationKey: input.output.cache.rcclVerificationKey,
-		invalidates_on: [
-			"runtime-cache-l2 key",
-			"resolved task input and context profile",
-			"host semantic proposal fingerprint"
-		],
-		packet: input.output.packet
-	});
-	return paths;
-}
-function inspectCompileCache(input) {
-	const paths = compileCachePaths(input.projectRoot, input.cache);
-	const levels = {
-		l1: inspectCacheLevel(paths.l1Path, (value) => isRecord(value) && value.version === "1.0" && value.kind === "runtime-cache-l1" && value.key === input.cache.l1Key, "runtime-cache-l1 key matched"),
-		l2: inspectCacheLevel(paths.l2Path, (value) => isRecord(value) && value.version === "1.0" && value.kind === "runtime-cache-l2" && value.key === input.cache.l2Key && value.l1Key === input.cache.l1Key && value.verificationPolicy === input.cache.verificationPolicy && value.rcclVerificationKey === input.cache.rcclVerificationKey, "runtime-cache-l2 key, parent key, and RCCL verification fingerprint matched"),
-		l3: inspectCacheLevel(paths.l3Path, (value) => isRecord(value) && value.version === "1.0" && value.kind === "runtime-cache-l3" && value.key === input.cache.l3Key && value.l1Key === input.cache.l1Key && value.l2Key === input.cache.l2Key && value.verificationPolicy === input.cache.verificationPolicy && value.rcclVerificationKey === input.cache.rcclVerificationKey && packetCacheMatches(value.packet, input.cache), "runtime-cache-l3 key chain, packet cache, and RCCL verification fingerprint matched")
-	};
-	const statuses = Object.values(levels).map((level) => level.status);
-	return {
-		status: statuses.every((value) => value === "hit") ? "hit" : statuses.some((value) => value === "rejected") ? "rejected" : statuses.some((value) => value === "hit") ? "partial" : "miss",
-		trustBoundary: "cache-read-only",
-		packetUsableForExecution: false,
-		paths,
-		levels,
-		diagnostics: ["Cache inspection is read-only and never substitutes for Runtime compile or RCCL task-time verification.", ...Object.entries(levels).map(([level, result]) => `${level}: ${result.status} (${result.reason})`)]
-	};
-}
-function compileCachePaths(projectRoot, cache) {
-	const root = join(projectRoot, ".resonant-code", "context", "cache", "runtime");
-	return {
-		l1Path: join(root, "l1", `${cache.l1Key}.json`),
-		l2Path: join(root, "l2", `${cache.l2Key}.json`),
-		l3Path: join(root, "l3", `${cache.l3Key}.json`)
-	};
-}
-function inspectCacheLevel(path, validate, hitReason) {
-	if (!existsSync(path)) return {
-		path,
-		status: "miss",
-		reason: "cache artifact is absent"
-	};
-	try {
-		return validate(JSON.parse(readFileSync(path, "utf-8"))) ? {
-			path,
-			status: "hit",
-			reason: hitReason
-		} : {
-			path,
-			status: "rejected",
-			reason: "cache artifact metadata did not match expected key chain"
-		};
-	} catch (error) {
-		return {
-			path,
-			status: "rejected",
-			reason: `cache artifact could not be parsed: ${error instanceof Error ? error.message : String(error)}`
-		};
-	}
-}
-function packetCacheMatches(packet, cache) {
-	if (!isRecord(packet) || !isRecord(packet.cache)) return false;
-	return packet.cache.l1Key === cache.l1Key && packet.cache.l2Key === cache.l2Key && packet.cache.l3Key === cache.l3Key && packet.cache.verificationPolicy === cache.verificationPolicy && packet.cache.rcclVerificationKey === cache.rcclVerificationKey;
-}
-function writeJson(path, value) {
-	mkdirSync(dirname(path), { recursive: true });
-	writeFileSync(path, `${JSON.stringify(value, null, 2)}\n`, "utf-8");
-}
-//#endregion
-//#region src/contract-policy.ts
-const DEFAULT_CAPABILITIES = {
-	can_read_files: true,
-	can_search_files: true,
-	can_run_commands: false,
-	can_inspect_diff: false,
-	can_request_context: true,
-	max_context_files: 12,
-	max_command_count: 0
-};
-function resolveContractPolicy(input) {
-	const mode = input.mode ?? "standard";
-	const policyInput = {
-		...input,
-		resolvedTask: input.resolvedTask ?? resolvePolicyTask(input)
-	};
-	const provided = input.providedContracts ?? {};
-	const capability = input.agentCapabilityProfile ?? DEFAULT_CAPABILITIES;
-	const highRiskTask = isHighRisk(policyRiskLevel(policyInput));
-	const taskModelRequired = shouldRequireTaskModel(policyInput, mode);
-	const semanticGraphRequired = shouldRequireSemanticGraph(policyInput, mode, taskModelRequired);
-	const deterministicFallbacks = collectDeterministicFallbackGovernance(policyInput);
-	const required = [];
-	const optional = [];
-	const skipped = [];
-	const reasons = [];
-	skipped.push({
-		kind: "agent-capability-profile",
-		reason_id: provided.agentCapability ? "already-provided" : "runtime-assumption"
-	});
-	if (!provided.agentCapability) reasons.push("agent capability profile is a Runtime assumption for policy selection, not a host artifact.");
-	if (provided.taskModel) skipped.push({
-		kind: "task-model",
-		reason_id: "already-provided"
-	});
-	else if (taskModelRequired) {
-		required.push("task-model");
-		reasons.push(mode === "strict" ? "strict mode requires task-model before deterministic compilation." : "task risk, compatibility, migration, or ambiguity requires task-model.");
-	} else {
-		optional.push("task-model");
-		skipped.push({
-			kind: "task-model",
-			reason_id: mode === "fast" ? "mode-fast" : "deterministic-fallback-allowed"
-		});
-		reasons.push("deterministic task interpretation is allowed for this mode and task shape.");
-	}
-	const needsTaskModel = taskModelRequired && !provided.taskModel;
-	if (rcclAvailable(input.sourceStatus)) if (provided.semanticGovernanceGraph) skipped.push({
-		kind: "semantic-governance-graph",
-		reason_id: "already-provided"
-	});
-	else if (!semanticGraphRequired) skipped.push({
-		kind: "semantic-governance-graph",
-		reason_id: mode === "fast" ? "mode-fast" : input.rcclRelevant === false ? "rccl-not-relevant" : "not-required-for-current-policy"
-	});
-	else if (needsTaskModel) {
-		skipped.push({
-			kind: "semantic-governance-graph",
-			reason_id: "waiting-for-task-model"
-		});
-		reasons.push("semantic-governance-graph is deferred until task-model is provided.");
-	} else {
-		required.push("semantic-governance-graph");
-		reasons.push("RCCL is relevant to this task and semantic governance should be host-assisted.");
-	}
-	else if (capability.can_request_context) {
-		if (mode === "strict" && highRiskTask) required.push("context-acquisition");
-		else optional.push("context-acquisition");
-		skipped.push({
-			kind: "semantic-governance-graph",
-			reason_id: "missing-rccl"
-		});
-	} else {
-		skipped.push({
-			kind: "semantic-governance-graph",
-			reason_id: "missing-rccl"
-		});
-		skipped.push({
-			kind: "context-acquisition",
-			reason_id: "insufficient-agent-capability"
-		});
-	}
-	if (!provided.adherenceEvidence && (capability.can_inspect_diff || capability.can_read_files || capability.can_run_commands)) {
-		if (mode === "strict") required.push("adherence-evidence");
-		else optional.push("adherence-evidence");
-		skipped.push({
-			kind: "adherence-evidence",
-			reason_id: "deferred-until-after-compile"
-		});
-	} else if (provided.adherenceEvidence) skipped.push({
-		kind: "adherence-evidence",
-		reason_id: "already-provided"
-	});
-	else skipped.push({
-		kind: "adherence-evidence",
-		reason_id: "insufficient-agent-capability"
-	});
-	if (input.sourceStatus.lockfile === "present") optional.push("governance-evolution-proposal");
-	else skipped.push({
-		kind: "governance-evolution-proposal",
-		reason_id: "not-required-for-current-policy"
-	});
-	return {
-		mode,
-		required: unique(required),
-		optional: unique(optional),
-		skipped,
-		escalation: resolveEscalation(required, optional),
-		diagnostics: {
-			task_model_required: taskModelRequired,
-			semantic_graph_required: semanticGraphRequired,
-			...input.rcclRelevant !== void 0 ? { rccl_relevant: input.rcclRelevant } : {},
-			reasons,
-			deterministic_fallbacks: deterministicFallbacks
-		}
-	};
-}
-function resolveEscalation(required, optional) {
-	if (required.includes("task-model")) return "task-model";
-	if (required.includes("semantic-governance-graph")) return "semantic-governance-graph";
-	if (required.includes("adherence-evidence")) return "adherence-required";
-	if (required.includes("context-acquisition")) return "context-acquisition";
-	return "none";
-}
-function shouldRequireTaskModel(input, mode) {
-	if (mode === "strict") return true;
-	if (mode === "fast") return false;
-	const profile = policyContextProfile(input);
-	const task = policyTask(input);
-	const operation = input.resolvedTask?.task_intent.operation ?? task?.operation;
-	const taskKind = input.resolvedTask?.taskKind ?? task?.taskKind;
-	if (isHighRisk(policyRiskLevel(input)) && isPolicyAuthoritative(input, "context.risk_level", "riskLevel")) return true;
-	if (profile?.scope_size === "cross-cutting") return true;
-	if (profile?.compatibility_requirement && profile.compatibility_requirement !== "none" && profile.compatibility_requirement !== "breaking-allowed" && isPolicyAuthoritative(input, "context.compatibility_requirement", "compatibilityRequirement")) return true;
-	if (profile?.interface_sensitivity && profile.interface_sensitivity !== "internal" && profile.interface_sensitivity !== "unknown" && isPolicyAuthoritative(input, "context.interface_sensitivity", "interfaceSensitivity")) return true;
-	if (profile?.migration_phase && profile.migration_phase !== "none" && isPolicyAuthoritative(input, "context.migration_phase", "migrationPhase")) return true;
-	if ((profile?.review_goal === "security" || profile?.review_goal === "regression-risk" || profile?.review_goal === "architecture-fit") && isPolicyAuthoritative(input, "context.review_goal", "reviewGoal")) return true;
-	if (taskKind === "migration" && isPolicyAuthoritative(input, "intent.task_kind", "taskKind")) return true;
-	if (operation === "review" && isPolicyAuthoritative(input, "intent.operation", "operation")) return true;
-	return hasAmbiguousTaskResolution(input);
-}
-function shouldRequireSemanticGraph(input, mode, taskModelRequired) {
-	if (!rcclAvailable(input.sourceStatus)) return false;
-	if (mode === "fast") return false;
-	if (mode === "strict") return true;
-	if (input.rcclRelevant !== true) return false;
-	return taskModelRequired || isHighRisk(policyRiskLevel(input));
-}
-function hasAmbiguousTaskResolution(input) {
-	const resolved = input.resolvedTask;
-	if (!resolved?.diagnostics.clarification_recommended) return false;
-	if (Boolean(resolved.task_intent.target_file || resolved.task_intent.changed_files.length || input.task?.targetFile || input.task?.changedFiles?.length)) return false;
-	const operationField = resolved.input_provenance.resolved_fields.find((field) => field.field === "intent.operation");
-	return !input.task?.operation && (!operationField || operationField.source === "deterministic" && operationField.confidence <= .5);
-}
-function collectDeterministicFallbackGovernance(input) {
-	const result = [];
-	const profile = policyContextProfile(input);
-	if (!profile) return result;
-	addFallbackGovernance(result, input, "context.risk_level", profile.risk_level ?? "");
-	addFallbackGovernance(result, input, "context.compatibility_requirement", profile.compatibility_requirement ?? "");
-	addFallbackGovernance(result, input, "context.interface_sensitivity", profile.interface_sensitivity ?? "");
-	addFallbackGovernance(result, input, "context.migration_phase", profile.migration_phase ?? "");
-	addFallbackGovernance(result, input, "context.review_goal", profile.review_goal ?? "");
-	return result;
-}
-function addFallbackGovernance(result, input, field, value) {
-	if (!value || !isElevatedFallbackField(field, value)) return;
-	const resolved = resolvedField(input, field);
-	if (resolved?.source !== "deterministic") return;
-	result.push({
-		field,
-		value,
-		confidence: resolved.confidence,
-		action: "ignored-for-policy",
-		reason: "deterministic fallback is trace-only and does not trigger standard-mode governance contracts"
-	});
-}
-function isElevatedFallbackField(field, value) {
-	if (field === "context.risk_level") return value === "high" || value === "critical";
-	if (field === "context.compatibility_requirement") return value !== "none" && value !== "breaking-allowed";
-	if (field === "context.interface_sensitivity") return value !== "internal" && value !== "unknown";
-	if (field === "context.migration_phase") return value !== "none";
-	if (field === "context.review_goal") return value === "security" || value === "regression-risk" || value === "architecture-fit";
-	return false;
-}
-function isPolicyAuthoritative(input, field, rawTaskField) {
-	if (rawTaskField === "riskLevel" && input.taskRisk && isHighRisk(input.taskRisk)) return true;
-	return Boolean(input.task?.[rawTaskField]) && isFieldAuthoritative(input, field);
-}
-function isFieldAuthoritative(input, field) {
-	const source = resolvedField(input, field)?.source;
-	return source === "explicit" || source === "host-agent" || source === "assistive-ai" || source === "repo-default";
-}
-function resolvedField(input, field) {
-	return input.resolvedTask?.input_provenance.resolved_fields.find((item) => item.field === field);
-}
-function rcclAvailable(sourceStatus) {
-	return sourceStatus.rccl === "present" || sourceStatus.rccl === "stale" || sourceStatus.rccl === "unverified";
-}
-function resolvePolicyTask(input) {
-	if (!input.task) return void 0;
-	return resolveTask({
-		task: input.task,
-		taskModels: input.taskModels ?? [],
-		interpretationMode: input.taskModels?.length ? "host-agent" : "deterministic-only"
-	});
-}
-function policyTask(input) {
-	return input.resolvedTask?.task ?? input.task;
-}
-function policyContextProfile(input) {
-	return input.resolvedTask?.context_profile;
-}
-function policyRiskLevel(input) {
-	return input.resolvedTask?.context_profile.risk_level ?? input.taskRisk ?? input.task?.riskLevel;
-}
-function isHighRisk(value) {
-	return value === "high" || value === "critical";
-}
-//#endregion
-//#region src/ai-contracts/diagnostics.ts
-function buildContractPayloadDiagnostics(kind, entries, source) {
-	const summary = {
-		total: entries.length,
-		accepted: 0,
-		rejected: 0,
-		downgraded: 0,
-		unused: 0
-	};
-	for (const entry of entries) summary[entry.status] += 1;
-	return {
-		kind,
-		...source ? { source } : {},
-		summary,
-		entries
-	};
-}
-//#endregion
-//#region src/ai-contracts/types.ts
-const AI_CONTRACT_VERSION = "ai-contract/v2";
-//#endregion
-//#region src/ai-contracts/shared.ts
-function isEvidenceRef(value) {
-	if (!isRecord(value)) return false;
-	if (!isEvidenceKind(value.kind)) return false;
-	if (typeof value.ref !== "string" || !value.ref.trim()) return false;
-	if (value.line_range !== void 0 && !isLineRange(value.line_range)) return false;
-	if (value.file !== void 0 && typeof value.file !== "string") return false;
-	if (value.snippet_hash !== void 0 && typeof value.snippet_hash !== "string") return false;
-	if (value.command !== void 0 && typeof value.command !== "string") return false;
-	if (value.output_hash !== void 0 && typeof value.output_hash !== "string") return false;
-	return true;
-}
-function validEvidenceRefs(value) {
-	return Array.isArray(value) && value.length > 0 && value.every(isEvidenceRef);
-}
-function normalizeEvidenceRefs(value) {
-	if (!Array.isArray(value)) return [];
-	return value.filter(isEvidenceRef).map((ref) => ({
-		...ref,
-		ref: ref.ref.trim()
-	}));
-}
-function contractVersionDiagnostic(raw, expectedKind) {
-	if (!isRecord(raw)) return null;
-	if (!("contractVersion" in raw) && !("schemaVersion" in raw) && !("kind" in raw)) return null;
-	if (raw.contractVersion !== "ai-contract/v2") return {
-		status: "rejected",
-		reason: "unsupported-value",
-		path: "contractVersion",
-		message: `Unsupported contractVersion "${String(raw.contractVersion)}"; expected ai-contract/v2 ${expectedKind} payload.`
-	};
-	if (raw.kind !== expectedKind) return {
-		status: "rejected",
-		reason: "unsupported-value",
-		path: "kind",
-		message: `Unsupported contract kind "${String(raw.kind)}"; expected ${expectedKind}.`
-	};
-	return {
-		status: "rejected",
-		reason: "malformed-payload",
-		path: "payload",
-		message: `Received a contract envelope for ${expectedKind}; provide the artifact payload body, not the contract metadata envelope.`
-	};
-}
-function isEvidenceKind(value) {
-	return value === "file" || value === "diff" || value === "command" || value === "rccl-evidence" || value === "runtime-trace" || value === "conversation";
-}
-function isLineRange(value) {
-	return Array.isArray(value) && value.length === 2 && typeof value[0] === "number" && typeof value[1] === "number" && Number.isInteger(value[0]) && Number.isInteger(value[1]) && value[0] >= 1 && value[1] >= value[0];
-}
-//#endregion
-//#region src/ai-contracts/agent-capability-profile.ts
-const AGENT_CAPABILITY_PROFILE_SCHEMA = {
-	type: "object",
-	additionalProperties: false,
-	properties: {
-		can_read_files: { type: "boolean" },
-		can_search_files: { type: "boolean" },
-		can_run_commands: { type: "boolean" },
-		can_inspect_diff: { type: "boolean" },
-		can_request_context: { type: "boolean" },
-		max_context_files: { type: "number" },
-		max_command_count: { type: "number" }
-	},
-	required: [
-		"can_read_files",
-		"can_search_files",
-		"can_run_commands",
-		"can_inspect_diff",
-		"can_request_context"
-	]
-};
-function prepareAgentCapabilityProfileContract(input) {
-	const prompt = [
-		"Produce an AgentCapabilityProfile for this host environment.",
-		"This profile is used by Runtime to decide which semantic contracts are safe and useful.",
-		"Return JSON only. Do not include free-form guidance.",
-		"",
-		`Task description: ${input.task.description}`
-	].join("\n");
-	const artifact = {
-		suggestedPath: input.artifactPath,
-		format: "json",
-		usage: `Write the agent capability profile to ${input.artifactPath}; workflow adapters may pass it to Runtime contract policy as agentCapabilityProfile.`
-	};
-	return {
-		profilePrompt: prompt,
-		profileSchema: JSON.stringify(AGENT_CAPABILITY_PROFILE_SCHEMA, null, 2),
-		profileArtifact: artifact,
-		contract: {
-			contractVersion: AI_CONTRACT_VERSION,
-			kind: "agent-capability-profile",
-			schemaId: "runtime.agent-capability-profile",
-			schemaVersion: "2.0",
-			prompt,
-			schema: AGENT_CAPABILITY_PROFILE_SCHEMA,
-			artifact,
-			provenance: {
-				owner: "runtime",
-				deterministic: true
-			},
-			cacheKeyMaterial: {
-				task: input.task,
-				schemaId: "runtime.agent-capability-profile"
-			}
-		}
-	};
-}
-function validateAgentCapabilityProfilePayload(raw) {
-	const entries = [];
-	const versionDiagnostic = contractVersionDiagnostic(raw, "agent-capability-profile");
-	if (versionDiagnostic) return {
-		profile: null,
-		diagnostics: buildContractPayloadDiagnostics("agent-capability-profile", [versionDiagnostic])
-	};
-	if (!isCapabilityProfile(raw)) {
-		entries.push({
-			status: raw == null ? "unused" : "rejected",
-			reason: raw == null ? "empty-payload" : "malformed-payload",
-			path: "profile",
-			message: "Agent capability profile must include boolean capability fields."
-		});
-		return {
-			profile: null,
-			diagnostics: buildContractPayloadDiagnostics("agent-capability-profile", entries)
-		};
-	}
-	entries.push({
-		status: "accepted",
-		reason: "accepted",
-		path: "profile",
-		message: "Agent capability profile accepted for Runtime contract policy."
-	});
-	return {
-		profile: raw,
-		diagnostics: buildContractPayloadDiagnostics("agent-capability-profile", entries)
-	};
-}
-function isCapabilityProfile(value) {
-	if (!isRecord(value)) return false;
-	return typeof value.can_read_files === "boolean" && typeof value.can_search_files === "boolean" && typeof value.can_run_commands === "boolean" && typeof value.can_inspect_diff === "boolean" && typeof value.can_request_context === "boolean" && (value.max_context_files === void 0 || typeof value.max_context_files === "number") && (value.max_command_count === void 0 || typeof value.max_command_count === "number");
-}
-//#endregion
-//#region src/ai-contracts/context-acquisition.ts
-const CONTEXT_ACQUISITION_SCHEMA = {
-	type: "object",
-	additionalProperties: false,
-	properties: { requests: {
-		type: "array",
-		items: {
-			type: "object",
-			additionalProperties: false,
-			properties: {
-				kind: { const: "rccl-incremental" },
-				mode: { enum: [
-					"task-scoped",
-					"changed-files",
-					"full"
-				] },
-				target_files: {
-					type: "array",
-					items: { type: "string" },
-					maxItems: 4
-				},
-				changed_files: {
-					type: "array",
-					items: { type: "string" },
-					maxItems: 4
-				},
-				scope: { type: "string" },
-				reason: { type: "string" },
-				confidence: {
-					type: "number",
-					minimum: 0,
-					maximum: 1
-				},
-				evidence_refs: { type: "array" }
-			},
-			required: [
-				"kind",
-				"mode",
-				"target_files",
-				"changed_files",
-				"reason",
-				"confidence",
-				"evidence_refs"
-			]
-		}
-	} },
-	required: ["requests"]
-};
-const MAX_CONTEXT_FILES = 4;
-const MIN_CONTEXT_CONFIDENCE = .5;
-function prepareContextAcquisitionContract(input) {
-	const prompt = [
-		"Acquire repository context needed before semantic governance graph generation.",
-		"Use this only to request bounded file windows, changed files, tests, or calibration slices that materially affect Runtime guidance.",
-		"Runtime/RCCL will decide whether the requested context becomes authoritative repository observation data.",
-		"Return JSON only.",
-		"",
-		`Task description: ${input.task.description}`,
-		`Target file: ${input.task.targetFile ?? "(none)"}`,
-		`Changed files: ${input.task.changedFiles?.join(", ") || "(none)"}`
-	].join("\n");
-	const artifact = {
-		suggestedPath: input.artifactPath,
-		format: "json",
-		usage: `Write bounded context-acquisition requests to ${input.artifactPath}; use them to drive calibrate-repo-context prepare-incremental before semantic graph compilation.`
-	};
-	return {
-		acquisitionPrompt: prompt,
-		acquisitionSchema: JSON.stringify(CONTEXT_ACQUISITION_SCHEMA, null, 2),
-		acquisitionArtifact: artifact,
-		contract: {
-			contractVersion: AI_CONTRACT_VERSION,
-			kind: "context-acquisition",
-			schemaId: "runtime.context-acquisition",
-			schemaVersion: "2.0",
-			prompt,
-			schema: CONTEXT_ACQUISITION_SCHEMA,
-			artifact,
-			provenance: {
-				owner: "runtime",
-				deterministic: true
-			},
-			cacheKeyMaterial: {
-				task: input.task,
-				schemaId: "runtime.context-acquisition"
-			}
-		}
-	};
-}
-function validateContextAcquisitionPayload(raw) {
-	const entries = [];
-	const requests = [];
-	const versionDiagnostic = contractVersionDiagnostic(raw, "context-acquisition");
-	if (versionDiagnostic) return {
-		requests,
-		diagnostics: buildContractPayloadDiagnostics("context-acquisition", [versionDiagnostic])
-	};
-	if (!isContextAcquisitionPayload(raw)) {
-		entries.push({
-			status: raw == null ? "unused" : "rejected",
-			reason: raw == null ? "empty-payload" : "malformed-payload",
-			path: "payload",
-			message: raw == null ? "No context acquisition payload was provided." : "Context acquisition payload must be an object with a requests array."
-		});
-		return {
-			requests,
-			diagnostics: buildContractPayloadDiagnostics("context-acquisition", entries)
-		};
-	}
-	raw.requests.forEach((request, index) => {
-		const path = `requests[${index}]`;
-		if (!isContextAcquisitionRequest(request)) {
-			entries.push(rejected$2(path, "malformed-payload", "Request must be a bounded rccl-incremental request with mode, target_files, changed_files, reason, confidence, and evidence_refs."));
-			return;
-		}
-		const targetFiles = unique(request.target_files.filter((file) => file.trim()).map((file) => normalizePath(file.trim())));
-		const changedFiles = unique(request.changed_files.filter((file) => file.trim()).map((file) => normalizePath(file.trim())));
-		const totalFiles = unique([...targetFiles, ...changedFiles]);
-		if (request.mode !== "full" && totalFiles.length === 0) {
-			entries.push(rejected$2(path, "missing-required-field", "Task-scoped and changed-files context acquisition requires at least one target or changed file."));
-			return;
-		}
-		if (totalFiles.length > MAX_CONTEXT_FILES) {
-			entries.push(rejected$2(path, "capped-by-policy", `Context acquisition is capped at ${MAX_CONTEXT_FILES} files per request.`));
-			return;
-		}
-		if (request.confidence < MIN_CONTEXT_CONFIDENCE) {
-			entries.push(rejected$2(path, "low-confidence", `Context acquisition confidence ${request.confidence} is below ${MIN_CONTEXT_CONFIDENCE}.`));
-			return;
-		}
-		if (!validEvidenceRefs(request.evidence_refs)) {
-			entries.push(rejected$2(path, "missing-evidence", "Context acquisition request must include evidence_refs explaining why this context is needed."));
-			return;
-		}
-		requests.push({
-			kind: "rccl-incremental",
-			mode: request.mode,
-			target_files: targetFiles,
-			changed_files: changedFiles,
-			...request.scope ? { scope: request.scope } : {},
-			reason: request.reason.trim(),
-			confidence: request.confidence,
-			evidence_refs: request.evidence_refs
-		});
-		entries.push({
-			status: "accepted",
-			reason: "accepted",
-			path,
-			message: "Context acquisition request accepted for RCCL workflow orchestration.",
-			confidence: request.confidence
-		});
-	});
-	if (!raw.requests.length) entries.push({
-		status: "unused",
-		reason: "empty-payload",
-		path: "requests",
-		message: "Context acquisition payload contains no requests."
-	});
-	return {
-		requests,
-		diagnostics: buildContractPayloadDiagnostics("context-acquisition", entries)
-	};
-}
-function isContextAcquisitionPayload(value) {
-	return isRecord(value) && Array.isArray(value.requests);
-}
-function isContextAcquisitionRequest(value) {
-	if (!isRecord(value)) return false;
-	return value.kind === "rccl-incremental" && isContextMode(value.mode) && Array.isArray(value.target_files) && value.target_files.every((item) => typeof item === "string") && Array.isArray(value.changed_files) && value.changed_files.every((item) => typeof item === "string") && (value.scope === void 0 || typeof value.scope === "string") && typeof value.reason === "string" && value.reason.trim().length > 0 && validConfidence(value.confidence) && Array.isArray(value.evidence_refs);
-}
-function isContextMode(value) {
-	return value === "task-scoped" || value === "changed-files" || value === "full";
-}
-function rejected$2(path, reason, message) {
-	return {
-		status: "rejected",
-		reason,
-		path,
-		message
-	};
-}
-//#endregion
-//#region src/ai-contracts/evidence.ts
-function verifyEvidenceRefs(refs, context = {}) {
-	const entries = refs.map((ref) => verifyEvidenceRef(ref, context));
-	const verified = entries.filter((entry) => entry.status === "verified").length;
-	const staticVerified = entries.filter((entry) => entry.status === "verified" && entry.static).length;
-	const conversationCount = entries.filter((entry) => entry.ref.kind === "conversation").length;
-	return {
-		total: entries.length,
-		verified,
-		staticVerified,
-		conversationOnly: entries.length > 0 && conversationCount === entries.length,
-		hasStaticEvidence: staticVerified > 0,
-		entries
-	};
-}
-function verifyEvidenceRef(ref, context) {
-	if (ref.kind === "conversation") return {
-		ref,
-		status: "verified",
-		static: false,
-		reason: "conversation evidence is contextual only"
-	};
-	if (ref.kind === "file") return verifyFileEvidence(ref, context);
-	if (ref.kind === "rccl-evidence") return verifyRcclEvidence(ref, context);
-	if (ref.kind === "runtime-trace") return verifyListedRef(ref, context.runtimeTraceRefs, "runtime trace reference", false);
-	if (ref.kind === "command") return verifyHashEvidence(ref, context.commandOutputHashes, "command output hash");
-	if (ref.kind === "diff") return verifyHashEvidence(ref, context.diffSnapshotHashes, "diff snapshot hash");
-	return {
-		ref,
-		status: "unverified",
-		static: false,
-		reason: "unsupported evidence kind"
-	};
-}
-function verifyFileEvidence(ref, context) {
-	if (!context.projectRoot) return {
-		ref,
-		status: "unverified",
-		static: false,
-		reason: "projectRoot is required for file evidence verification"
-	};
-	const parsed = parseRefLocation(ref.ref);
-	const file = ref.file ?? parsed.file;
-	const lineRange = ref.line_range ?? parsed.line_range;
-	if (!file) return {
-		ref,
-		status: "unverified",
-		static: false,
-		reason: "file evidence must include file or parseable ref"
-	};
-	const filePath = isAbsolute(file) ? file : resolve(context.projectRoot, file);
-	if (!existsSync(filePath)) return {
-		ref,
-		status: "unverified",
-		static: false,
-		reason: `file evidence target does not exist: ${file}`
-	};
-	if (!lineRange) return {
-		ref,
-		status: "unverified",
-		static: false,
-		reason: "file evidence must include line_range"
-	};
-	const lines = readFileSync(filePath, "utf-8").replace(/\r\n/g, "\n").split("\n");
-	if (lineRange[0] < 1 || lineRange[1] < lineRange[0] || lineRange[1] > lines.length) return {
-		ref,
-		status: "unverified",
-		static: false,
-		reason: `line_range ${lineRange[0]}-${lineRange[1]} is outside ${file}`
-	};
-	if (ref.snippet_hash && !matchesSnippetHash(lines.slice(lineRange[0] - 1, lineRange[1]).join("\n"), ref.snippet_hash)) return {
-		ref,
-		status: "unverified",
-		static: false,
-		reason: "snippet_hash does not match file line range"
-	};
-	return {
-		ref,
-		status: "verified",
-		static: true,
-		reason: "file and line range verified"
-	};
-}
-function verifyRcclEvidence(ref, context) {
-	const observations = context.observations ?? [];
-	if (!observations.length) return {
-		ref,
-		status: "unverified",
-		static: false,
-		reason: "RCCL observations are required for rccl-evidence verification"
-	};
-	const parsed = parseRefLocation(ref.ref);
-	const file = ref.file ?? parsed.file;
-	const lineRange = ref.line_range ?? parsed.line_range;
-	if (!file || !lineRange) return {
-		ref,
-		status: "unverified",
-		static: false,
-		reason: "rccl-evidence must reference a concrete evidence file and line range"
-	};
-	if (!observations.some((observation) => observationCanSupportRcclEvidence(observation) && observation.evidence.some((evidence) => {
-		const evidenceRef = `${evidence.file}:${evidence.line_range[0]}-${evidence.line_range[1]}`;
-		const sameRef = ref.ref === evidenceRef || ref.ref === `${observation.id}:${evidenceRef}`;
-		const sameLocation = normalizePathSeparators(file) === normalizePathSeparators(evidence.file) && lineRange[0] === evidence.line_range[0] && lineRange[1] === evidence.line_range[1];
-		return sameRef || sameLocation;
-	}))) return {
-		ref,
-		status: "unverified",
-		static: false,
-		reason: "rccl-evidence ref does not match loaded observation evidence"
-	};
-	return {
-		ref,
-		status: "verified",
-		static: true,
-		reason: "rccl-evidence matches loaded observation evidence"
-	};
-}
-function verifyListedRef(ref, refs, label, isStatic = true) {
-	if (refs?.includes(ref.ref)) return {
-		ref,
-		status: "verified",
-		static: isStatic,
-		reason: `${label} verified`
-	};
-	if (!refs) return {
-		ref,
-		status: "unverified",
-		static: false,
-		reason: `${label} is unavailable in the current workflow`
-	};
-	return {
-		ref,
-		status: "unverified",
-		static: false,
-		reason: `${label} was not captured by workflow`
-	};
-}
-function verifyHashEvidence(ref, hashes, label) {
-	if (ref.output_hash && hashes?.includes(ref.output_hash)) return {
-		ref,
-		status: "verified",
-		static: true,
-		reason: `${label} verified`
-	};
-	if (!ref.output_hash) return {
-		ref,
-		status: "unverified",
-		static: false,
-		reason: `${label} missing output_hash`
-	};
-	if (!hashes) return {
-		ref,
-		status: "unverified",
-		static: false,
-		reason: `${label} is unavailable in the current workflow`
-	};
-	return {
-		ref,
-		status: "unverified",
-		static: false,
-		reason: `${label} was not captured by workflow`
-	};
-}
-function parseRefLocation(ref) {
-	const match = /^(.*):(\d+)-(\d+)$/.exec(ref);
-	if (!match) return {};
-	const start = Number(match[2]);
-	const end = Number(match[3]);
-	if (!Number.isInteger(start) || !Number.isInteger(end) || start < 1 || end < start) return { file: match[1] };
-	return {
-		file: match[1],
-		line_range: [start, end]
-	};
-}
-function matchesSnippetHash(snippet, expected) {
-	const normalizedExpected = expected.replace(/^sha(1|256):/, "");
-	return hash("sha1", snippet) === normalizedExpected || hash("sha256", snippet) === normalizedExpected;
-}
-function hash(algorithm, value) {
-	return createHash(algorithm).update(value).digest("hex");
-}
-function observationCanSupportRcclEvidence(observation) {
-	const verification = observation.verification;
-	if (!verification) return true;
-	if (verification.disposition === "demote-to-ambient") return false;
-	return verification.evidence_status !== "failed" && verification.evidence_status !== "unverifiable";
-}
-//#endregion
-//#region src/ai-contracts/semantic-governance-graph.ts
-const SEMANTIC_GRAPH_SCHEMA = {
-	type: "object",
-	additionalProperties: false,
-	properties: {
-		nodes: { type: "array" },
-		edges: { type: "array" }
-	},
-	required: ["edges"]
-};
-async function prepareSemanticContractContext(input) {
-	const ctx = await resolveActivatedGovernanceContext(input.compileInput);
-	return {
-		resolvedTask: ctx.resolvedTask,
-		directives: ctx.activeDirectives.map(summarizeDirectiveForProposal),
-		observations: ctx.governanceIR.observations.filter((observation) => !skippedObservationIds(ctx.sources).has(observation.id)).map(summarizeObservationForProposal),
-		loadedSources: ctx.sources
-	};
-}
-async function prepareSemanticGovernanceGraphContractBundle(input) {
-	const context = await prepareSemanticContractContext(input);
-	return {
-		...context,
-		...prepareSemanticGovernanceGraphContract({
-			resolvedTask: context.resolvedTask,
-			directives: context.directives,
-			observations: context.observations,
-			artifactPath: input.artifactPath
-		})
-	};
-}
-function prepareSemanticGovernanceGraphContract(input) {
-	const prompt = buildGraphPrompt(input);
-	const artifact = {
-		suggestedPath: input.artifactPath,
-		format: "json",
-		usage: `Write the semantic-governance-graph payload to ${input.artifactPath}, then re-run with --governance-graph-file ${input.artifactPath}.`
-	};
-	return {
-		graphPrompt: prompt,
-		graphSchema: JSON.stringify(SEMANTIC_GRAPH_SCHEMA, null, 2),
-		graphArtifact: artifact,
-		contract: {
-			contractVersion: AI_CONTRACT_VERSION,
-			kind: "semantic-governance-graph",
-			schemaId: "runtime.semantic-governance-graph",
-			schemaVersion: "2.0",
-			prompt,
-			schema: SEMANTIC_GRAPH_SCHEMA,
-			artifact,
-			allowedIds: allowedIds(input),
-			provenance: {
-				owner: "runtime",
-				deterministic: true
-			},
-			context: {
-				resolvedTask: {
-					task_intent: input.resolvedTask.task_intent,
-					context_profile: input.resolvedTask.context_profile
-				},
-				directives: input.directives.map(compactDirectiveForContract),
-				observations: input.observations.map(compactObservationForContract),
-				edgeGuidance: {
-					relations: [
-						"reinforce",
-						"tension",
-						"suppress",
-						"ambient-only",
-						"unrelated"
-					],
-					impacts: [
-						"execution-mode",
-						"review-focus",
-						"ambient-context",
-						"no-effect"
-					],
-					execution_intents: [
-						"enforce",
-						"deviation-noted",
-						"ambient",
-						"suppress",
-						"no-change"
-					],
-					requirement: "Create edges only when the directive and observation meaning materially affect execution, review focus, or ambient context for this task."
-				}
-			},
-			cacheKeyMaterial: {
-				taskIntent: input.resolvedTask.task_intent,
-				contextProfile: input.resolvedTask.context_profile,
-				directiveIds: input.directives.map((directive) => directive.id),
-				observationIds: input.observations.map((observation) => observation.id)
-			}
-		}
-	};
-}
-function validateSemanticGovernanceGraphPayload(input) {
-	const entries = [];
-	const versionDiagnostic = contractVersionDiagnostic(input.raw, "semantic-governance-graph");
-	if (versionDiagnostic) return {
-		proposal: buildHostProposal(input.source, { edges: [] }),
-		diagnostics: buildContractPayloadDiagnostics("semantic-governance-graph", [versionDiagnostic], input.source)
-	};
-	const allowedDirectiveIds = input.allowedDirectiveIds ? new Set(input.allowedDirectiveIds) : null;
-	const allowedObservationIds = input.allowedObservationIds ? new Set(input.allowedObservationIds) : null;
-	const edges = graphEdges(input.raw, entries);
-	const accepted = [];
-	const seen = /* @__PURE__ */ new Set();
-	edges.forEach((edge, index) => {
-		const path = `edges[${index}]`;
-		if (!isGraphEdge(edge)) {
-			entries.push(rejected$1(path, "malformed-payload", "Graph edge is missing required fields or has unsupported values."));
-			return;
-		}
-		if (allowedDirectiveIds && !allowedDirectiveIds.has(edge.directive_id)) {
-			entries.push(rejected$1(path, "invalid-id", "Graph edge references a directive id outside allowedIds.", edge));
-			return;
-		}
-		if (allowedObservationIds && !allowedObservationIds.has(edge.observation_id)) {
-			entries.push(rejected$1(path, "invalid-id", "Graph edge references an observation id outside allowedIds.", edge));
-			return;
-		}
-		const duplicateKey = `${edge.directive_id}::${edge.observation_id}::${edge.relation}`;
-		if (seen.has(duplicateKey)) {
-			entries.push(rejected$1(path, "duplicate-id", "Duplicate graph edge for directive, observation, and relation.", edge));
-			return;
-		}
-		seen.add(duplicateKey);
-		if (edge.confidence < SEMANTIC_RELATION_POLICY.hostSemantic.minConfidence) {
-			entries.push(rejected$1(path, "low-confidence", "Graph edge confidence is below Runtime host semantic threshold.", edge));
-			return;
-		}
-		if (!validEvidenceRefs(edge.evidence_refs)) {
-			entries.push(rejected$1(path, "missing-evidence", "Graph edge must include evidence_refs.", edge));
-			return;
-		}
-		const evidenceRefs = normalizeEvidenceRefs(edge.evidence_refs);
-		const evidence = verifyEvidenceRefs(evidenceRefs, input.evidenceContext);
-		if (isExecutionImpactingEdge(edge) && evidence.conversationOnly) {
-			entries.push(rejected$1(path, "conversation-only-evidence", "Execution-impacting graph edges cannot be supported only by conversation evidence.", edge));
-			return;
-		}
-		if (isExecutionImpactingEdge(edge) && !evidence.hasStaticEvidence) {
-			entries.push(rejected$1(path, "insufficient-static-evidence", "Execution-impacting graph edges require at least one statically verified evidence ref.", edge));
-			return;
-		}
-		accepted.push({
-			...edge,
-			evidence_refs: evidenceRefs
-		});
-		entries.push({
-			status: "accepted",
-			reason: "accepted",
-			path,
-			message: "Semantic governance graph edge accepted for Runtime adjudication.",
-			directiveId: edge.directive_id,
-			observationId: edge.observation_id,
-			confidence: edge.confidence
-		});
-	});
-	if (!edges.length && !entries.length) entries.push({
-		status: "unused",
-		reason: "empty-payload",
-		path: "edges",
-		message: "No semantic governance graph edges were provided."
-	});
-	return {
-		proposal: buildHostProposal(input.source, { edges: accepted }),
-		diagnostics: buildContractPayloadDiagnostics("semantic-governance-graph", entries, input.source)
-	};
-}
-function isExecutionImpactingEdge(edge) {
-	return edge.impact === "execution-mode" || edge.execution_intent !== void 0 && edge.execution_intent !== "no-change";
-}
-function loadSemanticGovernanceGraphPayload(raw, source) {
-	return validateSemanticGovernanceGraphPayload({
-		raw,
-		source
-	}).proposal;
-}
-function graphEdges(raw, entries) {
-	if (Array.isArray(raw)) return raw;
-	if (!raw) return [];
-	if (!isRecord(raw)) {
-		entries.push(rejected$1("payload", "malformed-payload", "Semantic governance graph payload must be an object with an edges array."));
-		return [];
-	}
-	if (!Array.isArray(raw.edges)) {
-		entries.push(rejected$1("edges", "malformed-payload", "Semantic governance graph edges field must be an array."));
-		return [];
-	}
-	return raw.edges;
-}
-function isGraphEdge(value) {
-	if (!isRecord(value)) return false;
-	return typeof value.directive_id === "string" && typeof value.observation_id === "string" && isRelation(value.relation) && validConfidence(value.confidence) && typeof value.reason === "string" && validEvidenceRefs(value.evidence_refs) && (value.impact === void 0 || isImpact(value.impact)) && (value.review_priority === void 0 || isReviewPriority(value.review_priority)) && (value.execution_intent === void 0 || isExecutionIntent(value.execution_intent));
-}
-function isRelation(value) {
-	return value === "reinforce" || value === "tension" || value === "suppress" || value === "ambient-only" || value === "unrelated";
-}
-function isImpact(value) {
-	return value === "execution-mode" || value === "review-focus" || value === "ambient-context" || value === "no-effect";
-}
-function isReviewPriority(value) {
-	return value === "low" || value === "normal" || value === "high" || value === "critical";
-}
-function isExecutionIntent(value) {
-	return value === "enforce" || value === "deviation-noted" || value === "ambient" || value === "suppress" || value === "no-change";
-}
-function buildHostProposal(source, payload) {
-	return {
-		irVersion: GOVERNANCE_IR_VERSION,
-		source: {
-			kind: "host-proposal",
-			id: source.id,
-			...source.path ? { path: source.path } : {}
-		},
-		kind: "semantic-governance-graph",
-		payload
-	};
-}
-function rejected$1(path, reason, message, edge) {
-	return {
-		status: "rejected",
-		reason,
-		path,
-		message,
-		directiveId: edge?.directive_id,
-		observationId: edge?.observation_id,
-		confidence: edge?.confidence
-	};
-}
-function summarizeDirectiveForProposal(directive) {
-	return {
-		id: directive.id,
-		semanticKey: directive.semanticKey,
-		kind: directive.kind,
-		prescription: directive.prescription,
-		weight: directive.weight,
-		layer: directive.layer.id,
-		scope: directive.scope.path,
-		description: directive.body.description,
-		rationale: directive.body.rationale,
-		traits: directive.traits
-	};
-}
-function summarizeObservationForProposal(observation) {
-	return {
-		id: observation.id,
-		semanticKey: observation.semanticKey,
-		category: observation.category,
-		scope: observation.scope.path,
-		pattern: observation.pattern,
-		adherence: observation.adherence,
-		verification: observation.verification,
-		lifecycle: observation.lifecycle,
-		traits: observation.traits,
-		evidenceRefs: observation.evidence.map((evidence) => `${evidence.file}:${evidence.line_range[0]}-${evidence.line_range[1]}`),
-		evidence: observation.evidence.map((evidence) => ({
-			file: evidence.file,
-			line_range: evidence.line_range,
-			snippet: evidence.snippet
-		}))
-	};
-}
-function skippedObservationIds(sources) {
-	return new Set((sources.rcclVerificationSummary?.records ?? []).filter((record) => record.action === "skipped-not-task-relevant").map((record) => record.observation_id));
-}
-function buildGraphPrompt(input) {
-	const directives = input.directives.map(compactDirectiveForContract);
-	const observations = input.observations.map(compactObservationForContract);
-	return [
-		"Produce a semantic-governance-graph payload for Runtime.",
-		"Edges connect active directives to RCCL observations when repository reality changes how guidance should execute for this task.",
-		"Every edge must include evidence_refs from task context, RCCL evidence, files, diff, commands, or runtime trace.",
-		"Runtime will validate IDs, confidence, scope, verification, lifecycle, and final execution mode deterministically.",
-		"Use the directive and observation summaries below; do not infer relations from IDs alone.",
-		"Return JSON only.",
-		"",
-		`Resolved task intent: ${JSON.stringify(input.resolvedTask.task_intent)}`,
-		`Resolved context profile: ${JSON.stringify(input.resolvedTask.context_profile)}`,
-		`Allowed directive ids: ${input.directives.map((item) => item.id).join(", ") || "(none)"}`,
-		`Allowed observation ids: ${input.observations.map((item) => item.id).join(", ") || "(none)"}`,
-		"",
-		"Directive summaries:",
-		JSON.stringify(directives, null, 2),
-		"",
-		"Observation summaries:",
-		JSON.stringify(observations, null, 2)
-	].join("\n");
-}
-function allowedIds(input) {
-	return {
-		directiveIds: input.directives.map((directive) => directive.id),
-		observationIds: input.observations.map((observation) => observation.id)
-	};
-}
-function compactDirectiveForContract(directive) {
-	return {
-		id: directive.id,
-		semanticKey: directive.semanticKey,
-		kind: directive.kind,
-		prescription: directive.prescription,
-		weight: directive.weight,
-		layer: directive.layer,
-		scope: directive.scope,
-		description: truncate(directive.description, 360),
-		rationale: truncate(directive.rationale, 360),
-		traits: directive.traits
-	};
-}
-function compactObservationForContract(observation) {
-	return {
-		id: observation.id,
-		semanticKey: observation.semanticKey,
-		category: observation.category,
-		scope: observation.scope,
-		pattern: truncate(observation.pattern, 420),
-		adherence: observation.adherence,
-		verification: observation.verification,
-		lifecycle: observation.lifecycle,
-		traits: observation.traits,
-		evidenceRefs: observation.evidenceRefs,
-		evidence: observation.evidence.slice(0, 4).map((evidence) => ({
-			file: evidence.file,
-			line_range: evidence.line_range,
-			snippet: truncate(evidence.snippet, 260)
-		}))
-	};
-}
-function truncate(value, maxLength) {
-	const normalized = value.replace(/\s+/g, " ").trim();
-	if (normalized.length <= maxLength) return normalized;
-	return `${normalized.slice(0, Math.max(0, maxLength - 3))}...`;
-}
-//#endregion
-//#region src/ai-contracts/task-model.ts
-const TASK_MODEL_SCHEMA = {
-	type: "object",
-	additionalProperties: false,
-	properties: {
-		intent: { type: "object" },
-		context: { type: "object" },
-		uncertainties: {
-			type: "array",
-			items: { type: "string" }
-		}
-	},
-	required: [
-		"intent",
-		"context",
-		"uncertainties"
-	]
-};
-function prepareTaskModelContract(input) {
-	const prompt = buildTaskModelPrompt(input);
-	const artifact = {
-		suggestedPath: input.artifactPath,
-		format: "json",
-		usage: `Write a task-model JSON object or array to ${input.artifactPath}, then re-run with --task-model-file ${input.artifactPath}.`
-	};
-	return {
-		task: input.task,
-		taskModelPrompt: prompt,
-		taskModelSchema: JSON.stringify(TASK_MODEL_SCHEMA, null, 2),
-		ambiguityHints: buildAmbiguityHints(input.task),
-		modelArtifact: artifact,
-		clarificationHints: buildClarificationHints(input.task),
-		contract: {
-			contractVersion: AI_CONTRACT_VERSION,
-			kind: "task-model",
-			schemaId: "runtime.task-model",
-			schemaVersion: "2.0",
-			prompt,
-			schema: TASK_MODEL_SCHEMA,
-			artifact,
-			provenance: {
-				owner: "runtime",
-				deterministic: true
-			},
-			cacheKeyMaterial: {
-				task: input.task,
-				schemaId: "runtime.task-model"
-			}
-		}
-	};
-}
-function validateTaskModelPayload(raw) {
-	const versionDiagnostic = contractVersionDiagnostic(raw, "task-model");
-	if (versionDiagnostic) return {
-		models: [],
-		diagnostics: buildContractPayloadDiagnostics("task-model", [versionDiagnostic])
-	};
-	const values = raw == null ? [] : Array.isArray(raw) ? raw : [raw];
-	const entries = [];
-	const models = [];
-	values.forEach((value, index) => {
-		const path = Array.isArray(raw) ? `models[${index}]` : "model";
-		if (!isTaskModelProposal(value)) {
-			entries.push({
-				status: "rejected",
-				reason: value == null ? "empty-payload" : "malformed-payload",
-				path,
-				message: "Task model must include intent, context, uncertainties, and evidence-backed fields."
-			});
-			return;
-		}
-		const fieldError = firstInvalidField(value);
-		if (fieldError) {
-			entries.push({
-				status: "rejected",
-				reason: fieldError.reason,
-				path: `${path}.${fieldError.field}`,
-				message: fieldError.message,
-				confidence: fieldError.confidence
-			});
-			return;
-		}
-		models.push(value);
-		entries.push({
-			status: "accepted",
-			reason: "accepted",
-			path,
-			message: "Task model accepted for Runtime field-level adjudication."
-		});
-	});
-	if (!values.length) entries.push({
-		status: "unused",
-		reason: "empty-payload",
-		path: "model",
-		message: "No task model payload was provided."
-	});
-	return {
-		models,
-		diagnostics: buildContractPayloadDiagnostics("task-model", entries)
-	};
-}
-function isTaskModelProposal(value) {
-	if (!isRecord(value)) return false;
-	return isRecord(value.intent) && isRecord(value.context) && Array.isArray(value.uncertainties) && value.uncertainties.every((item) => typeof item === "string");
-}
-function firstInvalidField(model) {
-	const fields = [
-		[
-			"intent.task_kind",
-			model.intent.task_kind,
-			TASK_INTERPRETATION_ENUMS.intent.task_kind,
-			"scalar"
-		],
-		[
-			"intent.operation",
-			model.intent.operation,
-			TASK_INTERPRETATION_ENUMS.intent.operation,
-			"scalar"
-		],
-		[
-			"intent.target_layer",
-			model.intent.target_layer,
-			null,
-			"scalar"
-		],
-		[
-			"intent.target_file",
-			model.intent.target_file,
-			null,
-			"scalar"
-		],
-		[
-			"intent.changed_files",
-			model.intent.changed_files,
-			null,
-			"list"
-		],
-		[
-			"intent.tech_stack",
-			model.intent.tech_stack,
-			null,
-			"list"
-		],
-		[
-			"intent.tags",
-			model.intent.tags,
-			null,
-			"list"
-		],
-		[
-			"context.project_stage",
-			model.context.project_stage,
-			TASK_INTERPRETATION_ENUMS.context.project_stage,
-			"scalar"
-		],
-		[
-			"context.optimization_target",
-			model.context.optimization_target,
-			TASK_INTERPRETATION_ENUMS.context.optimization_target,
-			"scalar"
-		],
-		[
-			"context.hard_constraints",
-			model.context.hard_constraints,
-			null,
-			"list"
-		],
-		[
-			"context.allowed_tradeoffs",
-			model.context.allowed_tradeoffs,
-			null,
-			"list"
-		],
-		[
-			"context.avoid",
-			model.context.avoid,
-			null,
-			"list"
-		],
-		[
-			"context.risk_level",
-			model.context.risk_level,
-			TASK_INTERPRETATION_ENUMS.context.risk_level,
-			"scalar"
-		],
-		[
-			"context.scope_size",
-			model.context.scope_size,
-			TASK_INTERPRETATION_ENUMS.context.scope_size,
-			"scalar"
-		],
-		[
-			"context.compatibility_requirement",
-			model.context.compatibility_requirement,
-			TASK_INTERPRETATION_ENUMS.context.compatibility_requirement,
-			"scalar"
-		],
-		[
-			"context.interface_sensitivity",
-			model.context.interface_sensitivity,
-			TASK_INTERPRETATION_ENUMS.context.interface_sensitivity,
-			"scalar"
-		],
-		[
-			"context.refactor_tolerance",
-			model.context.refactor_tolerance,
-			TASK_INTERPRETATION_ENUMS.context.refactor_tolerance,
-			"scalar"
-		],
-		[
-			"context.migration_phase",
-			model.context.migration_phase,
-			TASK_INTERPRETATION_ENUMS.context.migration_phase,
-			"scalar"
-		],
-		[
-			"context.review_goal",
-			model.context.review_goal,
-			TASK_INTERPRETATION_ENUMS.context.review_goal,
-			"scalar"
-		]
-	];
-	for (const [field, candidate, allowedValues, kind] of fields) {
-		if (candidate === void 0) continue;
-		if (!isRecord(candidate)) return {
-			field,
-			reason: "malformed-payload",
-			message: "Task model field must be an object."
-		};
-		if (!validConfidence(candidate.confidence)) return {
-			field,
-			reason: "malformed-payload",
-			message: "Task model field confidence must be between 0 and 1."
-		};
-		if (candidate.confidence < .5) return {
-			field,
-			reason: "low-confidence",
-			message: "Task model field confidence is below threshold.",
-			confidence: candidate.confidence
-		};
-		if (!validEvidenceRefs(candidate.evidence_refs)) return {
-			field,
-			reason: "missing-evidence",
-			message: "Task model field must include at least one valid evidence_ref.",
-			confidence: candidate.confidence
-		};
-		if (kind === "scalar") {
-			if (typeof candidate.value !== "string") return {
-				field,
-				reason: "missing-required-field",
-				message: "Task model scalar field must include value.",
-				confidence: candidate.confidence
-			};
-			if (allowedValues && !allowedValues.includes(candidate.value)) return {
-				field,
-				reason: "unsupported-value",
-				message: `Unsupported value "${candidate.value}".`,
-				confidence: candidate.confidence
-			};
-		} else if (!Array.isArray(candidate.values) || !candidate.values.every((item) => typeof item === "string")) return {
-			field,
-			reason: "missing-required-field",
-			message: "Task model list field must include string values.",
-			confidence: candidate.confidence
-		};
-	}
-	return null;
-}
-function buildTaskModelPrompt(input) {
-	return [
-		"Produce a task-model payload for Runtime.",
-		"Resolve only fields supported by evidence from the user request, conversation, files, diff, commands, or repository context.",
-		"Every resolved field must include confidence and at least one evidence_ref.",
-		"Runtime will validate enums, evidence shape, confidence, and field-level precedence.",
-		"Return JSON only.",
-		"",
-		`Task description: ${input.task.description}`,
-		`Explicit operation: ${input.task.operation ?? "(none)"}`,
-		`Explicit target file: ${input.task.targetFile ?? "(none)"}`,
-		`Explicit changed files: ${input.task.changedFiles?.join(", ") || "(none)"}`,
-		`Explicit tech stack: ${input.task.techStack?.join(", ") || "(none)"}`,
-		`Allowed task enum values: ${JSON.stringify(TASK_INTERPRETATION_ENUMS)}`
-	].join("\n");
-}
-function buildAmbiguityHints(task) {
-	const hints = [];
-	if (!task.operation) hints.push("operation is not explicit");
-	if (!task.targetFile && !task.changedFiles?.length) hints.push("no concrete target files are specified");
-	if (!task.techStack?.length) hints.push("tech stack is implicit");
-	if (!task.projectStage) hints.push("project stage is not specified");
-	return hints;
-}
-function buildClarificationHints(task) {
-	return [
-		...!task.operation ? ["Clarify whether this is create, modify, bugfix, refactor, or review work."] : [],
-		...!task.targetFile && !task.changedFiles?.length ? ["Name the target or changed files when known."] : [],
-		...!task.optimizationTarget ? ["Specify the optimization target when the tradeoff matters."] : []
-	];
-}
-//#endregion
-//#region src/plan-guidance.ts
-async function planGuidance(input) {
-	const notes = [];
-	const sourceStatus = resolveSourceStatus(input, notes);
-	const guidanceMode = input.mode ?? "standard";
-	const resolvedTask = resolveTask({
-		task: input.task,
-		taskModels: input.taskModels ?? [],
-		interpretationMode: input.taskModels?.length ? "host-agent" : "deterministic-only"
-	});
-	const rcclRelevant = await resolveRcclRelevance(input, sourceStatus, resolvedTask, notes);
-	const policy = resolveContractPolicy({
-		sourceStatus,
-		providedContracts: input.providedContracts,
-		agentCapabilityProfile: input.agentCapabilityProfile,
-		task: input.task,
-		resolvedTask,
-		mode: guidanceMode,
-		rcclRelevant
-	});
-	const requiredContracts = [];
-	if (policy.required.includes("agent-capability-profile")) {
-		const profile = prepareAgentCapabilityProfileContract({
-			task: input.task,
-			artifactPath: input.artifactPaths.agentCapabilityProfile
-		});
-		requiredContracts.push({
-			kind: "agent-capability-profile",
-			artifact: profile.profileArtifact,
-			contract: profile.contract
-		});
-		notes.push("Agent capability profile requested so Runtime can select agentic contracts from concrete host capabilities.");
-	}
-	if (policy.required.includes("task-model")) {
-		const taskModel = prepareTaskModelContract({
-			task: input.task,
-			artifactPath: input.artifactPaths.taskModel
-		});
-		requiredContracts.push({
-			kind: "task-model",
-			artifact: taskModel.modelArtifact,
-			contract: taskModel.contract
-		});
-		notes.push("Task model contract requested; deterministic interpretation is fallback only.");
-	}
-	if (policy.required.includes("context-acquisition")) {
-		const acquisition = prepareContextAcquisitionContract({
-			task: input.task,
-			artifactPath: input.artifactPaths.contextAcquisition ?? input.artifactPaths.taskModel
-		});
-		requiredContracts.push({
-			kind: "context-acquisition",
-			artifact: acquisition.acquisitionArtifact,
-			contract: acquisition.contract
-		});
-		notes.push("Context acquisition is required because task risk is high and RCCL is absent.");
-	}
-	if (policy.required.includes("semantic-governance-graph")) {
-		const graph = await prepareSemanticGovernanceGraphContractBundle({
-			compileInput: guidancePlanCompileInput(input),
-			artifactPath: input.artifactPaths.semanticGovernanceGraph ?? defaultSemanticGovernanceGraphPath(input.projectRoot)
-		});
-		requiredContracts.push({
-			kind: "semantic-governance-graph",
-			artifact: graph.graphArtifact,
-			contract: graph.contract,
-			context: {
-				resolvedTask: graph.resolvedTask,
-				directives: graph.directives,
-				observations: graph.observations
-			}
-		});
-		notes.push("Semantic governance graph is required because RCCL is available and host semantic evidence should drive merge relations.");
-	}
-	if (policy.required.includes("adherence-evidence")) notes.push("Adherence evidence is required by strict mode after implementation; it is prepared after guidance compilation.");
-	if (policy.optional.includes("context-acquisition")) notes.push("RCCL is absent; context acquisition or repository calibration is recommended before semantic graph compilation.");
-	if (policy.optional.includes("adherence-evidence")) notes.push("Adherence evidence is optional in this mode; use prepare-adherence and complete when you want directive follow-rate updates.");
-	if (policy.optional.includes("governance-evolution-proposal")) notes.push("Governance evolution proposal is available from lockfile signals, but it is review-only and never writes automatically.");
-	notes.push(...policy.diagnostics.reasons);
-	return {
-		mode: requiredContracts.length ? "contracts-required" : "ready",
-		guidanceMode,
-		requiredContracts,
-		recommendedContracts: unique([...policy.required, ...policy.optional]),
-		sourceStatus,
-		outputPolicy: {
-			stdout: "compact",
-			trace: "session-only"
-		},
-		policy,
-		diagnostics: {
-			policy: requiredContracts.length ? "contracts-required" : "ready",
-			notes
-		}
-	};
-}
-function resolveSourceStatus(input, notes) {
-	return {
-		localAugment: input.localAugmentPath && existsSync(input.localAugmentPath) ? "present" : "absent",
-		rccl: resolveRcclSourceStatus(input.rcclPath, notes),
-		lockfile: input.lockfilePath && existsSync(input.lockfilePath) ? "present" : "absent",
-		cache: resolveCacheStatus(input.projectRoot)
-	};
-}
-function resolveRcclSourceStatus(rcclPath, notes) {
-	if (!rcclPath || !existsSync(rcclPath)) return "absent";
-	try {
-		const parsed = parseYaml(readFileSync(rcclPath, "utf-8"));
-		if (!isRecord(parsed) || !Array.isArray(parsed.observations)) return "unverified";
-		if (parsed.observations.length === 0) return "present";
-		const observations = parsed.observations.filter(isRecord);
-		if (observations.length !== parsed.observations.length) return "unverified";
-		if (observations.some((observation) => {
-			const verification = isRecord(observation.verification) ? observation.verification : null;
-			if (!verification) return true;
-			return !hasVerificationValue(verification, "evidence_status") || !hasVerificationValue(verification, "evidence_verified_count") || !hasVerificationValue(verification, "evidence_confidence") || !hasVerificationValue(verification, "induction_status") || !hasVerificationValue(verification, "induction_confidence") || !hasVerificationValue(verification, "checked_at") || !hasVerificationValue(verification, "disposition");
-		})) return "unverified";
-		return observations.some((observation) => {
-			const lifecycle = isRecord(observation.lifecycle) ? observation.lifecycle : null;
-			return lifecycle?.status === "stale" || lifecycle?.status === "superseded";
-		}) ? "stale" : "present";
-	} catch (error) {
-		notes?.push(`RCCL status check failed: ${error instanceof Error ? error.message : String(error)}`);
-		return "unverified";
-	}
-}
-function resolveCacheStatus(projectRoot) {
-	const cacheRoot = join(projectRoot, ".resonant-code", "context", "cache", "runtime");
-	if (!existsSync(cacheRoot)) return "miss";
-	const populatedLevels = [
-		"l1",
-		"l2",
-		"l3"
-	].filter((level) => hasFiles(join(cacheRoot, level))).length;
-	if (populatedLevels === 3) return "hit";
-	return populatedLevels > 0 ? "partial" : "miss";
-}
-function guidancePlanCompileInput(input) {
-	return {
-		builtinRoot: input.builtinRoot,
-		localAugmentPath: input.localAugmentPath,
-		rcclPath: input.rcclPath,
-		projectRoot: input.projectRoot,
-		lockfilePath: input.lockfilePath,
-		hostProposals: input.hostProposals,
-		hostFulfillment: input.hostFulfillment,
-		agentCapabilityProfile: input.agentCapabilityProfile,
-		preloadedSources: input.preloadedSources,
-		task: input.task,
-		taskModels: input.taskModels
-	};
-}
-function defaultSemanticGovernanceGraphPath(projectRoot) {
-	return join(projectRoot, ".resonant-code", "context", "semantic-governance-graphs", "semantic-governance-graph.json");
-}
-async function resolveRcclRelevance(input, sourceStatus, resolvedTask, notes) {
-	if (sourceStatus.rccl === "absent" || !input.rcclPath) return void 0;
-	const targets = taskTargets(input.task, resolvedTask);
-	if (targets.length === 0) return void 0;
-	let rccl = null;
-	try {
-		rccl = await loadRccl(input.rcclPath);
-	} catch (error) {
-		notes?.push(`RCCL relevance check failed: ${error instanceof Error ? error.message : String(error)}`);
-		return;
-	}
-	if (!rccl) return void 0;
-	return rccl.observations.some((observation) => targets.some((target) => scopeOverlapsPath(observation.scope, target) || observation.evidence.some((evidence) => fileOverlapsTarget(evidence.file, target))));
-}
-function taskTargets(task, resolvedTask) {
-	return unique([
-		task.targetFile,
-		...task.changedFiles ?? [],
-		resolvedTask.task_intent.target_file,
-		...resolvedTask.task_intent.changed_files
-	].filter((value) => Boolean(value)).map(normalizePath));
-}
-function hasFiles(directory) {
-	try {
-		return readdirSync(directory).some((entry) => entry.endsWith(".json"));
-	} catch (_error) {
-		return false;
-	}
-}
-function hasVerificationValue(record, key) {
-	return record[key] !== void 0 && record[key] !== null && record[key] !== "";
-}
-//#endregion
-//#region src/ai-contracts/adherence-evidence.ts
-const MINIMUM_ADHERENCE_CONFIDENCE = .5;
-const VERDICTS = new Set([
-	"followed",
-	"ignored",
-	"partial",
-	"unverified"
-]);
-const IGNORED_REASONS = new Set([
-	"not-applicable",
-	"conflicts-with-task",
-	"too-broad",
-	"repo-reality",
-	"false-positive",
-	"user-corrected",
-	"other"
-]);
-const ADHERENCE_EVIDENCE_SCHEMA = {
-	type: "object",
-	additionalProperties: false,
-	properties: { verdicts: { type: "array" } },
-	required: ["verdicts"]
-};
-function prepareAdherenceEvidenceContract(input) {
-	const prompt = buildEvidencePrompt(input.directives, input.taskDescription);
-	const artifact = {
-		suggestedPath: input.artifactPath,
-		format: "json",
-		usage: `Write adherence-evidence JSON to ${input.artifactPath}, then pass it to complete with --adherence-file ${input.artifactPath}.`
-	};
-	return {
-		evidencePrompt: prompt,
-		evidenceSchema: JSON.stringify(ADHERENCE_EVIDENCE_SCHEMA, null, 2),
-		evidenceArtifact: artifact,
-		contract: {
-			contractVersion: AI_CONTRACT_VERSION,
-			kind: "adherence-evidence",
-			schemaId: "runtime.adherence-evidence",
-			schemaVersion: "2.0",
-			prompt,
-			schema: ADHERENCE_EVIDENCE_SCHEMA,
-			artifact,
-			allowedIds: { directiveIds: input.directives.map((directive) => directive.id) },
-			provenance: {
-				owner: "runtime",
-				deterministic: true
-			},
-			cacheKeyMaterial: {
-				directiveIds: input.directives.map((directive) => directive.id),
-				schemaId: "runtime.adherence-evidence"
-			}
-		}
-	};
-}
-function validateAdherenceEvidencePayload(raw, allowedDirectiveIds, evidenceContext) {
-	const entries = [];
-	const verdicts = [];
-	const allowedIds = new Set(allowedDirectiveIds);
-	const versionDiagnostic = contractVersionDiagnostic(raw, "adherence-evidence");
-	if (versionDiagnostic) return {
-		verdicts,
-		diagnostics: buildContractPayloadDiagnostics("adherence-evidence", [versionDiagnostic])
-	};
-	if (!isAdherencePayload(raw)) {
-		entries.push({
-			status: raw == null ? "unused" : "rejected",
-			reason: raw == null ? "empty-payload" : "malformed-payload",
-			path: "payload",
-			message: raw == null ? "No adherence evidence payload was provided." : "Adherence evidence payload must be an object with a verdicts array."
-		});
-		return {
-			verdicts,
-			diagnostics: buildContractPayloadDiagnostics("adherence-evidence", entries)
-		};
-	}
-	const seen = /* @__PURE__ */ new Set();
-	raw.verdicts.forEach((item, index) => {
-		const path = `verdicts[${index}]`;
-		if (!isVerdictEntry(item)) {
-			entries.push({
-				status: "rejected",
-				reason: "malformed-payload",
-				path,
-				message: "Verdict must include directive_id, verdict, confidence, evidence_refs, and reason.",
-				directiveId: isRecord(item) && typeof item.directive_id === "string" ? item.directive_id : void 0
-			});
-			return;
-		}
-		if (!allowedIds.has(item.directive_id)) {
-			entries.push(rejected(path, "invalid-id", `Directive id "${item.directive_id}" is not allowed.`, item));
-			return;
-		}
-		if (seen.has(item.directive_id)) {
-			entries.push(rejected(path, "duplicate-id", `Directive id "${item.directive_id}" already has a verdict.`, item));
-			return;
-		}
-		seen.add(item.directive_id);
-		if (item.confidence < MINIMUM_ADHERENCE_CONFIDENCE) {
-			entries.push(rejected(path, "low-confidence", `Confidence ${item.confidence} is below ${MINIMUM_ADHERENCE_CONFIDENCE}.`, item));
-			return;
-		}
-		const nonUnverified = item.verdict !== "unverified";
-		const evidenceRefs = validEvidenceRefs(item.evidence_refs) ? normalizeEvidenceRefs(item.evidence_refs) : [];
-		if (nonUnverified && !evidenceRefs.length) {
-			verdicts.push(toUnverified(item, evidenceRefs));
-			entries.push(downgraded(path, "missing-evidence", "Non-unverified adherence verdict lacks evidence_refs; recorded as unverified and excluded from follow rate.", item));
-			return;
-		}
-		if (nonUnverified && evidenceRefs.length) {
-			const evidence = verifyEvidenceRefs(evidenceRefs, evidenceContext);
-			if (evidence.conversationOnly) {
-				verdicts.push(toUnverified(item, evidenceRefs));
-				entries.push(downgraded(path, "conversation-only-evidence", `Conversation-only adherence evidence cannot update follow rate; recorded as unverified. Evidence verification: ${summarizeEvidenceVerification(evidence)}.`, item));
-				return;
-			}
-			if (!evidence.hasStaticEvidence) {
-				verdicts.push(toUnverified(item, evidenceRefs));
-				entries.push(downgraded(path, "insufficient-static-evidence", `Adherence verdict lacks statically verified file, diff, command, or runtime trace evidence; recorded as unverified. Evidence verification: ${summarizeEvidenceVerification(evidence)}.`, item));
-				return;
-			}
-		}
-		const ignoredReason = item.verdict === "ignored" && item.ignored_reason && IGNORED_REASONS.has(item.ignored_reason) ? item.ignored_reason : void 0;
-		verdicts.push({
-			directive_id: item.directive_id,
-			verdict: item.verdict,
-			confidence: item.confidence,
-			evidence_refs: evidenceRefs,
-			reason: item.reason,
-			...ignoredReason ? { ignored_reason: ignoredReason } : {}
-		});
-		entries.push({
-			status: "accepted",
-			reason: "accepted",
-			path,
-			message: `Adherence evidence verdict accepted: ${item.verdict}.`,
-			directiveId: item.directive_id,
-			confidence: item.confidence
-		});
-	});
-	if (!raw.verdicts.length) entries.push({
-		status: "unused",
-		reason: "empty-payload",
-		path: "verdicts",
-		message: "Adherence evidence payload contains no verdicts."
-	});
-	return {
-		verdicts,
-		diagnostics: buildContractPayloadDiagnostics("adherence-evidence", entries)
-	};
-}
-function toUnverified(item, evidenceRefs) {
-	return {
-		directive_id: item.directive_id,
-		verdict: "unverified",
-		confidence: item.confidence,
-		evidence_refs: evidenceRefs,
-		reason: item.reason
-	};
-}
-function summarizeEvidenceVerification(evidence) {
-	return evidence.entries.map((entry) => `${entry.ref.kind}:${entry.status}:${entry.reason}`).join("; ") || "none";
-}
-function isAdherencePayload(value) {
-	return isRecord(value) && Array.isArray(value.verdicts);
-}
-function isVerdictEntry(value) {
-	if (!isRecord(value)) return false;
-	return typeof value.directive_id === "string" && typeof value.verdict === "string" && VERDICTS.has(value.verdict) && validConfidence(value.confidence) && Array.isArray(value.evidence_refs) && typeof value.reason === "string";
-}
-function rejected(path, reason, message, item) {
-	return {
-		status: "rejected",
-		reason,
-		path,
-		message,
-		directiveId: item.directive_id,
-		confidence: item.confidence
-	};
-}
-function downgraded(path, reason, message, item) {
-	return {
-		status: "downgraded",
-		reason,
-		path,
-		message,
-		directiveId: item.directive_id,
-		confidence: item.confidence
-	};
-}
-function buildEvidencePrompt(directives, taskDescription) {
-	return [
-		"Evaluate adherence to compiled directives after implementation.",
-		"Every followed, ignored, or partial verdict must cite evidence_refs from diff, file snippets, test/command output, or implementation evidence.",
-		"Use \"unverified\" when you did not inspect enough evidence. Unverified directives do not update follow rate.",
-		"Return JSON only.",
-		"",
-		`Task description: ${taskDescription}`,
-		"",
-		"Compiled directives:",
-		...directives.map((directive) => `- ${directive.id}: [${directive.prescription}] ${directive.description} (execution_mode: ${directive.execution_mode})`)
-	].join("\n");
-}
-//#endregion
-//#region src/ai-contracts/governance-evolution-proposal.ts
-const GOVERNANCE_EVOLUTION_SCHEMA = {
-	type: "object",
-	additionalProperties: false,
-	properties: { proposals: { type: "array" } },
-	required: ["proposals"]
-};
-function prepareGovernanceEvolutionProposalContract(input) {
-	const lockfileSummary = input.lockfileSummary ?? summarizeLockfileForEvolution(input.lockfilePath);
-	const reviewGroups = buildGovernanceEvolutionReviewGroups();
-	const artifact = {
-		suggestedPath: input.artifactPath ?? "(review-only-response)",
-		format: "json",
-		usage: input.artifactPath ? `Write a review-only governance-evolution-proposal payload to ${input.artifactPath}. Runtime validates it but does not modify authoritative files.` : "Return a review-only governance-evolution-proposal payload in the command response. Runtime validates it but does not modify authoritative files."
-	};
-	const prompt = [
-		"Prepare review-only governance evolution proposals from bounded lockfile summary signals.",
-		"Do not write local augment, RCCL, or lockfile state. Runtime/RCCL validators will only accept the proposal as assistive review input.",
-		"Use local-override, local-suppress, local-addition, or rccl-refresh only when repeated evidence justifies human review.",
-		"Return JSON only.",
-		"",
-		`Lockfile summary: ${JSON.stringify(lockfileSummary)}`,
-		`Review groups: ${JSON.stringify(reviewGroups)}`
-	].join("\n");
-	return {
-		proposalPrompt: prompt,
-		proposalSchema: JSON.stringify(GOVERNANCE_EVOLUTION_SCHEMA, null, 2),
-		proposalArtifact: artifact,
-		contract: {
-			contractVersion: AI_CONTRACT_VERSION,
-			kind: "governance-evolution-proposal",
-			schemaId: "runtime.governance-evolution-proposal",
-			schemaVersion: "2.0",
-			prompt,
-			schema: GOVERNANCE_EVOLUTION_SCHEMA,
-			artifact,
-			provenance: {
-				owner: "runtime",
-				deterministic: true
-			},
-			context: {
-				lockfileSummary,
-				reviewGroups,
-				authoritativeWritePolicy: "review-only; no automatic local augment or RCCL writes"
-			},
-			cacheKeyMaterial: {
-				schemaId: "runtime.governance-evolution-proposal",
-				lockfileSummary
-			}
-		},
-		lockfileSummary,
-		reviewGroups
-	};
-}
-function validateGovernanceEvolutionProposalPayload(raw) {
-	const entries = [];
-	const proposals = [];
-	if (!isRecord(raw) || !Array.isArray(raw.proposals)) {
-		entries.push({
-			status: raw == null ? "unused" : "rejected",
-			reason: raw == null ? "empty-payload" : "malformed-payload",
-			path: "proposals",
-			message: "Governance evolution proposal must include a proposals array."
-		});
-		return {
-			proposals,
-			diagnostics: buildContractPayloadDiagnostics("governance-evolution-proposal", entries)
-		};
-	}
-	raw.proposals.forEach((item, index) => {
-		const path = `proposals[${index}]`;
-		if (!isRecord(item) || !isProposalKind(item.kind) || typeof item.reason !== "string" || !validConfidence(item.confidence) || !validEvidenceRefs(item.evidence_refs)) {
-			entries.push({
-				status: "rejected",
-				reason: "malformed-payload",
-				path,
-				message: "Evolution proposal must include kind, reason, confidence, and evidence_refs.",
-				confidence: isRecord(item) && typeof item.confidence === "number" ? item.confidence : void 0
-			});
-			return;
-		}
-		proposals.push({
-			kind: item.kind,
-			...typeof item.target_id === "string" ? { target_id: item.target_id } : {},
-			reason: item.reason,
-			evidence_refs: item.evidence_refs,
-			confidence: item.confidence
-		});
-		entries.push({
-			status: "accepted",
-			reason: "accepted",
-			path,
-			message: "Governance evolution proposal accepted for review.",
-			confidence: item.confidence
-		});
-	});
-	return {
-		proposals,
-		diagnostics: buildContractPayloadDiagnostics("governance-evolution-proposal", entries)
-	};
-}
-function isProposalKind(value) {
-	return value === "local-override" || value === "local-suppress" || value === "local-addition" || value === "rccl-refresh";
-}
-function buildGovernanceEvolutionReviewGroups() {
-	return [
-		{
-			group: "playbook-candidate",
-			proposalKinds: [
-				"local-override",
-				"local-suppress",
-				"local-addition"
-			],
-			reviewRule: "Use only for durable prescriptive guidance changes that a human should review before local augment changes."
-		},
-		{
-			group: "rccl-candidate",
-			proposalKinds: ["rccl-refresh"],
-			reviewRule: "Use for observational signals that should be refreshed through RCCL commit or commit-refresh, never by direct runtime write."
-		},
-		{
-			group: "no-action",
-			proposalKinds: [],
-			reviewRule: "Prefer no proposal when lockfile signals are weak, one-off, unverified, or already explained by task-local context."
-		}
-	];
-}
-function summarizeLockfileForEvolution(lockfilePath) {
-	if (!lockfilePath || !existsSync(lockfilePath)) return {
-		status: "absent",
-		directive_count: 0,
-		observation_count: 0,
-		tension_count: 0
-	};
-	try {
-		const parsed = parseYaml(readFileSync(lockfilePath, "utf-8"));
-		if (!isRecord(parsed)) return {
-			status: "unreadable",
-			reason: "lockfile root is not an object"
-		};
-		const directives = isRecord(parsed.directives) ? parsed.directives : {};
-		const observations = isRecord(parsed.observations) ? parsed.observations : {};
-		const tensions = isRecord(parsed.tensions) ? parsed.tensions : {};
-		const governanceSummary = isRecord(parsed.governance_summary) ? parsed.governance_summary : {};
-		return {
-			status: "present",
-			directive_count: Object.keys(directives).length,
-			observation_count: Object.keys(observations).length,
-			tension_count: Object.keys(tensions).length,
-			total_tasks: numberField(governanceSummary.total_tasks),
-			last_tension_count: numberField(governanceSummary.last_tension_count),
-			last_observation_count: numberField(governanceSummary.last_observation_count),
-			directives: summarizeDirectiveSignals(directives),
-			observations: summarizeObservationSignals(observations)
-		};
-	} catch (error) {
-		return {
-			status: "unreadable",
-			reason: error instanceof Error ? error.message : String(error)
-		};
-	}
-}
-function summarizeDirectiveSignals(directives) {
-	return Object.entries(directives).slice(0, 20).map(([id, value]) => {
-		const entry = isRecord(value) ? value : {};
-		const quality = isRecord(entry.quality_signal) ? entry.quality_signal : {};
-		const overall = isRecord(quality.overall) ? quality.overall : {};
-		return {
-			id,
-			followed: numberField(overall.followed),
-			ignored: numberField(overall.ignored),
-			partial: numberField(overall.partial),
-			unverified: numberField(overall.unverified),
-			follow_rate: numberField(overall.follow_rate),
-			trend: stringField(overall.trend),
-			signal_confidence: stringField(quality.signal_confidence),
-			last_evaluation_source: stringField(quality.last_evaluation_source)
-		};
-	});
-}
-function summarizeObservationSignals(observations) {
-	return Object.entries(observations).slice(0, 20).map(([id, value]) => {
-		const entry = isRecord(value) ? value : {};
-		return {
-			id,
-			seen_count: numberField(entry.seen_count),
-			relation_count: numberField(entry.relation_count),
-			last_disposition: stringField(entry.last_disposition),
-			last_lifecycle_status: stringField(entry.last_lifecycle_status)
-		};
-	});
-}
-function numberField(value) {
-	return typeof value === "number" && Number.isFinite(value) ? value : null;
-}
-function stringField(value) {
-	return typeof value === "string" ? value : null;
-}
-//#endregion
-export { AI_CONTRACT_VERSION, DeterministicInterpretationProvider, GOVERNANCE_IR_VERSION, LOCKFILE_VERSION, TASK_INPUT_ENUMS, TASK_INTERPRETATION_ENUMS, TASK_INTERPRETATION_SOURCES, activatedDirectiveIdsIR, adjudicateSemanticRelations, buildGovernanceIR, buildSemanticRelationsIR, compile, evaluateGuidance, inspectCompileCache, loadSemanticGovernanceGraphPayload, persistCompileCache, planGuidance, prepareAdherenceEvidenceContract, prepareAgentCapabilityProfileContract, prepareContextAcquisitionContract, prepareGovernanceEvolutionProposalContract, prepareSemanticContractContext, prepareSemanticGovernanceGraphContract, prepareSemanticGovernanceGraphContractBundle, prepareTaskModelContract, proposeSemanticRelations, resolveActivationDecisionsIR, resolveContractPolicy, resolveExecutionDecisionsIR, resolveSourceStatus, resolveTask, resolveTaskInput, semanticRelationIRToPublic, semanticRelationsIRToPublic, validateAdherenceEvidencePayload, validateAgentCapabilityProfilePayload, validateContextAcquisitionPayload, validateGovernanceEvolutionProposalPayload, validateSemanticGovernanceGraphPayload, validateTaskModelPayload, verifyEvidenceRefs };
+export { compile, evaluateGuidance, planGuidance };

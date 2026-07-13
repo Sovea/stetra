@@ -151,8 +151,8 @@ function shouldRequireTaskModel(input: ContractPolicyInput, mode: GuidanceExecut
   if (mode === 'fast') return false;
   const profile = policyContextProfile(input);
   const task = policyTask(input);
-  const operation = input.resolvedTask?.task_intent.operation ?? task?.operation;
-  const taskKind = input.resolvedTask?.taskKind ?? task?.taskKind;
+  const workflow = input.resolvedTask?.task_intent.workflow ?? task?.workflow;
+  const changeType = input.resolvedTask?.task_intent.change_type ?? task?.changeType;
   if (isHighRisk(policyRiskLevel(input)) && isPolicyAuthoritative(input, 'context.risk_level', 'riskLevel')) return true;
   if (profile?.scope_size === 'cross-cutting') return true;
   if (profile?.compatibility_requirement && profile.compatibility_requirement !== 'none' && profile.compatibility_requirement !== 'breaking-allowed'
@@ -163,8 +163,8 @@ function shouldRequireTaskModel(input: ContractPolicyInput, mode: GuidanceExecut
     && isPolicyAuthoritative(input, 'context.migration_phase', 'migrationPhase')) return true;
   if ((profile?.review_goal === 'security' || profile?.review_goal === 'regression-risk' || profile?.review_goal === 'architecture-fit')
     && isPolicyAuthoritative(input, 'context.review_goal', 'reviewGoal')) return true;
-  if (taskKind === 'migration' && isPolicyAuthoritative(input, 'intent.task_kind', 'taskKind')) return true;
-  if (operation === 'review' && isPolicyAuthoritative(input, 'intent.operation', 'operation')) return true;
+  if (changeType === 'migration' && isPolicyAuthoritative(input, 'intent.change_type', 'changeType')) return true;
+  if (workflow === 'review' && isPolicyAuthoritative(input, 'intent.workflow', 'workflow')) return true;
   return hasAmbiguousTaskResolution(input);
 }
 

@@ -1,0 +1,28 @@
+{
+  "all": true,
+  "check-coverage": true,
+  "statements": 80,
+  "branches": 70,
+  "functions": 80,
+  "lines": 80,
+  "reporter": ["text", "text-summary"],
+  "include": [
+    "runtime/src/compile.ts",
+    "runtime/src/feedback.ts",
+    "runtime/src/intent/**/*.ts",
+    "runtime/src/ir/activation/**/*.ts",
+    "runtime/src/ir/ego/**/*.ts",
+    "runtime/src/ai-contracts/adherence-evidence.ts",
+    "runtime/src/ai-contracts/diagnostics.ts",
+    "runtime/src/ai-contracts/evidence.ts",
+    "runtime/src/ai-contracts/semantic-governance-graph.ts",
+    "runtime/src/ai-contracts/shared.ts",
+    "runtime/src/ai-contracts/task-model.ts",
+    "runtime/src/load/load-playbook.ts",
+    "rccl/src/indexing/**/*.ts",
+    "rccl/src/represent/**/*.ts",
+    "rccl/src/slicing/**/*.ts",
+    "rccl/src/verify/**/*.ts",
+    "rccl/src/utils/yaml.ts"
+  ]
+}

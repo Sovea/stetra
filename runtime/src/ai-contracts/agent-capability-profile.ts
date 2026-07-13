@@ -1,5 +1,5 @@
 import { buildContractPayloadDiagnostics } from './diagnostics.ts';
-import { contractVersionDiagnostic, isRecord } from './shared.ts';
+import { artifactIdentity, contractVersionDiagnostic, isRecord } from './shared.ts';
 import {
   AI_CONTRACT_VERSION,
   type AgentCapabilityProfile,
@@ -35,7 +35,7 @@ export function prepareAgentCapabilityProfileContract(input: AgentCapabilityProf
   const artifact = {
     suggestedPath: input.artifactPath,
     format: 'json' as const,
-    usage: `Write the agent capability profile to ${input.artifactPath}; workflow adapters may pass it to Runtime contract policy as agentCapabilityProfile.`,
+    usage: `Write a v1 envelope to ${input.artifactPath}: schema_version 1, kind agent-capability-profile, the issued requestId/contextFingerprint as request_id/context_fingerprint, and the profile under payload; then pass it back through Runtime artifacts.agentCapabilityProfile.`,
   };
   return {
     profilePrompt: prompt,
@@ -44,8 +44,9 @@ export function prepareAgentCapabilityProfileContract(input: AgentCapabilityProf
     contract: {
       contractVersion: AI_CONTRACT_VERSION,
       kind: 'agent-capability-profile',
+      ...artifactIdentity('agent-capability-profile', { task: input.task, schemaId: 'runtime.agent-capability-profile' }),
       schemaId: 'runtime.agent-capability-profile',
-      schemaVersion: '2.0',
+      schemaVersion: '1.0',
       prompt,
       schema: AGENT_CAPABILITY_PROFILE_SCHEMA,
       artifact,

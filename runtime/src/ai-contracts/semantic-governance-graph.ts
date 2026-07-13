@@ -2,7 +2,7 @@ import { resolveActivatedGovernanceContext } from '../compile-input.ts';
 import { SEMANTIC_RELATION_POLICY } from '../ir/relations/policy.ts';
 import { buildContractPayloadDiagnostics } from './diagnostics.ts';
 import { verifyEvidenceRefs } from './evidence.ts';
-import { contractVersionDiagnostic, isRecord, normalizeEvidenceRefs, validConfidence, validEvidenceRefs } from './shared.ts';
+import { artifactIdentity, contractVersionDiagnostic, isRecord, normalizeEvidenceRefs, validConfidence, validEvidenceRefs } from './shared.ts';
 import {
   AI_CONTRACT_VERSION,
   type ContractPayloadDiagnosticEntry,
@@ -63,7 +63,13 @@ export function prepareSemanticGovernanceGraphContract(input: SemanticGovernance
   const artifact = {
     suggestedPath: input.artifactPath,
     format: 'json' as const,
-    usage: `Write the semantic-governance-graph payload to ${input.artifactPath}, then re-run with --governance-graph-file ${input.artifactPath}.`,
+    usage: `Write a v1 envelope to ${input.artifactPath}: schema_version 1, kind semantic-governance-graph, the issued requestId/contextFingerprint as request_id/context_fingerprint, and the graph under payload; then re-run with --governance-graph-file ${input.artifactPath}.`,
+  };
+  const cacheKeyMaterial = {
+    taskIntent: input.resolvedTask.task_intent,
+    contextProfile: input.resolvedTask.context_profile,
+    directiveIds: input.directives.map((directive) => directive.id),
+    observationIds: input.observations.map((observation) => observation.id),
   };
   return {
     graphPrompt: prompt,
@@ -72,8 +78,9 @@ export function prepareSemanticGovernanceGraphContract(input: SemanticGovernance
     contract: {
       contractVersion: AI_CONTRACT_VERSION,
       kind: 'semantic-governance-graph',
+      ...artifactIdentity('semantic-governance-graph', cacheKeyMaterial),
       schemaId: 'runtime.semantic-governance-graph',
-      schemaVersion: '2.0',
+      schemaVersion: '1.0',
       prompt,
       schema: SEMANTIC_GRAPH_SCHEMA,
       artifact,
@@ -93,12 +100,7 @@ export function prepareSemanticGovernanceGraphContract(input: SemanticGovernance
           requirement: 'Create edges only when the directive and observation meaning materially affect execution, review focus, or ambient context for this task.',
         },
       },
-      cacheKeyMaterial: {
-        taskIntent: input.resolvedTask.task_intent,
-        contextProfile: input.resolvedTask.context_profile,
-        directiveIds: input.directives.map((directive) => directive.id),
-        observationIds: input.observations.map((observation) => observation.id),
-      },
+      cacheKeyMaterial,
     },
   };
 }
@@ -115,7 +117,7 @@ export function validateSemanticGovernanceGraphPayload(input: SemanticGovernance
   const allowedDirectiveIds = input.allowedDirectiveIds ? new Set(input.allowedDirectiveIds) : null;
   const allowedObservationIds = input.allowedObservationIds ? new Set(input.allowedObservationIds) : null;
   const edges = graphEdges(input.raw, entries);
-  const accepted: SemanticGovernanceGraphEdge[] = [];
+  const candidates: Array<{ edge: SemanticGovernanceGraphEdge; index: number }> = [];
   const seen = new Set<string>();
 
   edges.forEach((edge, index) => {
@@ -156,17 +158,44 @@ export function validateSemanticGovernanceGraphPayload(input: SemanticGovernance
       entries.push(rejected(path, 'insufficient-static-evidence', 'Execution-impacting graph edges require at least one statically verified evidence ref.', edge));
       return;
     }
-    accepted.push({ ...edge, evidence_refs: evidenceRefs });
-    entries.push({
-      status: 'accepted',
-      reason: 'accepted',
-      path,
-      message: 'Semantic governance graph edge accepted for Runtime adjudication.',
-      directiveId: edge.directive_id,
-      observationId: edge.observation_id,
-      confidence: edge.confidence,
-    });
+    candidates.push({ edge: { ...edge, evidence_refs: evidenceRefs }, index });
   });
+
+  const accepted: SemanticGovernanceGraphEdge[] = [];
+  const byDirective = new Map<string, Array<{ edge: SemanticGovernanceGraphEdge; index: number }>>();
+  for (const candidate of candidates) {
+    const group = byDirective.get(candidate.edge.directive_id) ?? [];
+    group.push(candidate);
+    byDirective.set(candidate.edge.directive_id, group);
+  }
+  for (const directiveId of [...byDirective.keys()].sort()) {
+    const ranked = byDirective.get(directiveId)!.sort((left, right) => compareGraphCandidates(left.edge, right.edge, input.evidenceContext));
+    ranked.forEach((candidate, rank) => {
+      const path = `edges[${candidate.index}]`;
+      if (rank >= SEMANTIC_RELATION_POLICY.hostSemantic.maxCandidatesPerDirective) {
+        entries.push({
+          status: 'unused',
+          reason: 'capped-by-policy',
+          path,
+          message: `Candidate exceeded maxCandidatesPerDirective=${SEMANTIC_RELATION_POLICY.hostSemantic.maxCandidatesPerDirective}.`,
+          directiveId: candidate.edge.directive_id,
+          observationId: candidate.edge.observation_id,
+          confidence: candidate.edge.confidence,
+        });
+        return;
+      }
+      accepted.push(candidate.edge);
+      entries.push({
+        status: 'accepted',
+        reason: 'accepted',
+        path,
+        message: 'Semantic governance graph edge accepted for Runtime adjudication.',
+        directiveId: candidate.edge.directive_id,
+        observationId: candidate.edge.observation_id,
+        confidence: candidate.edge.confidence,
+      });
+    });
+  }
 
   if (!edges.length && !entries.length) {
     entries.push({ status: 'unused', reason: 'empty-payload', path: 'edges', message: 'No semantic governance graph edges were provided.' });
@@ -176,6 +205,23 @@ export function validateSemanticGovernanceGraphPayload(input: SemanticGovernance
     proposal: buildHostProposal(input.source, { edges: accepted }),
     diagnostics: buildContractPayloadDiagnostics('semantic-governance-graph', entries, input.source),
   };
+}
+
+function compareGraphCandidates(
+  left: SemanticGovernanceGraphEdge,
+  right: SemanticGovernanceGraphEdge,
+  context: SemanticGovernanceGraphValidationInput['evidenceContext'],
+): number {
+  const dispositionRank = (edge: SemanticGovernanceGraphEdge) => {
+    const observation = context?.observations?.find((item) => item.id === edge.observation_id);
+    return observation?.verification?.disposition === 'keep' ? 2
+      : observation?.verification?.disposition === 'keep-with-reduced-confidence' ? 1 : 0;
+  };
+  const disposition = dispositionRank(right) - dispositionRank(left);
+  if (disposition) return disposition;
+  if (left.confidence !== right.confidence) return right.confidence - left.confidence;
+  if (left.evidence_refs.length !== right.evidence_refs.length) return right.evidence_refs.length - left.evidence_refs.length;
+  return `${left.observation_id}:${left.relation}:${left.reason}`.localeCompare(`${right.observation_id}:${right.relation}:${right.reason}`);
 }
 
 function isExecutionImpactingEdge(edge: SemanticGovernanceGraphEdge): boolean {

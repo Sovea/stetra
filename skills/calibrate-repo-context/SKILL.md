@@ -2,7 +2,7 @@
 name: calibrate-repo-context
 description: "Generate RCCL (Repository Context Calibration Layer) through a staged agent workflow, then write back statically verified calibration data."
 metadata:
-  version: "0.2.0"
+  version: "0.0.1"
   author: "Sovea"
 ---
 
@@ -33,7 +33,7 @@ node <this-skill-directory>/scripts/calibrate-repo-context.mjs prepare-increment
 ```
 
 This writes RCCL-owned cache artifacts under `.resonant-code/context/cache/rccl/`
-and may return an `ai-contract/v2` `rccl-observation-refresh` contract. Fulfill that contract with
+and may return an `ai-contract/v1` `rccl-observation-refresh` contract. Fulfill that contract with
 a structured YAML refresh proposal only when Runtime/RCCL requests it. The host
 agent may propose keep/revise/retire/new observations, evidence refs, counterexamples,
 and semantic-equivalence groups, but RCCL remains the
@@ -45,10 +45,12 @@ Task-time incremental calibration is intentionally narrow by default: `task-scop
 Commit an accepted refresh proposal with:
 
 ```sh
-node <this-skill-directory>/scripts/calibrate-repo-context.mjs commit-refresh <project-root> --input <path-to-refresh-yaml|-> [--debug-artifacts]
+node <this-skill-directory>/scripts/calibrate-repo-context.mjs commit-refresh <project-root> --input <path-to-refresh-yaml|-> [the same selector flags used by prepare-incremental] [--debug-artifacts]
 ```
 
-Refresh v2 rules:
+`commit-refresh` deterministically reissues the prepare contract from those selector flags before accepting the artifact. Reuse the same `--target-file`, `--changed-file`, `--scope`, `--mode`, `--file-limit`, and `--window-limit` values; a changed repository context or mismatched selector set is rejected.
+
+Refresh v1 rules:
 - `revise.provisional_id` must equal an existing active observation id; final id renames and historical reactivation are RCCL-owned decisions.
 - `new_observations.provisional_id` must not collide with an existing observation id.
 - `retire` is a proposal; RCCL verification decides stale, demotion, or carry-forward behavior.
@@ -181,8 +183,10 @@ Critical candidate constraints:
 ### Step 4 - Validate, verify, and commit
 
 ```sh
-node <this-skill-directory>/scripts/calibrate-repo-context.mjs commit <project-root> --input <path-to-yaml-file|-> [--debug-artifacts]
+node <this-skill-directory>/scripts/calibrate-repo-context.mjs commit <project-root> --input <path-to-yaml-file|-> [--scope <glob>] [--debug-artifacts]
 ```
+
+The commit phase reissues the full prepare contract for the current repository and scope. If the repository changed after prepare, the contract fingerprint no longer matches and commit fails without modifying RCCL.
 
 The commit phase performs five things:
 1. Parse generated YAML into candidate observations.
@@ -236,6 +240,6 @@ For quick calibration checks, the one-shot prepare command remains available:
 node <this-skill-directory>/scripts/calibrate-repo-context.mjs prepare <project-root> [--scope <glob>]
 ```
 
-The one-shot prepare output includes an RCCL-owned `ai-contract/v2` envelope and `candidateArtifact` metadata for the `rccl-observation-generation` host artifact. Host Claude may write candidate YAML to that suggested path, but `commit` remains the only deterministic parse, verification, and write boundary.
+The one-shot prepare output includes an RCCL-owned `ai-contract/v1` contract and `candidateArtifact` metadata. The host writes a v1 artifact envelope containing `schema_version`, `kind`, `request_id`, `context_fingerprint`, and `payload`; `commitCalibration` remains the only deterministic parse, verification, and write boundary.
 
 Prefer the staged workflow for real calibration because it separates semantic discovery, critique, and synthesis before the deterministic commit boundary.

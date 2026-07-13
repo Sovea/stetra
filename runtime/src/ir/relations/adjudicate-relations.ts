@@ -25,8 +25,8 @@ export function adjudicateSemanticRelations(
     switch (relation.relation) {
       case 'suppress':
         return adjudicateSuppressRelation(relation, {
-          directiveKind: directive.kind,
           observationAntiPattern: observation.traits.antiPattern,
+          observationVerified: observation.verification.evidenceStatus === 'verified',
         });
       case 'tension':
       case 'reinforce':
@@ -42,16 +42,16 @@ export function adjudicateSemanticRelations(
 function adjudicateSuppressRelation(
   relation: SemanticRelationIR,
   context: {
-    directiveKind: string;
     observationAntiPattern: boolean;
+    observationVerified: boolean;
   },
 ): SemanticRelationIR {
   if (!relation.basis.scope) return rejectRelation(relation, 'suppression is outside the task scope');
   if (!hasSemanticBasis(relation)) {
     return rejectRelation(relation, 'suppression lacks semantic basis');
   }
-  if (!hasAntiPatternBasis(relation, context)) {
-    return rejectRelation(relation, 'suppression requires an anti-pattern directive, anti-pattern observation, or anti-pattern conflict class');
+  if (!context.observationAntiPattern || !context.observationVerified) {
+    return rejectRelation(relation, 'suppression requires a statically verified anti-pattern observation under Runtime policy');
   }
   if (!relation.basis.evidence) {
     return downgradeRelation(relation, 'suppression lacks verified observation evidence');
@@ -76,18 +76,6 @@ function hasSemanticBasis(relation: SemanticRelationIR): boolean {
     || relation.basis.semanticKey
     || relation.basis.category
     || relation.signals.some((signal) => signal.kind === 'host-proposal' || signal.kind === 'semantic-key');
-}
-
-function hasAntiPatternBasis(
-  relation: SemanticRelationIR,
-  context: {
-    directiveKind: string;
-    observationAntiPattern: boolean;
-  },
-): boolean {
-  return context.directiveKind === 'anti-pattern'
-    || context.observationAntiPattern
-    || relation.conflictClass === 'anti-pattern';
 }
 
 function acceptedReason(relation: SemanticRelationIR, label: string): string {

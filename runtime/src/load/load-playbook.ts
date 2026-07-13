@@ -71,7 +71,7 @@ export function loadDirectiveFile(filePath: string, layerId: string): Directive[
   if (!Array.isArray(parsed)) {
     throw new Error(`Directive file must contain a top-level array: ${filePath}`);
   }
-  return parsed.map((item) => normalizeDirective(item as Record<string, unknown>, layerId, filePath, 'builtin'));
+  return parsed.map((item, index) => normalizeDirective(assertRecord(item, `${filePath}[${index}]`), layerId, filePath, 'builtin'));
 }
 
 /**
@@ -79,17 +79,20 @@ export function loadDirectiveFile(filePath: string, layerId: string): Directive[
  */
 export function loadLocalPlaybook(filePath?: string): LocalPlaybook | null {
   if (!filePath || !existsSync(filePath)) return null;
-  const parsed = parseYaml(readFileSync(filePath, 'utf-8')) as Record<string, unknown>;
+  const parsed = assertRecord(parseYaml(readFileSync(filePath, 'utf-8')), filePath);
+  if (parsed.version !== 1 && parsed.version !== '1.0') {
+    throw new Error(`UNSUPPORTED_SCHEMA_VERSION: ${filePath} must use local playbook schema 1. Re-run init; existing data was not modified.`);
+  }
   const meta = ((parsed.meta ?? {}) as Record<string, unknown>);
   return {
-    version: String(parsed.version ?? '1.0'),
+    version: '1.0',
     meta: {
       name: typeof meta.name === 'string' ? meta.name : undefined,
       extends: Array.isArray(meta.extends) ? meta.extends.map(String) : [],
     },
-    overrides: Array.isArray(parsed.overrides) ? parsed.overrides.map((item) => item as any) : [],
-    augments: Array.isArray(parsed.augments) ? parsed.augments.map((item) => item as any) : [],
-    suppresses: Array.isArray(parsed.suppresses) ? parsed.suppresses.map((item) => item as any) : [],
+    overrides: arrayField(parsed.overrides, 'overrides', filePath).map((item, index) => normalizeOverride(item, `${filePath}.overrides[${index}]`)),
+    augments: arrayField(parsed.augments, 'augments', filePath).map((item, index) => normalizeAugment(item, `${filePath}.augments[${index}]`)),
+    suppresses: arrayField(parsed.suppresses, 'suppresses', filePath).map((item, index) => normalizeSuppress(item, `${filePath}.suppresses[${index}]`)),
     additions: Array.isArray(parsed.additions)
       ? parsed.additions.map((item) => normalizeDirective(item as Record<string, unknown>, 'local', filePath, 'local-addition'))
       : [],
@@ -102,17 +105,25 @@ function normalizeDirective(
   filePath: string,
   kind: 'builtin' | 'local-addition',
 ): Directive {
+  rejectConditionalBranching(input, filePath);
+  const id = nonEmptyString(input.id, 'id', filePath);
+  const type = enumValue(input.type, ['constraint', 'preference', 'convention', 'architecture', 'anti-pattern'] as const, 'type', filePath);
+  const prescription = enumValue(input.prescription, ['must', 'should'] as const, 'prescription', filePath);
+  const weight = enumValue(input.weight ?? 'normal', ['low', 'normal', 'high', 'critical'] as const, 'weight', filePath);
+  const description = nonEmptyString(input.description, 'description', filePath);
+  const rationale = nonEmptyString(input.rationale, 'rationale', filePath);
+  const examples = normalizeExamples(input.examples, filePath);
   return {
-    id: String(input.id),
-    type: String(input.type) as DirectiveType,
+    id,
+    type: type as DirectiveType,
     layer: typeof input.layer === 'string' ? input.layer : layerId,
     scope: normalizeScope(input.scope),
-    prescription: String(input.prescription) as Prescription,
-    weight: (input.weight ?? 'normal') as Weight,
-    description: String(input.description ?? ''),
-    rationale: String(input.rationale ?? ''),
+    prescription: prescription as Prescription,
+    weight: weight as Weight,
+    description,
+    rationale,
     exceptions: Array.isArray(input.exceptions) ? input.exceptions.map(String) : [],
-    examples: normalizeExamples(input.examples),
+    examples,
     rccl_immune: Boolean(input.rccl_immune),
     traits: normalizeTraits(input.traits),
     source: { kind, layerId, filePath },
@@ -120,17 +131,18 @@ function normalizeDirective(
 }
 
 function normalizeScope(input: unknown): DirectiveScope {
-  if (typeof input === 'string') return { path: input };
+  if (typeof input === 'string' && input.trim()) return { path: input.trim() };
   if (input && typeof input === 'object' && typeof (input as Record<string, unknown>).path === 'string') {
     return { path: String((input as Record<string, unknown>).path) };
   }
-  return { path: '**/*' };
+  throw new Error('Invalid playbook directive scope: expected a non-empty path string or { path }.');
 }
 
-function normalizeExamples(input: unknown): DirectiveExample[] {
-  if (!Array.isArray(input)) return [];
-  return input.map((example) => {
-    const item = example as Record<string, unknown>;
+function normalizeExamples(input: unknown, location: string): DirectiveExample[] {
+  if (!Array.isArray(input) || input.length === 0) throw new Error(`Invalid playbook directive at ${location}: examples must be a non-empty array.`);
+  return input.map((example, index) => {
+    const item = assertRecord(example, `${location}.examples[${index}]`);
+    if (typeof item.note !== 'string' || !item.note.trim()) throw new Error(`Invalid playbook directive at ${location}: every example requires a non-empty note.`);
     return {
       avoid: item.avoid && typeof item.avoid === 'object'
         ? { code: String((item.avoid as Record<string, unknown>).code ?? '') }
@@ -138,9 +150,88 @@ function normalizeExamples(input: unknown): DirectiveExample[] {
       good: item.good && typeof item.good === 'object'
         ? { code: String((item.good as Record<string, unknown>).code ?? '') }
         : undefined,
-      note: String(item.note ?? ''),
+      note: item.note.trim(),
     };
   });
+}
+
+export function assertUniqueDirectiveIds(directives: Directive[]): void {
+  const seen = new Map<string, string>();
+  for (const directive of directives) {
+    const prior = seen.get(directive.id);
+    if (prior) throw new Error(`Duplicate directive id "${directive.id}" in ${prior} and ${directive.source.filePath}.`);
+    seen.set(directive.id, directive.source.filePath);
+  }
+}
+
+export function validateLocalReferences(local: LocalPlaybook | null, builtins: Directive[]): void {
+  if (!local) return;
+  const byId = new Map(builtins.map((directive) => [directive.id, directive]));
+  for (const override of local.overrides) {
+    const target = byId.get(override.supersedes);
+    if (!target) throw new Error(`Local override supersedes unknown directive "${override.supersedes}".`);
+    if (override.scope && override.scope.path !== target.scope.path) {
+      throw new Error(`Local override scope "${override.scope.path}" is incompatible with ${override.supersedes} scope "${target.scope.path}".`);
+    }
+  }
+  for (const item of [...local.augments, ...local.suppresses]) {
+    if (!byId.has(item.id)) throw new Error(`Local playbook references unknown directive "${item.id}".`);
+  }
+}
+
+function normalizeOverride(value: unknown, location: string) {
+  const item = assertRecord(value, location);
+  if ('id' in item && !('supersedes' in item)) throw new Error(`Invalid local override at ${location}: use explicit supersedes instead of id.`);
+  return {
+    supersedes: nonEmptyString(item.supersedes, 'supersedes', location),
+    ...(item.scope !== undefined ? { scope: normalizeScope(item.scope) } : {}),
+    ...(item.prescription !== undefined ? { prescription: enumValue(item.prescription, ['must', 'should'] as const, 'prescription', location) } : {}),
+    ...(item.weight !== undefined ? { weight: enumValue(item.weight, ['low', 'normal', 'high', 'critical'] as const, 'weight', location) } : {}),
+    ...(item.rationale !== undefined ? { rationale: nonEmptyString(item.rationale, 'rationale', location) } : {}),
+    ...(item.exceptions !== undefined ? { exceptions: stringArray(item.exceptions, 'exceptions', location) } : {}),
+  };
+}
+
+function normalizeAugment(value: unknown, location: string) {
+  const item = assertRecord(value, location);
+  return { id: nonEmptyString(item.id, 'id', location), examples: normalizeExamples(item.examples, location) };
+}
+
+function normalizeSuppress(value: unknown, location: string) {
+  const item = assertRecord(value, location);
+  return { id: nonEmptyString(item.id, 'id', location), reason: nonEmptyString(item.reason, 'reason', location) };
+}
+
+function assertRecord(value: unknown, location: string): Record<string, unknown> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error(`Expected object at ${location}.`);
+  return value as Record<string, unknown>;
+}
+
+function nonEmptyString(value: unknown, field: string, location: string): string {
+  if (typeof value !== 'string' || !value.trim()) throw new Error(`Invalid ${field} at ${location}: expected a non-empty string.`);
+  return value.trim();
+}
+
+function enumValue<T extends string>(value: unknown, allowed: readonly T[], field: string, location: string): T {
+  if (typeof value !== 'string' || !allowed.includes(value as T)) throw new Error(`Invalid ${field} at ${location}: expected one of ${allowed.join(', ')}.`);
+  return value as T;
+}
+
+function stringArray(value: unknown, field: string, location: string): string[] {
+  if (!Array.isArray(value) || !value.every((item) => typeof item === 'string')) throw new Error(`Invalid ${field} at ${location}: expected a string array.`);
+  return value.map((item) => item.trim()).filter(Boolean);
+}
+
+function arrayField(value: unknown, field: string, location: string): unknown[] {
+  if (value === undefined) return [];
+  if (!Array.isArray(value)) throw new Error(`Invalid ${field} at ${location}: expected an array.`);
+  return value;
+}
+
+function rejectConditionalBranching(input: Record<string, unknown>, location: string): void {
+  for (const key of ['if', 'when', 'condition', 'conditions', 'then', 'else']) {
+    if (key in input) throw new Error(`Invalid directive at ${location}: internal conditional branch "${key}" is not allowed.`);
+  }
 }
 
 function normalizeTraits(input: unknown): DirectiveTraits | undefined {

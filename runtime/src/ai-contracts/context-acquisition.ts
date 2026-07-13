@@ -8,7 +8,7 @@ import {
   type ContextAcquisitionValidationResult,
 } from './types.ts';
 import { buildContractPayloadDiagnostics } from './diagnostics.ts';
-import { contractVersionDiagnostic, isRecord, unique, validConfidence, validEvidenceRefs } from './shared.ts';
+import { artifactIdentity, contractVersionDiagnostic, isRecord, unique, validConfidence, validEvidenceRefs } from './shared.ts';
 import { normalizePath } from '../utils/paths.ts';
 
 const CONTEXT_ACQUISITION_SCHEMA = {
@@ -54,7 +54,7 @@ export function prepareContextAcquisitionContract(input: ContextAcquisitionContr
   const artifact = {
     suggestedPath: input.artifactPath,
     format: 'json' as const,
-    usage: `Write bounded context-acquisition requests to ${input.artifactPath}; use them to drive calibrate-repo-context prepare-incremental before semantic graph compilation.`,
+    usage: `Write a v1 envelope to ${input.artifactPath}: schema_version 1, kind context-acquisition, the issued requestId/contextFingerprint as request_id/context_fingerprint, and bounded requests under payload; use them to drive calibrate-repo-context prepare-incremental before semantic graph compilation.`,
   };
   return {
     acquisitionPrompt: prompt,
@@ -63,8 +63,9 @@ export function prepareContextAcquisitionContract(input: ContextAcquisitionContr
     contract: {
       contractVersion: AI_CONTRACT_VERSION,
       kind: 'context-acquisition',
+      ...artifactIdentity('context-acquisition', { task: input.task, schemaId: 'runtime.context-acquisition' }),
       schemaId: 'runtime.context-acquisition',
-      schemaVersion: '2.0',
+      schemaVersion: '1.0',
       prompt,
       schema: CONTEXT_ACQUISITION_SCHEMA,
       artifact,

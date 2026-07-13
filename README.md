@@ -87,7 +87,7 @@ This flow currently produces these project artifacts:
 - `.resonant-code/playbook.lock.yaml` — lockfile feedback from completed guided tasks
 - `.resonant-code/context/` — generated runtime sessions plus optional debug artifacts such as calibration reports, task models, governance graphs, and adherence evidence; this directory should normally be ignored
 
-> Suggested step: review, extend, and commit `.resonant-code/playbook/local-augment.yaml` so project-specific guidance becomes a durable repository asset. `.resonant-code/rccl.yaml` and `.resonant-code/playbook.lock.yaml` are optional team-level artifacts; `.resonant-code/context/` is generated state.
+> Review and commit the v1 local augment, RCCL, and lockfile when governance state is shared by the team. `.resonant-code/context/` remains generated state and should be ignored.
 
 ## Current implementation
 
@@ -95,13 +95,13 @@ What is implemented today:
 
 - `init` prepares a narrow strong-signal layer-selection prompt, lets the host choose only evidence-backed repo-specific playbook layers, then deterministically writes `.resonant-code/playbook/local-augment.yaml` and updates `.gitignore` for generated runtime context artifacts.
 - `calibrate-repo-context` prepares repository slices, generates RCCL candidates, verifies evidence statically, and writes authoritative output to `.resonant-code/rccl.yaml`.
-- `calibrate-repo-context` also supports an incremental `prepare-incremental` -> `commit-refresh` path that emits RCCL-owned `ai-contract/v2` `rccl-observation-refresh` contracts, accepts evidence refs, counterexamples, and semantic equivalence proposals, validates keep/revise/retire/new proposals, and writes scoped cache artifacts under `.resonant-code/context/cache/rccl/`.
+- `calibrate-repo-context` also supports an incremental `prepare-incremental` → `commit-refresh` path that emits RCCL-owned v1 `rccl-observation-refresh` contracts, accepts evidence refs, counterexamples, and semantic equivalence proposals, validates keep/revise/retire/new proposals, and writes scoped cache artifacts under `.resonant-code/context/cache/rccl/`.
 - `code` is a thin runtime consumer with a default `auto` flow. Runtime plans required host-agent contracts by mode: `standard` favors deterministic fallback for low-risk work, while `strict` preserves the full contract lifecycle.
 - Runtime policy diagnostics expose deterministic fallback provenance, but fallback intent fields are neutral defaults; compatibility, migration, sensitive-interface, and similar governance semantics must come from explicit structured input or a host task-model artifact.
 - `code doctor` reports durable/generated artifact state, cache volume, plugin completeness, a readiness summary with next actions, and a low-risk `standard`-mode probe so teams can see whether the default path will block unexpectedly.
-- The staged `prepare-interpretation` -> `prepare` -> `complete` flow remains available as an advanced/debug path.
-- The runtime exports `compile`, `resolveTask`, and `evaluateGuidance` and writes lockfile feedback to `.resonant-code/playbook.lock.yaml`.
-- The runtime also exports `planGuidance`, `resolveContractPolicy`, and Runtime-owned `task-model`, `semantic-governance-graph`, and `adherence-evidence` contract helpers for low-friction contract orchestration.
+- The staged `prepare-interpretation` → `prepare` → `complete` flow remains available as an advanced/debug path.
+- The Runtime root exports only `planGuidance`, `compile`, and `evaluateGuidance`; contract validators and IR helpers are internal.
+- RCCL exposes `prepareCalibration` and `commitCalibration` to skills; verification, consolidation, YAML, and authoritative writes remain internal.
 - Interpretation supports host-agent task models plus deterministic fallback fields marked as defaulted.
 - Task models, governance graphs, adherence evidence, and runtime sessions are written under `.resonant-code/context/`.
 - Runtime compile cache artifacts are written under `.resonant-code/context/cache/runtime/`; cache metadata records the invalidation inputs for each level and includes task-time RCCL verification policy/summary fingerprints. Cache reads are inspection-only and never replace Runtime compile or RCCL task-time verification.
@@ -110,11 +110,10 @@ What is implemented today:
 ## Development verification
 
 ```sh
-pnpm -r build
-pnpm verify:plugin
+pnpm verify
 ```
 
-`verify:plugin` uses the existing build plus the lightweight `code doctor` probe. It does not create repository test files.
+The verification gate runs typecheck, tracked tests, deterministic builds, an isolated release-package smoke test, and plugin/doctor checks on Node.js 22.
 
 ## Design constraints
 

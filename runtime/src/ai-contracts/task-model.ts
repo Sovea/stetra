@@ -1,6 +1,6 @@
 import { TASK_INTERPRETATION_ENUMS } from '../intent/schema.ts';
 import { buildContractPayloadDiagnostics } from './diagnostics.ts';
-import { contractVersionDiagnostic, isRecord, validConfidence, validEvidenceRefs } from './shared.ts';
+import { artifactIdentity, contractVersionDiagnostic, isRecord, validConfidence, validEvidenceRefs } from './shared.ts';
 import {
   AI_CONTRACT_VERSION,
   type ContractPayloadDiagnosticEntry,
@@ -26,7 +26,7 @@ export function prepareTaskModelContract(input: TaskModelContractInput): TaskMod
   const artifact = {
     suggestedPath: input.artifactPath,
     format: 'json' as const,
-    usage: `Write a task-model JSON object or array to ${input.artifactPath}, then re-run with --task-model-file ${input.artifactPath}.`,
+    usage: `Write a v1 envelope to ${input.artifactPath}: schema_version 1, kind task-model, the issued requestId/contextFingerprint as request_id/context_fingerprint, and the task-model object or array under payload; then re-run with --task-model-file ${input.artifactPath}.`,
   };
   return {
     task: input.task,
@@ -38,8 +38,9 @@ export function prepareTaskModelContract(input: TaskModelContractInput): TaskMod
     contract: {
       contractVersion: AI_CONTRACT_VERSION,
       kind: 'task-model',
+      ...artifactIdentity('task-model', { task: input.task, schemaId: 'runtime.task-model' }),
       schemaId: 'runtime.task-model',
-      schemaVersion: '2.0',
+      schemaVersion: '1.0',
       prompt,
       schema: TASK_MODEL_SCHEMA,
       artifact,
@@ -111,7 +112,8 @@ function isTaskModelProposal(value: unknown): value is TaskModelProposal {
 
 function firstInvalidField(model: TaskModelProposal): { field: string; reason: ContractPayloadDiagnosticEntry['reason']; message: string; confidence?: number } | null {
   const fields: Array<[string, unknown, readonly string[] | null, 'scalar' | 'list']> = [
-    ['intent.task_kind', model.intent.task_kind, TASK_INTERPRETATION_ENUMS.intent.task_kind, 'scalar'],
+    ['intent.workflow', model.intent.workflow, TASK_INTERPRETATION_ENUMS.intent.workflow, 'scalar'],
+    ['intent.change_type', model.intent.change_type, TASK_INTERPRETATION_ENUMS.intent.change_type, 'scalar'],
     ['intent.operation', model.intent.operation, TASK_INTERPRETATION_ENUMS.intent.operation, 'scalar'],
     ['intent.target_layer', model.intent.target_layer, null, 'scalar'],
     ['intent.target_file', model.intent.target_file, null, 'scalar'],
@@ -157,6 +159,8 @@ function buildTaskModelPrompt(input: TaskModelContractInput): string {
     'Return JSON only.',
     '',
     `Task description: ${input.task.description}`,
+    `Explicit workflow: ${input.task.workflow ?? '(none)'}`,
+    `Explicit change type: ${input.task.changeType ?? '(none)'}`,
     `Explicit operation: ${input.task.operation ?? '(none)'}`,
     `Explicit target file: ${input.task.targetFile ?? '(none)'}`,
     `Explicit changed files: ${input.task.changedFiles?.join(', ') || '(none)'}`,
@@ -167,6 +171,7 @@ function buildTaskModelPrompt(input: TaskModelContractInput): string {
 
 function buildAmbiguityHints(task: TaskModelContractInput['task']): string[] {
   const hints: string[] = [];
+  if (!task.changeType) hints.push('change type is not explicit');
   if (!task.operation) hints.push('operation is not explicit');
   if (!task.targetFile && !task.changedFiles?.length) hints.push('no concrete target files are specified');
   if (!task.techStack?.length) hints.push('tech stack is implicit');
@@ -176,7 +181,8 @@ function buildAmbiguityHints(task: TaskModelContractInput['task']): string[] {
 
 function buildClarificationHints(task: TaskModelContractInput['task']): string[] {
   return [
-    ...(!task.operation ? ['Clarify whether this is create, modify, bugfix, refactor, or review work.'] : []),
+    ...(!task.changeType ? ['Clarify whether this is feature, bugfix, refactor, migration, or unknown work.'] : []),
+    ...(!task.operation ? ['Clarify whether files are created, modified, deleted, or mixed.'] : []),
     ...(!task.targetFile && !task.changedFiles?.length ? ['Name the target or changed files when known.'] : []),
     ...(!task.optimizationTarget ? ['Specify the optimization target when the tradeoff matters.'] : []),
   ];

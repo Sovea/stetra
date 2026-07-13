@@ -1,0 +1,228 @@
+version: "1.0"
+generated_at: 2026-07-13T17:48:03.530Z
+git_ref: 0031ced
+observations:
+  - id: obs-agent-capability-schema-closed
+    semantic_key: agent-capability-schema-closed
+    category: constraint
+    scope: runtime/src/ai-contracts/agent-capability-profile.ts
+    pattern: Agent capability profiles use a closed object schema with required boolean capabilities, so undeclared host claims cannot enter Runtime planning.
+    confidence: 0.96
+    adherence_quality: good
+    evidence:
+      - file: runtime/src/ai-contracts/agent-capability-profile.ts
+        line_range:
+          - 12
+          - 25
+        snippet: |-
+          const AGENT_CAPABILITY_PROFILE_SCHEMA = {
+            type: 'object',
+            additionalProperties: false,
+            properties: {
+              can_read_files: { type: 'boolean' },
+              can_search_files: { type: 'boolean' },
+              can_run_commands: { type: 'boolean' },
+              can_inspect_diff: { type: 'boolean' },
+              can_request_context: { type: 'boolean' },
+              max_context_files: { type: 'number' },
+              max_command_count: { type: 'number' },
+            },
+            required: ['can_read_files', 'can_search_files', 'can_run_commands', 'can_inspect_diff', 'can_request_context'],
+          };
+    support:
+      source_slices:
+        - module:runtime-src
+        - root:runtime
+      file_count: 1
+      cluster_count: 1
+      scope_basis: single-file
+    verification:
+      evidence_status: verified
+      evidence_verified_count: 1
+      evidence_confidence: 0.96
+      induction_status: well-supported
+      induction_confidence: 0.96
+      checked_at: 2026-07-13T17:48:03.524Z
+      disposition: keep
+    lifecycle:
+      first_seen_git_ref: 0031ced
+      last_seen_git_ref: 0031ced
+      last_verified_at: 2026-07-13T17:48:03.524Z
+      content_fingerprint: bed551ae2eab1550b08cde6e408e39d211dfadb7
+      status: active
+  - id: obs-context-acquisition-bounded
+    semantic_key: context-acquisition-bounded
+    category: constraint
+    scope: runtime/src/ai-contracts/context-acquisition.ts
+    pattern: Context acquisition proposals are limited to RCCL incremental modes, at most four target or changed files, bounded confidence, and mandatory evidence references.
+    confidence: 0.97
+    adherence_quality: good
+    evidence:
+      - file: runtime/src/ai-contracts/context-acquisition.ts
+        line_range:
+          - 24
+          - 38
+        snippet: |-
+          kind: { const: 'rccl-incremental' },
+                    mode: { enum: ['task-scoped', 'changed-files', 'full'] },
+                    target_files: { type: 'array', items: { type: 'string' }, maxItems: 4 },
+                    changed_files: { type: 'array', items: { type: 'string' }, maxItems: 4 },
+                    scope: { type: 'string' },
+                    reason: { type: 'string' },
+                    confidence: { type: 'number', minimum: 0, maximum: 1 },
+                    evidence_refs: { type: 'array' },
+                  },
+                  required: ['kind', 'mode', 'target_files', 'changed_files', 'reason', 'confidence', 'evidence_refs'],
+                },
+              },
+            },
+            required: ['requests'],
+          };
+    support:
+      source_slices:
+        - module:runtime-src
+        - root:runtime
+      file_count: 1
+      cluster_count: 1
+      scope_basis: single-file
+    verification:
+      evidence_status: verified
+      evidence_verified_count: 1
+      evidence_confidence: 0.97
+      induction_status: well-supported
+      induction_confidence: 0.97
+      checked_at: 2026-07-13T17:48:03.524Z
+      disposition: keep
+    lifecycle:
+      first_seen_git_ref: 0031ced
+      last_seen_git_ref: 0031ced
+      last_verified_at: 2026-07-13T17:48:03.524Z
+      content_fingerprint: 21b160f34862abb8a66db4185dbff866ae63aa48
+      status: active
+  - id: obs-product-version-codex-manifest
+    semantic_key: product-version-codex-manifest
+    category: constraint
+    scope: .codex-plugin/plugin.json
+    pattern: The Codex plugin manifest declares resonant-code product version 0.0.1 and MIT licensing as release metadata.
+    confidence: 0.99
+    adherence_quality: good
+    evidence:
+      - file: .codex-plugin/plugin.json
+        line_range:
+          - 1
+          - 10
+        snippet: |-
+          {
+            "name": "resonant-code",
+            "version": "0.0.1",
+            "description": "An AI coding governance/runtime layer that aims to narrow the gap between AI generated code and code worth keeping.",
+            "author": {
+              "name": "Sovea",
+              "url": "https://github.com/Sovea"
+            },
+            "repository": "https://github.com/Sovea/resonant-code",
+            "license": "MIT",
+    support:
+      source_slices:
+        - boundary:repository-boundary
+        - style:config
+      file_count: 1
+      cluster_count: 1
+      scope_basis: single-file
+    verification:
+      evidence_status: verified
+      evidence_verified_count: 1
+      evidence_confidence: 0.99
+      induction_status: well-supported
+      induction_confidence: 0.99
+      checked_at: 2026-07-13T17:48:03.524Z
+      disposition: keep
+    lifecycle:
+      first_seen_git_ref: 0031ced
+      last_seen_git_ref: 0031ced
+      last_verified_at: 2026-07-13T17:48:03.524Z
+      content_fingerprint: a520364dd932859acef58d208c14a08a60da0dc0
+      status: active
+  - id: obs-rccl-public-lifecycle-only
+    semantic_key: rccl-public-lifecycle-only
+    category: architecture
+    scope: rccl/src/index.ts
+    pattern: The RCCL package root exposes only prepareCalibration and commitCalibration as the public skill lifecycle, with implementation helpers kept internal.
+    confidence: 0.99
+    adherence_quality: good
+    evidence:
+      - file: rccl/src/index.ts
+        line_range:
+          - 1
+          - 3
+        snippet: |-
+          /** RCCL v1 public skill lifecycle. */
+          export { prepareCalibration, commitCalibration } from './lifecycle.ts';
+          export type { PrepareCalibrationInput, CommitCalibrationInput } from './lifecycle.ts';
+    support:
+      source_slices:
+        - module:rccl-src
+      file_count: 1
+      cluster_count: 1
+      scope_basis: single-file
+    verification:
+      evidence_status: verified
+      evidence_verified_count: 1
+      evidence_confidence: 0.99
+      induction_status: well-supported
+      induction_confidence: 0.99
+      checked_at: 2026-07-13T17:48:03.524Z
+      disposition: keep
+    lifecycle:
+      first_seen_git_ref: 0031ced
+      last_seen_git_ref: 0031ced
+      last_verified_at: 2026-07-13T17:48:03.524Z
+      content_fingerprint: 8c42cee9e2c6de56187a7593e1e472ab83f95336
+      status: active
+  - id: obs-runtime-adherence-contract-identity
+    semantic_key: runtime-adherence-contract-identity
+    category: constraint
+    scope: runtime/src/ai-contracts/adherence-evidence.ts
+    pattern: Adherence evidence contracts bind schema v1, allowed directive IDs, deterministic provenance, and cache identity into a Runtime-owned envelope.
+    confidence: 0.97
+    adherence_quality: good
+    evidence:
+      - file: runtime/src/ai-contracts/adherence-evidence.ts
+        line_range:
+          - 40
+          - 52
+        snippet: |-
+          contract: {
+                contractVersion: AI_CONTRACT_VERSION,
+                kind: 'adherence-evidence',
+                ...artifactIdentity('adherence-evidence', { directiveIds: input.directives.map((directive) => directive.id), schemaId: 'runtime.adherence-evidence' }),
+                schemaId: 'runtime.adherence-evidence',
+                schemaVersion: '1.0',
+                prompt,
+                schema: ADHERENCE_EVIDENCE_SCHEMA,
+                artifact,
+                allowedIds: { directiveIds: input.directives.map((directive) => directive.id) },
+                provenance: { owner: 'runtime', deterministic: true },
+                cacheKeyMaterial: { directiveIds: input.directives.map((directive) => directive.id), schemaId: 'runtime.adherence-evidence' },
+              },
+    support:
+      source_slices:
+        - module:runtime-src
+        - root:runtime
+      file_count: 1
+      cluster_count: 1
+      scope_basis: single-file
+    verification:
+      evidence_status: verified
+      evidence_verified_count: 1
+      evidence_confidence: 0.97
+      induction_status: well-supported
+      induction_confidence: 0.97
+      checked_at: 2026-07-13T17:48:03.524Z
+      disposition: keep
+    lifecycle:
+      first_seen_git_ref: 0031ced
+      last_seen_git_ref: 0031ced
+      last_verified_at: 2026-07-13T17:48:03.524Z
+      content_fingerprint: d94482e4b4e5dadae3a34707d78494bf0086aa0b
+      status: active

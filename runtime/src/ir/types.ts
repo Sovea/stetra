@@ -1,5 +1,6 @@
 import type {
   AdherenceQuality,
+  ChangeType,
   ContextProfile,
   DirectiveExample,
   DirectiveType,
@@ -12,7 +13,7 @@ import type {
   RcclLifecycleStatus,
   RcclObservation,
   ScopeBasis,
-  TaskKind,
+  Workflow,
   VerificationDisposition,
   VerificationStatus,
   Weight,
@@ -163,7 +164,8 @@ export interface FieldProvenanceIR {
 export interface TaskIR {
   irVersion: GovernanceIRVersion;
   id: string;
-  kind: TaskKind;
+  workflow: Workflow;
+  changeType: ChangeType;
   operation: Operation;
   targetLayer: string;
   targets: TargetIR[];
@@ -183,7 +185,7 @@ export interface DirectiveFeedbackSignalIR {
   followed: number;
   ignored: number;
   followRate: number;
-  trend: 'improving' | 'stable' | 'degrading';
+  trend: 'improving' | 'stable' | 'declining';
   signalConfidence: FeedbackSignalConfidence;
   ignoredReasons: Partial<Record<IgnoredReason, number>>;
   lastIgnoredReason?: IgnoredReason;

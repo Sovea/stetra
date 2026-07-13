@@ -293,7 +293,8 @@ export function prepareIncrementalRccl(
 function buildPreparationContext(projectRootInput: string, scopeInput?: string): PreparationContext {
   const projectRoot = resolve(projectRootInput);
   const scope = scopeInput || 'auto';
-  const indexedFiles = buildRepoIndex(projectRoot, scope);
+  const index = buildRepoIndex(projectRoot, scope);
+  const indexedFiles = index.files;
   const representation = buildRepresentation(indexedFiles);
   const slices = planSlices(projectRoot, indexedFiles, representation);
   const windows = slices.flatMap((slice) => slice.windows);
@@ -303,6 +304,7 @@ function buildPreparationContext(projectRootInput: string, scopeInput?: string):
     indexed_files: indexedFiles.length,
     selected_slices: slices.length,
     windows: windows.length,
+    index_report: index.report,
   };
   return { projectRoot, scope, indexedFiles, representation, slices, contextMeta, stats };
 }
@@ -375,7 +377,7 @@ function buildObservationGenerationArtifact(projectRoot: string, scope: string):
   return {
     suggestedPath: suggestedObservationCandidatePath(projectRoot, scope),
     format: 'yaml' as const,
-    usage: 'Write candidate RCCL observations to this YAML path, then pass it to calibrate-repo-context commit with --input.',
+    usage: 'Write a v1 envelope with schema_version: 1, this contract requestId/contextFingerprint as request_id/context_fingerprint, kind: rccl-observation-generation, and the candidate document under payload; then pass it to commit.',
   };
 }
 
@@ -384,11 +386,26 @@ function buildObservationGenerationContract(
   prompt: string,
   artifact: ReturnType<typeof buildObservationGenerationArtifact>,
 ): RcclAIContractEnvelope {
+  const cacheKeyMaterial = {
+    scope: context.scope,
+    stats: context.stats,
+    slices: context.slices.map((slice) => ({
+      id: slice.id,
+      files: slice.files,
+      windows: slice.windows.map((window) => ({
+        file: window.file,
+        start_line: window.start_line,
+        end_line: window.end_line,
+        purpose: window.purpose,
+      })),
+    })),
+  };
   return {
-    contractVersion: 'ai-contract/v2' as const,
+    contractVersion: 'ai-contract/v1' as const,
     kind: 'rccl-observation-generation' as const,
+    ...contractIdentity('rccl-observation-generation', cacheKeyMaterial),
     schemaId: 'rccl.observation-generation-candidate',
-    schemaVersion: '2.0' as const,
+    schemaVersion: '1.0' as const,
     prompt,
     schema: RCCL_CANDIDATE_SCHEMA,
     artifact,
@@ -396,20 +413,7 @@ function buildObservationGenerationContract(
       owner: 'rccl' as const,
       deterministic: true as const,
     },
-    cacheKeyMaterial: {
-      scope: context.scope,
-      stats: context.stats,
-      slices: context.slices.map((slice) => ({
-        id: slice.id,
-        files: slice.files,
-        windows: slice.windows.map((window) => ({
-          file: window.file,
-          start_line: window.start_line,
-          end_line: window.end_line,
-          purpose: window.purpose,
-        })),
-      })),
-    },
+    cacheKeyMaterial,
   };
 }
 
@@ -417,7 +421,7 @@ function buildObservationRefreshArtifact(projectRoot: string, scope: string, mod
   return {
     suggestedPath: suggestedObservationRefreshPath(projectRoot, scope, mode, focusFiles),
     format: 'yaml' as const,
-    usage: 'Write the RCCL observation refresh proposal to this YAML path, then pass it to calibrate-repo-context commit-refresh with --input.',
+    usage: 'Write a v1 envelope with schema_version: 1, this contract requestId/contextFingerprint as request_id/context_fingerprint, kind: rccl-observation-refresh, and the refresh document under payload; then pass it to commit-refresh.',
   };
 }
 
@@ -431,11 +435,24 @@ function buildObservationRefreshContract(input: {
   staleObservations: string[];
   existingRccl: RcclDocument | null;
 }): RcclAIContractEnvelope {
+  const cacheKeyMaterial = {
+    scope: input.context.scope,
+    focusFiles: input.focusFiles,
+    affectedObservations: input.affectedObservations,
+    staleObservations: input.staleObservations,
+    existingObservationFingerprints: (input.existingRccl?.observations ?? []).map((observation) => ({
+      id: observation.id,
+      fingerprint: observation.lifecycle?.content_fingerprint ?? null,
+      verification: observation.verification.disposition,
+    })),
+    slices: input.slices.map((slice) => ({ id: slice.id, files: slice.files })),
+  };
   return {
-    contractVersion: 'ai-contract/v2' as const,
+    contractVersion: 'ai-contract/v1' as const,
     kind: 'rccl-observation-refresh' as const,
+    ...contractIdentity('rccl-observation-refresh', cacheKeyMaterial),
     schemaId: 'rccl.observation-refresh',
-    schemaVersion: '2.0' as const,
+    schemaVersion: '1.0' as const,
     prompt: input.prompt,
     schema: RCCL_REFRESH_SCHEMA,
     artifact: input.artifact,
@@ -444,15 +461,7 @@ function buildObservationRefreshContract(input: {
       deterministic: true as const,
     },
     cacheKeyMaterial: {
-      scope: input.context.scope,
-      focusFiles: input.focusFiles,
-      affectedObservations: input.affectedObservations,
-      staleObservations: input.staleObservations,
-      existingObservationFingerprints: (input.existingRccl?.observations ?? []).map((observation) => ({
-        id: observation.id,
-        fingerprint: observation.lifecycle?.content_fingerprint ?? null,
-        verification: observation.verification.disposition,
-      })),
+      ...cacheKeyMaterial,
       slices: input.slices.map((slice) => ({
         id: slice.id,
         files: slice.files,
@@ -465,6 +474,11 @@ function buildObservationRefreshContract(input: {
       })),
     },
   };
+}
+
+function contractIdentity(kind: string, context: unknown) {
+  const contextFingerprint = createHash('sha256').update(JSON.stringify({ kind, context })).digest('hex').slice(0, 24);
+  return { requestId: `${kind}:${contextFingerprint}`, contextFingerprint };
 }
 
 function suggestedObservationCandidatePath(projectRoot: string, scope: string): string {
@@ -588,7 +602,7 @@ function buildRefreshPrompt(input: {
   lines.push('');
   lines.push('## Hard rules');
   lines.push('1. Keep existing observations only when the provided slices and existing summary still support them.');
-  lines.push('2. Revise uses provisional_id equal to an existing active observation id; v2 still keeps final merge, rename, and lifecycle authority inside RCCL.');
+  lines.push('2. Revise uses provisional_id equal to an existing active observation id; v1 keeps final merge, rename, and lifecycle authority inside RCCL.');
   lines.push('3. Revise or create observations only with exact evidence copied from the provided windows plus matching evidence_refs.');
   lines.push('4. Retire means the observation should become stale unless RCCL verification proves a stronger disposition.');
   lines.push('5. Use only listed existing active observation ids in keep, revise, or retire.');

@@ -15,8 +15,10 @@ import type {
   ValidatedAdherenceEvidenceVerdict,
 } from './ai-contracts/types.ts';
 
-export type TaskKind = 'code' | 'review' | 'analysis' | 'migration';
-export type Operation = 'create' | 'modify' | 'review' | 'refactor' | 'bugfix';
+export type Workflow = 'code' | 'review' | 'analysis';
+export type TaskKind = Workflow;
+export type ChangeType = 'feature' | 'bugfix' | 'refactor' | 'migration' | 'unknown';
+export type Operation = 'create' | 'modify' | 'delete' | 'mixed';
 export type Prescription = 'must' | 'should';
 export type Weight = 'low' | 'normal' | 'high' | 'critical';
 export type DirectiveType = 'constraint' | 'preference' | 'convention' | 'architecture' | 'anti-pattern';
@@ -125,7 +127,8 @@ export interface RcclDocument {
 }
 
 export interface TaskIntent {
-  task_kind: TaskKind;
+  workflow: Workflow;
+  change_type: ChangeType;
   operation: Operation;
   target_layer: string;
   tech_stack: string[];
@@ -136,7 +139,6 @@ export interface TaskIntent {
 
 export interface ContextProfile {
   project_stage?: 'prototype' | 'growth' | 'stable' | 'critical';
-  change_type: Operation;
   optimization_target: 'speed' | 'maintainability' | 'safety' | 'simplicity' | 'reviewability';
   hard_constraints: string[];
   allowed_tradeoffs: string[];
@@ -151,7 +153,8 @@ export interface ContextProfile {
 }
 
 export interface LocalOverride {
-  id: string;
+  supersedes: string;
+  scope?: DirectiveScope;
   prescription?: Prescription;
   weight?: Weight;
   rationale?: string;
@@ -233,7 +236,8 @@ export interface RuntimeRcclVerificationSummary {
 
 export interface BaseTaskInput {
   description: string;
-  taskKind?: TaskKind;
+  workflow?: Workflow;
+  changeType?: ChangeType;
   tags?: string[];
   projectStage?: ContextProfile['project_stage'];
   optimizationTarget?: ContextProfile['optimization_target'];
@@ -309,6 +313,28 @@ export interface CompileInputBase {
   agentCapabilityProfile?: AgentCapabilityProfile;
   verificationPolicy?: RuntimeRcclVerificationPolicy;
   preloadedSources?: import('./load/compile-sources.ts').CompileSources;
+  artifacts?: RuntimeHostArtifacts;
+}
+
+export interface RuntimeHostArtifacts {
+  agentCapabilityProfile?: import('./ai-contracts/types.ts').HostArtifactInput;
+  taskModel?: import('./ai-contracts/types.ts').HostArtifactInput;
+  semanticGovernanceGraph?: import('./ai-contracts/types.ts').HostArtifactInput;
+  adherenceEvidence?: import('./ai-contracts/types.ts').HostArtifactInput;
+}
+
+export interface PublicLifecycleInputBase {
+  builtinRoot: string;
+  localAugmentPath?: string;
+  rcclPath?: string;
+  projectRoot: string;
+  lockfilePath?: string;
+  verificationPolicy?: RuntimeRcclVerificationPolicy;
+  artifacts?: RuntimeHostArtifacts;
+}
+
+export interface PublicCompileInput extends PublicLifecycleInputBase {
+  task: CompileTaskInput;
 }
 
 export interface GuidancePlanSourceStatus {
@@ -332,9 +358,8 @@ export interface GuidancePlanArtifactPaths {
   contextAcquisition?: string;
 }
 
-export interface GuidancePlanInput extends CompileInputBase {
+export interface GuidancePlanInput extends PublicLifecycleInputBase {
   task: CompileTaskInput;
-  taskModels?: TaskModelProposal[];
   mode?: GuidanceExecutionMode;
   providedContracts?: GuidancePlanProvidedContracts;
   artifactPaths: GuidancePlanArtifactPaths;
@@ -407,6 +432,8 @@ export interface GuidancePlan {
     policy: 'ready' | 'contracts-required' | 'degraded';
     notes: string[];
   };
+  resolvedTask: ResolvedTaskOutput;
+  contractDiagnostics: ContractPayloadDiagnostics[];
 }
 
 export interface RawCompileInput extends CompileInputBase {
@@ -417,7 +444,6 @@ export interface RawCompileInput extends CompileInputBase {
 
 export interface ResolveTaskRequest {
   task: CompileTaskInput;
-  taskKind?: TaskKind;
   taskModels?: TaskModelProposal[];
   interpretationMode?: InputProvenance['interpretation_mode'];
 }
@@ -561,6 +587,12 @@ export interface DecisionTrace {
   }>;
   context_influences: ContextInfluenceRecord[];
   host_fulfillment?: HostFulfillmentSummary;
+  ego_budget?: {
+    limits: { total_items: number; hard_items: number; ambient_items: number; examples_per_directive: number; serialized_characters: number };
+    exceeded: boolean;
+    serialized_characters: number;
+    omitted: Array<{ id: string; reason: string; original_priority: string }>;
+  };
 }
 
 export type RelationKind = 'reinforce' | 'tension' | 'anti-pattern-suppress' | 'ambient-only' | 'none';
@@ -691,7 +723,7 @@ export interface SemanticMergeResult {
 
 export interface ResolvedTaskOutput {
   task: CompileTaskInput;
-  taskKind: TaskKind;
+  workflow: Workflow;
   task_models?: TaskModelProposal[];
   task_intent: TaskIntent;
   context_profile: ContextProfile;
@@ -709,111 +741,21 @@ export interface RuntimeCacheKeys {
 }
 
 export interface ChangeDecisionPacket {
-  version: '1.0';
+  version: '1';
+  status: 'compiled' | 'needs-attention';
   task: {
-    task_kind: TaskKind;
+    workflow: Workflow;
+    change_type: ChangeType;
+    operation: Operation;
     input: CompileTaskInput;
   };
   interpretation: InterpretationPacket;
   governance: GovernancePacket;
   cache: RuntimeCacheKeys;
+  fingerprints: import('./ir/types.ts').IRFingerprintSet;
+  contract_diagnostics: ContractPayloadDiagnostics[];
+  post_compile_contract_requests: RuntimeContractRequest[];
 }
-
-export interface PrepareInterpretationOutput {
-  task: CompileTaskInput;
-  taskModelPrompt: string;
-  taskModelSchema: string;
-  ambiguityHints: string[];
-  modelArtifact: {
-    suggestedPath: string;
-    format: 'json' | 'yaml';
-    usage: string;
-  };
-  clarificationHints: string[];
-  contract: {
-    contractVersion: 'ai-contract/v2';
-    kind: 'task-model';
-    schemaId: string;
-    schemaVersion: '2.0';
-    prompt: string;
-    schema: unknown;
-    artifact: {
-      suggestedPath: string;
-      format: 'json' | 'yaml';
-      usage: string;
-    };
-    provenance: {
-      owner: 'runtime';
-      deterministic: true;
-    };
-    cacheKeyMaterial?: unknown;
-  };
-}
-
-export interface RuntimeSessionRecord {
-  version: '1.0';
-  status: 'ok' | 'failed';
-  createdAt: string;
-  paths: {
-    projectRoot: string;
-    pluginRoot: string;
-    builtinRoot: string;
-    runtimeEntry: string;
-    localAugmentPath?: string;
-    rcclPath?: string;
-    lockfilePath: string;
-  };
-  taskInput: CompileTaskInput;
-  interpretation: {
-    mode: InputProvenance['interpretation_mode'];
-    taskModels?: TaskModelProposal[];
-    provenance?: InputProvenance;
-    diagnostics?: RuntimeDiagnostics;
-    trace?: TaskInterpretationTrace;
-  };
-  compileInput: {
-    builtinRoot: string;
-    localAugmentPath?: string;
-    rcclPath?: string;
-    lockfilePath?: string;
-    projectRoot: string;
-    resolvedTask?: ResolvedTaskOutput;
-    task?: CompileTaskInput;
-    taskModels?: TaskModelProposal[];
-    interpretationMode?: InputProvenance['interpretation_mode'];
-    verificationPolicy?: RuntimeRcclVerificationPolicy;
-    hostProposals?: import('./ir/types.ts').HostProposalIR[];
-    hostFulfillment?: HostFulfillmentSummary;
-    governanceGraphFile?: string;
-  };
-  compileOutput: CompileOutput | null;
-  warnings: string[];
-  error?: string;
-}
-
-export interface PrepareCodeTaskResult {
-  status: 'ok' | 'failed';
-  sessionPath: string;
-  paths: RuntimeSessionRecord['paths'];
-  packet?: ChangeDecisionPacket;
-  ego: EffectiveGuidanceObject | null;
-  trace: DecisionTrace | null;
-  warnings: string[];
-  error?: string;
-}
-
-export interface CompleteCodeTaskResult {
-  status: 'updated' | 'skipped';
-  sessionPath: string;
-  lockfilePath: string | null;
-  followedDirectiveIds?: string[];
-  ignoredDirectiveIds?: string[];
-  ignoredDirectiveReasons?: Partial<Record<string, IgnoredReason>>;
-  signalConfidence?: FeedbackSignalConfidence;
-  reason?: string;
-}
-
-export interface ResolveTaskResult extends ResolvedTaskOutput {}
 
 export interface PrepareCodeTaskInput extends CompileTaskInput {
   projectRoot: string;
@@ -828,6 +770,8 @@ export interface CompileOutput {
   ego: EffectiveGuidanceObject;
   trace: DecisionTrace;
   cache: RuntimeCacheKeys;
+  contractDiagnostics: ContractPayloadDiagnostics[];
+  postCompileContractRequests: RuntimeContractRequest[];
 }
 
 export interface EvaluateInput {
@@ -840,6 +784,28 @@ export interface EvaluateInput {
   signalConfidence?: FeedbackSignalConfidence;
   hostFulfillment?: HostFulfillmentSummary;
   adherencePayload?: ValidatedAdherenceEvidenceVerdict[];
+  artifacts?: Pick<RuntimeHostArtifacts, 'adherenceEvidence'>;
+  evidenceContext?: import('./ai-contracts/types.ts').EvidenceRefVerificationContext;
+}
+
+export interface PublicEvaluateInput {
+  ego: EffectiveGuidanceObject;
+  packet: ChangeDecisionPacket;
+  lockfilePath: string;
+  artifacts?: Pick<RuntimeHostArtifacts, 'adherenceEvidence'>;
+  evidenceContext?: import('./ai-contracts/types.ts').EvidenceRefVerificationContext;
+}
+
+export interface EvaluateOutput {
+  status: 'updated' | 'needs-attention';
+  lockfile: LockfileDocument;
+  contractDiagnostics: ContractPayloadDiagnostics;
+  verdictCounts: {
+    followed: number;
+    partial: number;
+    ignored: number;
+    unverified: number;
+  };
 }
 
 export interface LockfileSignal {
@@ -848,7 +814,9 @@ export interface LockfileSignal {
   partial: number;
   unverified: number;
   follow_rate: number;
-  trend: 'improving' | 'stable' | 'degrading';
+  coverage_rate: number;
+  trend: 'improving' | 'stable' | 'declining';
+  recent_verdicts: Array<'followed' | 'partial' | 'ignored'>;
 }
 
 export interface LockfileTaskOutcome {

@@ -1,341 +1,17 @@
-import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { a as DEFAULT_SAMPLING_POLICY, c as RCCL_SCOPE_BASES, d as parseYaml, f as toYaml, l as validateCandidateObservationRecord, o as parseRccl, r as verifyEvidenceForDocument, s as parseRcclCandidates, t as verifyInductionForDocument, u as validateCandidateObservationShape } from "./verify-induction.mjs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import process from "node:process";
 import { createHash } from "node:crypto";
-import { dirname, extname, isAbsolute, join, relative, resolve } from "node:path";
-import { execSync } from "node:child_process";
-//#region src/indexing/build-repo-index.ts
-const SOURCE_EXTENSIONS = new Map([
-	[".ts", "typescript"],
-	[".tsx", "typescript"],
-	[".js", "javascript"],
-	[".jsx", "javascript"],
-	[".mjs", "javascript"],
-	[".cjs", "javascript"],
-	[".py", "python"],
-	[".go", "go"],
-	[".rs", "rust"],
-	[".java", "java"],
-	[".kt", "kotlin"],
-	[".swift", "swift"],
-	[".vue", "vue"],
-	[".svelte", "svelte"],
-	[".astro", "astro"]
-]);
-const IGNORE_DIRS = new Set([
-	"node_modules",
-	".git",
-	"dist",
-	"build",
-	"out",
-	".next",
-	".nuxt",
-	"coverage",
-	"__pycache__",
-	".resonant-code",
-	".playbook",
-	"vendor",
-	"target"
-]);
-function buildRepoIndex(projectRoot, scopeGlob = "auto") {
-	const allFiles = walkDir(projectRoot, projectRoot);
-	return (scopeGlob === "auto" ? autoScope(allFiles) : allFiles.filter((file) => matchScope(file, scopeGlob))).map((file) => indexFile(projectRoot, file)).filter((value) => Boolean(value));
+import { basename, dirname, extname, isAbsolute, join, relative, resolve } from "node:path";
+import { execFileSync, execSync } from "node:child_process";
+import ignore from "ignore";
+//#region src/io/parse-rccl-workflow.ts
+const RCCL_VERSION = "1.0";
+const ID_PATTERN = /^obs-[a-z0-9-]+$/;
+function isRcclVersion(value) {
+	return value === RCCL_VERSION || value === 1;
 }
-function walkDir(dir, projectRoot) {
-	const results = [];
-	let entries;
-	try {
-		entries = readdirSync(dir, { withFileTypes: true });
-	} catch {
-		return results;
-	}
-	for (const entry of entries) {
-		if (IGNORE_DIRS.has(entry.name)) continue;
-		const full = join(dir, entry.name);
-		if (entry.isDirectory()) results.push(...walkDir(full, projectRoot));
-		else if (entry.isFile() && SOURCE_EXTENSIONS.has(extname(entry.name))) results.push(relative(projectRoot, full).replace(/\\/g, "/"));
-	}
-	return results;
-}
-function autoScope(files) {
-	return [...files].sort();
-}
-function matchScope(file, scopeGlob) {
-	if (scopeGlob === "**" || scopeGlob === "**/*") return true;
-	if (scopeGlob.endsWith("/**")) return file.startsWith(scopeGlob.slice(0, -3));
-	if (scopeGlob.includes("*")) {
-		const escaped = scopeGlob.replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*\*/g, ".*").replace(/\*/g, "[^/]*");
-		return new RegExp(`^${escaped}$`).test(file);
-	}
-	return file === scopeGlob || file.startsWith(`${scopeGlob}/`);
-}
-function indexFile(projectRoot, file) {
-	try {
-		const content = readFileSync(join(projectRoot, file), "utf-8").replace(/\r\n/g, "\n");
-		const lines = content.split("\n");
-		const language = SOURCE_EXTENSIONS.get(extname(file)) ?? "unknown";
-		const imports = content.match(/\b(import|require|from)\b/g)?.length ?? 0;
-		const exports = content.match(/\b(export|module\.exports|pub\s+|func\s+[A-Z]|class\s+)\b/g)?.length ?? 0;
-		const symbolMatches = content.match(/\b(function|class|interface|type|const|let|var|def|fn|struct|enum|trait)\b/g)?.length ?? 0;
-		const packageRoot = inferPackageRoot(file);
-		return {
-			path: file,
-			language,
-			lines: lines.length,
-			is_test: /(test|spec)\./.test(file) || file.includes("__tests__"),
-			is_generated: /generated|gen\./.test(file),
-			package_root: packageRoot,
-			imports_count: imports,
-			exports_count: exports,
-			symbol_density: lines.length === 0 ? 0 : Number((symbolMatches / lines.length).toFixed(3)),
-			role_hints: []
-		};
-	} catch {
-		return null;
-	}
-}
-function inferPackageRoot(file) {
-	const [root] = file.split("/");
-	return root || ".";
-}
-//#endregion
-//#region src/utils/yaml.ts
-function parseYaml(text) {
-	const lines = text.replace(/\r\n/g, "\n").split("\n");
-	function stripQuotes(value) {
-		const trimmed = value.trim();
-		if (trimmed.startsWith("\"") && trimmed.endsWith("\"") || trimmed.startsWith("'") && trimmed.endsWith("'")) return trimmed.slice(1, -1);
-		return trimmed;
-	}
-	function parseScalar(raw) {
-		const value = stripQuotes(raw);
-		if (value === "null") return null;
-		if (value === "true") return true;
-		if (value === "false") return false;
-		if (/^-?\d+(?:\.\d+)?$/.test(value)) return Number(value);
-		if (value.startsWith("[") && value.endsWith("]")) {
-			const inner = value.slice(1, -1).trim();
-			if (inner === "") return [];
-			return inner.split(",").map((part) => parseScalar(part.trim()));
-		}
-		return value;
-	}
-	function isClosedQuoted(value) {
-		const trimmed = value.trim();
-		if (!trimmed) return true;
-		if (trimmed.startsWith("\"")) return trimmed.endsWith("\"") && trimmed.length > 1;
-		if (trimmed.startsWith("'")) return trimmed.endsWith("'") && trimmed.length > 1;
-		return true;
-	}
-	function readQuotedScalar(startValue, startIndex, parentIndent) {
-		const parts = [startValue.trim()];
-		let index = startIndex + 1;
-		while (index < lines.length && !isClosedQuoted(parts.join("\n"))) {
-			const raw = lines[index];
-			const trimmed = raw.trim();
-			const indent = raw.search(/\S/);
-			if (trimmed && indent <= parentIndent && (trimmed.includes(":") || trimmed.startsWith("- ")) && isClosedQuoted(parts.join("\n"))) break;
-			if (!trimmed.startsWith("#")) parts.push(raw);
-			index += 1;
-		}
-		return {
-			value: stripQuotes(parts.join("\n").trim()),
-			nextIndex: index
-		};
-	}
-	function skipEmpty(index) {
-		let cursor = index;
-		while (cursor < lines.length) {
-			const trimmed = lines[cursor].trim();
-			if (trimmed && !trimmed.startsWith("#")) break;
-			cursor += 1;
-		}
-		return cursor;
-	}
-	function lineIndent(index) {
-		return lines[index].search(/\S/);
-	}
-	function readBlockScalar(startIndex, parentIndent, style) {
-		const content = [];
-		let index = startIndex;
-		let blockIndent = -1;
-		while (index < lines.length) {
-			const raw = lines[index];
-			const trimmed = raw.trim();
-			const indent = raw.search(/\S/);
-			if (trimmed && indent <= parentIndent) break;
-			if (blockIndent === -1 && trimmed) blockIndent = indent;
-			if (!trimmed) content.push("");
-			else content.push(raw.slice(Math.max(blockIndent, 0)));
-			index += 1;
-		}
-		return {
-			value: style === ">" ? content.map((line, idx) => line === "" ? "\n" : `${idx > 0 && content[idx - 1] !== "" ? " " : ""}${line}`).join("").trim() : content.join("\n").trim(),
-			nextIndex: index
-		};
-	}
-	function parseInlineMap(remainder, indent, index) {
-		const colon = remainder.indexOf(":");
-		const key = remainder.slice(0, colon).trim();
-		const rawValue = remainder.slice(colon + 1).trim();
-		const map = {};
-		if (rawValue === "" || rawValue === "|" || rawValue === ">") {
-			if (rawValue === "|" || rawValue === ">") {
-				const block = readBlockScalar(index + 1, indent, rawValue);
-				map[key] = block.value;
-				return {
-					value: map,
-					nextIndex: block.nextIndex
-				};
-			}
-			const child = parseNode(index + 1, indent + 2);
-			map[key] = child.value;
-			return {
-				value: map,
-				nextIndex: child.nextIndex
-			};
-		}
-		if ((rawValue.startsWith("\"") || rawValue.startsWith("'")) && !isClosedQuoted(rawValue)) {
-			const quoted = readQuotedScalar(rawValue, index, indent);
-			map[key] = quoted.value;
-			return {
-				value: map,
-				nextIndex: quoted.nextIndex
-			};
-		}
-		map[key] = parseScalar(rawValue);
-		return {
-			value: map,
-			nextIndex: index + 1
-		};
-	}
-	function parseSequence(startIndex, indent) {
-		const items = [];
-		let index = startIndex;
-		while (index < lines.length) {
-			index = skipEmpty(index);
-			if (index >= lines.length) break;
-			const currentIndent = lineIndent(index);
-			const trimmed = lines[index].trim();
-			if (currentIndent < indent || !trimmed.startsWith("- ")) break;
-			const remainder = trimmed.slice(2).trim();
-			if (remainder === "") {
-				const child = parseNode(index + 1, currentIndent + 2);
-				items.push(child.value);
-				index = child.nextIndex;
-				continue;
-			}
-			if ((remainder.startsWith("\"") || remainder.startsWith("'")) && !isClosedQuoted(remainder)) {
-				const quoted = readQuotedScalar(remainder, index, currentIndent);
-				items.push(quoted.value);
-				index = quoted.nextIndex;
-				continue;
-			}
-			if (remainder.includes(":")) {
-				const item = parseInlineMap(remainder, currentIndent, index);
-				const merged = item.value;
-				let cursor = item.nextIndex;
-				while (true) {
-					const next = skipEmpty(cursor);
-					if (next >= lines.length) {
-						cursor = next;
-						break;
-					}
-					const nextIndent = lineIndent(next);
-					const nextTrimmed = lines[next].trim();
-					if (nextIndent <= currentIndent || nextTrimmed.startsWith("- ")) break;
-					const nested = parseMap(next, currentIndent + 2);
-					Object.assign(merged, nested.value);
-					cursor = nested.nextIndex;
-				}
-				items.push(merged);
-				index = cursor;
-				continue;
-			}
-			items.push(parseScalar(remainder));
-			index += 1;
-		}
-		return {
-			value: items,
-			nextIndex: index
-		};
-	}
-	function parseMap(startIndex, indent) {
-		const map = {};
-		let index = startIndex;
-		while (index < lines.length) {
-			index = skipEmpty(index);
-			if (index >= lines.length) break;
-			const currentIndent = lineIndent(index);
-			const trimmed = lines[index].trim();
-			if (currentIndent < indent || trimmed.startsWith("- ")) break;
-			const colon = trimmed.indexOf(":");
-			if (colon === -1) throw new Error(`Invalid YAML line ${index + 1}: ${trimmed}`);
-			const key = trimmed.slice(0, colon).trim();
-			const rawValue = trimmed.slice(colon + 1).trim();
-			if (rawValue === "" || rawValue === "|" || rawValue === ">") if (rawValue === "|" || rawValue === ">") {
-				const block = readBlockScalar(index + 1, currentIndent, rawValue);
-				map[key] = block.value;
-				index = block.nextIndex;
-			} else {
-				const child = parseNode(index + 1, currentIndent + 2);
-				map[key] = child.value;
-				index = child.nextIndex;
-			}
-			else if ((rawValue.startsWith("\"") || rawValue.startsWith("'")) && !isClosedQuoted(rawValue)) {
-				const quoted = readQuotedScalar(rawValue, index, currentIndent);
-				map[key] = quoted.value;
-				index = quoted.nextIndex;
-			} else {
-				map[key] = parseScalar(rawValue);
-				index += 1;
-			}
-		}
-		return {
-			value: map,
-			nextIndex: index
-		};
-	}
-	function parseNode(startIndex, indent) {
-		const index = skipEmpty(startIndex);
-		if (index >= lines.length) return {
-			value: {},
-			nextIndex: index
-		};
-		const currentIndent = lineIndent(index);
-		if (lines[index].trim().startsWith("- ") && currentIndent >= indent) return parseSequence(index, currentIndent);
-		return parseMap(index, currentIndent);
-	}
-	return parseNode(0, 0).value;
-}
-function quoteIfNeeded(value) {
-	return value === "" || /[:"'{}[\]#&*!|>%@`]/.test(value) || /^[ \t\n\r-]/.test(value) ? `"${value.replace(/\\/g, "\\\\").replace(/"/g, "\\\"")}"` : value;
-}
-function emitScalar(value) {
-	if (value === null) return "null";
-	if (typeof value === "number" || typeof value === "boolean") return String(value);
-	return quoteIfNeeded(value);
-}
-function toYaml(value, indent = 0) {
-	const spaces = " ".repeat(indent);
-	if (Array.isArray(value)) {
-		if (value.length === 0) return `${spaces}[]\n`;
-		return value.map((item) => {
-			if (Array.isArray(item) || item && typeof item === "object") return `${spaces}- ${toYaml(item, indent + 2).trimEnd().replace(/^ */, "")}\n`;
-			return `${spaces}- ${emitScalar(item)}\n`;
-		}).join("");
-	}
-	if (value && typeof value === "object") return Object.keys(value).map((key) => {
-		const child = value[key];
-		if (typeof child === "string" && child.includes("\n")) return `${spaces}${key}: |\n${child.split("\n").map((line) => `${" ".repeat(indent + 2)}${line}`).join("\n")}\n`;
-		if (Array.isArray(child) || child && typeof child === "object") return `${spaces}${key}:\n${toYaml(child, indent + 2)}`;
-		return `${spaces}${key}: ${emitScalar(child)}\n`;
-	}).join("");
-	return `${spaces}${emitScalar(value)}\n`;
-}
-//#endregion
-//#region src/validate-observation.ts
-const RCCL_OBSERVATION_ID_PATTERN = /^obs-[a-z0-9-]+$/;
-const RCCL_CATEGORIES = new Set([
+const VALID_CATEGORIES = new Set([
 	"style",
 	"architecture",
 	"pattern",
@@ -344,207 +20,44 @@ const RCCL_CATEGORIES = new Set([
 	"anti-pattern",
 	"migration"
 ]);
-const RCCL_ADHERENCE_QUALITIES = new Set([
-	"good",
-	"inconsistent",
-	"poor"
+const VALID_CRITIQUE_DISPOSITIONS = new Set([
+	"keep",
+	"revise",
+	"drop"
 ]);
-const RCCL_SCOPE_BASES = new Set([
-	"single-file",
-	"directory-cluster",
-	"module-cluster",
-	"cross-root"
-]);
-function validateCandidateObservationRecord(obs, prefix) {
-	const errors = validateCandidateCoreRecord(obs, prefix);
-	if ("id" in obs) errors.push(`${prefix}: candidate observations must use 'provisional_id', not 'id'`);
-	if ("scope" in obs) errors.push(`${prefix}: candidate observations must use 'scope_hint', not 'scope'`);
-	if ("support" in obs) errors.push(`${prefix}: candidate observations must use 'support_hint', not 'support'`);
-	if ("verification" in obs) errors.push(`${prefix}: candidate observations must not include 'verification'`);
-	if ("lifecycle" in obs) errors.push(`${prefix}: candidate observations must not include 'lifecycle'`);
-	if (!Array.isArray(obs.source_slice_ids) || obs.source_slice_ids.length === 0) errors.push(`${prefix}: missing or invalid 'source_slice_ids'`);
-	else if (!obs.source_slice_ids.every(isNonEmptyString$1)) errors.push(`${prefix}: 'source_slice_ids' must contain only non-empty strings`);
-	if (obs.support_hint != null) {
-		const supportHint = obs.support_hint;
-		if (typeof supportHint !== "object" || Array.isArray(supportHint)) errors.push(`${prefix}.support_hint: must be an object when present`);
-		else {
-			if (supportHint.file_count != null && !isPositiveNumber(supportHint.file_count)) errors.push(`${prefix}.support_hint.file_count: must be a positive number`);
-			if (supportHint.cluster_count != null && !isPositiveNumber(supportHint.cluster_count)) errors.push(`${prefix}.support_hint.cluster_count: must be a positive number`);
-			if (supportHint.scope_basis != null && !RCCL_SCOPE_BASES.has(String(supportHint.scope_basis))) errors.push(`${prefix}.support_hint.scope_basis: invalid value`);
-		}
-	}
-	errors.push(...validateTraitsRecord(obs.traits, `${prefix}.traits`));
-	return errors;
-}
-function validateCandidateObservationShape(observation, prefix) {
-	const errors = [];
-	if (!isNonEmptyString$1(observation.provisional_id)) errors.push(`${prefix}: missing or invalid 'provisional_id'`);
-	else if (!RCCL_OBSERVATION_ID_PATTERN.test(observation.provisional_id)) errors.push(`${prefix}: 'provisional_id' "${observation.provisional_id}" does not match /^obs-[a-z0-9-]+$/`);
-	if (!isNonEmptyString$1(observation.semantic_key)) errors.push(`${prefix}: missing or invalid 'semantic_key'`);
-	if (!RCCL_CATEGORIES.has(observation.category)) errors.push(`${prefix}: 'category' is invalid`);
-	if (!isNonEmptyString$1(observation.scope_hint)) errors.push(`${prefix}: missing or invalid 'scope_hint'`);
-	if (!isNonEmptyString$1(observation.pattern)) errors.push(`${prefix}: missing or invalid 'pattern'`);
-	if (!Number.isFinite(observation.confidence) || observation.confidence < 0 || observation.confidence > 1) errors.push(`${prefix}: 'confidence' must be a number between 0 and 1, got ${observation.confidence}`);
-	if (!RCCL_ADHERENCE_QUALITIES.has(observation.adherence_quality)) errors.push(`${prefix}: 'adherence_quality' is invalid`);
-	if (!observation.source_slice_ids?.length) errors.push(`${prefix}: missing or invalid 'source_slice_ids'`);
-	else if (!observation.source_slice_ids.every(isNonEmptyString$1)) errors.push(`${prefix}: 'source_slice_ids' must contain only non-empty strings`);
-	errors.push(...validateEvidenceShape(observation.evidence, prefix));
-	const supportHint = observation.support_hint;
-	if (supportHint != null) {
-		if (supportHint.file_count != null && !isPositiveNumber(supportHint.file_count)) errors.push(`${prefix}.support_hint.file_count: must be a positive number`);
-		if (supportHint.cluster_count != null && !isPositiveNumber(supportHint.cluster_count)) errors.push(`${prefix}.support_hint.cluster_count: must be a positive number`);
-		if (supportHint.scope_basis != null && !isScopeBasis$1(supportHint.scope_basis)) errors.push(`${prefix}.support_hint.scope_basis: invalid value`);
-	}
-	errors.push(...validateTraitsRecord(observation.traits, `${prefix}.traits`));
-	return errors;
-}
-function validateEvidenceSnippet(snippet, prefix, index) {
-	if (typeof snippet !== "string") return [];
-	const normalized = snippet.replace(/\r\n/g, "\n").trim();
-	if (!normalized) return [`${prefix}.evidence[${index}]: snippet must not be empty`];
-	const lines = normalized.split("\n").map((line) => line.trim()).filter(Boolean);
-	const tokenMatches = normalized.match(/[A-Za-z_][A-Za-z0-9_]*|\d+|==|!=|<=|>=|=>|&&|\|\||[()[\]{}.,;:+\-*/%<>!=?]/g) ?? [];
-	const identifierCount = tokenMatches.filter((token) => /^[A-Za-z_][A-Za-z0-9_]*$/.test(token)).length;
-	const punctuationCount = tokenMatches.length - identifierCount;
-	const hasDistinctiveStructure = /[{}();=>]|\b(import|export|return|const|let|var|function|class|interface|type|if|for|while|switch|case|await|async)\b/.test(normalized);
-	if (lines.length >= 2 || hasDistinctiveStructure) return [];
-	if (tokenMatches.length < 4) return [`${prefix}.evidence[${index}]: snippet is too short to verify reliably; include at least a distinctive statement or 2+ lines of code`];
-	if (identifierCount <= 2 && punctuationCount === 0) return [`${prefix}.evidence[${index}]: snippet looks like an identifier or label, not a verifiable code fragment`];
-	return [];
-}
-function validateCandidateCoreRecord(obs, prefix) {
-	const errors = [];
-	const id = obs.provisional_id;
-	const scope = obs.scope_hint;
-	if (!isNonEmptyString$1(id)) errors.push(`${prefix}: missing or invalid 'provisional_id'`);
-	else if (!RCCL_OBSERVATION_ID_PATTERN.test(id)) errors.push(`${prefix}: 'provisional_id' "${id}" does not match /^obs-[a-z0-9-]+$/`);
-	if (!RCCL_CATEGORIES.has(String(obs.category))) errors.push(`${prefix}: 'category' is invalid`);
-	if (!isNonEmptyString$1(obs.semantic_key)) errors.push(`${prefix}: missing or invalid 'semantic_key'`);
-	if (!isNonEmptyString$1(scope)) errors.push(`${prefix}: missing or invalid 'scope_hint'`);
-	if (!isNonEmptyString$1(obs.pattern)) errors.push(`${prefix}: missing or invalid 'pattern'`);
-	if (typeof obs.confidence !== "number" || !Number.isFinite(obs.confidence) || obs.confidence < 0 || obs.confidence > 1) errors.push(`${prefix}: 'confidence' must be a number between 0 and 1, got ${obs.confidence}`);
-	if (!RCCL_ADHERENCE_QUALITIES.has(String(obs.adherence_quality))) errors.push(`${prefix}: 'adherence_quality' is invalid`);
-	errors.push(...validateEvidenceRecord(obs.evidence, prefix));
-	errors.push(...validateTraitsRecord(obs.traits, `${prefix}.traits`));
-	return errors;
-}
-function validateTraitsRecord(value, prefix) {
-	if (value == null) return [];
-	const errors = [];
-	if (!isRecord$1(value)) return [`${prefix}: must be an object when present`];
-	const allowed = new Set([
-		"legacy",
-		"migration_boundary",
-		"anti_pattern",
-		"compatibility_boundary"
-	]);
-	for (const [key, item] of Object.entries(value)) {
-		if (item === void 0) continue;
-		if (!allowed.has(key)) errors.push(`${prefix}.${key}: unsupported trait`);
-		else if (typeof item !== "boolean") errors.push(`${prefix}.${key}: must be boolean`);
-	}
-	return errors;
-}
-function validateEvidenceRecord(value, prefix) {
-	const errors = [];
-	if (!Array.isArray(value) || value.length === 0) {
-		errors.push(`${prefix}: 'evidence' must be a non-empty array`);
-		return errors;
-	}
-	for (let i = 0; i < value.length; i += 1) {
-		const evidence = value[i];
-		if (!isRecord$1(evidence)) {
-			errors.push(`${prefix}.evidence[${i}]: must be an object`);
-			continue;
-		}
-		if (!isNonEmptyString$1(evidence.file)) errors.push(`${prefix}.evidence[${i}]: missing or invalid 'file'`);
-		if (!isValidLineRange(evidence.line_range)) errors.push(`${prefix}.evidence[${i}]: invalid 'line_range'`);
-		if (!isNonEmptyString$1(evidence.snippet)) errors.push(`${prefix}.evidence[${i}]: missing or invalid 'snippet'`);
-		else errors.push(...validateEvidenceSnippet(evidence.snippet, prefix, i));
-	}
-	return errors;
-}
-function validateEvidenceShape(value, prefix) {
-	const errors = [];
-	if (!value?.length) {
-		errors.push(`${prefix}: 'evidence' must be a non-empty array`);
-		return errors;
-	}
-	for (let i = 0; i < value.length; i += 1) {
-		const evidence = value[i];
-		if (!isNonEmptyString$1(evidence.file)) errors.push(`${prefix}.evidence[${i}]: missing or invalid 'file'`);
-		if (!isValidLineRange(evidence.line_range)) errors.push(`${prefix}.evidence[${i}]: invalid 'line_range'`);
-		if (!isNonEmptyString$1(evidence.snippet)) errors.push(`${prefix}.evidence[${i}]: missing or invalid 'snippet'`);
-		else errors.push(...validateEvidenceSnippet(evidence.snippet, prefix, i));
-	}
-	return errors;
-}
-function isValidLineRange(value) {
-	if (!Array.isArray(value) || value.length !== 2) return false;
-	const [start, end] = value;
-	return Number.isInteger(start) && Number.isInteger(end) && start >= 1 && end >= start;
-}
-function isPositiveNumber(value) {
-	return typeof value === "number" && Number.isFinite(value) && value >= 1;
-}
-function isNonEmptyString$1(value) {
-	return typeof value === "string" && value.trim().length > 0;
-}
-function isScopeBasis$1(value) {
-	return value === "single-file" || value === "directory-cluster" || value === "module-cluster" || value === "cross-root";
-}
-function isRecord$1(value) {
-	return Boolean(value) && typeof value === "object" && !Array.isArray(value);
-}
-//#endregion
-//#region src/io/parse-rccl.ts
-const RCCL_VERSION$1 = "1.0";
-function isRcclVersion$1(value) {
-	return value === RCCL_VERSION$1 || value === 1;
-}
-const REQUIRED_VERIFICATION_FIELDS = [
-	"evidence_status",
-	"evidence_verified_count",
-	"evidence_confidence",
-	"induction_status",
-	"induction_confidence",
-	"checked_at",
-	"disposition"
-];
-function parseRccl(yamlText, options = {}) {
-	const allowVerifiedFields = options.allowVerifiedFields === true;
-	const parsed = parseRawRcclDocument(yamlText);
+function parseRcclDiscoveryArtifact(yamlText) {
+	const parsed = parseRawWorkflowDocument(yamlText);
 	if (!parsed.valid || !parsed.doc) return {
 		valid: false,
 		errors: parsed.errors
 	};
-	const errors = validateFinalRcclDocument(parsed.doc, allowVerifiedFields);
+	const errors = validateDiscoveryDocument(parsed.doc);
 	if (errors.length > 0) return {
 		valid: false,
 		errors
 	};
 	return {
 		valid: true,
-		data: normalizeDocument(parsed.doc)
+		data: normalizeDiscoveryDocument(parsed.doc)
 	};
 }
-function parseRcclCandidates(yamlText) {
-	const parsed = parseRawRcclDocument(yamlText);
+function parseRcclCritiqueArtifact(yamlText) {
+	const parsed = parseRawWorkflowDocument(yamlText);
 	if (!parsed.valid || !parsed.doc) return {
 		valid: false,
 		errors: parsed.errors
 	};
-	const errors = validateCandidateRcclDocument(parsed.doc);
+	const errors = validateCritiqueDocument(parsed.doc);
 	if (errors.length > 0) return {
 		valid: false,
 		errors
 	};
 	return {
 		valid: true,
-		data: normalizeCandidateDocument(parsed.doc)
+		data: normalizeCritiqueDocument(parsed.doc)
 	};
 }
-function parseRawRcclDocument(yamlText) {
+function parseRawWorkflowDocument(yamlText) {
 	let cleaned = yamlText.trim();
 	if (cleaned.startsWith("```")) cleaned = cleaned.replace(/^```(?:yaml|yml)?\s*\n?/, "").replace(/\n?```\s*$/, "");
 	let doc;
@@ -565,239 +78,316 @@ function parseRawRcclDocument(yamlText) {
 		doc
 	};
 }
-function validateFinalRcclDocument(doc, allowVerifiedFields) {
-	const errors = validateDocumentEnvelope(doc);
+function validateEnvelope(doc, stage, collectionField) {
+	const errors = [];
+	if (!isRcclVersion(doc.version)) errors.push(`'version' must be "${RCCL_VERSION}", got "${doc.version}"`);
+	if (doc.stage !== stage) errors.push(`'stage' must be "${stage}", got "${doc.stage}"`);
+	if (doc.generated_at !== null && typeof doc.generated_at !== "string") errors.push("'generated_at' must be null or a string");
+	if (!doc.scope || typeof doc.scope !== "string") errors.push("missing or invalid 'scope'");
+	if (!Array.isArray(doc[collectionField]) || doc[collectionField].length === 0) errors.push(`'${collectionField}' must be a non-empty array`);
+	return errors;
+}
+function validateDiscoveryDocument(doc) {
+	const errors = validateEnvelope(doc, "discover", "seeds");
 	if (errors.length > 0) return errors;
-	const observations = doc.observations;
 	const ids = /* @__PURE__ */ new Set();
-	for (let i = 0; i < observations.length; i += 1) {
-		const obs = observations[i];
-		const rawId = String(obs.id ?? "");
-		if (rawId) {
-			if (ids.has(rawId)) errors.push(`Duplicate observation id: "${rawId}"`);
-			ids.add(rawId);
-		}
-		errors.push(...validateFinalObservation(obs, i, allowVerifiedFields));
+	for (let i = 0; i < doc.seeds.length; i += 1) {
+		const seed = doc.seeds[i];
+		const prefix = `seeds[${i}]`;
+		const seedId = String(seed.seed_id ?? "");
+		if (!seedId || typeof seed.seed_id !== "string") errors.push(`${prefix}: missing or invalid 'seed_id'`);
+		else if (!ID_PATTERN.test(seedId)) errors.push(`${prefix}: 'seed_id' "${seedId}" does not match /^obs-[a-z0-9-]+$/`);
+		else if (ids.has(seedId)) errors.push(`Duplicate discovery seed id: "${seedId}"`);
+		ids.add(seedId);
+		if (!seed.semantic_key || typeof seed.semantic_key !== "string") errors.push(`${prefix}: missing or invalid 'semantic_key'`);
+		if (!VALID_CATEGORIES.has(String(seed.category))) errors.push(`${prefix}: 'category' is invalid`);
+		if (!seed.scope_hint || typeof seed.scope_hint !== "string") errors.push(`${prefix}: missing or invalid 'scope_hint'`);
+		if (!seed.pattern || typeof seed.pattern !== "string") errors.push(`${prefix}: missing or invalid 'pattern'`);
+		if (!seed.decision_impact || typeof seed.decision_impact !== "string") errors.push(`${prefix}: missing or invalid 'decision_impact'`);
+		if (!Array.isArray(seed.source_slice_ids) || seed.source_slice_ids.length === 0) errors.push(`${prefix}: missing or invalid 'source_slice_ids'`);
+		errors.push(...validateEvidenceList(seed.evidence, `${prefix}.evidence`));
+		if (seed.uncertainty != null && typeof seed.uncertainty !== "string") errors.push(`${prefix}.uncertainty: must be null or a string`);
 	}
 	return errors;
 }
-function validateCandidateRcclDocument(doc) {
-	const errors = validateDocumentEnvelope(doc);
+function validateCritiqueDocument(doc) {
+	const errors = validateEnvelope(doc, "critique", "reviews");
 	if (errors.length > 0) return errors;
-	const observations = doc.observations;
 	const ids = /* @__PURE__ */ new Set();
-	for (let i = 0; i < observations.length; i += 1) {
-		const obs = observations[i];
-		const rawId = String(obs.provisional_id ?? "");
-		if (rawId) {
-			if (ids.has(rawId)) errors.push(`Duplicate candidate observation id: "${rawId}"`);
-			ids.add(rawId);
+	for (let i = 0; i < doc.reviews.length; i += 1) {
+		const review = doc.reviews[i];
+		const prefix = `reviews[${i}]`;
+		const seedId = String(review.seed_id ?? "");
+		if (!seedId || typeof review.seed_id !== "string") errors.push(`${prefix}: missing or invalid 'seed_id'`);
+		else if (!ID_PATTERN.test(seedId)) errors.push(`${prefix}: 'seed_id' "${seedId}" does not match /^obs-[a-z0-9-]+$/`);
+		else if (ids.has(seedId)) errors.push(`Duplicate critique seed id: "${seedId}"`);
+		ids.add(seedId);
+		if (!VALID_CRITIQUE_DISPOSITIONS.has(review.disposition)) errors.push(`${prefix}: 'disposition' is invalid`);
+		if (!Array.isArray(review.reasons) || review.reasons.length === 0) errors.push(`${prefix}: missing or invalid 'reasons'`);
+		if (review.issues != null && !Array.isArray(review.issues)) errors.push(`${prefix}.issues: must be an array when present`);
+		if (review.counter_evidence != null) errors.push(...validateEvidenceList(review.counter_evidence, `${prefix}.counter_evidence`));
+		if (review.recommended_scope_hint != null && typeof review.recommended_scope_hint !== "string") errors.push(`${prefix}.recommended_scope_hint: must be null or a string`);
+	}
+	return errors;
+}
+function validateEvidenceList(value, prefix) {
+	const errors = [];
+	if (!Array.isArray(value) || value.length === 0) return [`${prefix}: must be a non-empty array`];
+	for (let i = 0; i < value.length; i += 1) {
+		const evidence = value[i];
+		if (!evidence || typeof evidence !== "object" || Array.isArray(evidence)) {
+			errors.push(`${prefix}[${i}]: must be an object`);
+			continue;
 		}
-		errors.push(...validateCandidateObservation(obs, i));
+		if (!evidence.file || typeof evidence.file !== "string") errors.push(`${prefix}[${i}]: missing or invalid 'file'`);
+		if (!Array.isArray(evidence.line_range) || evidence.line_range.length !== 2) errors.push(`${prefix}[${i}]: invalid 'line_range'`);
+		if (!evidence.snippet || typeof evidence.snippet !== "string") errors.push(`${prefix}[${i}]: missing or invalid 'snippet'`);
 	}
 	return errors;
 }
-function validateDocumentEnvelope(doc) {
-	const errors = [];
-	if (!isRcclVersion$1(doc.version)) errors.push(`'version' must be "${RCCL_VERSION$1}", got "${doc.version}"`);
-	if (!Array.isArray(doc.observations) || doc.observations.length === 0) errors.push("'observations' must be a non-empty array");
-	return errors;
+function normalizeEvidenceList(value) {
+	return value.map((evidence) => ({
+		file: String(evidence.file),
+		line_range: [Number(evidence.line_range[0]), Number(evidence.line_range[1])],
+		snippet: String(evidence.snippet)
+	}));
 }
-function validateFinalObservation(obs, index, allowVerifiedFields) {
-	const errors = validateObservationCore(obs, index, "id", "scope");
-	const prefix = `observations[${index}]`;
-	if ("provisional_id" in obs) errors.push(`${prefix}: final RCCL observations must use 'id', not 'provisional_id'`);
-	if ("scope_hint" in obs) errors.push(`${prefix}: final RCCL observations must use 'scope', not 'scope_hint'`);
-	if ("source_slice_ids" in obs) errors.push(`${prefix}: final RCCL observations must store source slices in 'support.source_slices'`);
-	if ("support_hint" in obs) errors.push(`${prefix}: final RCCL observations must use 'support', not 'support_hint'`);
-	errors.push(...validateTraitsRecord(obs.traits, `${prefix}.traits`));
-	const support = obs.support;
-	if (!support || typeof support !== "object" || Array.isArray(support)) errors.push(`${prefix}: missing or invalid 'support'`);
-	else errors.push(...validateSupport(support, `${prefix}.support`));
-	const verification = obs.verification;
-	if (!verification || typeof verification !== "object" || Array.isArray(verification)) errors.push(`${prefix}: missing or invalid 'verification'`);
-	else errors.push(...validateVerification(verification, prefix, allowVerifiedFields));
-	errors.push(...validateLifecycle(obs.lifecycle, prefix));
-	return errors;
+function normalizeDiscoveryDocument(doc) {
+	return {
+		version: RCCL_VERSION,
+		stage: "discover",
+		generated_at: doc.generated_at == null ? null : String(doc.generated_at),
+		scope: String(doc.scope),
+		seeds: doc.seeds.map((seed) => ({
+			seed_id: String(seed.seed_id),
+			semantic_key: String(seed.semantic_key),
+			category: seed.category,
+			scope_hint: String(seed.scope_hint),
+			pattern: String(seed.pattern),
+			decision_impact: String(seed.decision_impact),
+			evidence: normalizeEvidenceList(seed.evidence),
+			source_slice_ids: seed.source_slice_ids.map(String),
+			uncertainty: seed.uncertainty == null ? null : String(seed.uncertainty)
+		}))
+	};
 }
-function validateCandidateObservation(obs, index) {
-	return validateCandidateObservationRecord(obs, `observations[${index}]`);
+function normalizeCritiqueDocument(doc) {
+	return {
+		version: RCCL_VERSION,
+		stage: "critique",
+		generated_at: doc.generated_at == null ? null : String(doc.generated_at),
+		scope: String(doc.scope),
+		reviews: doc.reviews.map((review) => ({
+			seed_id: String(review.seed_id),
+			disposition: review.disposition,
+			reasons: review.reasons.map(String),
+			issues: review.issues == null ? void 0 : review.issues.map(String),
+			counter_evidence: review.counter_evidence == null ? void 0 : normalizeEvidenceList(review.counter_evidence),
+			recommended_scope_hint: review.recommended_scope_hint == null ? null : String(review.recommended_scope_hint)
+		}))
+	};
 }
-function validateObservationCore(obs, index, idField, scopeField) {
-	const errors = [];
-	const prefix = `observations[${index}]`;
-	const id = obs[idField];
-	const scope = obs[scopeField];
-	if (!id || typeof id !== "string") errors.push(`${prefix}: missing or invalid '${idField}'`);
-	else if (!RCCL_OBSERVATION_ID_PATTERN.test(String(id))) errors.push(`${prefix}: '${idField}' "${id}" does not match /^obs-[a-z0-9-]+$/`);
-	if (!RCCL_CATEGORIES.has(String(obs.category))) errors.push(`${prefix}: 'category' is invalid`);
-	if (!obs.semantic_key || typeof obs.semantic_key !== "string") errors.push(`${prefix}: missing or invalid 'semantic_key'`);
-	if (!scope || typeof scope !== "string") errors.push(`${prefix}: missing or invalid '${scopeField}'`);
-	if (!obs.pattern || typeof obs.pattern !== "string") errors.push(`${prefix}: missing or invalid 'pattern'`);
-	if (typeof obs.confidence !== "number" || Number.isNaN(obs.confidence) || obs.confidence < 0 || obs.confidence > 1) errors.push(`${prefix}: 'confidence' must be a number between 0 and 1, got ${obs.confidence}`);
-	if (!RCCL_ADHERENCE_QUALITIES.has(String(obs.adherence_quality))) errors.push(`${prefix}: 'adherence_quality' is invalid`);
-	if (!Array.isArray(obs.evidence) || obs.evidence.length === 0) errors.push(`${prefix}: 'evidence' must be a non-empty array`);
-	else for (let i = 0; i < obs.evidence.length; i += 1) {
-		const evidence = obs.evidence[i];
-		if (!evidence.file || typeof evidence.file !== "string") errors.push(`${prefix}.evidence[${i}]: missing or invalid 'file'`);
-		if (!Array.isArray(evidence.line_range) || evidence.line_range.length !== 2) errors.push(`${prefix}.evidence[${i}]: invalid 'line_range'`);
-		if (!evidence.snippet || typeof evidence.snippet !== "string") errors.push(`${prefix}.evidence[${i}]: missing or invalid 'snippet'`);
-		else errors.push(...validateEvidenceSnippet(evidence.snippet, prefix, i));
+//#endregion
+//#region src/indexing/build-repo-index.ts
+const MAX_FILES = 2e4;
+const MAX_FILE_BYTES = 1024 * 1024;
+const MAX_TOTAL_BYTES = 64 * 1024 * 1024;
+const SOURCE_EXTENSIONS = new Map([
+	[".ts", "typescript"],
+	[".tsx", "typescript"],
+	[".js", "javascript"],
+	[".jsx", "javascript"],
+	[".mjs", "javascript"],
+	[".cjs", "javascript"],
+	[".py", "python"],
+	[".go", "go"],
+	[".rs", "rust"],
+	[".java", "java"],
+	[".kt", "kotlin"],
+	[".swift", "swift"],
+	[".vue", "vue"],
+	[".svelte", "svelte"],
+	[".astro", "astro"],
+	[".json", "config"],
+	[".yaml", "config"],
+	[".yml", "config"],
+	[".toml", "config"],
+	[".ini", "config"],
+	[".md", "documentation"],
+	[".mdx", "documentation"],
+	[".sql", "schema"],
+	[".graphql", "schema"],
+	[".proto", "schema"],
+	[".tf", "infra"]
+]);
+const SPECIAL_FILES = new Set([
+	"Dockerfile",
+	"Makefile",
+	"README",
+	"LICENSE",
+	"SECURITY",
+	"CONTRIBUTING",
+	"package-lock.json",
+	"pnpm-lock.yaml",
+	"yarn.lock",
+	"Cargo.lock",
+	"go.mod",
+	"go.sum"
+]);
+const IGNORE_DIRS = new Set([
+	"node_modules",
+	".git",
+	"dist",
+	"build",
+	"out",
+	".next",
+	".nuxt",
+	"coverage",
+	"__pycache__",
+	"vendor",
+	"target"
+]);
+function buildRepoIndex(projectRoot, scopeGlob = "auto") {
+	const candidates = discoverFiles(projectRoot);
+	const scoped = (scopeGlob === "auto" ? candidates : candidates.filter((file) => matchScope(file, scopeGlob))).sort();
+	const report = {
+		discovered_files: scoped.length,
+		indexed_files: 0,
+		read_bytes: 0,
+		skipped_oversize: 0,
+		skipped_unsupported: 0,
+		truncated: []
+	};
+	const files = [];
+	for (const file of scoped) {
+		if (files.length >= MAX_FILES) {
+			report.truncated.push("file-count-limit");
+			break;
+		}
+		if (!isSupported(file)) {
+			report.skipped_unsupported += 1;
+			continue;
+		}
+		const full = join(projectRoot, file);
+		let size = 0;
+		try {
+			size = statSync(full).size;
+		} catch {
+			continue;
+		}
+		if (size > MAX_FILE_BYTES) {
+			report.skipped_oversize += 1;
+			continue;
+		}
+		if (report.read_bytes + size > MAX_TOTAL_BYTES) {
+			report.truncated.push("total-read-limit");
+			break;
+		}
+		const indexed = indexFile(projectRoot, file);
+		report.read_bytes += size;
+		if (indexed) files.push(indexed);
 	}
-	return errors;
+	report.indexed_files = files.length;
+	report.truncated = [...new Set(report.truncated)];
+	return {
+		files,
+		report
+	};
 }
-function validateSupport(support, prefix) {
-	const errors = [];
-	if (!Array.isArray(support.source_slices)) errors.push(`${prefix}.source_slices: must be an array`);
-	if (typeof support.file_count !== "number") errors.push(`${prefix}.file_count: must be a number`);
-	if (typeof support.cluster_count !== "number") errors.push(`${prefix}.cluster_count: must be a number`);
-	if (!RCCL_SCOPE_BASES.has(String(support.scope_basis))) errors.push(`${prefix}.scope_basis: invalid value`);
-	return errors;
+function discoverFiles(projectRoot) {
+	if (existsSync(join(projectRoot, ".git"))) try {
+		return execFileSync("git", [
+			"ls-files",
+			"--cached",
+			"--others",
+			"--exclude-standard",
+			"-z"
+		], {
+			cwd: projectRoot,
+			encoding: "utf8",
+			maxBuffer: 64 * 1024 * 1024
+		}).split("\0").filter(Boolean).map(normalize).filter(inScopeGeneratedPolicy);
+	} catch {}
+	const matcher = ignore();
+	const ignorePath = join(projectRoot, ".gitignore");
+	if (existsSync(ignorePath)) matcher.add(readFileSync(ignorePath, "utf8"));
+	return walkDir(projectRoot, projectRoot, matcher);
 }
-function validateVerification(verification, prefix, allowVerifiedFields) {
-	const errors = [];
-	for (const field of REQUIRED_VERIFICATION_FIELDS) if (!(field in verification)) errors.push(`${prefix}.verification.${field}: missing required field`);
-	if (!allowVerifiedFields) {
-		for (const field of REQUIRED_VERIFICATION_FIELDS) if (verification[field] !== null && verification[field] !== void 0) errors.push(`${prefix}.verification.${field}: must be null (runtime fills this), got "${verification[field]}"`);
+function walkDir(dir, projectRoot, matcher) {
+	const results = [];
+	let entries;
+	try {
+		entries = readdirSync(dir, { withFileTypes: true });
+	} catch {
+		return results;
 	}
-	return errors;
-}
-function validateLifecycle(lifecycle, prefix) {
-	if (lifecycle == null) return [];
-	const errors = [];
-	if (lifecycle.status != null && lifecycle.status !== "active" && lifecycle.status !== "stale" && lifecycle.status !== "superseded") errors.push(`${prefix}.lifecycle.status: invalid value`);
-	if (lifecycle.content_fingerprint != null && typeof lifecycle.content_fingerprint !== "string") errors.push(`${prefix}.lifecycle.content_fingerprint: must be a string`);
-	if (lifecycle.supersedes != null) {
-		if (!Array.isArray(lifecycle.supersedes)) errors.push(`${prefix}.lifecycle.supersedes: must be an array`);
-		else for (const id of lifecycle.supersedes) if (typeof id !== "string" || !RCCL_OBSERVATION_ID_PATTERN.test(id)) errors.push(`${prefix}.lifecycle.supersedes: contains invalid observation id`);
+	for (const entry of entries) {
+		if (IGNORE_DIRS.has(entry.name)) continue;
+		const full = join(dir, entry.name);
+		const rel = normalize(relative(projectRoot, full));
+		if (matcher.ignores(rel) || !inScopeGeneratedPolicy(rel)) continue;
+		if (entry.isDirectory()) results.push(...walkDir(full, projectRoot, matcher));
+		else if (entry.isFile()) results.push(rel);
 	}
-	if (lifecycle.superseded_by != null && (typeof lifecycle.superseded_by !== "string" || !RCCL_OBSERVATION_ID_PATTERN.test(lifecycle.superseded_by))) errors.push(`${prefix}.lifecycle.superseded_by: must be a valid observation id`);
-	return errors;
+	return results;
 }
-function normalizeCandidateDocument(input) {
-	return {
-		version: RCCL_VERSION$1,
-		generated_at: typeof input.generated_at === "string" ? input.generated_at : null,
-		git_ref: typeof input.git_ref === "string" ? input.git_ref : null,
-		observations: Array.isArray(input.observations) ? input.observations.map(normalizeCandidateObservation$1) : []
-	};
+function inScopeGeneratedPolicy(file) {
+	const segments = normalize(file).split("/");
+	return !file.startsWith(".resonant-code/context/") && !file.startsWith(".git/") && !segments.some((segment) => IGNORE_DIRS.has(segment));
 }
-function normalizeCandidateObservation$1(input) {
-	const item = input;
-	const supportHint = item.support_hint;
-	return {
-		provisional_id: String(item.provisional_id),
-		semantic_key: normalizeSemanticKey$1(String(item.semantic_key)),
-		category: item.category,
-		scope_hint: normalizeScope$2(String(item.scope_hint)),
-		pattern: String(item.pattern),
-		confidence: Number(item.confidence),
-		adherence_quality: item.adherence_quality,
-		evidence: Array.isArray(item.evidence) ? item.evidence.map(normalizeEvidence) : [],
-		source_slice_ids: Array.isArray(item.source_slice_ids) ? Array.from(new Set(item.source_slice_ids.map(String))).sort() : [],
-		support_hint: supportHint == null ? null : {
-			scope_basis: supportHint.scope_basis == null ? null : normalizeScopeBasis(String(supportHint.scope_basis)),
-			file_count: supportHint.file_count == null ? null : Number(supportHint.file_count),
-			cluster_count: supportHint.cluster_count == null ? null : Number(supportHint.cluster_count)
-		},
-		traits: normalizeTraits$1(item.traits)
-	};
+function isSupported(file) {
+	const name = basename(file);
+	return SOURCE_EXTENSIONS.has(extname(name).toLowerCase()) || SPECIAL_FILES.has(name) || /(^|\/)(README|ADR)[^/]*$/i.test(file) || /(^|\/)\.github\/workflows\//.test(file);
 }
-function normalizeDocument(input) {
-	return {
-		version: RCCL_VERSION$1,
-		generated_at: typeof input.generated_at === "string" ? input.generated_at : null,
-		git_ref: typeof input.git_ref === "string" ? input.git_ref : null,
-		observations: Array.isArray(input.observations) ? input.observations.map(normalizeObservation) : []
-	};
+function matchScope(file, scopeGlob) {
+	if (scopeGlob === "**" || scopeGlob === "**/*") return true;
+	if (scopeGlob.endsWith("/**")) return file.startsWith(scopeGlob.slice(0, -3));
+	if (scopeGlob.includes("*")) {
+		const escaped = scopeGlob.replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*\*/g, ".*").replace(/\*/g, "[^/]*");
+		return new RegExp(`^${escaped}$`).test(file);
+	}
+	return file === scopeGlob || file.startsWith(`${scopeGlob}/`);
 }
-function normalizeObservation(input) {
-	const item = input;
-	return {
-		id: String(item.id),
-		semantic_key: normalizeSemanticKey$1(String(item.semantic_key)),
-		category: item.category,
-		scope: normalizeScope$2(String(item.scope)),
-		pattern: String(item.pattern),
-		confidence: Number(item.confidence),
-		adherence_quality: item.adherence_quality,
-		evidence: Array.isArray(item.evidence) ? item.evidence.map(normalizeEvidence) : [],
-		support: normalizeSupport(item.support),
-		verification: normalizeVerification(item.verification),
-		lifecycle: normalizeLifecycle(item.lifecycle),
-		traits: normalizeTraits$1(item.traits)
-	};
+function indexFile(projectRoot, file) {
+	try {
+		const content = readFileSync(join(projectRoot, file), "utf-8").replace(/\r\n/g, "\n");
+		const lines = content.split("\n");
+		const language = SOURCE_EXTENSIONS.get(extname(file).toLowerCase()) ?? inferSpecialRole(file);
+		const imports = content.match(/\b(import|require|from)\b/g)?.length ?? 0;
+		const exports = content.match(/\b(export|module\.exports|pub\s+|func\s+[A-Z]|class\s+)\b/g)?.length ?? 0;
+		const symbols = content.match(/\b(function|class|interface|type|const|let|var|def|fn|struct|enum|trait)\b/g)?.length ?? 0;
+		return {
+			path: file,
+			language,
+			lines: lines.length,
+			is_test: /(^|\/)(__tests__\/|test\/|tests\/)|\.(test|spec)\./.test(file),
+			is_generated: /(^|\/)(generated|gen)(\/|\.)/.test(file),
+			package_root: file.split("/")[0] || ".",
+			imports_count: imports,
+			exports_count: exports,
+			symbol_density: lines.length === 0 ? 0 : Number((symbols / lines.length).toFixed(3)),
+			role_hints: inferRoleHints(file)
+		};
+	} catch {
+		return null;
+	}
 }
-function normalizeEvidence(input) {
-	const value = input;
-	const lineRange = value.line_range;
-	return {
-		file: normalizePath$3(String(value.file)),
-		line_range: [Number(lineRange[0]), Number(lineRange[1])],
-		snippet: String(value.snippet ?? "")
-	};
+function inferSpecialRole(file) {
+	if (/readme|adr|\.mdx?$/i.test(file)) return "documentation";
+	if (/docker|\.tf$|infra|deploy/i.test(file)) return "infra";
+	return "config";
 }
-function normalizeSupport(input) {
-	return {
-		source_slices: Array.isArray(input.source_slices) ? Array.from(new Set(input.source_slices.map(String))).sort() : [],
-		file_count: Number(input.file_count),
-		cluster_count: Number(input.cluster_count),
-		scope_basis: normalizeScopeBasis(String(input.scope_basis))
-	};
+function inferRoleHints(file) {
+	return [
+		.../(^|\/)(test|tests|__tests__)(\/|$)|\.(test|spec)\./.test(file) ? ["test"] : [],
+		.../(^|\/)(config|\.github)(\/|$)|\.(json|ya?ml|toml|ini)$/.test(file) ? ["config"] : [],
+		.../readme|adr|\.mdx?$/i.test(file) ? ["documentation"] : [],
+		.../schema|migration|\.sql$|\.proto$|\.graphql$/.test(file) ? ["schema-or-migration"] : [],
+		.../docker|infra|deploy|\.tf$/.test(file) ? ["infra"] : []
+	];
 }
-function normalizeVerification(input) {
-	return {
-		evidence_status: input.evidence_status ?? null,
-		evidence_verified_count: input.evidence_verified_count == null ? null : Number(input.evidence_verified_count),
-		evidence_confidence: input.evidence_confidence == null ? null : Number(input.evidence_confidence),
-		induction_status: input.induction_status ?? null,
-		induction_confidence: input.induction_confidence == null ? null : Number(input.induction_confidence),
-		checked_at: typeof input.checked_at === "string" ? input.checked_at : null,
-		disposition: input.disposition ?? null
-	};
-}
-function normalizeLifecycle(input) {
-	if (!input) return void 0;
-	const status = input.status === "stale" || input.status === "superseded" ? input.status : "active";
-	return {
-		first_seen_git_ref: typeof input.first_seen_git_ref === "string" ? input.first_seen_git_ref : null,
-		last_seen_git_ref: typeof input.last_seen_git_ref === "string" ? input.last_seen_git_ref : null,
-		last_verified_at: typeof input.last_verified_at === "string" ? input.last_verified_at : null,
-		content_fingerprint: typeof input.content_fingerprint === "string" ? input.content_fingerprint : "",
-		status,
-		supersedes: Array.isArray(input.supersedes) ? input.supersedes.map(String).sort() : void 0,
-		superseded_by: typeof input.superseded_by === "string" ? input.superseded_by : void 0,
-		stale_since_git_ref: typeof input.stale_since_git_ref === "string" ? input.stale_since_git_ref : null,
-		superseded_at_git_ref: typeof input.superseded_at_git_ref === "string" ? input.superseded_at_git_ref : null
-	};
-}
-function normalizeTraits$1(input) {
-	if (!input || typeof input !== "object" || Array.isArray(input)) return void 0;
-	const value = input;
-	const traits = {
-		legacy: booleanTrait(value.legacy),
-		migration_boundary: booleanTrait(value.migration_boundary),
-		anti_pattern: booleanTrait(value.anti_pattern),
-		compatibility_boundary: booleanTrait(value.compatibility_boundary)
-	};
-	return Object.values(traits).some((item) => item !== void 0) ? traits : void 0;
-}
-function booleanTrait(input) {
-	return typeof input === "boolean" ? input : void 0;
-}
-function normalizeScopeBasis(value) {
-	if (value === "single-file" || value === "directory-cluster" || value === "module-cluster" || value === "cross-root") return value;
-	return "module-cluster";
-}
-function normalizeScope$2(scope) {
-	const trimmed = scope.trim();
-	return trimmed.length > 0 ? trimmed : "**";
-}
-function normalizePath$3(filePath) {
-	return filePath.replace(/\\/g, "/").replace(/^\.\//, "");
-}
-function normalizeSemanticKey$1(value) {
-	return value.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "") || "unknown";
+function normalize(value) {
+	return value.replace(/\\/g, "/");
 }
 //#endregion
 //#region src/represent/build-representation.ts
@@ -805,10 +395,33 @@ function buildRepresentation(indexedFiles) {
 	return {
 		roots: buildRoots(indexedFiles),
 		modules: buildModules(indexedFiles),
-		boundaries: [],
-		migrations: [],
-		style_clusters: []
+		boundaries: buildRoleZones(indexedFiles, "boundary"),
+		migrations: buildRoleZones(indexedFiles, "migration"),
+		style_clusters: buildStyleClusters(indexedFiles)
 	};
+}
+function buildRoleZones(indexedFiles, kind) {
+	const files = indexedFiles.filter((file) => kind === "migration" ? file.role_hints.includes("schema-or-migration") : file.role_hints.some((role) => role === "config" || role === "infra") || /(^|\/)(api|public|adapters?|integrations?)(\/|$)/.test(file.path));
+	if (!files.length) return [];
+	return [{
+		id: `${kind}:repository-${kind}`,
+		file_paths: files.map((file) => file.path).sort(),
+		reason: kind === "migration" ? "Schema and migration files form compatibility-sensitive change zones." : "Configuration, infrastructure, public API, and integration files form repository boundaries."
+	}];
+}
+function buildStyleClusters(indexedFiles) {
+	const grouped = /* @__PURE__ */ new Map();
+	for (const file of indexedFiles) {
+		const role = file.is_test ? "tests" : file.role_hints.includes("documentation") ? "documentation" : file.language;
+		const list = grouped.get(role) ?? [];
+		list.push(file);
+		grouped.set(role, list);
+	}
+	return [...grouped.entries()].map(([role, files]) => ({
+		id: `style:${role.replace(/[^a-z0-9]+/gi, "-")}`,
+		file_paths: files.map((file) => file.path).sort(),
+		reason: `Representative ${role} files for local structure and style calibration.`
+	})).sort((a, b) => a.id.localeCompare(b.id));
 }
 function buildRoots(indexedFiles) {
 	const grouped = /* @__PURE__ */ new Map();
@@ -849,27 +462,6 @@ function dominant(values) {
 	for (const value of values) counts.set(value, (counts.get(value) ?? 0) + 1);
 	return [...counts.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))[0]?.[0] ?? "unknown";
 }
-//#endregion
-//#region src/policies.ts
-const DEFAULT_SAMPLING_POLICY = {
-	max_slices: 8,
-	max_files_per_slice: 4,
-	max_windows_per_file: 3,
-	target_coverage: {
-		roots: true,
-		modules: true,
-		boundaries: true,
-		migrations: true,
-		style_clusters: true
-	}
-};
-const DEFAULT_VERIFICATION_POLICY = {
-	snippet_similarity_threshold: .75,
-	min_evidence_for_directory_scope: 2,
-	min_evidence_for_cross_root_scope: 3,
-	anti_pattern_min_evidence: 2,
-	migration_min_evidence: 2
-};
 //#endregion
 //#region src/slicing/extract-windows.ts
 function extractWindowsForFiles(projectRoot, files, policy = DEFAULT_SAMPLING_POLICY) {
@@ -950,7 +542,23 @@ function planSlices(projectRoot, indexedFiles, representation, policy = DEFAULT_
 		const files = cluster.file_paths.map((path) => fileMap.get(path)).filter((value) => Boolean(value)).slice(0, policy.max_files_per_slice);
 		slices.push(makeSlice(projectRoot, cluster.id, "style-cluster", files, cluster.reason, .75, policy));
 	}
-	return slices.filter((slice) => slice.files.length > 0 && slice.windows.length > 0).slice(0, policy.max_slices);
+	return roundRobinByKind(slices.filter((slice) => slice.files.length > 0 && slice.windows.length > 0)).slice(0, policy.max_slices);
+}
+function roundRobinByKind(slices) {
+	const kinds = [
+		"root",
+		"module",
+		"boundary",
+		"migration",
+		"style-cluster"
+	];
+	const queues = new Map(kinds.map((kind) => [kind, slices.filter((slice) => slice.kind === kind)]));
+	const result = [];
+	while ([...queues.values()].some((queue) => queue.length)) for (const kind of kinds) {
+		const next = queues.get(kind)?.shift();
+		if (next) result.push(next);
+	}
+	return result;
 }
 function makeSlice(projectRoot, id, kind, files, rationale, coverage_weight, policy) {
 	return {
@@ -1558,7 +1166,8 @@ function prepareIncrementalRccl(projectRootInput, options = {}) {
 function buildPreparationContext(projectRootInput, scopeInput) {
 	const projectRoot = resolve(projectRootInput);
 	const scope = scopeInput || "auto";
-	const indexedFiles = buildRepoIndex(projectRoot, scope);
+	const index = buildRepoIndex(projectRoot, scope);
+	const indexedFiles = index.files;
 	const representation = buildRepresentation(indexedFiles);
 	const slices = planSlices(projectRoot, indexedFiles, representation);
 	const windows = slices.flatMap((slice) => slice.windows);
@@ -1573,7 +1182,8 @@ function buildPreparationContext(projectRootInput, scopeInput) {
 			total_files: indexedFiles.length,
 			indexed_files: indexedFiles.length,
 			selected_slices: slices.length,
-			windows: windows.length
+			windows: windows.length,
+			index_report: index.report
 		}
 	};
 }
@@ -1642,15 +1252,30 @@ function buildObservationGenerationArtifact(projectRoot, scope) {
 	return {
 		suggestedPath: suggestedObservationCandidatePath(projectRoot, scope),
 		format: "yaml",
-		usage: "Write candidate RCCL observations to this YAML path, then pass it to calibrate-repo-context commit with --input."
+		usage: "Write a v1 envelope with schema_version: 1, this contract requestId/contextFingerprint as request_id/context_fingerprint, kind: rccl-observation-generation, and the candidate document under payload; then pass it to commit."
 	};
 }
 function buildObservationGenerationContract(context, prompt, artifact) {
+	const cacheKeyMaterial = {
+		scope: context.scope,
+		stats: context.stats,
+		slices: context.slices.map((slice) => ({
+			id: slice.id,
+			files: slice.files,
+			windows: slice.windows.map((window) => ({
+				file: window.file,
+				start_line: window.start_line,
+				end_line: window.end_line,
+				purpose: window.purpose
+			}))
+		}))
+	};
 	return {
-		contractVersion: "ai-contract/v2",
+		contractVersion: "ai-contract/v1",
 		kind: "rccl-observation-generation",
+		...contractIdentity("rccl-observation-generation", cacheKeyMaterial),
 		schemaId: "rccl.observation-generation-candidate",
-		schemaVersion: "2.0",
+		schemaVersion: "1.0",
 		prompt,
 		schema: RCCL_CANDIDATE_SCHEMA,
 		artifact,
@@ -1658,35 +1283,38 @@ function buildObservationGenerationContract(context, prompt, artifact) {
 			owner: "rccl",
 			deterministic: true
 		},
-		cacheKeyMaterial: {
-			scope: context.scope,
-			stats: context.stats,
-			slices: context.slices.map((slice) => ({
-				id: slice.id,
-				files: slice.files,
-				windows: slice.windows.map((window) => ({
-					file: window.file,
-					start_line: window.start_line,
-					end_line: window.end_line,
-					purpose: window.purpose
-				}))
-			}))
-		}
+		cacheKeyMaterial
 	};
 }
 function buildObservationRefreshArtifact(projectRoot, scope, mode, focusFiles) {
 	return {
 		suggestedPath: suggestedObservationRefreshPath(projectRoot, scope, mode, focusFiles),
 		format: "yaml",
-		usage: "Write the RCCL observation refresh proposal to this YAML path, then pass it to calibrate-repo-context commit-refresh with --input."
+		usage: "Write a v1 envelope with schema_version: 1, this contract requestId/contextFingerprint as request_id/context_fingerprint, kind: rccl-observation-refresh, and the refresh document under payload; then pass it to commit-refresh."
 	};
 }
 function buildObservationRefreshContract(input) {
+	const cacheKeyMaterial = {
+		scope: input.context.scope,
+		focusFiles: input.focusFiles,
+		affectedObservations: input.affectedObservations,
+		staleObservations: input.staleObservations,
+		existingObservationFingerprints: (input.existingRccl?.observations ?? []).map((observation) => ({
+			id: observation.id,
+			fingerprint: observation.lifecycle?.content_fingerprint ?? null,
+			verification: observation.verification.disposition
+		})),
+		slices: input.slices.map((slice) => ({
+			id: slice.id,
+			files: slice.files
+		}))
+	};
 	return {
-		contractVersion: "ai-contract/v2",
+		contractVersion: "ai-contract/v1",
 		kind: "rccl-observation-refresh",
+		...contractIdentity("rccl-observation-refresh", cacheKeyMaterial),
 		schemaId: "rccl.observation-refresh",
-		schemaVersion: "2.0",
+		schemaVersion: "1.0",
 		prompt: input.prompt,
 		schema: RCCL_REFRESH_SCHEMA,
 		artifact: input.artifact,
@@ -1695,15 +1323,7 @@ function buildObservationRefreshContract(input) {
 			deterministic: true
 		},
 		cacheKeyMaterial: {
-			scope: input.context.scope,
-			focusFiles: input.focusFiles,
-			affectedObservations: input.affectedObservations,
-			staleObservations: input.staleObservations,
-			existingObservationFingerprints: (input.existingRccl?.observations ?? []).map((observation) => ({
-				id: observation.id,
-				fingerprint: observation.lifecycle?.content_fingerprint ?? null,
-				verification: observation.verification.disposition
-			})),
+			...cacheKeyMaterial,
 			slices: input.slices.map((slice) => ({
 				id: slice.id,
 				files: slice.files,
@@ -1715,6 +1335,16 @@ function buildObservationRefreshContract(input) {
 				}))
 			}))
 		}
+	};
+}
+function contractIdentity(kind, context) {
+	const contextFingerprint = createHash("sha256").update(JSON.stringify({
+		kind,
+		context
+	})).digest("hex").slice(0, 24);
+	return {
+		requestId: `${kind}:${contextFingerprint}`,
+		contextFingerprint
 	};
 }
 function suggestedObservationCandidatePath(projectRoot, scope) {
@@ -1830,7 +1460,7 @@ function buildRefreshPrompt(input) {
 	lines.push("");
 	lines.push("## Hard rules");
 	lines.push("1. Keep existing observations only when the provided slices and existing summary still support them.");
-	lines.push("2. Revise uses provisional_id equal to an existing active observation id; v2 still keeps final merge, rename, and lifecycle authority inside RCCL.");
+	lines.push("2. Revise uses provisional_id equal to an existing active observation id; v1 keeps final merge, rename, and lifecycle authority inside RCCL.");
 	lines.push("3. Revise or create observations only with exact evidence copied from the provided windows plus matching evidence_refs.");
 	lines.push("4. Retire means the observation should become stale unless RCCL verification proves a stronger disposition.");
 	lines.push("5. Use only listed existing active observation ids in keep, revise, or retire.");
@@ -2001,6 +1631,115 @@ function loadContextMeta(projectRoot) {
 	} catch {
 		return null;
 	}
+}
+//#endregion
+//#region src/validate-candidates.ts
+const MIN_CONFIDENCE$1 = .3;
+function validateRcclCandidatePayload(yamlText) {
+	const parsed = parseRcclCandidates(yamlText);
+	if (!parsed.valid || !parsed.data) return {
+		valid: false,
+		observations: [],
+		document: null,
+		diagnostics: {
+			kind: "rccl-observation-generation",
+			summary: {
+				total: 0,
+				accepted: 0,
+				rejected: 1
+			},
+			entries: [{
+				status: "rejected",
+				reason: classifyParseErrors(parsed.errors ?? []),
+				path: "document",
+				message: (parsed.errors ?? []).join("; ") || "Failed to parse candidate YAML"
+			}]
+		}
+	};
+	return validateCandidateDocument(parsed.data);
+}
+function validateCandidateDocument(doc) {
+	const entries = [];
+	const accepted = [];
+	const seenIds = /* @__PURE__ */ new Set();
+	for (let i = 0; i < doc.observations.length; i += 1) {
+		const obs = doc.observations[i];
+		const path = `observations[${i}]`;
+		const id = obs.provisional_id;
+		if (seenIds.has(id)) {
+			entries.push({
+				status: "rejected",
+				reason: "duplicate-id",
+				path,
+				message: `Duplicate provisional_id "${id}"; only the first occurrence is accepted.`,
+				observationId: id
+			});
+			continue;
+		}
+		seenIds.add(id);
+		const structureErrors = validateCandidateObservationShape(obs, path);
+		if (structureErrors.length) {
+			entries.push({
+				status: "rejected",
+				reason: classifyStructureErrors$1(structureErrors),
+				path,
+				message: structureErrors.join("; "),
+				observationId: id || void 0,
+				confidence: Number.isFinite(obs.confidence) ? obs.confidence : void 0
+			});
+			continue;
+		}
+		if (obs.confidence < MIN_CONFIDENCE$1) {
+			entries.push({
+				status: "rejected",
+				reason: "low-confidence",
+				path,
+				message: `Confidence ${obs.confidence} is below minimum threshold ${MIN_CONFIDENCE$1}.`,
+				observationId: id,
+				confidence: obs.confidence
+			});
+			continue;
+		}
+		entries.push({
+			status: "accepted",
+			reason: "accepted",
+			path,
+			message: `Candidate "${id}" accepted.`,
+			observationId: id,
+			confidence: obs.confidence
+		});
+		accepted.push(obs);
+	}
+	const summary = {
+		total: doc.observations.length,
+		accepted: accepted.length,
+		rejected: doc.observations.length - accepted.length
+	};
+	return {
+		valid: accepted.length > 0,
+		observations: accepted,
+		document: {
+			version: doc.version,
+			generated_at: doc.generated_at,
+			git_ref: doc.git_ref
+		},
+		diagnostics: {
+			kind: "rccl-observation-generation",
+			summary,
+			entries
+		}
+	};
+}
+function classifyParseErrors(errors) {
+	const joined = errors.join(" ").toLowerCase();
+	if (joined.includes("yaml parse error") || joined.includes("must be a yaml object")) return "malformed-payload";
+	if (joined.includes("missing") || joined.includes("must be")) return "missing-required-field";
+	return "malformed-payload";
+}
+function classifyStructureErrors$1(errors) {
+	const joined = errors.join(" ").toLowerCase();
+	if (joined.includes("missing") || joined.includes("must be a non-empty")) return "missing-required-field";
+	return "unsupported-value";
 }
 //#endregion
 //#region src/consolidate/derive-support.ts
@@ -2589,7 +2328,7 @@ function writeContextArtifact(projectRoot, folder, extension, content, seed) {
 }
 //#endregion
 //#region src/validate-refresh.ts
-const MIN_CONFIDENCE$1 = .3;
+const MIN_CONFIDENCE = .3;
 const RETIRE_REASON_IDS = new Set([
 	"file-missing",
 	"snippet-drift",
@@ -2675,7 +2414,7 @@ function validateKeepList(keep, activeIds, entries, occurrences, enforceActiveId
 		if (entry.structureErrors.length) {
 			entries.push({
 				status: "rejected",
-				reason: classifyStructureErrors$1(entry.structureErrors),
+				reason: classifyStructureErrors(entry.structureErrors),
 				path,
 				message: entry.structureErrors.join("; "),
 				observationId: id || void 0
@@ -2697,7 +2436,7 @@ function validateCandidateList(observations, pathPrefix, entries, options) {
 		if (structureErrors.length) {
 			entries.push({
 				status: "rejected",
-				reason: classifyStructureErrors$1(structureErrors),
+				reason: classifyStructureErrors(structureErrors),
 				path,
 				message: structureErrors.join("; "),
 				observationId: id || void 0,
@@ -2722,12 +2461,12 @@ function validateCandidateList(observations, pathPrefix, entries, options) {
 			entries.push(rejected(path, "invalid-id", `New observation provisional_id "${id}" already exists.`, id));
 			return;
 		}
-		if (observation.confidence < MIN_CONFIDENCE$1) {
+		if (observation.confidence < MIN_CONFIDENCE) {
 			entries.push({
 				status: "rejected",
 				reason: "low-confidence",
 				path,
-				message: `Confidence ${observation.confidence} is below minimum threshold ${MIN_CONFIDENCE$1}.`,
+				message: `Confidence ${observation.confidence} is below minimum threshold ${MIN_CONFIDENCE}.`,
 				observationId: id,
 				confidence: observation.confidence
 			});
@@ -2742,7 +2481,7 @@ function validateRetireList(retire, activeIds, entries, occurrences, enforceActi
 		if (item.structureErrors.length) {
 			entries.push({
 				status: "rejected",
-				reason: classifyStructureErrors$1(item.structureErrors),
+				reason: classifyStructureErrors(item.structureErrors),
 				path,
 				message: item.structureErrors.join("; "),
 				observationId: entry.observation_id || void 0,
@@ -2766,12 +2505,12 @@ function validateRetireList(retire, activeIds, entries, occurrences, enforceActi
 			entries.push(rejected(path, "unsupported-value", `Unsupported retire reason "${entry.reason_id}".`, entry.observation_id));
 			return;
 		}
-		if (!Number.isFinite(entry.confidence) || entry.confidence < MIN_CONFIDENCE$1 || entry.confidence > 1) {
+		if (!Number.isFinite(entry.confidence) || entry.confidence < MIN_CONFIDENCE || entry.confidence > 1) {
 			entries.push({
 				status: "rejected",
 				reason: "low-confidence",
 				path,
-				message: `Retire confidence must be between ${MIN_CONFIDENCE$1} and 1.`,
+				message: `Retire confidence must be between ${MIN_CONFIDENCE} and 1.`,
 				observationId: entry.observation_id,
 				confidence: entry.confidence
 			});
@@ -2784,7 +2523,7 @@ function validateSemanticEquivalenceList(proposals, activeIds, entries, enforceA
 	proposals.forEach((item) => {
 		const { proposal, path } = item;
 		if (item.structureErrors.length) {
-			entries.push(rejected(path, classifyStructureErrors$1(item.structureErrors), item.structureErrors.join("; ")));
+			entries.push(rejected(path, classifyStructureErrors(item.structureErrors), item.structureErrors.join("; ")));
 			return;
 		}
 		if (enforceActiveIds) {
@@ -2801,7 +2540,7 @@ function validateCounterexampleList(proposals, activeIds, entries, enforceActive
 	proposals.forEach((item) => {
 		const { proposal, path } = item;
 		if (item.structureErrors.length) {
-			entries.push(rejected(path, classifyStructureErrors$1(item.structureErrors), item.structureErrors.join("; "), proposal.observation_id));
+			entries.push(rejected(path, classifyStructureErrors(item.structureErrors), item.structureErrors.join("; "), proposal.observation_id));
 			return;
 		}
 		if (enforceActiveIds && !activeIds.has(proposal.observation_id)) {
@@ -3012,7 +2751,7 @@ function normalizeCounterexampleList(value, fieldPresent) {
 function validateSemanticEquivalenceRecord(item, path) {
 	const errors = [];
 	if (normalizeStringList(item.observation_ids).length < 2) errors.push(`${path}: observation_ids must contain at least two ids`);
-	if (!Number.isFinite(numberValue(item.confidence)) || numberValue(item.confidence) < MIN_CONFIDENCE$1 || numberValue(item.confidence) > 1) errors.push(`${path}: confidence must be between ${MIN_CONFIDENCE$1} and 1`);
+	if (!Number.isFinite(numberValue(item.confidence)) || numberValue(item.confidence) < MIN_CONFIDENCE || numberValue(item.confidence) > 1) errors.push(`${path}: confidence must be between ${MIN_CONFIDENCE} and 1`);
 	if (!validEvidenceRefs(item.evidence_refs)) errors.push(`${path}: evidence_refs must contain at least one valid evidence reference`);
 	if (!isNonEmptyString(item.reason)) errors.push(`${path}: missing or invalid 'reason'`);
 	return errors;
@@ -3020,7 +2759,7 @@ function validateSemanticEquivalenceRecord(item, path) {
 function validateCounterexampleRecord(item, path) {
 	const errors = [];
 	if (!isNonEmptyString(item.observation_id)) errors.push(`${path}: missing or invalid 'observation_id'`);
-	if (!Number.isFinite(numberValue(item.confidence)) || numberValue(item.confidence) < MIN_CONFIDENCE$1 || numberValue(item.confidence) > 1) errors.push(`${path}: confidence must be between ${MIN_CONFIDENCE$1} and 1`);
+	if (!Number.isFinite(numberValue(item.confidence)) || numberValue(item.confidence) < MIN_CONFIDENCE || numberValue(item.confidence) > 1) errors.push(`${path}: confidence must be between ${MIN_CONFIDENCE} and 1`);
 	if (!validEvidenceRefs(item.evidence_refs)) errors.push(`${path}: evidence_refs must contain at least one valid evidence reference`);
 	if (!isNonEmptyString(item.reason)) errors.push(`${path}: missing or invalid 'reason'`);
 	return errors;
@@ -3136,7 +2875,7 @@ function hasOwn(record, key) {
 function isStringArray(value) {
 	return Array.isArray(value);
 }
-function classifyStructureErrors$1(errors) {
+function classifyStructureErrors(errors) {
 	const joined = errors.join(" ").toLowerCase();
 	if (joined.includes("missing") || joined.includes("must be a non-empty")) return "missing-required-field";
 	if (joined.includes("must be an array") || joined.includes("must be an object")) return "malformed-payload";
@@ -3147,107 +2886,6 @@ function dedupeErrors(errors) {
 }
 function isScopeBasis(value) {
 	return RCCL_SCOPE_BASES.has(String(value));
-}
-//#endregion
-//#region src/verify/verify-evidence.ts
-function verifyEvidenceForDocument(rccl, projectRoot, now = /* @__PURE__ */ new Date(), policy = DEFAULT_VERIFICATION_POLICY) {
-	return {
-		...rccl,
-		observations: rccl.observations.map((observation) => verifyObservationEvidence(observation, projectRoot, now.toISOString(), policy))
-	};
-}
-function verifyObservationEvidence(observation, projectRoot, checkedAt, policy = DEFAULT_VERIFICATION_POLICY) {
-	if (observation.evidence.length === 0) return applyEvidenceVerification(observation, "unverifiable", 0, 0, checkedAt, "demote-to-ambient");
-	const results = observation.evidence.map((item) => verifyEvidence(item, projectRoot, policy));
-	const verifiedCount = results.filter((result) => result.status === "match").length;
-	const ratio = verifiedCount / results.length;
-	if (verifiedCount === results.length) return applyEvidenceVerification(observation, "verified", verifiedCount, observation.confidence, checkedAt, "keep");
-	if (verifiedCount > 0) {
-		const confidence = Math.max(observation.confidence * ratio, .3);
-		return applyEvidenceVerification(observation, "partial", verifiedCount, confidence, checkedAt, confidence < .7 ? "keep-with-reduced-confidence" : "keep");
-	}
-	return applyEvidenceVerification(observation, "failed", 0, 0, checkedAt, "demote-to-ambient");
-}
-function applyEvidenceVerification(observation, status, verifiedCount, evidenceConfidence, checkedAt, disposition) {
-	return {
-		...observation,
-		verification: {
-			...observation.verification,
-			evidence_status: status,
-			evidence_verified_count: verifiedCount,
-			evidence_confidence: Number(evidenceConfidence.toFixed(2)),
-			checked_at: checkedAt,
-			disposition
-		}
-	};
-}
-function verifyEvidence(evidence, projectRoot, policy = DEFAULT_VERIFICATION_POLICY) {
-	const fullPath = join(projectRoot, evidence.file);
-	if (!existsSync(fullPath)) return { status: "file-not-found" };
-	const lines = readFileSync(fullPath, "utf-8").replace(/\r\n/g, "\n").split("\n");
-	const [start, end] = evidence.line_range;
-	if (start < 1 || end < start || end > lines.length) return { status: "range-out-of-bounds" };
-	return tokenOverlapSimilarity(lines.slice(start - 1, end).join("\n"), evidence.snippet) >= policy.snippet_similarity_threshold ? { status: "match" } : { status: "mismatch" };
-}
-function tokenOverlapSimilarity(a, b) {
-	const aTokens = tokenize(a);
-	const bTokens = tokenize(b);
-	if (aTokens.length === 0 || bTokens.length === 0) return 0;
-	const counts = /* @__PURE__ */ new Map();
-	for (const token of aTokens) counts.set(token, (counts.get(token) ?? 0) + 1);
-	let overlap = 0;
-	for (const token of bTokens) {
-		const count = counts.get(token) ?? 0;
-		if (count > 0) {
-			overlap += 1;
-			counts.set(token, count - 1);
-		}
-	}
-	return overlap / Math.max(aTokens.length, bTokens.length);
-}
-function tokenize(text) {
-	return text.replace(/\r\n/g, "\n").replace(/['"`]/g, "\"").replace(/\s+/g, " ").trim().match(/[A-Za-z_][A-Za-z0-9_]*|\d+|==|!=|<=|>=|=>|&&|\|\||[()[\]{}.,;:+\-*/%<>!=?]/g) ?? [];
-}
-//#endregion
-//#region src/verify/verify-induction.ts
-function verifyInductionForDocument(rccl, policy = DEFAULT_VERIFICATION_POLICY) {
-	return {
-		...rccl,
-		observations: rccl.observations.map((observation) => verifyObservationInduction(observation, policy))
-	};
-}
-function verifyObservationInduction(observation, policy = DEFAULT_VERIFICATION_POLICY) {
-	const evidenceCount = observation.verification.evidence_verified_count ?? 0;
-	const minRequired = minimumEvidence(observation, policy);
-	let induction_status = "well-supported";
-	let induction_confidence = observation.verification.evidence_confidence ?? 0;
-	if (observation.support.scope_basis === "cross-root" && evidenceCount < policy.min_evidence_for_cross_root_scope) {
-		induction_status = "overgeneralized";
-		induction_confidence = Math.min(induction_confidence, .35);
-	} else if (observation.support.scope_basis === "directory-cluster" && evidenceCount < policy.min_evidence_for_directory_scope) {
-		induction_status = "narrowly-supported";
-		induction_confidence = Math.min(induction_confidence, .5);
-	} else if (evidenceCount < minRequired) {
-		induction_status = "narrowly-supported";
-		induction_confidence = Math.min(induction_confidence, .55);
-	}
-	let disposition = observation.verification.disposition ?? "keep";
-	if (induction_status === "overgeneralized") disposition = "demote-to-ambient";
-	else if (induction_status === "narrowly-supported" && disposition === "keep") disposition = "keep-with-reduced-confidence";
-	return {
-		...observation,
-		verification: {
-			...observation.verification,
-			induction_status,
-			induction_confidence: Number(induction_confidence.toFixed(2)),
-			disposition
-		}
-	};
-}
-function minimumEvidence(observation, policy) {
-	if (observation.category === "anti-pattern") return policy.anti_pattern_min_evidence;
-	if (observation.category === "migration") return policy.migration_min_evidence;
-	return 1;
 }
 //#endregion
 //#region src/commit-refresh.ts
@@ -3767,296 +3405,202 @@ function normalizePath(filePath) {
 	return filePath.replace(/\\/g, "/").replace(/^\.\//, "");
 }
 //#endregion
-//#region src/validate-candidates.ts
-const MIN_CONFIDENCE = .3;
-function validateRcclCandidatePayload(yamlText) {
-	const parsed = parseRcclCandidates(yamlText);
-	if (!parsed.valid || !parsed.data) return {
-		valid: false,
-		observations: [],
-		document: null,
-		diagnostics: {
-			kind: "rccl-observation-generation",
-			summary: {
-				total: 0,
-				accepted: 0,
-				rejected: 1
-			},
-			entries: [{
-				status: "rejected",
-				reason: classifyParseErrors(parsed.errors ?? []),
-				path: "document",
-				message: (parsed.errors ?? []).join("; ") || "Failed to parse candidate YAML"
-			}]
-		}
-	};
-	return validateCandidateDocument(parsed.data);
+//#region src/lifecycle.ts
+function prepareCalibration(input) {
+	if (input.mode === "full") return prepareRccl(input.projectRoot, {
+		scope: input.scope,
+		debugArtifacts: input.debugArtifacts
+	});
+	if (input.mode === "incremental") return prepareIncrementalRccl(input.projectRoot, {
+		scope: input.scope,
+		targetFiles: input.targetFiles,
+		changedFiles: input.changedFiles,
+		mode: input.incrementalMode,
+		fileLimit: input.fileLimit,
+		windowLimit: input.windowLimit,
+		debugArtifacts: input.debugArtifacts
+	});
+	return prepareRcclWorkflowStage(input.projectRoot, {
+		stage: input.mode,
+		scope: input.scope,
+		discovery: parseDiscovery(input.artifacts?.discovery),
+		critique: parseCritique(input.artifacts?.critique),
+		debugArtifacts: input.debugArtifacts
+	});
 }
-function validateCandidateDocument(doc) {
-	const entries = [];
-	const accepted = [];
-	const seenIds = /* @__PURE__ */ new Set();
-	for (let i = 0; i < doc.observations.length; i += 1) {
-		const obs = doc.observations[i];
-		const path = `observations[${i}]`;
-		const id = obs.provisional_id;
-		if (seenIds.has(id)) {
-			entries.push({
-				status: "rejected",
-				reason: "duplicate-id",
-				path,
-				message: `Duplicate provisional_id "${id}"; only the first occurrence is accepted.`,
-				observationId: id
-			});
-			continue;
-		}
-		seenIds.add(id);
-		const structureErrors = validateCandidateObservationShape(obs, path);
-		if (structureErrors.length) {
-			entries.push({
-				status: "rejected",
-				reason: classifyStructureErrors(structureErrors),
-				path,
-				message: structureErrors.join("; "),
-				observationId: id || void 0,
-				confidence: Number.isFinite(obs.confidence) ? obs.confidence : void 0
-			});
-			continue;
-		}
-		if (obs.confidence < MIN_CONFIDENCE) {
-			entries.push({
-				status: "rejected",
-				reason: "low-confidence",
-				path,
-				message: `Confidence ${obs.confidence} is below minimum threshold ${MIN_CONFIDENCE}.`,
-				observationId: id,
-				confidence: obs.confidence
-			});
-			continue;
-		}
-		entries.push({
-			status: "accepted",
-			reason: "accepted",
-			path,
-			message: `Candidate "${id}" accepted.`,
-			observationId: id,
-			confidence: obs.confidence
-		});
-		accepted.push(obs);
-	}
-	const summary = {
-		total: doc.observations.length,
-		accepted: accepted.length,
-		rejected: doc.observations.length - accepted.length
+function commitCalibration(input) {
+	const expectedKind = input.plan.mode === "refresh" ? "rccl-observation-refresh" : "rccl-observation-generation";
+	const issuedContract = reissueCalibrationContract(input);
+	if (!issuedContract.valid) return {
+		status: "failed",
+		reason: issuedContract.reason,
+		diagnostics: issuedContract.diagnostics
 	};
+	const artifact = unwrapArtifact(input.artifacts.candidate, expectedKind, issuedContract.contract);
+	if (!artifact.valid) return {
+		status: "failed",
+		reason: artifact.reason,
+		diagnostics: artifact.diagnostics
+	};
+	const candidateYaml = toYaml(artifact.payload);
+	if (input.plan.mode === "refresh") return commitRcclObservationRefresh(input.projectRoot, candidateYaml, { debugArtifacts: input.plan.debugArtifacts });
+	const validated = validateRcclCandidatePayload(candidateYaml);
+	if (!validated.valid) return {
+		status: "failed",
+		reason: "invalid-candidate-payload",
+		diagnostics: validated.diagnostics
+	};
+	const candidateDocument = {
+		version: "1.0",
+		generated_at: validated.document?.generated_at ?? null,
+		git_ref: validated.document?.git_ref ?? null,
+		observations: validated.observations
+	};
+	const consolidation = consolidateObservations(candidateDocument.observations);
+	const verified = verifyInductionForDocument(verifyEvidenceForDocument({
+		version: "1.0",
+		generated_at: candidateDocument.generated_at,
+		git_ref: candidateDocument.git_ref,
+		observations: materializeRcclObservations(consolidation.observations)
+	}, input.projectRoot));
 	return {
-		valid: accepted.length > 0,
-		observations: accepted,
-		document: {
-			version: doc.version,
-			generated_at: doc.generated_at,
-			git_ref: doc.git_ref
-		},
+		status: "committed",
+		...emitRccl(verified, input.projectRoot),
+		diagnostics: validated.diagnostics,
+		debugArtifacts: input.plan.debugArtifacts ? {
+			enabled: true,
+			candidates: writeCandidateArtifact(input.projectRoot, candidateDocument),
+			consolidation: writeConsolidationArtifact(input.projectRoot, consolidation, verified)
+		} : { enabled: false }
+	};
+}
+function reissueCalibrationContract(input) {
+	if (!input.plan?.contract) return {
+		valid: false,
+		reason: "missing-calibration-contract",
 		diagnostics: {
-			kind: "rccl-observation-generation",
-			summary,
-			entries
+			code: "MISSING_CALIBRATION_CONTRACT",
+			message: "commitCalibration requires the contract issued by prepareCalibration."
 		}
 	};
-}
-function classifyParseErrors(errors) {
-	const joined = errors.join(" ").toLowerCase();
-	if (joined.includes("yaml parse error") || joined.includes("must be a yaml object")) return "malformed-payload";
-	if (joined.includes("missing") || joined.includes("must be")) return "missing-required-field";
-	return "malformed-payload";
-}
-function classifyStructureErrors(errors) {
-	const joined = errors.join(" ").toLowerCase();
-	if (joined.includes("missing") || joined.includes("must be a non-empty")) return "missing-required-field";
-	return "unsupported-value";
-}
-//#endregion
-//#region src/io/parse-rccl-workflow.ts
-const RCCL_VERSION = "1.0";
-const ID_PATTERN = /^obs-[a-z0-9-]+$/;
-function isRcclVersion(value) {
-	return value === RCCL_VERSION || value === 1;
-}
-const VALID_CATEGORIES = new Set([
-	"style",
-	"architecture",
-	"pattern",
-	"constraint",
-	"legacy",
-	"anti-pattern",
-	"migration"
-]);
-const VALID_CRITIQUE_DISPOSITIONS = new Set([
-	"keep",
-	"revise",
-	"drop"
-]);
-function parseRcclDiscoveryArtifact(yamlText) {
-	const parsed = parseRawWorkflowDocument(yamlText);
-	if (!parsed.valid || !parsed.doc) return {
+	const expected = (input.plan.mode === "full" ? prepareRccl(input.projectRoot, { scope: input.plan.scope }) : prepareIncrementalRccl(input.projectRoot, {
+		scope: input.plan.scope,
+		targetFiles: input.plan.targetFiles,
+		changedFiles: input.plan.changedFiles,
+		mode: input.plan.incrementalMode,
+		fileLimit: input.plan.fileLimit,
+		windowLimit: input.plan.windowLimit
+	})).contract;
+	if (!expected || expected.kind !== (input.plan.mode === "full" ? "rccl-observation-generation" : "rccl-observation-refresh")) return {
 		valid: false,
-		errors: parsed.errors
+		reason: "calibration-contract-unavailable",
+		diagnostics: {
+			code: "CALIBRATION_CONTRACT_UNAVAILABLE",
+			message: "The current repository state does not issue the requested calibration contract. Re-run prepareCalibration."
+		}
 	};
-	const errors = validateDiscoveryDocument(parsed.doc);
-	if (errors.length > 0) return {
+	if (input.plan.contract.requestId !== expected.requestId || input.plan.contract.contextFingerprint !== expected.contextFingerprint || input.plan.contract.kind !== expected.kind || input.plan.contract.schemaId !== expected.schemaId || input.plan.contract.schemaVersion !== expected.schemaVersion) return {
 		valid: false,
-		errors
+		reason: "calibration-plan-stale",
+		diagnostics: {
+			code: "CALIBRATION_PLAN_STALE",
+			message: "The supplied plan is not the contract currently issued for this repository state. Re-run prepareCalibration."
+		}
 	};
 	return {
 		valid: true,
-		data: normalizeDiscoveryDocument(parsed.doc)
+		contract: expected
 	};
 }
-function parseRcclCritiqueArtifact(yamlText) {
-	const parsed = parseRawWorkflowDocument(yamlText);
-	if (!parsed.valid || !parsed.doc) return {
-		valid: false,
-		errors: parsed.errors
-	};
-	const errors = validateCritiqueDocument(parsed.doc);
-	if (errors.length > 0) return {
-		valid: false,
-		errors
-	};
-	return {
-		valid: true,
-		data: normalizeCritiqueDocument(parsed.doc)
-	};
-}
-function parseRawWorkflowDocument(yamlText) {
-	let cleaned = yamlText.trim();
-	if (cleaned.startsWith("```")) cleaned = cleaned.replace(/^```(?:yaml|yml)?\s*\n?/, "").replace(/\n?```\s*$/, "");
-	let doc;
+function unwrapArtifact(text, expectedKind, contract) {
+	let raw;
 	try {
-		doc = parseYaml(cleaned);
-	} catch (err) {
+		raw = parseYaml(text);
+	} catch (error) {
 		return {
 			valid: false,
-			errors: [`YAML parse error: ${err instanceof Error ? err.message : String(err)}`]
+			reason: "malformed-yaml",
+			diagnostics: {
+				code: "MALFORMED_YAML",
+				message: error instanceof Error ? error.message : String(error)
+			}
 		};
 	}
-	if (!doc || typeof doc !== "object" || Array.isArray(doc)) return {
+	if (!raw || typeof raw !== "object" || Array.isArray(raw)) return {
 		valid: false,
-		errors: ["Document must be a YAML object"]
+		reason: "invalid-artifact-envelope",
+		diagnostics: {
+			code: "MALFORMED_ARTIFACT",
+			message: "RCCL artifact must use the v1 envelope."
+		}
+	};
+	const envelope = raw;
+	if (envelope.schema_version !== 1) return {
+		valid: false,
+		reason: "unsupported-schema-version",
+		diagnostics: {
+			code: "UNSUPPORTED_SCHEMA_VERSION",
+			message: `Expected schema_version 1; found ${String(envelope.schema_version)}. Re-run calibrate-repo-context prepare. Existing files were not modified.`
+		}
+	};
+	if (envelope.kind !== expectedKind) return {
+		valid: false,
+		reason: "artifact-kind-mismatch",
+		diagnostics: {
+			code: "ARTIFACT_KIND_MISMATCH",
+			message: `Expected ${expectedKind}; found ${String(envelope.kind)}.`
+		}
+	};
+	if (typeof envelope.context_fingerprint !== "string" || typeof envelope.request_id !== "string") return {
+		valid: false,
+		reason: "missing-artifact-identity",
+		diagnostics: {
+			code: "MISSING_ARTIFACT_IDENTITY",
+			message: "request_id and context_fingerprint are required."
+		}
+	};
+	if (envelope.request_id !== `${expectedKind}:${envelope.context_fingerprint}`) return {
+		valid: false,
+		reason: "request-id-mismatch",
+		diagnostics: {
+			code: "REQUEST_ID_MISMATCH",
+			message: "request_id is not bound to the supplied context_fingerprint."
+		}
+	};
+	if (envelope.request_id !== contract.requestId || envelope.context_fingerprint !== contract.contextFingerprint) return {
+		valid: false,
+		reason: "context-fingerprint-mismatch",
+		diagnostics: {
+			code: "CONTEXT_FINGERPRINT_MISMATCH",
+			message: "Artifact identity does not match the issued calibration plan."
+		}
+	};
+	if (!("payload" in envelope)) return {
+		valid: false,
+		reason: "missing-payload",
+		diagnostics: {
+			code: "MISSING_PAYLOAD",
+			message: "Artifact envelope is missing payload."
+		}
 	};
 	return {
 		valid: true,
-		doc
+		payload: envelope.payload
 	};
 }
-function validateEnvelope(doc, stage, collectionField) {
-	const errors = [];
-	if (!isRcclVersion(doc.version)) errors.push(`'version' must be "${RCCL_VERSION}", got "${doc.version}"`);
-	if (doc.stage !== stage) errors.push(`'stage' must be "${stage}", got "${doc.stage}"`);
-	if (doc.generated_at !== null && typeof doc.generated_at !== "string") errors.push("'generated_at' must be null or a string");
-	if (!doc.scope || typeof doc.scope !== "string") errors.push("missing or invalid 'scope'");
-	if (!Array.isArray(doc[collectionField]) || doc[collectionField].length === 0) errors.push(`'${collectionField}' must be a non-empty array`);
-	return errors;
+function parseDiscovery(value) {
+	if (!value) return void 0;
+	if (typeof value !== "string") return value;
+	const parsed = parseRcclDiscoveryArtifact(value);
+	if (!parsed.valid || !parsed.data) throw new Error(`Invalid RCCL discovery artifact: ${(parsed.errors ?? []).join("; ")}`);
+	return parsed.data;
 }
-function validateDiscoveryDocument(doc) {
-	const errors = validateEnvelope(doc, "discover", "seeds");
-	if (errors.length > 0) return errors;
-	const ids = /* @__PURE__ */ new Set();
-	for (let i = 0; i < doc.seeds.length; i += 1) {
-		const seed = doc.seeds[i];
-		const prefix = `seeds[${i}]`;
-		const seedId = String(seed.seed_id ?? "");
-		if (!seedId || typeof seed.seed_id !== "string") errors.push(`${prefix}: missing or invalid 'seed_id'`);
-		else if (!ID_PATTERN.test(seedId)) errors.push(`${prefix}: 'seed_id' "${seedId}" does not match /^obs-[a-z0-9-]+$/`);
-		else if (ids.has(seedId)) errors.push(`Duplicate discovery seed id: "${seedId}"`);
-		ids.add(seedId);
-		if (!seed.semantic_key || typeof seed.semantic_key !== "string") errors.push(`${prefix}: missing or invalid 'semantic_key'`);
-		if (!VALID_CATEGORIES.has(String(seed.category))) errors.push(`${prefix}: 'category' is invalid`);
-		if (!seed.scope_hint || typeof seed.scope_hint !== "string") errors.push(`${prefix}: missing or invalid 'scope_hint'`);
-		if (!seed.pattern || typeof seed.pattern !== "string") errors.push(`${prefix}: missing or invalid 'pattern'`);
-		if (!seed.decision_impact || typeof seed.decision_impact !== "string") errors.push(`${prefix}: missing or invalid 'decision_impact'`);
-		if (!Array.isArray(seed.source_slice_ids) || seed.source_slice_ids.length === 0) errors.push(`${prefix}: missing or invalid 'source_slice_ids'`);
-		errors.push(...validateEvidenceList(seed.evidence, `${prefix}.evidence`));
-		if (seed.uncertainty != null && typeof seed.uncertainty !== "string") errors.push(`${prefix}.uncertainty: must be null or a string`);
-	}
-	return errors;
-}
-function validateCritiqueDocument(doc) {
-	const errors = validateEnvelope(doc, "critique", "reviews");
-	if (errors.length > 0) return errors;
-	const ids = /* @__PURE__ */ new Set();
-	for (let i = 0; i < doc.reviews.length; i += 1) {
-		const review = doc.reviews[i];
-		const prefix = `reviews[${i}]`;
-		const seedId = String(review.seed_id ?? "");
-		if (!seedId || typeof review.seed_id !== "string") errors.push(`${prefix}: missing or invalid 'seed_id'`);
-		else if (!ID_PATTERN.test(seedId)) errors.push(`${prefix}: 'seed_id' "${seedId}" does not match /^obs-[a-z0-9-]+$/`);
-		else if (ids.has(seedId)) errors.push(`Duplicate critique seed id: "${seedId}"`);
-		ids.add(seedId);
-		if (!VALID_CRITIQUE_DISPOSITIONS.has(review.disposition)) errors.push(`${prefix}: 'disposition' is invalid`);
-		if (!Array.isArray(review.reasons) || review.reasons.length === 0) errors.push(`${prefix}: missing or invalid 'reasons'`);
-		if (review.issues != null && !Array.isArray(review.issues)) errors.push(`${prefix}.issues: must be an array when present`);
-		if (review.counter_evidence != null) errors.push(...validateEvidenceList(review.counter_evidence, `${prefix}.counter_evidence`));
-		if (review.recommended_scope_hint != null && typeof review.recommended_scope_hint !== "string") errors.push(`${prefix}.recommended_scope_hint: must be null or a string`);
-	}
-	return errors;
-}
-function validateEvidenceList(value, prefix) {
-	const errors = [];
-	if (!Array.isArray(value) || value.length === 0) return [`${prefix}: must be a non-empty array`];
-	for (let i = 0; i < value.length; i += 1) {
-		const evidence = value[i];
-		if (!evidence || typeof evidence !== "object" || Array.isArray(evidence)) {
-			errors.push(`${prefix}[${i}]: must be an object`);
-			continue;
-		}
-		if (!evidence.file || typeof evidence.file !== "string") errors.push(`${prefix}[${i}]: missing or invalid 'file'`);
-		if (!Array.isArray(evidence.line_range) || evidence.line_range.length !== 2) errors.push(`${prefix}[${i}]: invalid 'line_range'`);
-		if (!evidence.snippet || typeof evidence.snippet !== "string") errors.push(`${prefix}[${i}]: missing or invalid 'snippet'`);
-	}
-	return errors;
-}
-function normalizeEvidenceList(value) {
-	return value.map((evidence) => ({
-		file: String(evidence.file),
-		line_range: [Number(evidence.line_range[0]), Number(evidence.line_range[1])],
-		snippet: String(evidence.snippet)
-	}));
-}
-function normalizeDiscoveryDocument(doc) {
-	return {
-		version: RCCL_VERSION,
-		stage: "discover",
-		generated_at: doc.generated_at == null ? null : String(doc.generated_at),
-		scope: String(doc.scope),
-		seeds: doc.seeds.map((seed) => ({
-			seed_id: String(seed.seed_id),
-			semantic_key: String(seed.semantic_key),
-			category: seed.category,
-			scope_hint: String(seed.scope_hint),
-			pattern: String(seed.pattern),
-			decision_impact: String(seed.decision_impact),
-			evidence: normalizeEvidenceList(seed.evidence),
-			source_slice_ids: seed.source_slice_ids.map(String),
-			uncertainty: seed.uncertainty == null ? null : String(seed.uncertainty)
-		}))
-	};
-}
-function normalizeCritiqueDocument(doc) {
-	return {
-		version: RCCL_VERSION,
-		stage: "critique",
-		generated_at: doc.generated_at == null ? null : String(doc.generated_at),
-		scope: String(doc.scope),
-		reviews: doc.reviews.map((review) => ({
-			seed_id: String(review.seed_id),
-			disposition: review.disposition,
-			reasons: review.reasons.map(String),
-			issues: review.issues == null ? void 0 : review.issues.map(String),
-			counter_evidence: review.counter_evidence == null ? void 0 : normalizeEvidenceList(review.counter_evidence),
-			recommended_scope_hint: review.recommended_scope_hint == null ? null : String(review.recommended_scope_hint)
-		}))
-	};
+function parseCritique(value) {
+	if (!value) return void 0;
+	if (typeof value !== "string") return value;
+	const parsed = parseRcclCritiqueArtifact(value);
+	if (!parsed.valid || !parsed.data) throw new Error(`Invalid RCCL critique artifact: ${(parsed.errors ?? []).join("; ")}`);
+	return parsed.data;
 }
 //#endregion
-export { DEFAULT_SAMPLING_POLICY, DEFAULT_VERIFICATION_POLICY, commitRcclObservationRefresh, consolidateObservations, deriveScope, deriveSupport, emitRccl, materializeRcclObservations, normalizeDocument, normalizeObservation, parseRccl, parseRcclCandidates, parseRcclCritiqueArtifact, parseRcclDiscoveryArtifact, prepareIncrementalRccl, prepareRccl, prepareRcclWorkflowStage, serializeRccl, validateRcclCandidatePayload, validateRcclObservationRefreshPayload, verifyEvidence, verifyEvidenceForDocument, verifyInductionForDocument, verifyObservationEvidence, verifyObservationInduction, writeCandidateArtifact, writeConsolidationArtifact };
+export { commitCalibration, prepareCalibration };

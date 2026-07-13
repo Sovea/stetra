@@ -6,7 +6,7 @@ const WEIGHT_RANKS = { low: 0, normal: 1, high: 2, critical: 3 } as const;
 const PRESCRIPTION_RANKS = { should: 0, must: 1 } as const;
 
 export function directivesToIR(directives: Directive[], local: LocalPlaybook | null): DirectiveIR[] {
-  const overrideById = new Map(local?.overrides.map((item) => [item.id, item]) ?? []);
+  const overrideById = new Map(local?.overrides.map((item) => [item.supersedes, item]) ?? []);
   const augmentById = new Map(local?.augments.map((item) => [item.id, item]) ?? []);
   const suppressById = new Map(local?.suppresses.map((item) => [item.id, item]) ?? []);
   return directives.map((directive) => {

@@ -279,7 +279,7 @@ function feedbackSignalsForDirective(
 
   if (frequentlyIgnored) labels.push('feedback:frequently-ignored');
   if (frequentlyIgnored && directive.prescription === 'must') labels.push('feedback:frequently-ignored-must-review');
-  if (directiveSignal?.trend === 'degrading') labels.push('feedback:degrading');
+  if (directiveSignal?.trend === 'declining') labels.push('feedback:declining');
   if (directiveSignal?.signalConfidence === 'user-corrected') labels.push('feedback:user-corrected');
   if (recurringTension) labels.push('feedback:recurring-tension');
   if (noisyObservation) labels.push('feedback:noisy-observation');

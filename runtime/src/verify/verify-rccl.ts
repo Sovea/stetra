@@ -1,5 +1,8 @@
-import { dirname, resolve } from 'node:path';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import {
+  verifyObservationEvidence,
+  verifyObservationInduction,
+  type RcclObservation as RcclSourceObservation,
+} from '@resonant-code/rccl/runtime';
 import { unique } from '../utils/common.ts';
 import { normalizePath, pathMatchesScope, scopeOverlapsPath, fileOverlapsTarget } from '../utils/paths.ts';
 import type {
@@ -10,11 +13,6 @@ import type {
   RuntimeRcclVerificationRecord,
   RuntimeRcclVerificationSummary,
 } from '../types.ts';
-
-interface RcclModule {
-  verifyObservationEvidence: (observation: RcclObservation, projectRoot: string, checkedAt: string) => RcclObservation;
-  verifyObservationInduction: (observation: RcclObservation) => RcclObservation;
-}
 
 export interface VerifyRcclDocumentOptions {
   projectRoot: string;
@@ -48,7 +46,6 @@ export async function verifyRcclDocumentWithSummary(
   options: VerifyRcclDocumentOptions,
 ): Promise<VerifyRcclDocumentResult> {
   const checkedAt = (options.now ?? new Date()).toISOString();
-  const rcclModule = await loadRcclModule();
   const policy = options.policy ?? 'task-relevant';
   const targets = taskTargets(options.resolvedTask);
   const records: RuntimeRcclVerificationRecord[] = [];
@@ -74,9 +71,9 @@ export async function verifyRcclDocumentWithSummary(
       return observation;
     }
 
-    const verified = rcclModule.verifyObservationInduction(
-      rcclModule.verifyObservationEvidence(observation, options.projectRoot, checkedAt),
-    );
+    const verified = verifyObservationInduction(
+      verifyObservationEvidence(observation as unknown as RcclSourceObservation, options.projectRoot, checkedAt),
+    ) as unknown as RcclObservation;
     const after = verificationSnapshot(verified);
     records.push({
       observation_id: observation.id,
@@ -186,9 +183,4 @@ function reuseReason(policy: RuntimeRcclVerificationPolicy, relevanceReason: str
   if (policy === 'trust-existing') return 'trust-existing policy reused stored RCCL verification; incomplete verification remains ambient downstream';
   if (policy === 'deep') return 'deep policy should not reuse observations';
   return relevanceReason;
-}
-
-async function loadRcclModule(): Promise<RcclModule> {
-  const entry = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..', '..', 'rccl', 'dist', 'index.mjs');
-  return import(pathToFileURL(entry).href) as Promise<RcclModule>;
 }

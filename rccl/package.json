@@ -1,15 +1,30 @@
 {
   "name": "@resonant-code/rccl",
-  "version": "0.1.0",
+  "version": "0.0.1",
   "private": true,
   "type": "module",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "import": "./dist/index.mjs"
+    },
+    "./runtime": {
+      "types": "./src/runtime.ts",
+      "import": "./src/runtime.ts"
+    }
+  },
   "scripts": {
     "build": "tsdown --config ./tsdown.config.ts",
-    "test": "node test/refresh-contract.test.mjs"
+    "typecheck": "tsc --noEmit",
+    "test": "tsx test/refresh-contract.test.mjs && tsx --test test/v1-hardening.test.ts"
   },
   "devDependencies": {
     "@types/node": "^22.19.15",
     "tsdown": "^0.21.8",
     "typescript": "^6.0.2"
+  },
+  "dependencies": {
+    "ignore": "^7.0.5",
+    "yaml": "^2.9.0"
   }
 }

@@ -77,11 +77,11 @@ function compareDirectives(
   b: DirectiveIR,
   decisionByDirectiveId: Map<string, SemanticMergeResult['directive_modes'][number]>,
 ): number {
-  const layerScore = getDirectiveLayerRank(b.layer.id) - getDirectiveLayerRank(a.layer.id);
-  if (layerScore !== 0) return layerScore;
-
   const prescriptionScore = a.prescription === b.prescription ? 0 : a.prescription === 'must' ? -1 : 1;
   if (prescriptionScore !== 0) return prescriptionScore;
+
+  const layerScore = getDirectiveLayerRank(b.layer.id) - getDirectiveLayerRank(a.layer.id);
+  if (layerScore !== 0) return layerScore;
 
   const weights = { low: 0, normal: 1, high: 2, critical: 3 };
   const weightScore = weights[b.weight] - weights[a.weight];

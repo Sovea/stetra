@@ -1,6 +1,6 @@
 import { buildContractPayloadDiagnostics } from './diagnostics.ts';
 import { verifyEvidenceRefs } from './evidence.ts';
-import { contractVersionDiagnostic, isRecord, normalizeEvidenceRefs, validConfidence, validEvidenceRefs } from './shared.ts';
+import { artifactIdentity, contractVersionDiagnostic, isRecord, normalizeEvidenceRefs, validConfidence, validEvidenceRefs } from './shared.ts';
 import {
   AI_CONTRACT_VERSION,
   type AdherenceEvidenceContractInput,
@@ -31,7 +31,7 @@ export function prepareAdherenceEvidenceContract(input: AdherenceEvidenceContrac
   const artifact = {
     suggestedPath: input.artifactPath,
     format: 'json' as const,
-    usage: `Write adherence-evidence JSON to ${input.artifactPath}, then pass it to complete with --adherence-file ${input.artifactPath}.`,
+    usage: `Write a v1 envelope to ${input.artifactPath}: schema_version 1, kind adherence-evidence, the issued requestId/contextFingerprint as request_id/context_fingerprint, and verdicts under payload; then pass it to complete with --adherence-file ${input.artifactPath}.`,
   };
   return {
     evidencePrompt: prompt,
@@ -40,8 +40,9 @@ export function prepareAdherenceEvidenceContract(input: AdherenceEvidenceContrac
     contract: {
       contractVersion: AI_CONTRACT_VERSION,
       kind: 'adherence-evidence',
+      ...artifactIdentity('adherence-evidence', { directiveIds: input.directives.map((directive) => directive.id), schemaId: 'runtime.adherence-evidence' }),
       schemaId: 'runtime.adherence-evidence',
-      schemaVersion: '2.0',
+      schemaVersion: '1.0',
       prompt,
       schema: ADHERENCE_EVIDENCE_SCHEMA,
       artifact,

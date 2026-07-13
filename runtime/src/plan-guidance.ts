@@ -1,9 +1,12 @@
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
-import { prepareAgentCapabilityProfileContract } from './ai-contracts/agent-capability-profile.ts';
+import { prepareAgentCapabilityProfileContract, validateAgentCapabilityProfilePayload } from './ai-contracts/agent-capability-profile.ts';
 import { prepareContextAcquisitionContract } from './ai-contracts/context-acquisition.ts';
 import { prepareSemanticGovernanceGraphContractBundle } from './ai-contracts/semantic-governance-graph.ts';
 import { prepareTaskModelContract } from './ai-contracts/task-model.ts';
+import { validateTaskModelPayload } from './ai-contracts/task-model.ts';
+import { buildContractPayloadDiagnostics } from './ai-contracts/diagnostics.ts';
+import { unwrapHostArtifactEnvelope } from './ai-contracts/shared.ts';
 import { resolveContractPolicy } from './contract-policy.ts';
 import { resolveTask } from './interpret/normalize-candidate.ts';
 import { loadRccl } from './load/load-rccl.ts';
@@ -20,21 +23,64 @@ import type {
   ResolvedTaskOutput,
   RuntimeContractRequest,
 } from './types.ts';
+import type { ContractPayloadDiagnostics, TaskModelProposal } from './ai-contracts/types.ts';
 
 export async function planGuidance(input: GuidancePlanInput): Promise<GuidancePlan> {
   const notes: string[] = [];
+  const contractDiagnostics: ContractPayloadDiagnostics[] = [];
+  const issuedCapabilityProfile = prepareAgentCapabilityProfileContract({
+    task: input.task,
+    artifactPath: input.artifactPaths.agentCapabilityProfile,
+  });
+  let agentCapabilityProfile = null;
+  if (input.artifacts?.agentCapabilityProfile) {
+    const unwrapped = unwrapHostArtifactEnvelope(input.artifacts.agentCapabilityProfile.raw, issuedCapabilityProfile.contract);
+    if (unwrapped.diagnostic) {
+      contractDiagnostics.push(buildContractPayloadDiagnostics('agent-capability-profile', [unwrapped.diagnostic], {
+        id: issuedCapabilityProfile.contract.requestId,
+        path: input.artifacts.agentCapabilityProfile.path,
+      }));
+    } else {
+      const validated = validateAgentCapabilityProfilePayload(unwrapped.payload);
+      contractDiagnostics.push(validated.diagnostics);
+      agentCapabilityProfile = validated.profile;
+    }
+  }
+  const issuedTaskModel = prepareTaskModelContract({
+    task: input.task,
+    artifactPath: input.artifactPaths.taskModel,
+  });
+  let taskModels: TaskModelProposal[] = [];
+  if (input.artifacts?.taskModel) {
+    const unwrapped = unwrapHostArtifactEnvelope(input.artifacts.taskModel.raw, issuedTaskModel.contract);
+    if (unwrapped.diagnostic) {
+      contractDiagnostics.push(buildContractPayloadDiagnostics('task-model', [unwrapped.diagnostic], {
+        id: issuedTaskModel.contract.requestId,
+        path: input.artifacts.taskModel.path,
+      }));
+    } else {
+      const validated = validateTaskModelPayload(unwrapped.payload);
+      contractDiagnostics.push(validated.diagnostics);
+      taskModels = validated.models;
+    }
+  }
   const sourceStatus = resolveSourceStatus(input, notes);
   const guidanceMode = input.mode ?? 'standard';
   const resolvedTask = resolveTask({
     task: input.task,
-    taskModels: input.taskModels ?? [],
-    interpretationMode: input.taskModels?.length ? 'host-agent' : 'deterministic-only',
+    taskModels,
+    interpretationMode: taskModels.length ? 'host-agent' : 'deterministic-only',
   });
   const rcclRelevant = await resolveRcclRelevance(input, sourceStatus, resolvedTask, notes);
   const policy = resolveContractPolicy({
     sourceStatus,
-    providedContracts: input.providedContracts,
-    agentCapabilityProfile: input.agentCapabilityProfile,
+    providedContracts: {
+      ...input.providedContracts,
+      agentCapability: Boolean(agentCapabilityProfile),
+      taskModel: taskModels.length > 0,
+      semanticGovernanceGraph: Boolean(input.artifacts?.semanticGovernanceGraph),
+    },
+    agentCapabilityProfile,
     task: input.task,
     resolvedTask,
     mode: guidanceMode,
@@ -43,27 +89,19 @@ export async function planGuidance(input: GuidancePlanInput): Promise<GuidancePl
   const requiredContracts: RuntimeContractRequest[] = [];
 
   if (policy.required.includes('agent-capability-profile')) {
-    const profile = prepareAgentCapabilityProfileContract({
-      task: input.task,
-      artifactPath: input.artifactPaths.agentCapabilityProfile,
-    });
     requiredContracts.push({
       kind: 'agent-capability-profile',
-      artifact: profile.profileArtifact,
-      contract: profile.contract,
+      artifact: issuedCapabilityProfile.profileArtifact,
+      contract: issuedCapabilityProfile.contract,
     });
     notes.push('Agent capability profile requested so Runtime can select agentic contracts from concrete host capabilities.');
   }
 
   if (policy.required.includes('task-model')) {
-    const taskModel = prepareTaskModelContract({
-      task: input.task,
-      artifactPath: input.artifactPaths.taskModel,
-    });
     requiredContracts.push({
       kind: 'task-model',
-      artifact: taskModel.modelArtifact,
-      contract: taskModel.contract,
+      artifact: issuedTaskModel.modelArtifact,
+      contract: issuedTaskModel.contract,
     });
     notes.push('Task model contract requested; deterministic interpretation is fallback only.');
   }
@@ -83,7 +121,7 @@ export async function planGuidance(input: GuidancePlanInput): Promise<GuidancePl
 
   if (policy.required.includes('semantic-governance-graph')) {
     const graph = await prepareSemanticGovernanceGraphContractBundle({
-      compileInput: guidancePlanCompileInput(input),
+      compileInput: guidancePlanCompileInput(input, taskModels),
       artifactPath: input.artifactPaths.semanticGovernanceGraph ?? defaultSemanticGovernanceGraphPath(input.projectRoot),
     });
     requiredContracts.push({
@@ -130,6 +168,8 @@ export async function planGuidance(input: GuidancePlanInput): Promise<GuidancePl
       policy: requiredContracts.length ? 'contracts-required' : 'ready',
       notes,
     },
+    resolvedTask,
+    contractDiagnostics,
   };
 }
 
@@ -150,6 +190,10 @@ function resolveRcclSourceStatus(rcclPath: string | undefined, notes?: string[])
   try {
     const parsed = parseYaml(readFileSync(rcclPath, 'utf-8'));
     if (!isRecord(parsed) || !Array.isArray(parsed.observations)) return 'unverified';
+    if (parsed.version !== '1.0' && parsed.version !== 1) {
+      notes?.push('UNSUPPORTED_SCHEMA_VERSION: RCCL must use schema 1; re-run calibrate-repo-context.');
+      return 'unverified';
+    }
     if (parsed.observations.length === 0) return 'present';
     const observations = parsed.observations.filter(isRecord);
     if (observations.length !== parsed.observations.length) return 'unverified';
@@ -184,19 +228,16 @@ function resolveCacheStatus(projectRoot: string): GuidancePlanSourceStatus['cach
   return populatedLevels > 0 ? 'partial' : 'miss';
 }
 
-function guidancePlanCompileInput(input: GuidancePlanInput): CompileInput {
+function guidancePlanCompileInput(input: GuidancePlanInput, taskModels: TaskModelProposal[]): CompileInput {
   return {
     builtinRoot: input.builtinRoot,
     localAugmentPath: input.localAugmentPath,
     rcclPath: input.rcclPath,
     projectRoot: input.projectRoot,
     lockfilePath: input.lockfilePath,
-    hostProposals: input.hostProposals,
-    hostFulfillment: input.hostFulfillment,
-    agentCapabilityProfile: input.agentCapabilityProfile,
-    preloadedSources: input.preloadedSources,
+    verificationPolicy: input.verificationPolicy,
     task: input.task,
-    taskModels: input.taskModels,
+    taskModels,
   };
 }
 

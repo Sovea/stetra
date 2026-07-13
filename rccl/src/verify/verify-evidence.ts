@@ -1,5 +1,5 @@
-import { existsSync, readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { existsSync, readFileSync, realpathSync } from 'node:fs';
+import { isAbsolute, relative, resolve, win32 } from 'node:path';
 import type { RcclDocument, RcclEvidence, RcclObservation, VerificationDisposition, VerificationStatus, VerificationPolicy } from '../types.ts';
 import { DEFAULT_VERIFICATION_POLICY } from '../policies.ts';
 
@@ -63,14 +63,28 @@ export function verifyEvidence(
   evidence: RcclEvidence,
   projectRoot: string,
   policy: VerificationPolicy = DEFAULT_VERIFICATION_POLICY,
-): { status: 'match' | 'mismatch' | 'file-not-found' | 'range-out-of-bounds' } {
-  const fullPath = join(projectRoot, evidence.file);
+): { status: 'match' | 'mismatch' | 'file-not-found' | 'range-out-of-bounds' | 'path-outside-project' } {
+  if (!safeRelativeEvidencePath(evidence.file)) return { status: 'path-outside-project' };
+  const root = realpathSync(resolve(projectRoot));
+  const fullPath = resolve(root, evidence.file);
   if (!existsSync(fullPath)) return { status: 'file-not-found' };
-  const lines = readFileSync(fullPath, 'utf-8').replace(/\r\n/g, '\n').split('\n');
+  let realFile: string;
+  try { realFile = realpathSync(fullPath); } catch { return { status: 'file-not-found' }; }
+  const rel = relative(root, realFile);
+  if (!rel || rel === '..' || rel.startsWith(`..${process.platform === 'win32' ? '\\' : '/'}`) || isAbsolute(rel)) {
+    return { status: 'path-outside-project' };
+  }
+  const lines = readFileSync(realFile, 'utf-8').replace(/\r\n/g, '\n').split('\n');
   const [start, end] = evidence.line_range;
   if (start < 1 || end < start || end > lines.length) return { status: 'range-out-of-bounds' };
   const actual = lines.slice(start - 1, end).join('\n');
   return tokenOverlapSimilarity(actual, evidence.snippet) >= policy.snippet_similarity_threshold ? { status: 'match' } : { status: 'mismatch' };
+}
+
+function safeRelativeEvidencePath(file: string): boolean {
+  if (!file || isAbsolute(file) || win32.isAbsolute(file)) return false;
+  const normalized = file.replace(/\\/g, '/');
+  return !normalized.split('/').some((segment) => segment === '..') && !normalized.startsWith('/');
 }
 
 function tokenOverlapSimilarity(a: string, b: string): number {

@@ -1,7 +1,6 @@
-import { GOVERNANCE_IR_VERSION, type GovernanceIRBundle, type SemanticRelationIR } from '../types.ts';
+import { type GovernanceIRBundle, type SemanticRelationIR } from '../types.ts';
 import { adjudicateSemanticRelations } from './adjudicate-relations.ts';
 import { proposeSemanticRelations } from './propose-relations.ts';
-import { stableHash } from '../../utils/hash.ts';
 
 export function buildSemanticRelationsIR(bundle: GovernanceIRBundle): SemanticRelationIR[] {
   const proposals = proposeSemanticRelations(bundle);
@@ -36,53 +35,17 @@ function mergeRelationProposals(relations: SemanticRelationIR[]): SemanticRelati
 
 function mergeRelationGroup(group: SemanticRelationIR[]): SemanticRelationIR {
   if (group.length === 1) return group[0];
+  return [...group].sort(compareWholeProposals)[0];
+}
 
-  const relation = chooseMergedRelation(group);
-  const directiveId = group[0].directiveId;
-  const observationId = group[0].observationId;
-  const signals = uniqueSignals(group.flatMap((item) => item.signals));
-  const evidenceRefs = uniqueStrings(group.flatMap((item) => item.evidenceRefs));
-  const proposedBy = group.some((item) => item.proposedBy !== group[0].proposedBy) ? 'multi-source' : group[0].proposedBy;
-  const impact = chooseImpact(group, relation);
-  const reviewPriority = chooseReviewPriority(group);
-  const executionIntent = chooseExecutionIntent(group);
-  const mergeIntent = chooseMergeIntent(group);
-  const groupId = chooseGroupId(group);
-  const conflictClass = chooseConflictClass(group, relation);
-  const confidence = Number(Math.max(...group.map((item) => item.confidence)).toFixed(2));
-  const basis = {
-    scope: group.some((item) => item.basis.scope),
-    semanticKey: group.some((item) => item.basis.semanticKey),
-    category: group.some((item) => item.basis.category),
-    evidence: group.some((item) => item.basis.evidence),
-    hostReasoning: group.some((item) => item.basis.hostReasoning),
-    feedback: group.some((item) => item.basis.feedback),
-  };
-
-  return {
-    irVersion: GOVERNANCE_IR_VERSION,
-    id: stableHash(['semantic-relation-ir', 'merged', directiveId, observationId, relation, proposedBy, signals, evidenceRefs, impact, reviewPriority, executionIntent, mergeIntent, groupId]),
-    directiveId,
-    observationId,
-    proposedBy,
-    relation,
-    ...(conflictClass ? { conflictClass } : {}),
-    confidence,
-    basis,
-    signals,
-    evidenceRefs,
-    reasoningSummary: summarizeMergedReasoning(group, relation),
-    ...(impact ? { impact } : {}),
-    ...(reviewPriority ? { reviewPriority } : {}),
-    ...(executionIntent ? { executionIntent } : {}),
-    ...(mergeIntent ? { mergeIntent } : {}),
-    ...(groupId ? { groupId } : {}),
-    adjudication: {
-      status: 'accepted',
-      finalRelation: relation,
-      reason: 'merged semantic relation proposal before adjudication',
-    },
-  };
+function compareWholeProposals(left: SemanticRelationIR, right: SemanticRelationIR): number {
+  const sourceRank = { 'host-agent': 3, feedback: 2, 'runtime-structural': 1, 'multi-source': 0 } as const;
+  const source = sourceRank[right.proposedBy] - sourceRank[left.proposedBy];
+  if (source) return source;
+  if (left.confidence !== right.confidence) return right.confidence - left.confidence;
+  if (left.basis.evidence !== right.basis.evidence) return left.basis.evidence ? -1 : 1;
+  if (left.evidenceRefs.length !== right.evidenceRefs.length) return right.evidenceRefs.length - left.evidenceRefs.length;
+  return left.id.localeCompare(right.id);
 }
 
 function chooseMergedRelation(group: SemanticRelationIR[]): SemanticRelationIR['relation'] {

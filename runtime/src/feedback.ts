@@ -1,9 +1,14 @@
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
+import { dirname } from 'node:path';
+import { validateAdherenceEvidencePayload } from './ai-contracts/adherence-evidence.ts';
+import { buildContractPayloadDiagnostics } from './ai-contracts/diagnostics.ts';
+import { unwrapHostArtifactEnvelope } from './ai-contracts/shared.ts';
 import { isRecord, validConfidence } from './utils/common.ts';
 import { parseYaml, toYaml } from './utils/yaml.ts';
 import {
   LOCKFILE_VERSION,
   type EvaluateInput,
+  type EvaluateOutput,
   type ExecutionMode,
   type FeedbackSignalConfidence,
   type HostFulfillmentArtifactSummary,
@@ -12,24 +17,60 @@ import {
   type LockfileDirectiveEntry,
   type LockfileDocument,
   type LockfileObservationEntry,
+  type PublicEvaluateInput,
   type LockfileTensionEntry,
 } from './types.ts';
 
-export function evaluateGuidance(input: EvaluateInput): LockfileDocument {
+export function evaluateGuidance(input: PublicEvaluateInput): EvaluateOutput {
+  const release = acquireLock(`${input.lockfilePath}.lock`);
+  try {
+    const trackedDirectiveIds = getTrackedDirectiveIds(input);
+    const validation = validatePublicAdherenceArtifact(input, trackedDirectiveIds);
+    const lockfile = evaluateGuidanceUnlocked({
+      ...input,
+      adherencePayload: validation.verdicts,
+      followedDirectiveIds: undefined,
+      ignoredDirectiveIds: undefined,
+      ignoredDirectiveReasons: undefined,
+      signalConfidence: undefined,
+      hostFulfillment: undefined,
+    });
+    return {
+      status: validation.diagnostics.summary.rejected > 0 ? 'needs-attention' : 'updated',
+      lockfile,
+      contractDiagnostics: validation.diagnostics,
+      verdictCounts: summarizeCurrentVerdicts(validation.verdicts, trackedDirectiveIds),
+    };
+  } finally {
+    release();
+  }
+}
+
+function summarizeCurrentVerdicts(
+  verdicts: import('./ai-contracts/types.ts').ValidatedAdherenceEvidenceVerdict[],
+  trackedDirectiveIds: string[],
+): EvaluateOutput['verdictCounts'] {
+  const counts = { followed: 0, partial: 0, ignored: 0, unverified: 0 };
+  const covered = new Set<string>();
+  for (const verdict of verdicts) {
+    if (covered.has(verdict.directive_id)) continue;
+    covered.add(verdict.directive_id);
+    counts[verdict.verdict] += 1;
+  }
+  counts.unverified += trackedDirectiveIds.filter((id) => !covered.has(id)).length;
+  return counts;
+}
+
+function evaluateGuidanceUnlocked(input: EvaluateInput): LockfileDocument {
   const existing = loadLockfile(input.lockfilePath);
   const trackedDirectiveIds = getTrackedDirectiveIds(input);
   const adherenceResolved = resolveFromAdherencePayload(input, trackedDirectiveIds);
-  const hasExplicitDirectiveSignal = Boolean(
-    adherenceResolved
-    || input.followedDirectiveIds?.length
-    || input.ignoredDirectiveIds?.length,
-  );
-  const followed = adherenceResolved?.followed ?? new Set(input.followedDirectiveIds ?? []);
-  const ignored = adherenceResolved?.ignored ?? new Set(input.ignoredDirectiveIds ?? []);
+  const followed = adherenceResolved?.followed ?? new Set<string>();
+  const ignored = adherenceResolved?.ignored ?? new Set<string>();
   const partial = adherenceResolved?.partial ?? new Set<string>();
-  const unverified = adherenceResolved?.unverified ?? new Set<string>();
-  const ignoredReasons = adherenceResolved?.ignoredReasons ?? input.ignoredDirectiveReasons;
-  const taskType = input.ego.taskIntent.operation;
+  const unverified = adherenceResolved?.unverified ?? new Set(trackedDirectiveIds);
+  const ignoredReasons = adherenceResolved?.ignoredReasons;
+  const taskType = input.ego.taskIntent.change_type;
   const taskProfile = taskProfileKey(input);
   const today = new Date().toISOString().slice(0, 10);
   const now = new Date().toISOString();
@@ -48,11 +89,6 @@ export function evaluateGuidance(input: EvaluateInput): LockfileDocument {
 
   updateObservationFeedback(existing, observedRccl, input, now);
   updateTensionFeedback(existing, input, now);
-
-  if (!hasExplicitDirectiveSignal) {
-    writeFileSync(input.lockfilePath, toYaml(existing), 'utf-8');
-    return existing;
-  }
 
   for (const directiveId of trackedDirectiveIds) {
     const entry = existing.directives[directiveId] ?? createEntry();
@@ -84,7 +120,10 @@ export function evaluateGuidance(input: EvaluateInput): LockfileDocument {
     }
     entry.quality_signal.by_task_type[taskType] = counts;
     entry.quality_signal.by_task_profile[taskProfile] = profileCounts;
+    const coveredVerdict: 'ignored' | 'partial' | 'followed' | null = ignored.has(directiveId) ? 'ignored' : partial.has(directiveId) ? 'partial' : followed.has(directiveId) ? 'followed' : null;
+    if (coveredVerdict) entry.quality_signal.overall.recent_verdicts = [...entry.quality_signal.overall.recent_verdicts, coveredVerdict].slice(-20);
     entry.quality_signal.overall.follow_rate = computeFollowRate(entry);
+    entry.quality_signal.overall.coverage_rate = computeCoverageRate(entry);
     entry.quality_signal.overall.trend = computeTrend(entry);
     entry.quality_signal.signal_confidence = adherenceResolved
       ? 'explicit'
@@ -104,14 +143,52 @@ export function evaluateGuidance(input: EvaluateInput): LockfileDocument {
     existing.directives[directiveId] = entry;
   }
 
-  writeFileSync(input.lockfilePath, toYaml(existing), 'utf-8');
+  atomicWrite(input.lockfilePath, toYaml(existing));
   return existing;
+}
+
+function validatePublicAdherenceArtifact(
+  input: PublicEvaluateInput,
+  trackedDirectiveIds: string[],
+): import('./ai-contracts/types.ts').AdherenceEvidenceValidationResult {
+  const artifact = input.artifacts?.adherenceEvidence;
+  if (!artifact) return {
+    verdicts: [],
+    diagnostics: buildContractPayloadDiagnostics('adherence-evidence', [{
+      status: 'unused', reason: 'empty-payload', path: 'artifact', message: 'No adherence artifact was provided; tracked directives are recorded as unverified.',
+    }]),
+  };
+  const request = input.packet.post_compile_contract_requests.find((item) => item.kind === 'adherence-evidence');
+  if (!request) return {
+    verdicts: [],
+    diagnostics: buildContractPayloadDiagnostics('adherence-evidence', [{
+      status: 'rejected',
+      reason: 'malformed-payload',
+      path: 'packet.post_compile_contract_requests',
+      message: 'The compiled packet does not contain the Runtime-issued adherence-evidence contract.',
+    }], { id: 'missing-adherence-contract', path: artifact.path }),
+  };
+  const unwrapped = unwrapHostArtifactEnvelope(artifact.raw, request.contract);
+  if (unwrapped.diagnostic) return {
+    verdicts: [],
+    diagnostics: buildContractPayloadDiagnostics('adherence-evidence', [unwrapped.diagnostic], { id: request.contract.requestId, path: artifact.path }),
+  };
+  const issuedDirectiveIds = request.contract.allowedIds?.directiveIds ?? [];
+  const trackedSet = new Set(trackedDirectiveIds);
+  return validateAdherenceEvidencePayload(
+    unwrapped.payload,
+    issuedDirectiveIds.filter((id) => trackedSet.has(id)),
+    input.evidenceContext,
+  );
 }
 
 function loadLockfile(filePath: string): LockfileDocument {
   if (!existsSync(filePath)) return createDocument();
   const parsed = parseYaml(readFileSync(filePath, 'utf-8')) as unknown;
-  if (!isLockfileDocument(parsed)) return createDocument();
+  if (isRecord(parsed) && 'version' in parsed && parsed.version !== LOCKFILE_VERSION) {
+    throw new Error(`UNSUPPORTED_SCHEMA_VERSION: lockfile ${filePath} must use ${LOCKFILE_VERSION}; found ${String(parsed.version)}. Re-run init. Existing data was not modified.`);
+  }
+  if (!isLockfileDocument(parsed)) throw new Error(`INVALID_LOCKFILE: ${filePath} is malformed and was not modified.`);
   return {
     version: LOCKFILE_VERSION,
     directives: normalizeDirectiveEntries(parsed.directives),
@@ -136,7 +213,7 @@ function isLockfileDocument(value: unknown): value is LockfileDocument {
 }
 
 function isLockfileVersion(value: unknown): boolean {
-  return value === LOCKFILE_VERSION || value === 1 || value === 1.0;
+  return value === LOCKFILE_VERSION || value === 1;
 }
 
 function normalizeObservationEntries(entries: Record<string, LockfileObservationEntry>): Record<string, LockfileObservationEntry> {
@@ -161,6 +238,8 @@ function normalizeDirectiveEntries(entries: Record<string, LockfileDirectiveEntr
           ...entry.quality_signal?.overall,
           partial: (entry.quality_signal?.overall as { partial?: number })?.partial ?? 0,
           unverified: (entry.quality_signal?.overall as { unverified?: number })?.unverified ?? 0,
+          coverage_rate: (entry.quality_signal?.overall as { coverage_rate?: number })?.coverage_rate ?? 0,
+          recent_verdicts: normalizeRecentVerdicts((entry.quality_signal?.overall as { recent_verdicts?: unknown })?.recent_verdicts),
         },
         by_task_type: normalizeSignalCountMap(entry.quality_signal?.by_task_type),
         by_task_profile: normalizeSignalCountMap(entry.quality_signal?.by_task_profile),
@@ -324,7 +403,9 @@ function createEntry(): LockfileDirectiveEntry {
         partial: 0,
         unverified: 0,
         follow_rate: 0,
+        coverage_rate: 0,
         trend: 'stable',
+        recent_verdicts: [],
       },
       by_task_type: {},
       by_task_profile: {},
@@ -370,7 +451,14 @@ function summarizeExecutionModes(input: EvaluateInput): Record<ExecutionMode, nu
 function computeFollowRate(entry: LockfileDirectiveEntry): number {
   const { followed, ignored, partial } = entry.quality_signal.overall;
   const total = followed + ignored + partial;
-  return total === 0 ? 0 : Number(((followed + partial) / total).toFixed(2));
+  return total === 0 ? 0 : Number((followed / total).toFixed(2));
+}
+
+function computeCoverageRate(entry: LockfileDirectiveEntry): number {
+  const { followed, ignored, partial, unverified } = entry.quality_signal.overall;
+  const covered = followed + ignored + partial;
+  const total = covered + unverified;
+  return total === 0 ? 0 : Number((covered / total).toFixed(2));
 }
 
 function emptySignalCounts(): { followed: number; ignored: number; partial: number; unverified: number } {
@@ -403,17 +491,69 @@ function validEvaluationSource(value: unknown): value is HostFulfillmentFeedback
     || value === 'adherence-evidence';
 }
 
-function computeTrend(entry: LockfileDirectiveEntry): 'improving' | 'stable' | 'degrading' {
-  const rate = entry.quality_signal.overall.follow_rate;
-  if (rate >= 0.9) return 'stable';
-  if (rate >= 0.75) return 'improving';
-  return 'degrading';
+function computeTrend(entry: LockfileDirectiveEntry): 'improving' | 'stable' | 'declining' {
+  const verdicts = entry.quality_signal.overall.recent_verdicts;
+  if (verdicts.length < 10) return 'stable';
+  const recent = strictWindowRate(verdicts.slice(-5));
+  const previous = strictWindowRate(verdicts.slice(-10, -5));
+  const difference = recent - previous;
+  if (difference >= 0.1) return 'improving';
+  if (difference <= -0.1) return 'declining';
+  return 'stable';
+}
+
+function strictWindowRate(verdicts: Array<'followed' | 'partial' | 'ignored'>): number {
+  return verdicts.filter((verdict) => verdict === 'followed').length / verdicts.length;
+}
+
+function normalizeRecentVerdicts(value: unknown): Array<'followed' | 'partial' | 'ignored'> {
+  return Array.isArray(value)
+    ? value.filter((item): item is 'followed' | 'partial' | 'ignored' => item === 'followed' || item === 'partial' || item === 'ignored').slice(-20)
+    : [];
+}
+
+function acquireLock(lockPath: string, timeoutMs = 5_000): () => void {
+  mkdirSync(dirname(lockPath), { recursive: true });
+  const deadline = Date.now() + timeoutMs;
+  let fd: number | null = null;
+  while (fd === null) {
+    try {
+      fd = openSync(lockPath, 'wx');
+      writeFileSync(fd, `${process.pid}\n${new Date().toISOString()}\n`, 'utf8');
+      fsyncSync(fd);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+      if (Date.now() >= deadline) throw new Error(`LOCKFILE_LOCK_TIMEOUT: could not acquire ${lockPath} within ${timeoutMs}ms.`);
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 20);
+    }
+  }
+  return () => {
+    if (fd !== null) closeSync(fd);
+    try { unlinkSync(lockPath); } catch { /* lock cleanup is best effort after the update completed */ }
+  };
+}
+
+function atomicWrite(filePath: string, contents: string): void {
+  mkdirSync(dirname(filePath), { recursive: true });
+  const tempPath = `${filePath}.${process.pid}.${Date.now()}.tmp`;
+  const fd = openSync(tempPath, 'wx');
+  try {
+    writeFileSync(fd, contents, 'utf8');
+    fsyncSync(fd);
+  } finally {
+    closeSync(fd);
+  }
+  renameSync(tempPath, filePath);
+  try {
+    const directoryFd = openSync(dirname(filePath), 'r');
+    try { fsyncSync(directoryFd); } finally { closeSync(directoryFd); }
+  } catch { /* Windows may not allow directory fsync; atomic rename has already completed. */ }
 }
 
 function taskProfileKey(input: EvaluateInput): string {
   const context = input.packet.interpretation.resolved.context_profile;
   return [
-    input.ego.taskIntent.operation,
+    input.ego.taskIntent.change_type,
     context.risk_level ?? 'medium',
     context.scope_size ?? 'unknown',
     context.compatibility_requirement ?? 'none',

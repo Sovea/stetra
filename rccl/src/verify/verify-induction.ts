@@ -17,15 +17,19 @@ export function verifyObservationInduction(
 ): RcclObservation {
   const evidenceCount = observation.verification.evidence_verified_count ?? 0;
   const minRequired = minimumEvidence(observation, policy);
+  const distinctFiles = new Set(observation.evidence.map((item) => item.file.replace(/\\/g, '/'))).size;
+  const distinctRoots = new Set(observation.evidence.map((item) => item.file.replace(/\\/g, '/').split('/')[0])).size;
   let induction_status: RcclObservation['verification']['induction_status'] = 'well-supported';
   let induction_confidence = observation.verification.evidence_confidence ?? 0;
 
-  if (observation.support.scope_basis === 'cross-root' && evidenceCount < policy.min_evidence_for_cross_root_scope) {
+  if (observation.support.scope_basis === 'cross-root'
+    && (evidenceCount < 3 || distinctFiles < 3 || distinctRoots < 2)) {
     induction_status = 'overgeneralized';
     induction_confidence = Math.min(induction_confidence, 0.35);
-  } else if (observation.support.scope_basis === 'directory-cluster' && evidenceCount < policy.min_evidence_for_directory_scope) {
-    induction_status = 'narrowly-supported';
-    induction_confidence = Math.min(induction_confidence, 0.5);
+  } else if ((observation.support.scope_basis === 'directory-cluster' || observation.support.scope_basis === 'module-cluster')
+    && (evidenceCount < 2 || distinctFiles < 2)) {
+    induction_status = 'overgeneralized';
+    induction_confidence = Math.min(induction_confidence, 0.35);
   } else if (evidenceCount < minRequired) {
     induction_status = 'narrowly-supported';
     induction_confidence = Math.min(induction_confidence, 0.55);

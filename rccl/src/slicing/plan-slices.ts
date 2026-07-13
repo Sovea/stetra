@@ -46,9 +46,21 @@ export function planSlices(
     }
   }
 
-  return slices
-    .filter((slice) => slice.files.length > 0 && slice.windows.length > 0)
+  return roundRobinByKind(slices.filter((slice) => slice.files.length > 0 && slice.windows.length > 0))
     .slice(0, policy.max_slices);
+}
+
+function roundRobinByKind(slices: CalibrationSlice[]): CalibrationSlice[] {
+  const kinds: CalibrationSlice['kind'][] = ['root', 'module', 'boundary', 'migration', 'style-cluster'];
+  const queues = new Map(kinds.map((kind) => [kind, slices.filter((slice) => slice.kind === kind)]));
+  const result: CalibrationSlice[] = [];
+  while ([...queues.values()].some((queue) => queue.length)) {
+    for (const kind of kinds) {
+      const next = queues.get(kind)?.shift();
+      if (next) result.push(next);
+    }
+  }
+  return result;
 }
 
 function makeSlice(

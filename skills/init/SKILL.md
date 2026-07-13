@@ -2,7 +2,7 @@
 name: init
 description: "Initialize resonant-code by selecting playbook layers from explicit strong repository signals. Use when setting up resonant-code for a project."
 metadata:
-  version: "0.1.0"
+  version: "0.0.1"
   author: "Sovea"
 ---
 

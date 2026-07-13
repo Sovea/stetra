@@ -171,7 +171,7 @@ This separation is a core governance constraint, not an implementation detail.
 
 ### Layered Playbook Layout
 
-Playbook is organized conceptually by physical layers. In the current implementation, built-in playbook files live under `plugins/resonant-code/playbook/`, and project-local prescriptive guidance is written to `.resonant-code/playbook/local-augment.yaml`.
+Playbook is organized conceptually by physical layers. In the current repository layout, built-in playbook files live under `playbook/`, and project-local prescriptive guidance is written to `.resonant-code/playbook/local-augment.yaml`.
 
 Target layered layout:
 
@@ -401,7 +401,7 @@ Runtime should be treated as a plugin-level subsystem, not as one more skill scr
 Preferred structure:
 
 ```text
-plugins/resonant-code/runtime/
+runtime/
   src/
   dist/
 ```
@@ -425,16 +425,16 @@ Skills should call Runtime, not reimplement any part of the pipeline themselves.
 
 The repository currently includes:
 
-- built-in playbook files under `plugins/resonant-code/playbook/`
+- built-in playbook files under `playbook/`
 - `init` skill writing `.resonant-code/playbook/local-augment.yaml`
 - `calibrate-repo-context` skill writing `.resonant-code/rccl.yaml`
 - static RCCL verify gate in the calibration flow
-- a first-pass TypeScript Runtime under `plugins/resonant-code/runtime/`
+- a TypeScript Runtime under `runtime/`
 
 Current runtime state:
 
-- TypeScript source lives in `plugins/resonant-code/runtime/src/`
-- build output lives in `plugins/resonant-code/runtime/dist/`
+- TypeScript source lives in `runtime/src/`
+- build output lives in `runtime/dist/`
 - build currently uses `tsdown` to emit the Runtime ESM dist under `runtime/dist/`
 - Runtime exposes compile and lockfile feedback entrypoints
 
@@ -468,7 +468,7 @@ Current limitations that should be understood before extending:
 - semantic merge still uses structural recall internally, but host semantic judgment enters through `semantic-governance-graph`
 - runtime cache storage records L1/L2/L3 artifacts, invalidation inputs, and RCCL verification fingerprints; cache reads are inspection-only and must not replace task-time Runtime compile or RCCL verification
 - layer filtering and merge should continue moving toward the full target design above
-- RCCL v2 contracts include evidence refs, counterexamples, and semantic equivalence proposals, but final consolidation and demotion remain static verification boundaries
+- RCCL v1 contracts include evidence refs, counterexamples, and semantic equivalence proposals, but final consolidation and demotion remain static verification boundaries
 - adherence feedback now requires `adherence-evidence`; uncovered directives are recorded as `unverified` and do not update follow rate
 
 These limitations are contract-layer maturation gaps, not architecture changes.

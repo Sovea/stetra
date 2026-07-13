@@ -446,6 +446,7 @@ meta:
 ${extendsLines}
 
 # Override a built-in rule's prescription, weight, rationale, or exceptions.
+# Every override must use `supersedes: <directive-id>`; duplicate ids are invalid.
 # overrides: []
 
 # Add examples to a built-in rule — the lowest-effort way to teach

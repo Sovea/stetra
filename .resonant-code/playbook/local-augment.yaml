@@ -1,0 +1,11 @@
+version: "1.0"
+meta:
+  name: resonant-code
+  extends:
+    - builtin/core
+    - builtin/languages/typescript
+    - builtin/task-types/*
+overrides: []
+augments: []
+suppresses: []
+additions: []

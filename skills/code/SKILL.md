@@ -2,7 +2,7 @@
 name: code
 description: "Skill for implementing, modifying, fixing, or refactoring code. It compiles task-time guidance through Runtime, applies the compiled EGO during implementation, and writes evidence-aware quality signals back to the lockfile after the task."
 metadata:
-  version: "0.2.0"
+  version: "0.0.1"
   author: "Sovea"
 ---
 
@@ -17,7 +17,7 @@ Do not reconstruct EGO or semantic merge logic in the skill.
 Do not use raw playbook YAML as the primary prompt input.
 Do not create ad hoc host-agent schemas or prompts in this skill.
 
-Host-agent semantic judgment enters only through `ai-contract/v2` artifacts:
+Host-agent semantic judgment enters only through v1 artifact envelopes (`ai-contract/v1`):
 
 - `task-model`
 - `semantic-governance-graph`
@@ -38,7 +38,7 @@ Deterministic fallback uses neutral defaults for compatibility, migration, sensi
 
 `auto` may include an `agentLoop` field. Treat `agentLoop.pendingContracts` as the next host-agent work queue: write the artifact to `artifactPath`, repair only from Runtime/RCCL diagnostics, and resume with `resumeCommand`. The default repair limit is three attempts for the same contract and same failure reason.
 
-If `auto` returns `status: "contracts-required"`, this is not a default stopping point. In the same turn, fulfill only the listed Runtime-owned contract artifacts and re-run with the new v2 flags or the supplied `agentLoop.pendingContracts[].resumeCommand`:
+If `auto` returns `status: "contracts-required"`, this is not a default stopping point. In the same turn, fulfill only the listed Runtime-owned contract artifacts and re-run with the v1 artifact flags or the supplied `agentLoop.pendingContracts[].resumeCommand`:
 
 ```sh
 node <this-skill-directory>/scripts/code.mjs auto <project-root> --task "<user task>" --task-model-file <path> --governance-graph-file <path>
@@ -140,6 +140,6 @@ For lightweight completion that updates only the governance summary and does not
 node <this-skill-directory>/scripts/code.mjs complete --session <session-path> --auto-unverified
 ```
 
-When `--adherence-file` is used, `complete` only consumes the v2 `adherence-evidence` payload. It does not accept manual followed/ignored flag shortcuts. Runtime validates directive ids, evidence, confidence, and verdict enum values, then writes evidence-aware lockfile feedback. `--auto-unverified` is summary-only and intentionally does not update directive follow rate.
+When `--adherence-file` is used, `complete` only consumes the v1 `adherence-evidence` payload. It does not accept manual followed/ignored flag shortcuts. Runtime validates directive ids, evidence, confidence, and verdict enum values, then writes evidence-aware lockfile feedback. `--auto-unverified` is summary-only and intentionally does not update directive follow rate.
 
 Do not manually write the lockfile.

@@ -1,5 +1,6 @@
 import type {
   CompatibilityRequirement,
+  ChangeType,
   CompileTaskInput,
   ContextProfile,
   ExecutionMode,
@@ -11,7 +12,7 @@ import type {
   ReviewGoal,
   RiskLevel,
   ScopeSize,
-  TaskKind,
+  Workflow,
 } from '../types.ts';
 import type {
   SemanticRelationImpactIR,
@@ -19,9 +20,9 @@ import type {
   SemanticRelationReviewPriorityIR,
 } from '../ir/types.ts';
 
-export type AIContractVersion = 'ai-contract/v2';
-export const AI_CONTRACT_VERSION: AIContractVersion = 'ai-contract/v2';
-export type AIContractSchemaVersion = '2.0';
+export type AIContractVersion = 'ai-contract/v1';
+export const AI_CONTRACT_VERSION: AIContractVersion = 'ai-contract/v1';
+export type AIContractSchemaVersion = '1.0';
 export type AIContractKind =
   | 'agent-capability-profile'
   | 'task-model'
@@ -42,6 +43,8 @@ export interface AIContractArtifact {
 export interface AIContractEnvelope<TSchema = unknown> {
   contractVersion: AIContractVersion;
   kind: AIContractKind;
+  requestId: string;
+  contextFingerprint: string;
   schemaId: string;
   schemaVersion: AIContractSchemaVersion;
   prompt: string;
@@ -57,6 +60,19 @@ export interface AIContractEnvelope<TSchema = unknown> {
   };
   context?: unknown;
   cacheKeyMaterial?: unknown;
+}
+
+export interface HostArtifactEnvelopeV1<TPayload = unknown> {
+  schema_version: 1;
+  kind: AIContractKind;
+  request_id: string;
+  context_fingerprint: string;
+  payload: TPayload;
+}
+
+export interface HostArtifactInput {
+  raw: unknown;
+  path?: string;
 }
 
 export type EvidenceRefKind = 'file' | 'diff' | 'command' | 'rccl-evidence' | 'runtime-trace' | 'conversation';
@@ -86,6 +102,7 @@ export type ContractPayloadDiagnosticReason =
   | 'malformed-payload'
   | 'missing-evidence'
   | 'missing-required-field'
+  | 'unsupported-schema-version'
   | 'unsupported-value'
   | 'capped-by-policy'
   | 'unverified-evidence'
@@ -235,7 +252,8 @@ export interface TaskModelListField<T extends string = string> {
 
 export interface TaskModelProposal {
   intent: {
-    task_kind?: TaskModelScalarField<TaskKind>;
+    workflow?: TaskModelScalarField<Workflow>;
+    change_type?: TaskModelScalarField<ChangeType>;
     operation?: TaskModelScalarField<Operation>;
     target_layer?: TaskModelScalarField<string>;
     target_file?: TaskModelScalarField<string>;

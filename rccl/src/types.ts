@@ -263,6 +263,15 @@ export interface IndexedFile {
   role_hints: string[];
 }
 
+export interface RepoIndexReport {
+  discovered_files: number;
+  indexed_files: number;
+  read_bytes: number;
+  skipped_oversize: number;
+  skipped_unsupported: number;
+  truncated: Array<'file-count-limit' | 'total-read-limit'>;
+}
+
 export interface RepoRootSummary {
   root: string;
   file_count: number;
@@ -345,16 +354,17 @@ export interface RcclCalibrationStats {
   indexed_files: number;
   selected_slices: number;
   windows: number;
+  index_report?: RepoIndexReport;
 }
 
-export type RcclAIContractVersion = 'ai-contract/v2';
+export type RcclAIContractVersion = 'ai-contract/v1';
 export type RcclAIContractKind =
   | 'context-acquisition'
   | 'rccl-observation-generation'
   | 'rccl-observation-refresh'
   | 'rccl-counterexample'
   | 'rccl-semantic-equivalence';
-export type RcclAIContractSchemaVersion = '2.0';
+export type RcclAIContractSchemaVersion = '1.0';
 
 export interface RcclAIContractArtifact {
   suggestedPath: string;
@@ -365,6 +375,8 @@ export interface RcclAIContractArtifact {
 export interface RcclAIContractEnvelope {
   contractVersion: RcclAIContractVersion;
   kind: RcclAIContractKind;
+  requestId: string;
+  contextFingerprint: string;
   schemaId: string;
   schemaVersion: RcclAIContractSchemaVersion;
   prompt: string;

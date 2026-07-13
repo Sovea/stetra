@@ -1,7 +1,7 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { parseYaml } from '../utils/yaml.ts';
 import { buildContractPayloadDiagnostics } from './diagnostics.ts';
-import { isRecord, validConfidence, validEvidenceRefs } from './shared.ts';
+import { artifactIdentity, isRecord, validConfidence, validEvidenceRefs } from './shared.ts';
 import {
   AI_CONTRACT_VERSION,
   type ContractPayloadDiagnosticEntry,
@@ -28,8 +28,8 @@ export function prepareGovernanceEvolutionProposalContract(
     suggestedPath: input.artifactPath ?? '(review-only-response)',
     format: 'json' as const,
     usage: input.artifactPath
-      ? `Write a review-only governance-evolution-proposal payload to ${input.artifactPath}. Runtime validates it but does not modify authoritative files.`
-      : 'Return a review-only governance-evolution-proposal payload in the command response. Runtime validates it but does not modify authoritative files.',
+      ? `Write a v1 review-only envelope to ${input.artifactPath} using the issued requestId/contextFingerprint and put the governance-evolution-proposal under payload. Runtime validates it but does not modify authoritative files.`
+      : 'Return a v1 review-only envelope using the issued requestId/contextFingerprint and put the governance-evolution-proposal under payload. Runtime validates it but does not modify authoritative files.',
   };
   const prompt = [
     'Prepare review-only governance evolution proposals from bounded lockfile summary signals.',
@@ -47,8 +47,9 @@ export function prepareGovernanceEvolutionProposalContract(
     contract: {
       contractVersion: AI_CONTRACT_VERSION,
       kind: 'governance-evolution-proposal',
+      ...artifactIdentity('governance-evolution-proposal', { schemaId: 'runtime.governance-evolution-proposal', lockfileSummary }),
       schemaId: 'runtime.governance-evolution-proposal',
-      schemaVersion: '2.0',
+      schemaVersion: '1.0',
       prompt,
       schema: GOVERNANCE_EVOLUTION_SCHEMA,
       artifact,

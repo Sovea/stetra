@@ -1,4 +1,4 @@
-import type { CompileTaskInput, ContextProfile, Operation, TaskIntent, TaskKind } from '../types.ts';
+import type { ChangeType, CompileTaskInput, ContextProfile, Operation, TaskIntent, Workflow } from '../types.ts';
 import type { TaskModelProposal } from '../ai-contracts/types.ts';
 
 export type InterpretationSource = 'explicit' | 'deterministic' | 'host-agent' | 'assistive-ai' | 'repo-default' | 'derived';
@@ -24,7 +24,8 @@ export interface CandidateListField<T> {
 
 export interface ParsedTaskCandidate {
   intent: {
-    task_kind?: CandidateField<TaskKind>;
+    workflow?: CandidateField<Workflow>;
+    change_type?: CandidateField<ChangeType>;
     operation?: CandidateField<Operation>;
     target_layer?: CandidateField<string>;
     tech_stack?: CandidateListField<string>;
@@ -34,7 +35,6 @@ export interface ParsedTaskCandidate {
   };
   context: {
     project_stage?: CandidateField<ContextProfile['project_stage']>;
-    change_type?: CandidateField<Operation>;
     optimization_target?: CandidateField<ContextProfile['optimization_target']>;
     hard_constraints?: CandidateListField<string>;
     allowed_tradeoffs?: CandidateListField<string>;
@@ -125,7 +125,7 @@ export interface TaskInterpretationTrace {
 
 export interface ResolvedTaskInput {
   task: CompileTaskInput;
-  taskKind: TaskKind;
+  workflow: Workflow;
   intent: TaskIntent;
   contextProfile: ContextProfile;
   provenance: InputProvenance;

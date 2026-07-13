@@ -1,5 +1,6 @@
 import { inferTargetLayer } from '../intent/parse-intent.ts';
 import {
+  CHANGE_TYPES,
   COMPATIBILITY_REQUIREMENTS,
   INTERFACE_SENSITIVITIES,
   MIGRATION_PHASES,
@@ -10,9 +11,9 @@ import {
   REVIEW_GOALS,
   RISK_LEVELS,
   SCOPE_SIZES,
-  TASK_KINDS,
+  WORKFLOWS,
 } from '../intent/schema.ts';
-import type { CompileTaskInput, ContextProfile, Operation, ResolveTaskRequest, ResolvedTaskOutput, TaskIntent, TaskKind } from '../types.ts';
+import type { ChangeType, CompileTaskInput, ContextProfile, Operation, ResolveTaskRequest, ResolvedTaskOutput, TaskIntent, Workflow } from '../types.ts';
 import type { TaskModelListField, TaskModelProposal, TaskModelScalarField } from '../ai-contracts/types.ts';
 import { DeterministicInterpretationProvider } from './deterministic-extractor.ts';
 import { uniqueCompact } from '../utils/common.ts';
@@ -55,13 +56,22 @@ interface ListFieldSpec {
 
 const SCALAR_FIELD_SPECS: ScalarFieldSpec[] = [
   {
-    field: 'intent.task_kind',
+    field: 'intent.workflow',
     section: 'intent',
-    candidateKey: 'task_kind',
-    explicitValue: (input) => input.taskKind ?? input.task.taskKind,
-    fallbackValue: (det) => det.intent.task_kind?.value ?? 'code',
-    defaultConfidence: (det) => det.intent.task_kind?.confidence ?? 0.85,
-    allowedValues: TASK_KINDS,
+    candidateKey: 'workflow',
+    explicitValue: (input) => input.task.workflow,
+    fallbackValue: (det) => det.intent.workflow?.value ?? 'code',
+    defaultConfidence: (det) => det.intent.workflow?.confidence ?? 0.85,
+    allowedValues: WORKFLOWS,
+  },
+  {
+    field: 'intent.change_type',
+    section: 'intent',
+    candidateKey: 'change_type',
+    explicitValue: (input) => input.task.changeType,
+    fallbackValue: (det) => det.intent.change_type?.value ?? 'unknown',
+    defaultConfidence: (det) => det.intent.change_type?.confidence ?? 0.4,
+    allowedValues: CHANGE_TYPES,
   },
   {
     field: 'intent.operation',
@@ -268,7 +278,8 @@ export function resolveTask(input: ResolveTaskRequest): ResolvedTaskOutput {
 
   const task: CompileTaskInput = {
     description: input.task.description,
-    taskKind: scalar<TaskKind>('intent.task_kind').value,
+    workflow: scalar<Workflow>('intent.workflow').value,
+    changeType: scalar<ChangeType>('intent.change_type').value,
     operation: scalar<Operation>('intent.operation').value,
     targetFile: scalar<string | undefined>('intent.target_file').value,
     changedFiles: list('intent.changed_files').values,
@@ -290,7 +301,8 @@ export function resolveTask(input: ResolveTaskRequest): ResolvedTaskOutput {
 
   const resolvedTargetFile = scalar<string | undefined>('intent.target_file').value;
   const intent: TaskIntent = {
-    task_kind: scalar<TaskKind>('intent.task_kind').value,
+    workflow: scalar<Workflow>('intent.workflow').value,
+    change_type: scalar<ChangeType>('intent.change_type').value,
     operation: scalar<Operation>('intent.operation').value,
     target_layer: inferTargetLayer(resolvedTargetFile),
     tech_stack: uniqueCompact(list('intent.tech_stack').values),
@@ -301,7 +313,6 @@ export function resolveTask(input: ResolveTaskRequest): ResolvedTaskOutput {
 
   const contextProfile: ContextProfile = {
     project_stage: scalar<ContextProfile['project_stage']>('context.project_stage').value,
-    change_type: scalar<Operation>('intent.operation').value,
     optimization_target: scalar<ContextProfile['optimization_target']>('context.optimization_target').value,
     hard_constraints: uniqueCompact(list('context.hard_constraints').values),
     allowed_tradeoffs: uniqueCompact(list('context.allowed_tradeoffs').values),
@@ -316,7 +327,8 @@ export function resolveTask(input: ResolveTaskRequest): ResolvedTaskOutput {
   };
 
   const provenance = buildProvenance(input, {
-    task_kind: scalar<TaskKind>('intent.task_kind'),
+    workflow: scalar<Workflow>('intent.workflow'),
+    change_type: scalar<ChangeType>('intent.change_type'),
     operation: scalar<Operation>('intent.operation'),
     target_file: scalar<string | undefined>('intent.target_file'),
     changed_files: list('intent.changed_files'),
@@ -340,7 +352,7 @@ export function resolveTask(input: ResolveTaskRequest): ResolvedTaskOutput {
 
   return {
     task,
-    taskKind: scalar<TaskKind>('intent.task_kind').value,
+    workflow: scalar<Workflow>('intent.workflow').value,
     task_models: input.taskModels ?? [],
     task_intent: intent,
     context_profile: contextProfile,
@@ -462,7 +474,8 @@ function resolveListField<T>({
 function buildProvenance(
   input: ResolveTaskInput,
   resolved: {
-    task_kind: ScalarResolution<TaskKind>;
+    workflow: ScalarResolution<Workflow>;
+    change_type: ScalarResolution<ChangeType>;
     operation: ScalarResolution<Operation>;
     target_file: ScalarResolution<string | undefined>;
     changed_files: ListResolution<string>;
@@ -484,7 +497,8 @@ function buildProvenance(
   conflicts: InterpretationConflict[],
 ): InputProvenance {
   const resolved_fields = [
-    summarizeScalarField('intent.task_kind', resolved.task_kind),
+    summarizeScalarField('intent.workflow', resolved.workflow),
+    summarizeScalarField('intent.change_type', resolved.change_type),
     summarizeScalarField('intent.operation', resolved.operation),
     summarizeScalarField('intent.target_file', resolved.target_file),
     summarizeListField('intent.changed_files', resolved.changed_files),
@@ -505,6 +519,7 @@ function buildProvenance(
   ].filter((item): item is NonNullable<typeof item> => Boolean(item));
 
   const unresolved_fields = [
+    ...(resolved.change_type.value === 'unknown' ? ['intent.change_type'] : []),
     ...(resolved.target_file.value ? [] : ['intent.target_file']),
     ...(resolved.project_stage.value ? [] : ['context.project_stage']),
   ];
@@ -696,12 +711,12 @@ function uniqueDiscardedInputs(items: DiscardedInterpretationInput[]): Discarded
 
 function summarizeCandidate(candidate: ParsedTaskCandidate): CandidateSummary {
   const scalarFields = [
-    ['intent.task_kind', candidate.intent.task_kind],
+    ['intent.workflow', candidate.intent.workflow],
+    ['intent.change_type', candidate.intent.change_type],
     ['intent.operation', candidate.intent.operation],
     ['intent.target_layer', candidate.intent.target_layer],
     ['intent.target_file', candidate.intent.target_file],
     ['context.project_stage', candidate.context.project_stage],
-    ['context.change_type', candidate.context.change_type],
     ['context.optimization_target', candidate.context.optimization_target],
     ['context.risk_level', candidate.context.risk_level],
     ['context.scope_size', candidate.context.scope_size],
@@ -728,13 +743,15 @@ function summarizeCandidate(candidate: ParsedTaskCandidate): CandidateSummary {
     ...scalarFields.filter(([, field]) => !field || field.status !== 'resolved').map(([name]) => name),
     ...listFields.filter(([, field]) => !field || field.status !== 'resolved' || field.values.length === 0).map(([name]) => name),
   ];
-  const source = candidate.intent.task_kind?.source
+  const source = candidate.intent.workflow?.source
+    ?? candidate.intent.change_type?.source
     ?? candidate.intent.operation?.source
     ?? candidate.intent.target_file?.source
     ?? candidate.context.optimization_target?.source
     ?? 'deterministic';
   const confidenceValues = [
-    candidate.intent.task_kind?.confidence,
+    candidate.intent.workflow?.confidence,
+    candidate.intent.change_type?.confidence,
     candidate.intent.operation?.confidence,
     candidate.intent.target_layer?.confidence,
     candidate.intent.target_file?.confidence,
@@ -742,7 +759,6 @@ function summarizeCandidate(candidate: ParsedTaskCandidate): CandidateSummary {
     candidate.intent.changed_files?.confidence,
     candidate.intent.tags?.confidence,
     candidate.context.project_stage?.confidence,
-    candidate.context.change_type?.confidence,
     candidate.context.optimization_target?.confidence,
     candidate.context.hard_constraints?.confidence,
     candidate.context.allowed_tradeoffs?.confidence,
@@ -770,7 +786,8 @@ function summarizeCandidate(candidate: ParsedTaskCandidate): CandidateSummary {
 function taskModelToCandidate(model: TaskModelProposal): ParsedTaskCandidate {
   return {
     intent: {
-      task_kind: scalarField(model.intent.task_kind),
+      workflow: scalarField(model.intent.workflow),
+      change_type: scalarField(model.intent.change_type),
       operation: scalarField(model.intent.operation),
       target_layer: scalarField(model.intent.target_layer),
       target_file: scalarField(model.intent.target_file),
@@ -780,7 +797,6 @@ function taskModelToCandidate(model: TaskModelProposal): ParsedTaskCandidate {
     },
     context: {
       project_stage: scalarField(model.context.project_stage),
-      change_type: undefined,
       optimization_target: scalarField(model.context.optimization_target),
       hard_constraints: listField(model.context.hard_constraints),
       allowed_tradeoffs: listField(model.context.allowed_tradeoffs),

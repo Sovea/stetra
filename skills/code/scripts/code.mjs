@@ -214,7 +214,7 @@ function readBooleanFlag(flags, key) {
 function rejectRemovedFlags(flags, removed) {
   for (const flag of removed) {
     if (flags.has(flag)) {
-      throw new Error(`Flag --${flag} was removed by the ai-contract/v2 workflow. Use --task-model-file, --governance-graph-file, or --adherence-file as appropriate.`);
+      throw new Error(`Flag --${flag} was removed by the ai-contract/v1 workflow. Use --task-model-file, --governance-graph-file, or --adherence-file as appropriate.`);
     }
   }
 }

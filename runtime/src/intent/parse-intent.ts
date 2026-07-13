@@ -1,5 +1,6 @@
-import type { CompileTaskInput, ContextProfile, Operation, TaskIntent } from '../types.ts';
+import type { ChangeType, CompileTaskInput, ContextProfile, Operation, TaskIntent } from '../types.ts';
 import {
+  CHANGE_TYPES,
   COMPATIBILITY_REQUIREMENTS,
   INTERFACE_SENSITIVITIES,
   MIGRATION_PHASES,
@@ -10,16 +11,15 @@ import {
   REVIEW_GOALS,
   RISK_LEVELS,
   SCOPE_SIZES,
-  TASK_KINDS,
+  WORKFLOWS,
   enumValue,
 } from './schema.ts';
 
 const DEFAULT_OPTIMIZATION_TARGET: Record<Operation, ContextProfile['optimization_target']> = {
   create: 'maintainability',
   modify: 'maintainability',
-  review: 'reviewability',
-  refactor: 'maintainability',
-  bugfix: 'safety',
+  delete: 'safety',
+  mixed: 'maintainability',
 };
 
 /**
@@ -34,8 +34,10 @@ export function parseIntent(task: CompileTaskInput): TaskIntent {
   ])];
 
   const operation = enumValue(task.operation, OPERATIONS) ?? 'modify';
+  const changeType = enumValue(task.changeType, CHANGE_TYPES) ?? inferChangeType(operation);
   return {
-    task_kind: enumValue(task.taskKind, TASK_KINDS) ?? 'code',
+    workflow: enumValue(task.workflow, WORKFLOWS) ?? 'code',
+    change_type: changeType,
     operation,
     target_layer: inferTargetLayer(targetFile),
     tech_stack: techStack,
@@ -43,6 +45,10 @@ export function parseIntent(task: CompileTaskInput): TaskIntent {
     changed_files: changedFiles,
     tags: [...new Set(task.tags ?? inferTags(targetFile, changedFiles))],
   };
+}
+
+function inferChangeType(operation: Operation): ChangeType {
+  return operation === 'create' ? 'feature' : 'unknown';
 }
 
 function inferTechStackFromFile(targetFile: string | undefined): string[] {
@@ -91,7 +97,6 @@ function inferAvoid(): string[] {
 export function buildContextProfile(task: CompileTaskInput, intent: TaskIntent): ContextProfile {
   return {
     project_stage: enumValue(task.projectStage, PROJECT_STAGES),
-    change_type: intent.operation,
     optimization_target: enumValue(task.optimizationTarget, OPTIMIZATION_TARGETS) ?? inferOptimizationTarget(intent.operation),
     hard_constraints: [...new Set(task.hardConstraints ?? inferHardConstraints())],
     allowed_tradeoffs: [...new Set(task.allowedTradeoffs ?? inferAllowedTradeoffs())],
@@ -130,7 +135,7 @@ function inferInterfaceSensitivity(intent: TaskIntent): ContextProfile['interfac
 }
 
 function inferRefactorTolerance(_task: CompileTaskInput, intent: TaskIntent): ContextProfile['refactor_tolerance'] {
-  if (intent.operation === 'refactor') return 'bounded';
+  if (intent.change_type === 'refactor') return 'bounded';
   return 'local-only';
 }
 
@@ -139,7 +144,7 @@ function inferMigrationPhase(_task: CompileTaskInput): ContextProfile['migration
 }
 
 function inferReviewGoal(task: CompileTaskInput, intent: TaskIntent): ContextProfile['review_goal'] {
-  if (intent.operation === 'bugfix' || task.optimizationTarget === 'safety') return 'regression-risk';
-  if (intent.operation === 'review') return 'correctness';
+  if (intent.change_type === 'bugfix' || task.optimizationTarget === 'safety') return 'regression-risk';
+  if (intent.workflow === 'review') return 'correctness';
   return 'maintainability';
 }

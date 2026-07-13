@@ -11,7 +11,7 @@ interface LockfileDirectiveLike {
       followed?: number;
       ignored?: number;
       follow_rate?: number;
-      trend?: 'improving' | 'stable' | 'degrading';
+      trend?: 'improving' | 'stable' | 'declining';
     };
     ignored_reasons?: Partial<Record<IgnoredReason, number>>;
     last_ignored_reason?: IgnoredReason;

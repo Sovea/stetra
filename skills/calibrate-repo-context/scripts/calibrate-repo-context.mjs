@@ -36,7 +36,9 @@ function readInputText(input) {
 
 async function runPrepare(options = {}) {
   const rccl = await loadRccl();
-  const result = rccl.prepareRccl(projectRoot, {
+  const result = rccl.prepareCalibration({
+    projectRoot,
+    mode: 'full',
     scope: options.scope,
     debugArtifacts: shouldEmitDebugArtifacts(options.debugArtifacts),
   });
@@ -55,14 +57,14 @@ async function runPrepareStage(options = {}) {
   }
 
   const rccl = await loadRccl();
-  const discovery = options.discovery ? readAndParseDiscovery(rccl, options.discovery) : undefined;
-  const critique = options.critique ? readAndParseCritique(rccl, options.critique) : undefined;
+  const discovery = options.discovery ? readInputText(options.discovery) : undefined;
+  const critique = options.critique ? readInputText(options.critique) : undefined;
 
-  const result = rccl.prepareRcclWorkflowStage(projectRoot, {
-    stage: options.stage,
+  const result = rccl.prepareCalibration({
+    projectRoot,
+    mode: options.stage,
     scope: options.scope,
-    discovery,
-    critique,
+    artifacts: { discovery, critique },
     debugArtifacts: shouldEmitDebugArtifacts(options.debugArtifacts),
   });
   process.stdout.write(JSON.stringify(result, null, 2) + '\n');
@@ -71,11 +73,13 @@ async function runPrepareStage(options = {}) {
 
 async function runPrepareIncremental(options = {}) {
   const rccl = await loadRccl();
-  const result = rccl.prepareIncrementalRccl(projectRoot, {
+  const result = rccl.prepareCalibration({
+    projectRoot,
+    mode: 'incremental',
     scope: options.scope,
     targetFiles: options.targetFiles,
     changedFiles: options.changedFiles,
-    mode: options.mode,
+    incrementalMode: options.mode,
     fileLimit: options.fileLimit,
     windowLimit: options.windowLimit,
     debugArtifacts: shouldEmitDebugArtifacts(options.debugArtifacts),
@@ -99,52 +103,32 @@ async function runCommit(options = {}) {
   }
 
   const rccl = await loadRccl();
-  const validated = rccl.validateRcclCandidatePayload(yamlText);
-
-  if (!validated.valid) {
-    process.stderr.write('? Validation failed for RCCL generation:\n');
-    for (const entry of validated.diagnostics.entries) {
-      if (entry.status === 'rejected') process.stderr.write(`  - [${entry.reason}] ${entry.path}: ${entry.message}\n`);
-    }
-    process.stdout.write(JSON.stringify({
-      error: true,
-      diagnostics: validated.diagnostics,
-      input: {
-        source: options.input === '-' ? 'stdin' : options.input,
-        supportsStdin: true,
-      },
-    }, null, 2) + '\n');
+  const issued = rccl.prepareCalibration({
+    projectRoot,
+    mode: 'full',
+    scope: options.scope,
+  });
+  const result = rccl.commitCalibration({
+    projectRoot,
+    plan: {
+      mode: 'full',
+      contract: issued.contract,
+      scope: options.scope,
+      debugArtifacts: shouldEmitDebugArtifacts(options.debugArtifacts),
+    },
+    artifacts: { candidate: yamlText },
+  });
+  if (result.status === 'failed') {
+    process.stderr.write(`? RCCL commit failed: ${result.reason}\n`);
+    process.stdout.write(JSON.stringify({ error: true, ...result }, null, 2) + '\n');
     process.exit(1);
   }
-
-  const candidateDoc = { version: validated.document?.version ?? '1.0', generated_at: validated.document?.generated_at ?? null, git_ref: validated.document?.git_ref ?? null, observations: validated.observations };
-  const consolidation = rccl.consolidateObservations(validated.observations);
-  const draftDocument = {
-    version: candidateDoc.version,
-    generated_at: candidateDoc.generated_at,
-    git_ref: candidateDoc.git_ref,
-    observations: rccl.materializeRcclObservations(consolidation.observations),
-  };
-  const evidenceVerified = rccl.verifyEvidenceForDocument(draftDocument, projectRoot);
-  const verified = rccl.verifyInductionForDocument(evidenceVerified);
-  const result = rccl.emitRccl(verified, projectRoot);
-  const debugArtifactsEnabled = shouldEmitDebugArtifacts(options.debugArtifacts);
-  const debugArtifacts = debugArtifactsEnabled
-    ? {
-      enabled: true,
-      candidates: rccl.writeCandidateArtifact(projectRoot, candidateDoc),
-      consolidation: rccl.writeConsolidationArtifact(projectRoot, consolidation, verified),
-    }
-    : { enabled: false };
-
   process.stdout.write(JSON.stringify({
     ...result,
-    diagnostics: validated.diagnostics,
     input: {
       source: options.input === '-' ? 'stdin' : options.input,
       supportsStdin: true,
     },
-    debugArtifacts,
   }, null, 2) + '\n');
 
   if (result.verification_summary.demoted_count > 0 || result.verification_summary.reduced_confidence_count > 0) {
@@ -175,8 +159,34 @@ async function runCommitRefresh(options = {}) {
   }
 
   const rccl = await loadRccl();
-  const committed = rccl.commitRcclObservationRefresh(projectRoot, yamlText, {
-    debugArtifacts: shouldEmitDebugArtifacts(options.debugArtifacts),
+  const issued = rccl.prepareCalibration({
+    projectRoot,
+    mode: 'incremental',
+    scope: options.scope,
+    targetFiles: options.targetFiles,
+    changedFiles: options.changedFiles,
+    incrementalMode: options.mode,
+    fileLimit: options.fileLimit,
+    windowLimit: options.windowLimit,
+  });
+  if (!issued.contract || issued.contract.kind !== 'rccl-observation-refresh') {
+    process.stderr.write('? The current repository state did not issue a refresh contract. Re-run prepare-incremental with the same selectors.\n');
+    process.exit(1);
+  }
+  const committed = rccl.commitCalibration({
+    projectRoot,
+    plan: {
+      mode: 'refresh',
+      contract: issued.contract,
+      scope: options.scope,
+      targetFiles: options.targetFiles,
+      changedFiles: options.changedFiles,
+      incrementalMode: options.mode,
+      fileLimit: options.fileLimit,
+      windowLimit: options.windowLimit,
+      debugArtifacts: shouldEmitDebugArtifacts(options.debugArtifacts),
+    },
+    artifacts: { candidate: yamlText },
   });
 
   if (committed.status === 'failed') {
@@ -305,8 +315,8 @@ function printUsage() {
   process.stderr.write('  prepare-stage <project-root> --stage discover [--scope <glob>] [--debug-artifacts[=<bool>]]\n');
   process.stderr.write('  prepare-stage <project-root> --stage critique --discovery <path> [--scope <glob>] [--debug-artifacts[=<bool>]]\n');
   process.stderr.write('  prepare-stage <project-root> --stage synthesize --discovery <path> --critique <path> [--scope <glob>] [--debug-artifacts[=<bool>]]\n');
-  process.stderr.write('  commit <project-root> --input <path-to-yaml|-> [--debug-artifacts[=<bool>]]\n');
-  process.stderr.write('  commit-refresh <project-root> --input <path-to-refresh-yaml|-> [--debug-artifacts[=<bool>]]\n');
+  process.stderr.write('  commit <project-root> --input <path-to-yaml|-> [--scope <glob>] [--debug-artifacts[=<bool>]]\n');
+  process.stderr.write('  commit-refresh <project-root> --input <path-to-refresh-yaml|-> [--target-file <path>] [--changed-file <path>] [--scope <glob>] [--mode <task-scoped|changed-files|full>] [--file-limit <n>] [--window-limit <n>] [--debug-artifacts[=<bool>]]\n');
 }
 
 const opts = parseArgs(args);

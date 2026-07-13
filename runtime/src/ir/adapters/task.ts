@@ -8,7 +8,8 @@ export function taskToIR(resolved: ResolvedTaskOutput): TaskIR {
   return {
     irVersion: GOVERNANCE_IR_VERSION,
     id: stableHash(['task-ir', resolved.task.description, intent, context]),
-    kind: intent.task_kind,
+    workflow: intent.workflow,
+    changeType: intent.change_type,
     operation: intent.operation,
     targetLayer: intent.target_layer,
     targets: buildTargets(intent.target_file, intent.changed_files),

@@ -1,7 +1,14 @@
 import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { resolveActivatedGovernanceContext } from './compile-input.ts';
+import { prepareTaskModelContract, validateTaskModelPayload } from './ai-contracts/task-model.ts';
+import { prepareSemanticGovernanceGraphContractBundle, validateSemanticGovernanceGraphPayload } from './ai-contracts/semantic-governance-graph.ts';
+import { prepareAdherenceEvidenceContract } from './ai-contracts/adherence-evidence.ts';
+import { buildContractPayloadDiagnostics } from './ai-contracts/diagnostics.ts';
+import { unwrapHostArtifactEnvelope } from './ai-contracts/shared.ts';
 import { projectIRActivationToPublic } from './ir/activation/public-adapter.ts';
 import { projectIREgoToPublic } from './ir/ego/public-adapter.ts';
+import { applyEgoBudget, EGO_BUDGET } from './ir/ego/budget.ts';
 import { resolveExecutionDecisionsIR } from './ir/execution/resolve-execution.ts';
 import { buildSemanticRelationsIR } from './ir/relations/build-relations.ts';
 import { projectIRSemanticMergeToPublic } from './ir/semantic-merge/public-adapter.ts';
@@ -19,14 +26,17 @@ import {
   type GovernancePacket,
   type InterpretationPacket,
   type RcclDocument,
+  type PublicCompileInput,
   type ResolvedCompileInput,
   type ResolvedTaskOutput,
+  type RuntimeContractRequest,
   type ReviewFocusItem,
   type SemanticMergeResult,
   type TensionView,
   type TraceStep,
 } from './types.ts';
-import type { SemanticRelationIR } from './ir/types.ts';
+import type { ContractPayloadDiagnostics, TaskModelProposal } from './ai-contracts/types.ts';
+import type { HostProposalIR, SemanticRelationIR } from './ir/types.ts';
 
 function buildInterpretationPacket(resolved: ResolvedTaskOutput): InterpretationPacket {
   return {
@@ -52,21 +62,29 @@ function buildGovernancePacket(
   return { activation, tensions, focus, semantic_merge, ego, trace };
 }
 
-function compileResolvedOutput(packet: ChangeDecisionPacket, resolvedTask: ResolvedTaskOutput): CompileOutput {
+function compileResolvedOutput(
+  packet: ChangeDecisionPacket,
+  resolvedTask: ResolvedTaskOutput,
+  contractDiagnostics: ContractPayloadDiagnostics[],
+  postCompileContractRequests: RuntimeContractRequest[],
+): CompileOutput {
   return {
     packet,
     resolvedTask,
     ego: packet.governance.ego,
     trace: packet.governance.trace,
     cache: packet.cache,
+    contractDiagnostics,
+    postCompileContractRequests,
   };
 }
 
 /**
  * Runs the deterministic playbook pipeline and produces a change decision packet.
  */
-export async function compile(input: CompileInput): Promise<CompileOutput> {
-  const ctx = await resolveActivatedGovernanceContext(input);
+export async function compile(input: PublicCompileInput): Promise<CompileOutput> {
+  const validated = await validatePublicCompileInput(input);
+  const ctx = await resolveActivatedGovernanceContext(validated.input);
   const { normalizedInput, resolvedTask: resolved, sources, governanceIR, activationDecisions: activationDecisionsIR, activeDirectives: irActiveDirectives } = ctx;
   const traceSteps: TraceStep[] = [];
   const intent = resolved.task_intent;
@@ -79,6 +97,8 @@ export async function compile(input: CompileInput): Promise<CompileOutput> {
       `interpretation_mode: ${resolved.input_provenance.interpretation_mode}`,
       `resolved_fields: ${resolved.input_provenance.resolved_fields.length}`,
       `unresolved_fields: ${resolved.input_provenance.unresolved_fields.join(', ') || '(none)'}`,
+      `workflow: ${intent.workflow}`,
+      `change_type: ${intent.change_type}`,
       `operation: ${intent.operation}`,
       `target_layer: ${intent.target_layer}`,
       `tech_stack: ${intent.tech_stack.join(', ') || '(none)'}`,
@@ -203,7 +223,14 @@ export async function compile(input: CompileInput): Promise<CompileOutput> {
     ],
   });
 
-  const ego = projectIREgoToPublic(activatedGovernanceIR, semanticMergeResult, intent);
+  const egoBudget = applyEgoBudget(projectIREgoToPublic(activatedGovernanceIR, semanticMergeResult, intent));
+  const ego = egoBudget.ego;
+  traceSteps.push({
+    stage: 'Contract Diagnostics',
+    lines: validated.diagnostics.length
+      ? validated.diagnostics.map((item) => `${item.kind}: provided=${item.summary.total} accepted=${item.summary.accepted} rejected=${item.summary.rejected} downgraded=${item.summary.downgraded} unused=${item.summary.unused}`)
+      : ['no host artifacts provided'],
+  });
   traceSteps.push({
     stage: 'EGO Assembly',
     lines: [
@@ -211,6 +238,9 @@ export async function compile(input: CompileInput): Promise<CompileOutput> {
       `avoid: ${ego.guidance.avoid.length}`,
       `context_tensions: ${ego.guidance.context_tensions.length}`,
       `ambient: ${ego.guidance.ambient.length}`,
+      `budget_status: ${egoBudget.exceeded ? 'EGO_BUDGET_EXCEEDED' : 'within-budget'}`,
+      `serialized_characters: ${egoBudget.serializedCharacters}/${EGO_BUDGET.serializedCharacters}`,
+      `omitted: ${egoBudget.omissions.length}`,
     ],
   });
 
@@ -226,6 +256,18 @@ export async function compile(input: CompileInput): Promise<CompileOutput> {
     observation_links: semanticMergeResult.observation_links,
     context_influences: semanticMergeResult.context_influences,
     ...(hostFulfillment ? { host_fulfillment: hostFulfillment } : {}),
+    ego_budget: {
+      limits: {
+        total_items: EGO_BUDGET.totalItems,
+        hard_items: EGO_BUDGET.hardItems,
+        ambient_items: EGO_BUDGET.ambientItems,
+        examples_per_directive: EGO_BUDGET.examplesPerDirective,
+        serialized_characters: EGO_BUDGET.serializedCharacters,
+      },
+      exceeded: egoBudget.exceeded,
+      serialized_characters: egoBudget.serializedCharacters,
+      omitted: egoBudget.omissions,
+    },
   };
 
   const cache = buildCacheKeys({
@@ -240,17 +282,143 @@ export async function compile(input: CompileInput): Promise<CompileOutput> {
   }, selectedLayerIds, rccl);
 
   const packet: ChangeDecisionPacket = {
-    version: LOCKFILE_VERSION,
+    version: '1',
+    status: validated.diagnostics.some((item) => item.summary.rejected > 0) || egoBudget.exceeded ? 'needs-attention' : 'compiled',
     task: {
-      task_kind: resolved.taskKind,
+      workflow: resolved.workflow,
+      change_type: intent.change_type,
+      operation: intent.operation,
       input: resolved.task,
     },
     interpretation: buildInterpretationPacket(resolved),
     governance: buildGovernancePacket(activationView, tensions, focus, semanticMergeResult, ego, trace),
     cache,
+    fingerprints: governanceIR.fingerprints,
+    contract_diagnostics: validated.diagnostics,
+    post_compile_contract_requests: [],
   };
 
-  return compileResolvedOutput(packet, resolved);
+  const adherence = prepareAdherenceEvidenceContract({
+    directives: activeDirectives.map((directive) => ({
+      id: directive.id,
+      description: directive.description,
+      prescription: directive.prescription,
+      execution_mode: semanticMergeResult.directive_modes.find((item) => item.directive_id === directive.id)?.execution_mode ?? 'ambient',
+    })),
+    taskDescription: resolved.task.description,
+    artifactPath: join(normalizedInput.projectRoot, '.resonant-code', 'context', 'adherence-evidence', 'code', `${adherenceArtifactName(resolved)}.json`),
+  });
+  const postCompileContractRequests: RuntimeContractRequest[] = [{
+    kind: 'adherence-evidence',
+    artifact: adherence.evidenceArtifact,
+    contract: adherence.contract,
+  }];
+  packet.post_compile_contract_requests = postCompileContractRequests;
+  return compileResolvedOutput(packet, resolved, validated.diagnostics, postCompileContractRequests);
+}
+
+async function validatePublicCompileInput(input: PublicCompileInput): Promise<{
+  input: CompileInput;
+  diagnostics: ContractPayloadDiagnostics[];
+}> {
+  if (!('task' in input)) {
+    throw new Error('compile() v1 requires a raw task input; pre-resolved task objects are not accepted.');
+  }
+  const diagnostics: ContractPayloadDiagnostics[] = [];
+  const taskContract = prepareTaskModelContract({
+    task: input.task,
+    artifactPath: input.artifacts?.taskModel?.path ?? join(input.projectRoot, '.resonant-code', 'context', 'task-models', 'code', 'task-model.json'),
+  });
+  let taskModels: TaskModelProposal[] = [];
+  if (input.artifacts?.taskModel) {
+    const unwrapped = unwrapHostArtifactEnvelope(input.artifacts.taskModel.raw, taskContract.contract);
+    if (unwrapped.diagnostic) {
+      diagnostics.push(buildContractPayloadDiagnostics('task-model', [unwrapped.diagnostic], {
+        id: taskContract.contract.requestId,
+        path: input.artifacts.taskModel.path,
+      }));
+    } else {
+      const validated = validateTaskModelPayload(unwrapped.payload);
+      diagnostics.push(validated.diagnostics);
+      taskModels = validated.models;
+    }
+  }
+
+  const preliminary: CompileInput = {
+    ...input,
+    taskModels,
+    hostProposals: [],
+    hostFulfillment: undefined,
+  };
+  const graphContract = await prepareSemanticGovernanceGraphContractBundle({
+    compileInput: preliminary,
+    artifactPath: input.artifacts?.semanticGovernanceGraph?.path ?? join(input.projectRoot, '.resonant-code', 'context', 'semantic-governance-graphs', 'code', 'semantic-governance-graph.json'),
+  });
+  const proposals: HostProposalIR[] = [];
+  let graphDiagnostics = null;
+  if (input.artifacts?.semanticGovernanceGraph) {
+    const unwrapped = unwrapHostArtifactEnvelope(input.artifacts.semanticGovernanceGraph.raw, graphContract.contract);
+    if (unwrapped.diagnostic) {
+      graphDiagnostics = buildContractPayloadDiagnostics('semantic-governance-graph', [unwrapped.diagnostic], {
+        id: graphContract.contract.requestId,
+        path: input.artifacts.semanticGovernanceGraph.path,
+      });
+    } else {
+      const validated = validateSemanticGovernanceGraphPayload({
+        raw: unwrapped.payload,
+        source: { id: graphContract.contract.requestId, path: input.artifacts.semanticGovernanceGraph.path },
+        allowedDirectiveIds: graphContract.contract.allowedIds?.directiveIds,
+        allowedObservationIds: graphContract.contract.allowedIds?.observationIds,
+        evidenceContext: {
+          projectRoot: input.projectRoot,
+          observations: graphContract.loadedSources?.rccl?.observations,
+        },
+      });
+      graphDiagnostics = validated.diagnostics;
+      if (((validated.proposal.payload as { edges?: unknown[] }).edges ?? []).length) proposals.push(validated.proposal);
+    }
+    diagnostics.push(graphDiagnostics);
+  }
+  const taskDiagnostics = diagnostics.find((item) => item.kind === 'task-model') ?? null;
+  return {
+    input: {
+      ...preliminary,
+      hostProposals: proposals,
+      hostFulfillment: {
+        status: summarizeFulfillment(taskDiagnostics, graphDiagnostics),
+        agentCapability: { kind: 'agent-capability-profile', provided: false, path: null, status: 'absent', diagnostics: null },
+        taskModel: artifactSummary('task-model', input.artifacts?.taskModel, taskDiagnostics),
+        semanticGovernanceGraph: artifactSummary('semantic-governance-graph', input.artifacts?.semanticGovernanceGraph, graphDiagnostics),
+      },
+    },
+    diagnostics,
+  };
+}
+
+function artifactSummary(kind: 'task-model' | 'semantic-governance-graph', artifact: { path?: string } | undefined, diagnostics: ContractPayloadDiagnostics | null) {
+  const summary = diagnostics?.summary;
+  const accepted = (summary?.accepted ?? 0) > 0;
+  const rejected = (summary?.rejected ?? 0) > 0;
+  return {
+    kind,
+    provided: Boolean(artifact),
+    path: artifact?.path ?? null,
+    status: !artifact ? 'absent' as const : accepted && rejected ? 'partially-accepted' as const : accepted ? 'accepted' as const : rejected ? 'rejected' as const : 'unused' as const,
+    diagnostics,
+  };
+}
+
+function summarizeFulfillment(task: ContractPayloadDiagnostics | null, graph: ContractPayloadDiagnostics | null) {
+  const summaries = [task, graph].filter(Boolean).map((item) => item!.summary);
+  if (!summaries.length) return 'absent' as const;
+  if (summaries.some((item) => item.rejected > 0) && summaries.some((item) => item.accepted > 0)) return 'partially-accepted' as const;
+  if (summaries.some((item) => item.rejected > 0)) return 'rejected' as const;
+  if (summaries.some((item) => item.accepted > 0)) return 'accepted' as const;
+  return 'unused' as const;
+}
+
+function adherenceArtifactName(resolved: ResolvedTaskOutput): string {
+  return `adherence-${stableHash([resolved.task_intent, resolved.task.description]).slice(0, 12)}`;
 }
 
 function summarizeRcclSourceEvolution(rccl: RcclDocument | null): string[] {

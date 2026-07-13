@@ -60,7 +60,7 @@ function buildSkippedDecision(
 }
 
 function buildActivationNote(directive: DirectiveIR, task: TaskIR): string {
-  const reasons = [`directive matched task intent for ${task.operation}`];
+  const reasons = [`directive matched ${task.workflow}/${task.changeType}/${task.operation} task context`];
   if (directive.source.kind === 'local-playbook') reasons.push('local directive addition applied');
   if (directive.local.overrideApplied) reasons.push('local override applied');
   if (directive.local.augmentApplied) reasons.push('local examples augment applied');
@@ -71,7 +71,9 @@ function buildActivationNote(directive: DirectiveIR, task: TaskIR): string {
 function layerMatchesTask(directive: DirectiveIR, task: TaskIR): boolean {
   const sourceLayer = directive.layer.id;
   if (sourceLayer === 'builtin/core' || directive.source.kind === 'local-playbook' || sourceLayer.startsWith('local')) return true;
-  if (sourceLayer.startsWith('builtin/task-types/')) return sourceLayer.endsWith(`/${task.operation}`);
+  if (sourceLayer.startsWith('builtin/task-types/')) {
+    return task.changeType !== 'unknown' && sourceLayer.endsWith(`/${task.changeType}`);
+  }
   if (sourceLayer.startsWith('builtin/languages/')) return task.techStack.some((tech) => sourceLayer.endsWith(`/${tech}`));
   if (sourceLayer.startsWith('builtin/frameworks/')) return task.techStack.some((tech) => sourceLayer.endsWith(`/${tech}`));
   return true;
@@ -85,8 +87,8 @@ function scopeMatchesTask(scope: string, task: TaskIR): boolean {
 function sortActivationDecisions(items: ActivationDecisionIR[]): ActivationDecisionIR[] {
   return [...items].sort((a, b) => {
     if (a.status !== b.status) return a.status === 'activated' ? -1 : 1;
-    if (a.priority.layerRank !== b.priority.layerRank) return b.priority.layerRank - a.priority.layerRank;
     if (a.priority.prescriptionRank !== b.priority.prescriptionRank) return b.priority.prescriptionRank - a.priority.prescriptionRank;
+    if (a.priority.layerRank !== b.priority.layerRank) return b.priority.layerRank - a.priority.layerRank;
     if (a.priority.weightRank !== b.priority.weightRank) return b.priority.weightRank - a.priority.weightRank;
     if (a.priority.localOverrideRank !== b.priority.localOverrideRank) return b.priority.localOverrideRank - a.priority.localOverrideRank;
     return a.directiveId.localeCompare(b.directiveId);
