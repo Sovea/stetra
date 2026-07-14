@@ -8,4 +8,60 @@ meta:
 overrides: []
 augments: []
 suppresses: []
-additions: []
+additions:
+  - id: local-runtime-compile-evaluate-boundary-01
+    type: architecture
+    layer: local
+    scope:
+      path: "runtime/src/**"
+    prescription: must
+    weight: critical
+    description: "Keep Runtime authoritative for compiling delivered guidance and evaluating only those delivered guidance IDs against actual change evidence."
+    rationale: "The product is a change harness only when policy activation and postflight verdicts share one deterministic boundary."
+    exceptions: []
+    traits:
+      safety_critical: true
+    examples:
+      - good:
+          code: "compileChange(task) -> decision; evaluateChange(decision, diff, checks, evidence) -> verdict"
+        avoid:
+          code: "skill parses playbook and reports adherence for every active directive"
+        note: "The evaluation scope is exactly the guidance the task received."
+
+  - id: local-rccl-evidence-is-not-semantic-truth-01
+    type: constraint
+    layer: local
+    scope:
+      path: "rccl/src/**"
+    prescription: must
+    weight: critical
+    description: "Keep RCCL evidence integrity, semantic confidence, and human review status as separate signals."
+    rationale: "File existence and snippet similarity can establish evidence currency but cannot deterministically prove the semantic statement or its representativeness."
+    exceptions: []
+    traits:
+      safety_critical: true
+    examples:
+      - good:
+          code: "evidenceVerification.status = 'current'; semanticConfidence = 'high'; reviewStatus = 'reviewed'"
+        avoid:
+          code: "verification.status = 'verified-truth'"
+        note: "Trace the assurance source without overstating what was proven."
+
+  - id: local-skills-remain-thin-orchestrators-01
+    type: architecture
+    layer: local
+    scope:
+      path: "skills/**"
+    prescription: must
+    weight: critical
+    description: "Keep skills limited to lifecycle orchestration, filesystem IO, bounded command execution, and Runtime/RCCL handoff."
+    rationale: "A second policy engine in skill code would make governance behavior host-specific and unauditable."
+    exceptions: []
+    traits:
+      safety_critical: true
+    examples:
+      - good:
+          code: "skill calls compileChange/evaluateChange and persists the returned session"
+        avoid:
+          code: "skill ranks directives or decides whether an RCCL relation is enforceable"
+        note: "Workflow code may validate CLI shape but not reconstruct governance semantics."

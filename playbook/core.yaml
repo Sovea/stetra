@@ -376,7 +376,7 @@
   layer: core
   scope:
     path: "**/*"
-  prescription: must
+  prescription: should
   weight: high
   rccl_immune: false
   traits:
@@ -415,7 +415,7 @@
   layer: core
   scope:
     path: "**/*"
-  prescription: must
+  prescription: should
   weight: critical
   rccl_immune: true
   traits:

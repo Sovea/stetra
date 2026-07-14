@@ -1,310 +1,50 @@
-# local-augment.template.yaml
-# resonant-code · local playbook for this project
-#
-# This file teaches resonant-code your project's taste and conventions.
-# It works by referencing and adjusting the built-in ruleset — you never
-# need to rebuild rules that already exist.
-#
-# Quick reference:
-#   overrides  — replace specific fields of a built-in directive
-#   augments   — add examples to a built-in directive (lowest effort)
-#   suppresses — disable a built-in directive that doesn't fit this project
-#   additions  — define new directives that don't exist in the built-in playbook
-#
-# All four sections are optional. Start with augments — it's the fastest
-# way to teach resonant-code what good code looks like in this codebase.
-#
-# To find built-in directive IDs:
-#   /rc playbook list
-#   /rc playbook search <keyword>
-
+# Project-local prescriptive guidance using the current Playbook schema.
 version: "1.0"
 
 meta:
   name: "my-project"
-  # Human-readable project name. Used in Decision Trace output.
-
   extends:
-    # Which built-in layers this project builds on.
-    # resonant-code sets this automatically during /rc playbook init
-    # from explicit strong repository signals that justify loading a layer.
-    # It does not try to summarize the repository or generate a wiki.
-    #
-    # Each entry can be:
-    #   A specific layer  "builtin/frameworks/react"   — load that layer only
-    #   A wildcard        "builtin/frameworks/*"        — load all layers under that path
-    #   An exclusion      "!builtin/task-types/migration" — remove from a preceding wildcard
-    #
-    # Rules:
-    #   1. Wildcards only expand over built-in layers that exist in the installed version.
-    #   2. An exclusion ("!") must appear AFTER the wildcard it targets — parser error otherwise.
-    #   3. Excluding a path not matched by any preceding wildcard produces a warning.
-    #   4. Order matters — later entries can override directives from earlier ones.
-    #      Always list builtin/core first.
-    #
-    # Minimal example (core only):
-    #   extends:
-    #     - "builtin/core"
-    #
-    # Selective example (all task-types except migration):
-    #   extends:
-    #     - "builtin/core"
-    #     - "builtin/languages/typescript"
-    #     - "builtin/frameworks/react"
-    #     - "builtin/task-types/*"
-    #     - "!builtin/task-types/migration"
-    #
-    # Full example (everything):
-    #   extends:
-    #     - "builtin/core"
-    #     - "builtin/languages/*"
-    #     - "builtin/frameworks/*"
-    #     - "builtin/task-types/*"
-    #
-    # To see all available built-in layers:
-    #   /rc playbook list
     - "builtin/core"
     - "builtin/languages/typescript"
-    - "builtin/frameworks/react"
     - "builtin/task-types/*"
-    - "!builtin/task-types/migration"
 
-  # local_layers:
-  # Opt-in to multi-file layout when additions grows too large to maintain
-  # in a single file. Each path is relative to .playbook/.
-  # Files listed here are loaded in order — later files can reference IDs
-  # defined in earlier files.
-  # Not needed during MVP. Uncomment when you feel the single-file friction.
-  #
-  # local_layers:
-  #   - "local/core.yaml"
-  #   - "local/languages/typescript.yaml"
-  #   - "local/frameworks/react.yaml"
-  #   - "local/domains/payments.yaml"
+# Override strength or rationale for an existing built-in ID.
+overrides:
+  - supersedes: "core-smallest-reasonable-change-01"
+    prescription: must
+    weight: critical
+    rationale: "Changes in this project must remain reviewable within the requested boundary."
+    exceptions:
+      - "Broader work is allowed when a narrow change would be unsafe or structurally dishonest."
 
+# Add project-grounded examples to an existing built-in ID.
+augments:
+  - id: "core-preserve-local-consistency-01"
+    examples:
+      - good:
+          code: "import { parseConfig } from './config/parse.js';"
+        note: "This project uses explicit ESM extensions at runtime boundaries."
 
-# ──────────────────────────────────────────────
-# OVERRIDES
-# Replace specific fields of a built-in directive.
-# Use when the built-in rule is mostly right but needs adjustment
-# for this project's context — downgrading prescription during a migration,
-# updating rationale to reflect a project-specific reason, and so on.
-#
-# You can override any field except id.
-# Fields not listed here retain their built-in values.
-# ──────────────────────────────────────────────
+# Disable a built-in directive that is wrong for this project.
+suppresses:
+  - id: "core-comments-only-when-they-carry-meaning-01"
+    reason: "Generated protocol modules require field comments for downstream tooling."
 
-# overrides:
-#   - id: "core-smallest-reasonable-change-01"
-#     # (required) The stable ID of the built-in directive to override.
-#     # Run `/rc playbook list` to browse available IDs.
-#
-#     prescription: must
-#     # (required) Base strength. Determines rank together with type.
-#     # must  — non-negotiable; forms the top tier of base rank
-#     # should — expected but deferrable; forms the lower tier of base rank
-#     #
-#     # A should can never outscore a must regardless of weight.
-#     # Use must only when violating this rule causes a concrete, traceable problem.
-#
-#     weight: high
-#     # Same-layer micro-adjustment only. Does not affect cross-layer ranking.
-#     # Applies only when two directives in the same layer share the same base rank.
-#     #
-#     # Discrete tiers:
-#     #   low      — de-emphasise within the layer
-#     #   normal   — default; omit this field if you have no specific preference
-#     #   high     — emphasise within the layer
-#     #   critical — strongest within-layer signal
-#     #
-#     # Weight never causes a should to outscore a must.
-#     # Weight never causes a lower-layer directive to outscore a higher-layer one.
-#     # RCCL does not interact with weight — RCCL determines execution mode
-#     # (enforce / deviation-noted / ambient / suppress), not rank.
-#
-#     rationale: >
-#       During the Q3 refactor, broader changes are sometimes necessary
-#       to avoid leaving the codebase in an incoherent intermediate state.
-#       Revisit after refactor is complete.
-#     # Override the rationale the agent uses when making trade-off decisions.
-#     # Write it as the reason you would give a teammate, not a restatement
-#     # of the description.
-#
-#     exceptions:
-#       - "Broader change is acceptable when explicitly approved in the PR description."
-#     # Override or extend the built-in exception list.
-#     # Each entry is a complete condition + mitigation statement.
-#     # Consumed by the agent, not parsed by the runtime.
-
-
-# ──────────────────────────────────────────────
-# AUGMENTS
-# Add examples to a built-in directive without changing the rule itself.
-# This is the lowest-effort, highest-value way to personalise resonant-code.
-#
-# The agent learns your project's taste from these examples.
-# You do not need to understand the full directive schema to contribute here —
-# just add code pairs that represent what good and bad look like in this codebase.
-# ──────────────────────────────────────────────
-
-# augments:
-#   - id: "ts-respect-runtime-boundaries-01"
-#     # (required) The stable ID of the built-in directive to augment.
-#
-#     examples:
-#       # Add as many scenarios as you like.
-#       # Each scenario must have at least one of avoid/good, plus a note.
-#       # note must explain WHY, not just WHAT changed. Minimum 10 characters.
-#
-#       - avoid:
-#           code: "return res.json() as Promise<User>;"
-#         good:
-#           code: |
-#             const data = await res.json();
-#             return UserSchema.parse(data);
-#         note: "This project uses zod for all API boundary validation.
-#                Schemas live in src/lib/schemas/ — always parse before trusting."
-#
-#       - avoid:
-#           code: "const id = process.env.STRIPE_KEY as string;"
-#         good:
-#           code: |
-#             const id = process.env.STRIPE_KEY;
-#             if (!id) throw new Error('STRIPE_KEY is required');
-#         note: "Environment variables are always string | undefined at runtime.
-#                Never assert — validate explicitly at startup."
-
-
-# ──────────────────────────────────────────────
-# SUPPRESSES
-# Disable a built-in directive that does not apply to this project.
-# Use sparingly — suppressed rules are silently absent from the agent's guidance.
-# Always include a reason so future maintainers understand the decision.
-# ──────────────────────────────────────────────
-
-# suppresses:
-#   - id: "ts-explicit-public-interfaces-01"
-#     # (required) The stable ID of the built-in directive to disable.
-#
-#     reason: "Next.js App Router page components require default exports.
-#              This rule conflicts with that constraint in the app/ directory."
-#     # (required) Why this rule doesn't apply here.
-#     # Write it as the justification you would give during a code review.
-#     # Minimum 10 characters.
-
-
-# ──────────────────────────────────────────────
-# ADDITIONS
-# Define new directives that don't exist in the built-in playbook.
-# Use when the project has conventions, patterns, or constraints that are
-# specific enough that the built-in ruleset would never cover them.
-#
-# Full directive schema — all fields follow the same rules as built-in directives.
-# See .playbook/directive.template.yaml for detailed field documentation.
-# ──────────────────────────────────────────────
-
-# additions:
-#   - id: "local-zustand-slice-01"
-#     # (required) Must be globally unique within this project's playbook.
-#     # Prefix with "local-" to distinguish from built-in IDs.
-#     # Pattern: local-{topic}-{sequence}
-#     # Never rename after the directive is in active use — ID is the cache key.
-#
-#     type: architecture
-#     # (required) Taxonomy label for layer filtering.
-#     # Options: constraint | preference | convention | architecture | anti-pattern
-#
-#     layer: local-frameworks
-#     # (required) Which layer this directive belongs to.
-#     # Use "local-" prefix to distinguish from built-in layers.
-#     # Options: local-core | local-languages | local-frameworks
-#     #          local-task-types | local-domains
-#     # Determines Layer Filter behavior — rules in irrelevant layers are
-#     # dropped before the agent receives guidance.
-#
-#     scope:
-#       path: "src/store/**"
-#     # (required) File matcher. Glob pattern relative to the project root.
-#     # Controls which files this directive applies to.
-#     # Do not use scope to express domain ownership — that is the layer's job.
-#     # Prefer the narrowest scope that is correct.
-#
-#     prescription: must
-#     # (required) Base strength. Determines rank together with type.
-#     # must  — non-negotiable; forms the top tier of base rank
-#     # should — expected but deferrable; forms the lower tier of base rank
-#     #
-#     # A should can never outscore a must regardless of weight.
-#     # Use must only when violating this rule causes a concrete, traceable problem.
-#
-#     weight: high
-#     # Same-layer micro-adjustment only. Does not affect cross-layer ranking.
-#     # Applies only when two directives in the same layer share the same base rank.
-#     #
-#     # Discrete tiers:
-#     #   low      — de-emphasise within the layer
-#     #   normal   — default; omit this field if you have no specific preference
-#     #   high     — emphasise within the layer
-#     #   critical — strongest within-layer signal
-#     #
-#     # Weight never causes a should to outscore a must.
-#     # Weight never causes a lower-layer directive to outscore a higher-layer one.
-#     # RCCL does not interact with weight — RCCL determines execution mode
-#     # (enforce / deviation-noted / ambient / suppress), not rank.
-#
-#     description: "Zustand store must be split into slices. No single monolithic store."
-#     # (required) One sentence. State the rule, not the motivation.
-#
-#     rationale: >
-#       A monolithic store becomes unmaintainable as the project grows.
-#       Slice isolation allows independent testing, independent replacement,
-#       and clear ownership boundaries between features.
-#     # (required) Why this rule exists. Consumed by the agent when making
-#     # trade-off decisions. Write it as the reason you would give a new teammate.
-#
-#     exceptions:
-#       - "A single top-level store is acceptable for prototypes explicitly
-#          marked with a // TODO: split into slices comment."
-#     # Conditions under which this rule does not apply.
-#     # Each entry is a complete condition + required mitigation.
-#     # Consumed by the agent, not parsed by the runtime.
-#     # Omit if there are no real exceptions.
-#
-#     rccl_immune: false
-#     # When true, RCCL observed patterns cannot downgrade this directive's
-#     # execution mode. Regardless of adherence_quality, mode is always enforce.
-#     # Reserve for security and compliance rules only.
-#     # Defaults to false if omitted.
-#
-#     examples:
-#       # (required) At least one scenario.
-#       # Each scenario must include note — minimum 10 characters, must explain WHY.
-#
-#       - avoid:
-#           code: |
-#             const useStore = create<AppState>((set) => ({
-#               user: null,
-#               cart: [],
-#               ui: { modalOpen: false },
-#               setUser: (user) => set({ user }),
-#               addToCart: (item) => set((s) => ({ cart: [...s.cart, item] })),
-#             }));
-#         good:
-#           code: |
-#             // src/store/user.slice.ts
-#             export const userSlice: StateSlice<UserState> = (set) => ({
-#               user: null,
-#               setUser: (user) => set({ user }),
-#             });
-#
-#             // src/store/cart.slice.ts
-#             export const cartSlice: StateSlice<CartState> = (set, get) => ({
-#               items: [],
-#               addItem: (item) => set((s) => ({ items: [...s.items, item] })),
-#               total: () => get().items.reduce((s, i) => s + i.price, 0),
-#             });
-#         note: "Monolithic store cannot be tested in isolation and accumulates
-#                unrelated reasons to change. Each slice owns exactly one domain,
-#                is independently testable, and can be replaced without touching others."
-#
-#     # quality_signal: written by runtime — do not edit
+# Add truly project-specific prescription. Examples are required.
+additions:
+  - id: "local-runtime-boundary-01"
+    type: architecture
+    layer: local
+    scope:
+      path: "src/runtime/**"
+    prescription: must
+    weight: critical
+    description: "Keep policy decisions inside the Runtime public boundary."
+    rationale: "Consumers must not create host-specific policy engines."
+    exceptions: []
+    examples:
+      - good:
+          code: "const decision = await compileChange(input);"
+        avoid:
+          code: "const rules = parsePlaybookInSkill();"
+        note: "The Runtime result is shared and inspectable; skill-local interpretation is not."

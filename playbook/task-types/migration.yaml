@@ -71,7 +71,7 @@
   layer: task-types
   scope:
     path: "**/*"
-  prescription: must
+  prescription: should
   weight: high
   traits:
     compatibility_sensitive: true

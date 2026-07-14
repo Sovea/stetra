@@ -1,94 +1,20 @@
-import { a as PrepareRcclResult, d as RcclWorkflowDiscoveryDocument, i as PrepareIncrementalRcclResult, n as CommitRcclObservationRefreshSuccess, o as PrepareRcclWorkflowStageResult, p as VerificationSummary, s as RcclAIContractEnvelope, t as CommitRcclObservationRefreshFailure, u as RcclWorkflowCritiqueDocument } from "./types.mjs";
+import { a as CommitCalibrationOutput, c as PrepareCalibrationInput, d as RcclEvidence, f as RcclObservation, h as ValidateContextOutput, i as CommitCalibrationInput, l as PrepareCalibrationOutput, m as ValidateContextInput, n as CalibrationDiagnostic, o as DecisionDimension, p as RcclObservationProposal, r as CalibrationProposal, s as EvidenceStatus, t as CalibrationContract, u as RcclDocument } from "./types.mjs";
 
-//#region src/validate-candidates.d.ts
-type RcclDiagnosticStatus = 'accepted' | 'rejected';
-type RcclDiagnosticReason = 'accepted' | 'duplicate-id' | 'low-confidence' | 'malformed-payload' | 'missing-required-field' | 'unsupported-value' | 'failed-verification';
-interface RcclDiagnosticEntry {
-  status: RcclDiagnosticStatus;
-  reason: RcclDiagnosticReason;
-  path: string;
-  message: string;
-  observationId?: string;
-  confidence?: number;
-}
-interface RcclCandidatePayloadDiagnostics {
-  kind: 'rccl-observation-generation';
-  summary: {
-    total: number;
-    accepted: number;
-    rejected: number;
-  };
-  entries: RcclDiagnosticEntry[];
-}
-//#endregion
 //#region src/lifecycle.d.ts
-interface PrepareCalibrationInput {
-  projectRoot: string;
-  mode: 'full' | 'incremental' | 'discover' | 'critique' | 'synthesize';
-  scope?: string;
-  targetFiles?: string[];
-  changedFiles?: string[];
-  incrementalMode?: 'task-scoped' | 'changed-files' | 'full';
-  fileLimit?: number;
-  windowLimit?: number;
-  debugArtifacts?: boolean;
-  artifacts?: {
-    discovery?: string | RcclWorkflowDiscoveryDocument;
-    critique?: string | RcclWorkflowCritiqueDocument;
-  };
-}
-declare function prepareCalibration(input: PrepareCalibrationInput): PrepareRcclResult | PrepareIncrementalRcclResult | PrepareRcclWorkflowStageResult;
-interface CommitCalibrationInput {
-  projectRoot: string;
-  plan: {
-    mode: 'full' | 'refresh';
-    contract: RcclAIContractEnvelope;
-    scope?: string;
-    targetFiles?: string[];
-    changedFiles?: string[];
-    incrementalMode?: 'task-scoped' | 'changed-files' | 'full';
-    fileLimit?: number;
-    windowLimit?: number;
-    debugArtifacts?: boolean;
-  };
-  artifacts: {
-    candidate: string;
-  };
-}
-declare function commitCalibration(input: CommitCalibrationInput): CommitRcclObservationRefreshSuccess | CommitRcclObservationRefreshFailure | {
-  status: "failed";
-  reason: string;
-  diagnostics: {
-    code: string;
-    message: string;
-  };
-} | {
-  status: "failed";
-  reason: string;
-  diagnostics: RcclCandidatePayloadDiagnostics;
-} | {
-  diagnostics: RcclCandidatePayloadDiagnostics;
-  debugArtifacts: {
-    enabled: boolean;
-    candidates: string;
-    consolidation: string;
-  } | {
-    enabled: boolean;
-    candidates?: undefined;
-    consolidation?: undefined;
-  };
-  written: string;
-  history_written: string;
-  stats: {
-    added: number;
-    updated: number;
-    preserved: number;
-    stale: number;
-    superseded: number;
-  };
-  verification_summary: VerificationSummary;
-  status: "committed";
-  reason?: undefined;
+declare function prepareCalibration(input: PrepareCalibrationInput): PrepareCalibrationOutput;
+declare function commitCalibration(input: CommitCalibrationInput): CommitCalibrationOutput;
+declare function validateContext(input: ValidateContextInput): ValidateContextOutput;
+//#endregion
+//#region src/parse.d.ts
+declare function parseRcclDocument(text: string): {
+  valid: boolean;
+  data?: RcclDocument;
+  diagnostics: CalibrationDiagnostic[];
+};
+declare function parseCalibrationProposal(input: CalibrationProposal | string): {
+  valid: boolean;
+  data?: CalibrationProposal;
+  diagnostics: CalibrationDiagnostic[];
 };
 //#endregion
-export { type CommitCalibrationInput, type PrepareCalibrationInput, commitCalibration, prepareCalibration };
+export { type CalibrationContract, type CalibrationDiagnostic, type CalibrationProposal, type CommitCalibrationInput, type CommitCalibrationOutput, type DecisionDimension, type EvidenceStatus, type PrepareCalibrationInput, type PrepareCalibrationOutput, type RcclDocument, type RcclEvidence, type RcclObservation, type RcclObservationProposal, type ValidateContextInput, type ValidateContextOutput, commitCalibration, parseCalibrationProposal, parseRcclDocument, prepareCalibration, validateContext };

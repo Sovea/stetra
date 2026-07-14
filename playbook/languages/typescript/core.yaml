@@ -62,7 +62,7 @@
   layer: languages
   scope:
     path: "**/*.{ts,tsx}"
-  prescription: must
+  prescription: should
   weight: high
   traits:
     compatibility_sensitive: true
@@ -124,7 +124,7 @@
   layer: languages
   scope:
     path: "**/*.{ts,tsx}"
-  prescription: must
+  prescription: should
   weight: critical
   rccl_immune: true
   traits:
@@ -255,7 +255,7 @@
   layer: languages
   scope:
     path: "**/*.{ts,tsx}"
-  prescription: must
+  prescription: should
   weight: critical
   rccl_immune: true
   traits:

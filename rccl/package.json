@@ -10,13 +10,13 @@
     },
     "./runtime": {
       "types": "./src/runtime.ts",
-      "import": "./src/runtime.ts"
+      "import": "./dist/runtime.mjs"
     }
   },
   "scripts": {
     "build": "tsdown --config ./tsdown.config.ts",
     "typecheck": "tsc --noEmit",
-    "test": "tsx test/refresh-contract.test.mjs && tsx --test test/v1-hardening.test.ts"
+    "test": "tsx --test test/context.test.ts"
   },
   "devDependencies": {
     "@types/node": "^22.19.15",

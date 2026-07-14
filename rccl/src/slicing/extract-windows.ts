@@ -1,7 +1,19 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import type { CalibrationWindow, IndexedFile, SamplingPolicy } from '../types.ts';
-import { DEFAULT_SAMPLING_POLICY } from '../policies.ts';
+import type { CalibrationWindow, IndexedFile, SamplingPolicy } from '../calibration-types.ts';
+
+const DEFAULT_SAMPLING_POLICY: SamplingPolicy = {
+  max_slices: 8,
+  max_files_per_slice: 4,
+  max_windows_per_file: 3,
+  target_coverage: {
+    roots: true,
+    modules: true,
+    boundaries: true,
+    migrations: true,
+    style_clusters: true,
+  },
+};
 
 export function extractWindowsForFiles(
   projectRoot: string,

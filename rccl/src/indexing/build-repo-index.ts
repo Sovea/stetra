@@ -2,7 +2,7 @@ import { execFileSync } from 'node:child_process';
 import { existsSync, readdirSync, readFileSync, statSync, type Dirent } from 'node:fs';
 import { basename, extname, join, relative } from 'node:path';
 import ignore from 'ignore';
-import type { IndexedFile, RepoIndexReport } from '../types.ts';
+import type { IndexedFile, RepoIndexReport } from '../calibration-types.ts';
 
 const MAX_FILES = 20_000;
 const MAX_FILE_BYTES = 1024 * 1024;

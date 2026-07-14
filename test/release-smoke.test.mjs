@@ -19,64 +19,113 @@ try {
 
   writeFileSync(join(project, 'example.ts'), 'export const answer = 42;\n', 'utf8');
   writeFileSync(join(project, '.resonant-code', 'rccl.yaml'), `version: "1.0"
-generated_at: "2026-01-01T00:00:00.000Z"
-git_ref: null
+generatedAt: "2026-07-14T00:00:00.000Z"
+gitRef: null
 observations:
-  - id: obs-export-style
-    semantic_key: export-style
-    category: style
+  - id: obs-export-boundary
+    category: architecture
     scope: "**/*.ts"
-    pattern: Named exports are used in TypeScript modules.
-    confidence: 0.9
-    adherence_quality: good
+    statement: Named exports define the module boundary in the sampled TypeScript entrypoint.
+    affects: [api-shape, architecture-boundary]
+    decisionImpact: A new export style would make the feature inconsistent with the existing module boundary.
+    semanticConfidence: high
+    reviewStatus: reviewed
     evidence:
       - file: example.ts
-        line_range: [1, 1]
+        lineRange: [1, 1]
         snippet: "export const answer = 42;"
-    support:
-      source_slices: [slice-example]
-      file_count: 1
-      cluster_count: 1
-      scope_basis: single-file
-    verification:
-      evidence_status: verified
-      evidence_verified_count: 1
-      evidence_confidence: 0.9
-      induction_status: well-supported
-      induction_confidence: 0.9
-      checked_at: "2026-01-01T00:00:00.000Z"
-      disposition: keep
+    evidenceVerification:
+      status: current
+      verifiedCount: 1
+      totalCount: 1
+      checkedAt: "2026-07-14T00:00:00.000Z"
     lifecycle:
-      first_seen_git_ref: null
-      last_seen_git_ref: null
-      last_verified_at: "2026-01-01T00:00:00.000Z"
-      content_fingerprint: smoke-observation
       status: active
-    traits: {}
+      contentFingerprint: smoke-observation
+      firstSeenGitRef: null
+      lastSeenGitRef: null
+      lastVerifiedAt: "2026-07-14T00:00:00.000Z"
 `, 'utf8');
 
   const runtime = await import(pathToFileURL(join(plugin, 'runtime', 'dist', 'index.mjs')).href);
-  assert.deepEqual(Object.keys(runtime).sort(), ['compile', 'evaluateGuidance', 'planGuidance']);
-  const result = await runtime.compile({
+  assert.deepEqual(Object.keys(runtime).sort(), ['compileChange', 'evaluateChange']);
+  const decision = await runtime.compileChange({
     builtinRoot: join(plugin, 'playbook'),
     rcclPath: join(project, '.resonant-code', 'rccl.yaml'),
     projectRoot: project,
     task: {
       description: 'Add an exported feature',
-      workflow: 'code',
       changeType: 'feature',
-      operation: 'modify',
-      targetFile: 'example.ts',
-      changedFiles: ['example.ts'],
+      targets: ['example.ts'],
       techStack: ['typescript'],
+      risk: 'low',
+      scope: 'local',
     },
+    relationProposals: [{
+      directiveId: 'feature-fit-existing-system-01',
+      observationId: 'obs-export-boundary',
+      relation: 'supports',
+      rationale: 'The existing export boundary is concrete evidence for repository fit.',
+      evidenceRefs: ['example.ts:1-1'],
+      confidence: 0.9,
+    }],
   });
-  assert.equal(result.packet.version, '1');
-  assert.equal(result.packet.status, 'compiled');
-  assert.equal(result.packet.task.change_type, 'feature');
-  assert.ok(result.trace.activation.selected_layers.includes('builtin/task-types/feature'));
-  assert.ok(result.packet.fingerprints.bundle);
-  assert.ok(result.postCompileContractRequests.some((request) => request.kind === 'adherence-evidence'));
+  assert.notEqual(decision.status, 'needs-interpretation');
+  if (decision.status === 'needs-interpretation') throw new Error('Unexpected interpretation request.');
+  assert.equal(decision.schemaVersion, '1.0');
+  assert.equal(decision.status, 'compiled');
+  assert.equal(decision.task.changeType, 'feature');
+  assert.ok(decision.trace.selectedLayers.includes('builtin/task-types/feature'));
+  assert.deepEqual(decision.trace.relevantObservationIds, ['obs-export-boundary']);
+  assert.ok(decision.trace.relationDecisions.some((item) => item.status === 'accepted' && item.relation === 'reinforce'));
+  assert.ok(decision.guidance.required.length <= 3);
+  assert.ok(decision.guidance.consider.length <= 3);
+  assert.ok(decision.trace.deliveredGuidanceIds.length > 0);
+
+  const checks = decision.verificationPlan.commands.map((command) => ({
+    id: command.id,
+    status: 'passed',
+    outputRef: `check:${command.id}`,
+  }));
+  const evaluationInput = {
+    decision,
+    changes: { files: [{ path: 'example.ts', status: 'modified' }] },
+    checks,
+    evidence: evidenceForDecision(decision),
+    feedbackPath: join(project, '.resonant-code', 'feedback', 'verified-events.jsonl'),
+  };
+  const evaluation = runtime.evaluateChange(evaluationInput);
+  assert.equal(evaluation.schemaVersion, '1.0');
+  assert.equal(evaluation.status, 'accepted');
+  assert.equal(evaluation.operation, 'modify');
+  assert.ok(evaluation.feedback.recorded > 0);
+  assert.equal(runtime.evaluateChange(evaluationInput).feedback.recorded, 0);
 } finally {
   rmSync(temporary, { recursive: true, force: true });
+}
+
+function evidenceForDecision(decision) {
+  const items = [
+    ...decision.guidance.required.map((item) => ({ ...item, section: 'required' })),
+    ...decision.guidance.consider.map((item) => ({ ...item, section: 'consider' })),
+    ...decision.guidance.avoid.map((item) => ({ ...item, section: 'avoid' })),
+  ];
+  const evidence = items.map((item) => {
+    const refs = [{ kind: 'diff', ref: 'diff:example.ts', file: 'example.ts' }];
+    for (const requirement of item.verification) {
+      if (requirement.kind === 'semantic') {
+        refs.push({ kind: 'semantic', ref: `semantic:${item.id}`, description: `Inspected ${item.id} at the exported module boundary.` });
+      }
+      if (requirement.kind === 'static') refs.push({ kind: 'static', ref: `static:${item.id}` });
+    }
+    return { guidanceId: item.id, verdict: 'satisfied', evidenceRefs: refs };
+  });
+  for (const tension of decision.guidance.tensions) {
+    evidence.push({
+      guidanceId: tension.id,
+      verdict: 'satisfied',
+      evidenceRefs: [{ kind: 'semantic', ref: `semantic:${tension.id}`, description: tension.resolution }],
+    });
+  }
+  return evidence;
 }

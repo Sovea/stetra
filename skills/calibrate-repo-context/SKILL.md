@@ -1,245 +1,83 @@
 ---
 name: calibrate-repo-context
-description: "Generate RCCL (Repository Context Calibration Layer) through a staged agent workflow, then write back statically verified calibration data."
+description: "Create or refresh a small set of evidence-current repository observations that materially affect code decisions."
 metadata:
   version: "0.0.1"
   author: "Sovea"
 ---
 
-# Calibrate Repository Context
+# Calibrate Decision-Relevant Repository Context
 
-Generate `.resonant-code/rccl.yaml` for the current repository.
+RCCL is not a repository summary. Store an observation only when removing it could cause an agent to make a different and worse implementation or review decision.
 
-RCCL is not a repo wiki or full codebase summary. It is a compact set of observational
-signals that materially affect code generation, modification, and review quality.
+Good observations describe compatibility boundaries, public API shape, transaction or data-flow boundaries, migration phases, module-format constraints, legacy interfaces, or concrete anti-patterns.
 
-This skill uses a multi-stage host-agent workflow:
+Do not store package versions, schema existence, exported symbol lists, generic style descriptions, or facts that tools can read on demand unless they establish a durable decision boundary.
 
-1. Discover candidate signals from sampled repository slices.
-2. Critique those signals for weak evidence, overgeneralization, duplication, and counterexamples.
-3. Synthesize reviewed signals into candidate RCCL YAML.
-4. Commit through deterministic parsing, consolidation, evidence verification, induction verification, and final emission.
+## Prepare
 
-The agent performs semantic judgment in the staged artifacts. The script owns schemas, artifact validation, and the final trust boundary.
-
-## Instructions
-
-## Default incremental workflow
-
-For task-time or small follow-up calibration, prefer the incremental prepare path:
+Prefer targeted calibration:
 
 ```sh
-node <this-skill-directory>/scripts/calibrate-repo-context.mjs prepare-incremental <project-root> [--target-file <path>] [--changed-file <path>] [--scope <glob>] [--mode <task-scoped|changed-files|full>]
+node <skill-directory>/scripts/calibrate-repo-context.mjs prepare <project-root> \
+  --path <file-or-directory> \
+  [--path <file-or-directory>] \
+  [--max-files <n>]
 ```
 
-This writes RCCL-owned cache artifacts under `.resonant-code/context/cache/rccl/`
-and may return an `ai-contract/v1` `rccl-observation-refresh` contract. Fulfill that contract with
-a structured YAML refresh proposal only when Runtime/RCCL requests it. The host
-agent may propose keep/revise/retire/new observations, evidence refs, counterexamples,
-and semantic-equivalence groups, but RCCL remains the
-deterministic boundary for schema validation, evidence verification,
-consolidation, lifecycle handling, and final writes.
+If no path is supplied, RCCL chooses a bounded set of likely architecture and migration boundary files. The returned contract contains selected paths, evidence windows, a context fingerprint, and the proposal schema.
 
-Task-time incremental calibration is intentionally narrow by default: `task-scoped` and `changed-files` cap selected context to 4 files and 24 windows. Override with `--file-limit <n>` and `--window-limit <n>` only when broader context is worth the added host-agent cost. Use `--mode full` for broad refreshes.
-
-Commit an accepted refresh proposal with:
-
-```sh
-node <this-skill-directory>/scripts/calibrate-repo-context.mjs commit-refresh <project-root> --input <path-to-refresh-yaml|-> [the same selector flags used by prepare-incremental] [--debug-artifacts]
-```
-
-`commit-refresh` deterministically reissues the prepare contract from those selector flags before accepting the artifact. Reuse the same `--target-file`, `--changed-file`, `--scope`, `--mode`, `--file-limit`, and `--window-limit` values; a changed repository context or mismatched selector set is rejected.
-
-Refresh v1 rules:
-- `revise.provisional_id` must equal an existing active observation id; final id renames and historical reactivation are RCCL-owned decisions.
-- `new_observations.provisional_id` must not collide with an existing observation id.
-- `retire` is a proposal; RCCL verification decides stale, demotion, or carry-forward behavior.
-- Omitted active observations are carried forward unchanged.
-- Use the exact action schemas; shorthand or malformed action items are rejected and must be corrected before commit.
-
-Use the full staged workflow below when doing broad repository calibration.
-
-### Step 1 - Prepare discovery stage
-
-```sh
-node <this-skill-directory>/scripts/calibrate-repo-context.mjs prepare-stage <project-root> --stage discover [--scope <glob>]
-```
-
-Where:
-- `<project-root>` is the repository to calibrate, usually `.`
-- `--scope` optionally narrows analysis, default `auto`
-
-The script prints JSON with an inline `prompt`, `suggestedArtifactPath`, metadata, and optional debug artifact paths.
-Use the prompt as your own input and write the discovery YAML to `suggestedArtifactPath` or another file.
-
-Discovery artifacts must use:
+The host writes one YAML or JSON proposal using the exact `requestId` and `contextFingerprint`:
 
 ```yaml
-version: "1.0"
-stage: discover
-generated_at: <auto-filled-or-null>
-scope: "<scope>"
-seeds:
-  - seed_id: "obs-<kebab-case-name>"
-    semantic_key: "<stable-kebab-case-semantic-identity>"
-    category: <category>
-    scope_hint: "<glob>"
-    pattern: "<observed-pattern>"
-    decision_impact: "<why-this-affects-code-decisions>"
-    evidence:
-      - file: "<relative-path>"
-        line_range: [<start>, <end>]
-        snippet: "<code>"
-    evidence_refs:
-      - kind: "file"
-        ref: "<relative-path>:<start>-<end>"
-        file: "<relative-path>"
-        line_range: [<start>, <end>]
-    counterexamples: []
-    source_slice_ids: ["<slice-id>"]
-    uncertainty: "<optional-limit-or-null>"
-```
-
-### Step 2 - Prepare critique stage
-
-```sh
-node <this-skill-directory>/scripts/calibrate-repo-context.mjs prepare-stage <project-root> --stage critique --discovery <path-to-discovery-yaml> [--scope <glob>]
-```
-
-The script validates the discovery artifact before returning a critique prompt.
-Use the prompt as your own input and write the critique YAML to the returned `suggestedArtifactPath` or another file.
-
-Critique artifacts must use:
-
-```yaml
-version: "1.0"
-stage: critique
-generated_at: <auto-filled-or-null>
-scope: "<scope>"
-reviews:
-  - seed_id: "obs-<seed-id-from-discovery>"
-    disposition: <keep|revise|drop>
-    reasons:
-      - "<reason>"
-    issues:
-      - "<optional-issue>"
-    counter_evidence:
-      - file: "<relative-path>"
-        line_range: [<start>, <end>]
-        snippet: "<code>"
-    recommended_scope_hint: "<optional-narrower-scope-or-null>"
-```
-
-Review every discovery seed exactly once.
-Use `drop` for weak, redundant, summary-like, or non-decision-impacting seeds.
-Use `revise` when the signal is useful but needs narrower scope, clearer wording, or better evidence.
-
-### Step 3 - Prepare synthesis stage
-
-```sh
-node <this-skill-directory>/scripts/calibrate-repo-context.mjs prepare-stage <project-root> --stage synthesize --discovery <path-to-discovery-yaml> --critique <path-to-critique-yaml> [--scope <glob>]
-```
-
-The script validates both staged artifacts before returning a synthesis prompt.
-Use the prompt as your own input and write candidate RCCL YAML to a file.
-
-Candidate RCCL must use:
-
-```yaml
-version: "1.0"
-generated_at: <auto-filled-or-null>
-git_ref: <auto-filled-or-null>
+schemaVersion: "1.0"
+requestId: "<from-prepare>"
+contextFingerprint: "<from-prepare>"
+replace: false
 observations:
-  - provisional_id: "obs-<kebab-case-name>"
-    semantic_key: "<stable-kebab-case-semantic-identity>"
-    category: <category>
-    scope_hint: "<glob>"
-    pattern: "<human-readable-description>"
-    confidence: <0.0-1.0>
-    adherence_quality: <good|inconsistent|poor>
+  - id: "obs-public-api-boundary"
+    category: "architecture"
+    scope: "src/api/**"
+    statement: "Public API construction is centralized in src/api/index.ts."
+    affects: ["api-shape", "architecture-boundary"]
+    decisionImpact: "Adding a second entrypoint would split the supported public API."
+    semanticConfidence: "high"
+    reviewStatus: "reviewed"
     evidence:
-      - file: "<relative-path>"
-        line_range: [<start>, <end>]
-        snippet: "<code>"
-    source_slice_ids: ["<slice-id>"]
-    support_hint:
-      file_count: <number-or-null>
-      cluster_count: <number-or-null>
-      scope_basis: <single-file|directory-cluster|module-cluster|cross-root|null>
+      - file: "src/api/index.ts"
+        lineRange: [1, 24]
+        snippet: "<exact excerpt from a supplied window>"
 ```
 
-Critical candidate constraints:
-- Every observation must include real `evidence` copied from provided windows and matching `evidence_refs`.
-- Use `provisional_id`, not final `id`.
-- Use `scope_hint`, not final `scope`.
-- Use `source_slice_ids` and optional `support_hint`, not final `support`.
-- Do not include `verification` or `lifecycle`.
-- `semantic_key` is required and must be stable kebab-case semantic identity.
-- `confidence` must be between `0` and `1`.
-- `adherence_quality` must be `good`, `inconsistent`, or `poor`.
-- `category` must be one of `style`, `architecture`, `pattern`, `constraint`, `legacy`, `anti-pattern`, `migration`.
-- Prefer fewer, stronger observations; omit weak or unverifiable signals.
+Categories are `architecture`, `constraint`, `compatibility`, `legacy`, `anti-pattern`, `migration`, and `convention`.
 
-### Step 4 - Validate, verify, and commit
+Decision dimensions are `compatibility`, `api-shape`, `architecture-boundary`, `data-flow`, `migration`, `testing`, `error-handling`, `module-format`, and `review-focus`.
+
+Prefer zero observations over weak observations.
+
+## Commit
+
+Use the same path selectors as prepare:
 
 ```sh
-node <this-skill-directory>/scripts/calibrate-repo-context.mjs commit <project-root> --input <path-to-yaml-file|-> [--scope <glob>] [--debug-artifacts]
+node <skill-directory>/scripts/calibrate-repo-context.mjs commit <project-root> \
+  --input <proposal.yaml|proposal.json|-> \
+  --path <file-or-directory>
 ```
 
-The commit phase reissues the full prepare contract for the current repository and scope. If the repository changed after prepare, the contract fingerprint no longer matches and commit fails without modifying RCCL.
+RCCL reissues the current contract. A stale request ID or context fingerprint is rejected without modifying `.resonant-code/rccl.yaml`.
 
-The commit phase performs five things:
-1. Parse generated YAML into candidate observations.
-2. Deterministically consolidate candidates into final observations.
-3. Static evidence verification against the repository.
-4. Induction verification for scope/support quality.
-5. Write the current verified calibration result authoritatively to `.resonant-code/rccl.yaml`.
+RCCL validates schema, unique IDs, decision impact, decision dimensions, and exact evidence integrity. It owns `evidenceVerification` and `lifecycle`; proposals cannot set those fields.
 
-It only emits commit-time debug artifacts under `.resonant-code/context/` for candidates and consolidation output when you pass `--debug-artifacts` or set `RESONANT_CODE_DEBUG_ARTIFACTS=1`.
-When observations are demoted or kept with reduced confidence, stderr includes a compact verification summary so you can tune candidate quality instead of guessing.
+Evidence verification proves only that cited source excerpts still exist. It does not prove that the observation's semantic statement is universally true. Semantic confidence and human review status remain separate fields.
 
-Exit `0`: committed successfully. Parse stdout JSON:
-
-```json
-{
-  "written": ".resonant-code/rccl.yaml",
-  "stats": { "added": 5, "updated": 2, "preserved": 3 },
-  "verification_summary": {
-    "total_observations": 7,
-    "kept_count": 5,
-    "reduced_confidence_count": 1,
-    "demoted_count": 1
-  },
-  "input": {
-    "source": "stdin",
-    "supportsStdin": true
-  },
-  "debugArtifacts": {
-    "enabled": false
-  }
-}
-```
-
-Print a confirmation:
-
-```text
-RCCL calibration complete - .resonant-code/rccl.yaml updated.
-
-Added:     <stats.added> observations
-Updated:   <stats.updated> observations
-Preserved: <stats.preserved> observations
-```
-
-Exit `1`: validation failed. Report structured errors from stderr and do not write the file manually.
-
-## One-shot mode
-
-For quick calibration checks, the one-shot prepare command remains available:
+## Validate And Refresh
 
 ```sh
-node <this-skill-directory>/scripts/calibrate-repo-context.mjs prepare <project-root> [--scope <glob>]
+node <skill-directory>/scripts/calibrate-repo-context.mjs validate <project-root>
+node <skill-directory>/scripts/calibrate-repo-context.mjs refresh-stale <project-root>
 ```
 
-The one-shot prepare output includes an RCCL-owned `ai-contract/v1` contract and `candidateArtifact` metadata. The host writes a v1 artifact envelope containing `schema_version`, `kind`, `request_id`, `context_fingerprint`, and `payload`; `commitCalibration` remains the only deterministic parse, verification, and write boundary.
+`validate` checks current evidence without writing. `refresh-stale` writes current evidence states back to RCCL. Evidence states are `current`, `partial`, `stale`, and `broken`.
 
-Prefer the staged workflow for real calibration because it separates semantic discovery, critique, and synthesis before the deterministic commit boundary.
+Stale or broken observations can provide ambient context but cannot change directive execution until refreshed with current evidence.

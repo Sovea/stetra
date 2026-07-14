@@ -110,7 +110,7 @@
   layer: task-types
   scope:
     path: "**/*"
-  prescription: must
+  prescription: should
   weight: critical
   rccl_immune: true
   traits:

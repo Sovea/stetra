@@ -1,29 +1,15 @@
-# directive.minimal.template.yaml
-# Minimal viable Directive. Only required fields.
-# Use this for straightforward rules with a single clear scenario.
-# See directive.template.yaml for all available fields and their constraints.
+# Minimal valid local directive.
 
-- id: ts-prefer-type-alias-01       # unique, stable, never rename after shipping
-  type: preference                  # constraint | preference | convention | architecture | anti-pattern
-  scope: "**/*.ts"                  # file matcher only — not a domain label
-  prescription: should              # must | should
-
-  description: "Prefer type aliases over interfaces for object shapes that are not extended."
-
-  rationale: >
-    Interfaces invite accidental extension and declaration merging.
-    For closed object shapes, a type alias is the more precise tool
-    and communicates intent to future readers.
-
+- id: local-prefer-explicit-result-01
+  type: convention
+  layer: local
+  scope:
+    path: "src/**"
+  prescription: should
+  weight: normal
+  description: "Return an explicit result shape from repository boundary functions."
+  rationale: "An explicit shape keeps boundary behavior readable and stable for callers."
   examples:
-    - avoid:
-        code: "interface UserProps { id: string; name: string; }"
-      good:
-        code: "type UserProps = { id: string; name: string; };"
-      note: "UserProps is a closed shape — no extension intended.
-             type alias prevents accidental interface merging across files."
-
-  # Omitted fields fall back to defaults:
-  #   weight     → normal (1.0)
-  #   exceptions → none
-  # quality_signal: written by runtime — do not edit
+    - good:
+        code: "return { user, permissions };"
+      note: "The caller can understand the supported result without reconstructing internal state."

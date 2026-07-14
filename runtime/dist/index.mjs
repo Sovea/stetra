@@ -1,5 +1,5 @@
 import { createRequire } from "node:module";
-import { closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, readdirSync, realpathSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, readdirSync, realpathSync, rmSync, statSync } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve, win32 } from "node:path";
 import { createHash } from "node:crypto";
 //#region \0rolldown/runtime.js
@@ -26,1435 +26,7 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
 }) : target, mod));
 var __require = /* @__PURE__ */ createRequire(import.meta.url);
 //#endregion
-//#region src/ai-contracts/diagnostics.ts
-function buildContractPayloadDiagnostics(kind, entries, source) {
-	const summary = {
-		total: entries.length,
-		accepted: 0,
-		rejected: 0,
-		downgraded: 0,
-		unused: 0
-	};
-	for (const entry of entries) summary[entry.status] += 1;
-	return {
-		kind,
-		...source ? { source } : {},
-		summary,
-		entries
-	};
-}
-//#endregion
-//#region src/ai-contracts/types.ts
-const AI_CONTRACT_VERSION = "ai-contract/v1";
-//#endregion
-//#region src/utils/common.ts
-function unique(values) {
-	return [...new Set(values)];
-}
-function uniqueCompact(values) {
-	return [...new Set((values ?? []).filter((value) => value !== void 0 && value !== null))];
-}
-function isRecord$1(value) {
-	return Boolean(value) && typeof value === "object" && !Array.isArray(value);
-}
-function validConfidence(value) {
-	return typeof value === "number" && Number.isFinite(value) && value >= 0 && value <= 1;
-}
-function hasConstraint(values, expected) {
-	return expected.some((item) => values.includes(item));
-}
-//#endregion
-//#region src/ai-contracts/shared.ts
-function stableRefHash(value) {
-	return createHash("sha1").update(JSON.stringify(value)).digest("hex").slice(0, 16);
-}
-function artifactIdentity(kind, cacheKeyMaterial) {
-	const contextFingerprint = stableRefHash({
-		kind,
-		cacheKeyMaterial
-	});
-	return {
-		requestId: `${kind}:${contextFingerprint}`,
-		contextFingerprint
-	};
-}
-function unwrapHostArtifactEnvelope(raw, expected) {
-	if (!isRecord$1(raw)) return {
-		payload: null,
-		diagnostic: {
-			status: "rejected",
-			reason: "malformed-payload",
-			path: "artifact",
-			message: "Host artifact must use the v1 envelope: schema_version, kind, request_id, context_fingerprint, payload."
-		}
-	};
-	if (raw.schema_version !== 1) return {
-		payload: null,
-		diagnostic: {
-			status: "rejected",
-			reason: "unsupported-schema-version",
-			path: "schema_version",
-			message: `UNSUPPORTED_SCHEMA_VERSION: expected schema_version 1; found ${String(raw.schema_version)}. Re-run init and calibrate-repo-context. Existing data was not modified.`
-		}
-	};
-	if (raw.kind !== expected.kind) return rejectedEnvelope("kind", `Artifact kind "${String(raw.kind)}" does not match ${expected.kind}.`);
-	if (raw.request_id !== expected.requestId) return rejectedEnvelope("request_id", "Artifact request_id does not match the contract issued for this compile context.");
-	if (raw.context_fingerprint !== expected.contextFingerprint) return rejectedEnvelope("context_fingerprint", "Artifact context_fingerprint does not match current task and allowed-ID context.");
-	if (!("payload" in raw)) return rejectedEnvelope("payload", "Artifact envelope is missing payload.");
-	return {
-		payload: raw.payload,
-		diagnostic: null
-	};
-}
-function rejectedEnvelope(path, message) {
-	return {
-		payload: null,
-		diagnostic: {
-			status: "rejected",
-			reason: path === "kind" ? "unsupported-value" : "invalid-id",
-			path,
-			message
-		}
-	};
-}
-function isEvidenceRef(value) {
-	if (!isRecord$1(value)) return false;
-	if (!isEvidenceKind(value.kind)) return false;
-	if (typeof value.ref !== "string" || !value.ref.trim()) return false;
-	if (value.line_range !== void 0 && !isLineRange(value.line_range)) return false;
-	if (value.file !== void 0 && typeof value.file !== "string") return false;
-	if (value.snippet_hash !== void 0 && typeof value.snippet_hash !== "string") return false;
-	if (value.command !== void 0 && typeof value.command !== "string") return false;
-	if (value.output_hash !== void 0 && typeof value.output_hash !== "string") return false;
-	return true;
-}
-function validEvidenceRefs(value) {
-	return Array.isArray(value) && value.length > 0 && value.every(isEvidenceRef);
-}
-function normalizeEvidenceRefs(value) {
-	if (!Array.isArray(value)) return [];
-	return value.filter(isEvidenceRef).map((ref) => ({
-		...ref,
-		ref: ref.ref.trim()
-	}));
-}
-function contractVersionDiagnostic(raw, expectedKind) {
-	if (!isRecord$1(raw)) return null;
-	if (!("contractVersion" in raw) && !("schemaVersion" in raw) && !("kind" in raw)) return null;
-	if (raw.contractVersion !== "ai-contract/v1") return {
-		status: "rejected",
-		reason: "unsupported-value",
-		path: "contractVersion",
-		message: `UNSUPPORTED_SCHEMA_VERSION: unsupported contractVersion "${String(raw.contractVersion)}"; expected ${AI_CONTRACT_VERSION} ${expectedKind} payload. Re-run init and calibrate-repo-context for v1 artifacts.`
-	};
-	if (raw.kind !== expectedKind) return {
-		status: "rejected",
-		reason: "unsupported-value",
-		path: "kind",
-		message: `Unsupported contract kind "${String(raw.kind)}"; expected ${expectedKind}.`
-	};
-	return {
-		status: "rejected",
-		reason: "malformed-payload",
-		path: "payload",
-		message: `Received a contract envelope for ${expectedKind}; provide the artifact payload body, not the contract metadata envelope.`
-	};
-}
-function isEvidenceKind(value) {
-	return value === "file" || value === "diff" || value === "command" || value === "rccl-evidence" || value === "runtime-trace" || value === "conversation";
-}
-function isLineRange(value) {
-	return Array.isArray(value) && value.length === 2 && typeof value[0] === "number" && typeof value[1] === "number" && Number.isInteger(value[0]) && Number.isInteger(value[1]) && value[0] >= 1 && value[1] >= value[0];
-}
-//#endregion
-//#region src/ai-contracts/agent-capability-profile.ts
-const AGENT_CAPABILITY_PROFILE_SCHEMA = {
-	type: "object",
-	additionalProperties: false,
-	properties: {
-		can_read_files: { type: "boolean" },
-		can_search_files: { type: "boolean" },
-		can_run_commands: { type: "boolean" },
-		can_inspect_diff: { type: "boolean" },
-		can_request_context: { type: "boolean" },
-		max_context_files: { type: "number" },
-		max_command_count: { type: "number" }
-	},
-	required: [
-		"can_read_files",
-		"can_search_files",
-		"can_run_commands",
-		"can_inspect_diff",
-		"can_request_context"
-	]
-};
-function prepareAgentCapabilityProfileContract(input) {
-	const prompt = [
-		"Produce an AgentCapabilityProfile for this host environment.",
-		"This profile is used by Runtime to decide which semantic contracts are safe and useful.",
-		"Return JSON only. Do not include free-form guidance.",
-		"",
-		`Task description: ${input.task.description}`
-	].join("\n");
-	const artifact = {
-		suggestedPath: input.artifactPath,
-		format: "json",
-		usage: `Write a v1 envelope to ${input.artifactPath}: schema_version 1, kind agent-capability-profile, the issued requestId/contextFingerprint as request_id/context_fingerprint, and the profile under payload; then pass it back through Runtime artifacts.agentCapabilityProfile.`
-	};
-	return {
-		profilePrompt: prompt,
-		profileSchema: JSON.stringify(AGENT_CAPABILITY_PROFILE_SCHEMA, null, 2),
-		profileArtifact: artifact,
-		contract: {
-			contractVersion: AI_CONTRACT_VERSION,
-			kind: "agent-capability-profile",
-			...artifactIdentity("agent-capability-profile", {
-				task: input.task,
-				schemaId: "runtime.agent-capability-profile"
-			}),
-			schemaId: "runtime.agent-capability-profile",
-			schemaVersion: "1.0",
-			prompt,
-			schema: AGENT_CAPABILITY_PROFILE_SCHEMA,
-			artifact,
-			provenance: {
-				owner: "runtime",
-				deterministic: true
-			},
-			cacheKeyMaterial: {
-				task: input.task,
-				schemaId: "runtime.agent-capability-profile"
-			}
-		}
-	};
-}
-function validateAgentCapabilityProfilePayload(raw) {
-	const entries = [];
-	const versionDiagnostic = contractVersionDiagnostic(raw, "agent-capability-profile");
-	if (versionDiagnostic) return {
-		profile: null,
-		diagnostics: buildContractPayloadDiagnostics("agent-capability-profile", [versionDiagnostic])
-	};
-	if (!isCapabilityProfile(raw)) {
-		entries.push({
-			status: raw == null ? "unused" : "rejected",
-			reason: raw == null ? "empty-payload" : "malformed-payload",
-			path: "profile",
-			message: "Agent capability profile must include boolean capability fields."
-		});
-		return {
-			profile: null,
-			diagnostics: buildContractPayloadDiagnostics("agent-capability-profile", entries)
-		};
-	}
-	entries.push({
-		status: "accepted",
-		reason: "accepted",
-		path: "profile",
-		message: "Agent capability profile accepted for Runtime contract policy."
-	});
-	return {
-		profile: raw,
-		diagnostics: buildContractPayloadDiagnostics("agent-capability-profile", entries)
-	};
-}
-function isCapabilityProfile(value) {
-	if (!isRecord$1(value)) return false;
-	return typeof value.can_read_files === "boolean" && typeof value.can_search_files === "boolean" && typeof value.can_run_commands === "boolean" && typeof value.can_inspect_diff === "boolean" && typeof value.can_request_context === "boolean" && (value.max_context_files === void 0 || typeof value.max_context_files === "number") && (value.max_command_count === void 0 || typeof value.max_command_count === "number");
-}
-//#endregion
-//#region src/utils/glob.ts
-/**
-* Lightweight glob matcher for the subset used by playbook scopes and RCCL scopes.
-*/
-function minimatch(filepath, pattern) {
-	return globToRegex(pattern).test(filepath.replace(/\\/g, "/"));
-}
-function globToRegex(pattern) {
-	let i = 0;
-	let regex = "^";
-	while (i < pattern.length) {
-		const c = pattern[i];
-		if (c === "*") if (pattern[i + 1] === "*") {
-			i += 2;
-			if (pattern[i] === "/") {
-				i += 1;
-				regex += "(?:.+/)?";
-			} else regex += ".*";
-		} else {
-			i += 1;
-			regex += "[^/]*";
-		}
-		else if (c === "?") {
-			i += 1;
-			regex += "[^/]";
-		} else if (c === "{") {
-			const closeIndex = pattern.indexOf("}", i + 1);
-			if (closeIndex === -1) {
-				regex += "\\{";
-				i += 1;
-				continue;
-			}
-			const options = pattern.slice(i + 1, closeIndex).split(",").map((option) => option.trim()).filter(Boolean).map(escapeRegex);
-			regex += options.length ? `(?:${options.join("|")})` : "\\{\\}";
-			i = closeIndex + 1;
-		} else if (c === ".") {
-			i += 1;
-			regex += "\\.";
-		} else {
-			regex += escapeRegex(c);
-			i += 1;
-		}
-	}
-	return new RegExp(`${regex}$`);
-}
-function escapeRegex(value) {
-	return value.replace(/[|\\{}()[\]^$+*?.]/g, "\\$&");
-}
-//#endregion
-//#region src/utils/paths.ts
-function normalizePath$1(value) {
-	return value.replace(/\\/g, "/").replace(/^\.\//, "");
-}
-function normalizePathSeparators(value) {
-	return value.replace(/\\/g, "/");
-}
-function pathMatchesScope(path, scope) {
-	if (scope === "*" || scope === "**" || scope === "**/*") return true;
-	if (scope.includes("*") || scope.includes("?") || scope.includes("{")) return minimatch(path, scope);
-	const normalizedScope = scope.replace(/\/$/, "");
-	return path === normalizedScope || path.startsWith(`${normalizedScope}/`);
-}
-function scopeOverlapsPath(scope, path) {
-	const normalizedScope = normalizePath$1(scope);
-	const normalizedPath = normalizePath$1(path);
-	return pathMatchesScope(normalizedPath, normalizedScope) || pathMatchesScope(normalizedScope, normalizedPath);
-}
-function fileOverlapsTarget(file, target) {
-	const normalizedFile = normalizePath$1(file);
-	const normalizedTarget = normalizePath$1(target);
-	return normalizedFile === normalizedTarget || pathMatchesScope(normalizedFile, normalizedTarget) || pathMatchesScope(normalizedTarget, normalizedFile);
-}
-//#endregion
-//#region src/ai-contracts/context-acquisition.ts
-const CONTEXT_ACQUISITION_SCHEMA = {
-	type: "object",
-	additionalProperties: false,
-	properties: { requests: {
-		type: "array",
-		items: {
-			type: "object",
-			additionalProperties: false,
-			properties: {
-				kind: { const: "rccl-incremental" },
-				mode: { enum: [
-					"task-scoped",
-					"changed-files",
-					"full"
-				] },
-				target_files: {
-					type: "array",
-					items: { type: "string" },
-					maxItems: 4
-				},
-				changed_files: {
-					type: "array",
-					items: { type: "string" },
-					maxItems: 4
-				},
-				scope: { type: "string" },
-				reason: { type: "string" },
-				confidence: {
-					type: "number",
-					minimum: 0,
-					maximum: 1
-				},
-				evidence_refs: { type: "array" }
-			},
-			required: [
-				"kind",
-				"mode",
-				"target_files",
-				"changed_files",
-				"reason",
-				"confidence",
-				"evidence_refs"
-			]
-		}
-	} },
-	required: ["requests"]
-};
-function prepareContextAcquisitionContract(input) {
-	const prompt = [
-		"Acquire repository context needed before semantic governance graph generation.",
-		"Use this only to request bounded file windows, changed files, tests, or calibration slices that materially affect Runtime guidance.",
-		"Runtime/RCCL will decide whether the requested context becomes authoritative repository observation data.",
-		"Return JSON only.",
-		"",
-		`Task description: ${input.task.description}`,
-		`Target file: ${input.task.targetFile ?? "(none)"}`,
-		`Changed files: ${input.task.changedFiles?.join(", ") || "(none)"}`
-	].join("\n");
-	const artifact = {
-		suggestedPath: input.artifactPath,
-		format: "json",
-		usage: `Write a v1 envelope to ${input.artifactPath}: schema_version 1, kind context-acquisition, the issued requestId/contextFingerprint as request_id/context_fingerprint, and bounded requests under payload; use them to drive calibrate-repo-context prepare-incremental before semantic graph compilation.`
-	};
-	return {
-		acquisitionPrompt: prompt,
-		acquisitionSchema: JSON.stringify(CONTEXT_ACQUISITION_SCHEMA, null, 2),
-		acquisitionArtifact: artifact,
-		contract: {
-			contractVersion: AI_CONTRACT_VERSION,
-			kind: "context-acquisition",
-			...artifactIdentity("context-acquisition", {
-				task: input.task,
-				schemaId: "runtime.context-acquisition"
-			}),
-			schemaId: "runtime.context-acquisition",
-			schemaVersion: "1.0",
-			prompt,
-			schema: CONTEXT_ACQUISITION_SCHEMA,
-			artifact,
-			provenance: {
-				owner: "runtime",
-				deterministic: true
-			},
-			cacheKeyMaterial: {
-				task: input.task,
-				schemaId: "runtime.context-acquisition"
-			}
-		}
-	};
-}
-//#endregion
-//#region src/intent/schema.ts
-const WORKFLOWS = [
-	"code",
-	"review",
-	"analysis"
-];
-const CHANGE_TYPES = [
-	"feature",
-	"bugfix",
-	"refactor",
-	"migration",
-	"unknown"
-];
-const OPERATIONS = [
-	"create",
-	"modify",
-	"delete",
-	"mixed"
-];
-const PROJECT_STAGES = [
-	"prototype",
-	"growth",
-	"stable",
-	"critical"
-];
-const OPTIMIZATION_TARGETS = [
-	"speed",
-	"maintainability",
-	"safety",
-	"simplicity",
-	"reviewability"
-];
-const RISK_LEVELS = [
-	"low",
-	"medium",
-	"high",
-	"critical"
-];
-const SCOPE_SIZES = [
-	"single-file",
-	"module",
-	"cross-cutting",
-	"unknown"
-];
-const COMPATIBILITY_REQUIREMENTS = [
-	"none",
-	"preserve-behavior",
-	"preserve-api",
-	"migration-compatible",
-	"breaking-allowed"
-];
-const INTERFACE_SENSITIVITIES = [
-	"internal",
-	"public-api",
-	"persistence",
-	"external-integration",
-	"auth-security",
-	"unknown"
-];
-const REFACTOR_TOLERANCES = [
-	"none",
-	"local-only",
-	"bounded",
-	"broad"
-];
-const MIGRATION_PHASES = [
-	"none",
-	"preparation",
-	"dual-run",
-	"cutover",
-	"cleanup"
-];
-const REVIEW_GOALS = [
-	"correctness",
-	"regression-risk",
-	"architecture-fit",
-	"maintainability",
-	"security",
-	"performance"
-];
-const TASK_INTERPRETATION_ENUMS = {
-	intent: {
-		workflow: WORKFLOWS,
-		change_type: CHANGE_TYPES,
-		operation: OPERATIONS
-	},
-	context: {
-		project_stage: PROJECT_STAGES,
-		optimization_target: OPTIMIZATION_TARGETS,
-		risk_level: RISK_LEVELS,
-		scope_size: SCOPE_SIZES,
-		compatibility_requirement: COMPATIBILITY_REQUIREMENTS,
-		interface_sensitivity: INTERFACE_SENSITIVITIES,
-		refactor_tolerance: REFACTOR_TOLERANCES,
-		migration_phase: MIGRATION_PHASES,
-		review_goal: REVIEW_GOALS
-	}
-};
-function enumValue$1(value, allowedValues) {
-	return typeof value === "string" && allowedValues.includes(value) ? value : void 0;
-}
-function hasEnumValue(value, allowedValues) {
-	return enumValue$1(value, allowedValues) !== void 0;
-}
-//#endregion
-//#region src/intent/parse-intent.ts
-const DEFAULT_OPTIMIZATION_TARGET = {
-	create: "maintainability",
-	modify: "maintainability",
-	delete: "safety",
-	mixed: "maintainability"
-};
-/**
-* Produces a deterministic task intent from user task input without using an LLM.
-*/
-function parseIntent(task) {
-	const targetFile = task.targetFile?.replace(/\\/g, "/");
-	const changedFiles = (task.changedFiles ?? []).map((file) => file.replace(/\\/g, "/"));
-	const techStack = [...new Set([...task.techStack ?? [], ...inferTechStackFromFile(targetFile)])];
-	const operation = enumValue$1(task.operation, OPERATIONS) ?? "modify";
-	const changeType = enumValue$1(task.changeType, CHANGE_TYPES) ?? inferChangeType(operation);
-	return {
-		workflow: enumValue$1(task.workflow, WORKFLOWS) ?? "code",
-		change_type: changeType,
-		operation,
-		target_layer: inferTargetLayer(targetFile),
-		tech_stack: techStack,
-		target_file: targetFile,
-		changed_files: changedFiles,
-		tags: [...new Set(task.tags ?? inferTags(targetFile, changedFiles))]
-	};
-}
-function inferChangeType(operation) {
-	return operation === "create" ? "feature" : "unknown";
-}
-function inferTechStackFromFile(targetFile) {
-	if (!targetFile) return [];
-	if (targetFile.endsWith(".tsx")) return ["typescript"];
-	if (targetFile.endsWith(".ts")) return ["typescript"];
-	return [];
-}
-function inferTargetLayer(targetFile) {
-	if (!targetFile) return "module";
-	if (/(^|\/)(test|tests|spec|specs)(\/|$)|\.(test|spec)\./.test(targetFile)) return "test";
-	if (/(^|\/)(api|routes)(\/|$)|\b(handler|endpoint)\b/.test(targetFile)) return "api";
-	if (/(^|\/)(store|state)(\/|$)|\.slice\./.test(targetFile)) return "store";
-	if (/(^|\/)(components?|views?|pages?)(\/|$)|\.tsx$/.test(targetFile)) return "component";
-	if (/(^|\/)(utils?|helpers?|lib)(\/|$)/.test(targetFile)) return "util";
-	return "module";
-}
-function inferTags(targetFile, changedFiles) {
-	const inputs = [targetFile, ...changedFiles].filter(Boolean).join(" ");
-	const tags = [];
-	if (/(^|\/)(test|tests|spec|specs)(\/|$)|\.(test|spec)\./.test(inputs)) tags.push("test");
-	return tags;
-}
-function inferOptimizationTarget(operation) {
-	return DEFAULT_OPTIMIZATION_TARGET[operation];
-}
-function inferHardConstraints() {
-	return [];
-}
-function inferAllowedTradeoffs() {
-	return [];
-}
-function inferAvoid() {
-	return [];
-}
-/**
-* Builds the contextual priorities and constraints used alongside task intent.
-*/
-function buildContextProfile(task, intent) {
-	return {
-		project_stage: enumValue$1(task.projectStage, PROJECT_STAGES),
-		optimization_target: enumValue$1(task.optimizationTarget, OPTIMIZATION_TARGETS) ?? inferOptimizationTarget(intent.operation),
-		hard_constraints: [...new Set(task.hardConstraints ?? inferHardConstraints())],
-		allowed_tradeoffs: [...new Set(task.allowedTradeoffs ?? inferAllowedTradeoffs())],
-		avoid: [...new Set(task.avoid ?? inferAvoid())],
-		risk_level: enumValue$1(task.riskLevel, RISK_LEVELS) ?? inferRiskLevel(task, intent),
-		scope_size: enumValue$1(task.scopeSize, SCOPE_SIZES) ?? inferScopeSize(intent),
-		compatibility_requirement: enumValue$1(task.compatibilityRequirement, COMPATIBILITY_REQUIREMENTS) ?? inferCompatibilityRequirement(task),
-		interface_sensitivity: enumValue$1(task.interfaceSensitivity, INTERFACE_SENSITIVITIES) ?? inferInterfaceSensitivity(intent),
-		refactor_tolerance: enumValue$1(task.refactorTolerance, REFACTOR_TOLERANCES) ?? inferRefactorTolerance(task, intent),
-		migration_phase: enumValue$1(task.migrationPhase, MIGRATION_PHASES) ?? inferMigrationPhase(task),
-		review_goal: enumValue$1(task.reviewGoal, REVIEW_GOALS) ?? inferReviewGoal(task, intent)
-	};
-}
-function inferRiskLevel(task, intent) {
-	if (task.projectStage === "critical") return "critical";
-	if (task.optimizationTarget === "safety") return "high";
-	if (intent.operation === "create" && intent.changed_files.length <= 1) return "low";
-	return "medium";
-}
-function inferScopeSize(intent) {
-	const files = [...new Set([intent.target_file, ...intent.changed_files].filter(Boolean))];
-	if (!files.length) return "unknown";
-	if (files.length === 1) return "single-file";
-	return new Set(files.map((file) => file.split("/").slice(0, 2).join("/"))).size <= 1 ? "module" : "cross-cutting";
-}
-function inferCompatibilityRequirement(_task) {
-	return "none";
-}
-function inferInterfaceSensitivity(intent) {
-	return intent.target_file || intent.changed_files.length || intent.tags.length || intent.tech_stack.length ? "internal" : "unknown";
-}
-function inferRefactorTolerance(_task, intent) {
-	if (intent.change_type === "refactor") return "bounded";
-	return "local-only";
-}
-function inferMigrationPhase(_task) {
-	return "none";
-}
-function inferReviewGoal(task, intent) {
-	if (intent.change_type === "bugfix" || task.optimizationTarget === "safety") return "regression-risk";
-	if (intent.workflow === "review") return "correctness";
-	return "maintainability";
-}
-//#endregion
-//#region src/interpret/deterministic-extractor.ts
-var DeterministicInterpretationProvider = class {
-	source = "deterministic";
-	interpret(task) {
-		const intent = parseIntent(task);
-		const context = buildContextProfile(task, intent);
-		const explicitWorkflow = hasEnumValue(task.workflow, WORKFLOWS);
-		const explicitChangeType = hasEnumValue(task.changeType, CHANGE_TYPES);
-		const explicitOperation = hasEnumValue(task.operation, OPERATIONS);
-		const explicitProjectStage = hasEnumValue(task.projectStage, PROJECT_STAGES);
-		const explicitOptimizationTarget = hasEnumValue(task.optimizationTarget, OPTIMIZATION_TARGETS);
-		const explicitRiskLevel = hasEnumValue(task.riskLevel, RISK_LEVELS);
-		const explicitScopeSize = hasEnumValue(task.scopeSize, SCOPE_SIZES);
-		const explicitCompatibilityRequirement = hasEnumValue(task.compatibilityRequirement, COMPATIBILITY_REQUIREMENTS);
-		const explicitInterfaceSensitivity = hasEnumValue(task.interfaceSensitivity, INTERFACE_SENSITIVITIES);
-		const explicitRefactorTolerance = hasEnumValue(task.refactorTolerance, REFACTOR_TOLERANCES);
-		const explicitMigrationPhase = hasEnumValue(task.migrationPhase, MIGRATION_PHASES);
-		const explicitReviewGoal = hasEnumValue(task.reviewGoal, REVIEW_GOALS);
-		return {
-			intent: {
-				workflow: toField(intent.workflow, explicitWorkflow ? "explicit" : "deterministic", explicitWorkflow ? 1 : .85, explicitWorkflow ? "provided directly via task input" : "default code workflow"),
-				change_type: toField(intent.change_type, explicitChangeType ? "explicit" : "deterministic", explicitChangeType ? 1 : intent.change_type === "unknown" ? .35 : .6, explicitChangeType ? "provided directly via task input" : "conservative deterministic change-type fallback"),
-				operation: toField(intent.operation, explicitOperation ? "explicit" : "deterministic", explicitOperation ? 1 : .5, explicitOperation ? "provided directly via task input" : "neutral deterministic default applied because no explicit operation was provided"),
-				target_layer: toField(intent.target_layer, task.targetFile ? "explicit" : "deterministic", task.targetFile ? 1 : .6, task.targetFile ? "derived from explicit target file path" : "fallback module-level layer because no target file was provided"),
-				tech_stack: toListField(intent.tech_stack, task.techStack?.length ? "explicit" : "deterministic", task.techStack?.length ? 1 : intent.tech_stack.length ? .55 : .2, task.techStack?.length ? "provided directly via task input" : "derived from explicit target file extension when available"),
-				target_file: intent.target_file ? toField(intent.target_file, task.targetFile ? "explicit" : "deterministic", task.targetFile ? 1 : .65, task.targetFile ? "provided directly via task input" : "derived from normalized target file input") : unresolvedField("deterministic", "target file not explicitly provided"),
-				changed_files: toListField(intent.changed_files, task.changedFiles?.length ? "explicit" : "deterministic", intent.changed_files.length ? 1 : .2, "derived from explicit changed files when available"),
-				tags: toListField(intent.tags, task.tags?.length ? "explicit" : "deterministic", task.tags?.length ? 1 : intent.tags.length ? .55 : .2, task.tags?.length ? "provided directly via task input" : "derived from target file and changed-file test path signals")
-			},
-			context: {
-				project_stage: context.project_stage ? toField(context.project_stage, explicitProjectStage ? "explicit" : "deterministic", explicitProjectStage ? 1 : .5, explicitProjectStage ? "provided directly via task input" : "not inferred strongly; carried through when available") : unresolvedField(explicitProjectStage ? "explicit" : "deterministic", "project stage not resolved"),
-				optimization_target: toField(context.optimization_target, explicitOptimizationTarget ? "explicit" : "deterministic", explicitOptimizationTarget ? 1 : .55, explicitOptimizationTarget ? "provided directly via task input" : "stable fallback derived from resolved operation, not free-text policy extraction"),
-				hard_constraints: toListField(context.hard_constraints, task.hardConstraints?.length ? "explicit" : "deterministic", task.hardConstraints?.length ? 1 : 0, task.hardConstraints?.length ? "provided directly via task input" : "left unresolved unless explicit constraints are provided"),
-				allowed_tradeoffs: toListField(context.allowed_tradeoffs, task.allowedTradeoffs?.length ? "explicit" : "deterministic", task.allowedTradeoffs?.length ? 1 : 0, task.allowedTradeoffs?.length ? "provided directly via task input" : "left unresolved unless explicit tradeoffs are provided"),
-				avoid: toListField(context.avoid, task.avoid?.length ? "explicit" : "deterministic", task.avoid?.length ? 1 : 0, task.avoid?.length ? "provided directly via task input" : "left unresolved unless explicit avoid guidance is provided"),
-				risk_level: toField(context.risk_level, explicitRiskLevel ? "explicit" : "deterministic", explicitRiskLevel ? 1 : .65, explicitRiskLevel ? "provided directly via task input" : "neutral deterministic default derived from explicit project stage, optimization target, operation, and task shape"),
-				scope_size: toField(context.scope_size, explicitScopeSize ? "explicit" : "deterministic", explicitScopeSize ? 1 : context.scope_size === "unknown" ? .35 : .8, explicitScopeSize ? "provided directly via task input" : "derived from target and changed-file spread"),
-				compatibility_requirement: toField(context.compatibility_requirement, explicitCompatibilityRequirement ? "explicit" : "deterministic", explicitCompatibilityRequirement ? 1 : .5, explicitCompatibilityRequirement ? "provided directly via task input" : "neutral deterministic default; compatibility requirements must be explicit or supplied by task-model"),
-				interface_sensitivity: toField(context.interface_sensitivity, explicitInterfaceSensitivity ? "explicit" : "deterministic", explicitInterfaceSensitivity ? 1 : context.interface_sensitivity === "unknown" ? .35 : .5, explicitInterfaceSensitivity ? "provided directly via task input" : "neutral deterministic default; sensitive interfaces must be explicit or supplied by task-model"),
-				refactor_tolerance: toField(context.refactor_tolerance, explicitRefactorTolerance ? "explicit" : "deterministic", explicitRefactorTolerance ? 1 : .55, explicitRefactorTolerance ? "provided directly via task input" : "neutral deterministic default derived from the resolved operation only"),
-				migration_phase: toField(context.migration_phase, explicitMigrationPhase ? "explicit" : "deterministic", explicitMigrationPhase ? 1 : .45, explicitMigrationPhase ? "provided directly via task input" : "neutral deterministic default; migration phase must be explicit or supplied by task-model"),
-				review_goal: toField(context.review_goal, explicitReviewGoal ? "explicit" : "deterministic", explicitReviewGoal ? 1 : .55, explicitReviewGoal ? "provided directly via task input" : "neutral deterministic default derived from the resolved operation only")
-			},
-			uncertainties: [...context.project_stage ? [] : ["project_stage unresolved"], ...intent.target_file ? [] : ["target_file unresolved"]]
-		};
-	}
-};
-function toField(value, source, confidence, rationale) {
-	return {
-		value,
-		source,
-		confidence,
-		status: "resolved",
-		rationale
-	};
-}
-function unresolvedField(source, rationale) {
-	return {
-		source,
-		confidence: 0,
-		status: "unresolved",
-		rationale
-	};
-}
-function toListField(values, source, confidence, rationale) {
-	return {
-		values,
-		source,
-		confidence,
-		status: values.length ? "resolved" : "unresolved",
-		rationale
-	};
-}
-//#endregion
-//#region src/interpret/normalize-candidate.ts
-const deterministicProvider = new DeterministicInterpretationProvider();
-const MIN_ASSISTIVE_CONTEXT_CONFIDENCE = .5;
-const SCALAR_FIELD_SPECS = [
-	{
-		field: "intent.workflow",
-		section: "intent",
-		candidateKey: "workflow",
-		explicitValue: (input) => input.task.workflow,
-		fallbackValue: (det) => det.intent.workflow?.value ?? "code",
-		defaultConfidence: (det) => det.intent.workflow?.confidence ?? .85,
-		allowedValues: WORKFLOWS
-	},
-	{
-		field: "intent.change_type",
-		section: "intent",
-		candidateKey: "change_type",
-		explicitValue: (input) => input.task.changeType,
-		fallbackValue: (det) => det.intent.change_type?.value ?? "unknown",
-		defaultConfidence: (det) => det.intent.change_type?.confidence ?? .4,
-		allowedValues: CHANGE_TYPES
-	},
-	{
-		field: "intent.operation",
-		section: "intent",
-		candidateKey: "operation",
-		explicitValue: (input) => input.task.operation,
-		fallbackValue: (det) => det.intent.operation?.value ?? "modify",
-		defaultConfidence: (det) => det.intent.operation?.confidence ?? .5,
-		allowedValues: OPERATIONS
-	},
-	{
-		field: "intent.target_file",
-		section: "intent",
-		candidateKey: "target_file",
-		explicitValue: (input) => input.task.targetFile,
-		fallbackValue: (det) => det.intent.target_file?.value,
-		defaultConfidence: (det) => det.intent.target_file?.confidence ?? .65
-	},
-	{
-		field: "context.project_stage",
-		section: "context",
-		candidateKey: "project_stage",
-		explicitValue: (input) => input.task.projectStage,
-		fallbackValue: (det) => det.context.project_stage?.value,
-		defaultConfidence: (det) => det.context.project_stage?.confidence ?? .5,
-		allowedValues: PROJECT_STAGES
-	},
-	{
-		field: "context.optimization_target",
-		section: "context",
-		candidateKey: "optimization_target",
-		explicitValue: (input) => input.task.optimizationTarget,
-		fallbackValue: (det) => det.context.optimization_target?.value,
-		defaultConfidence: (det) => det.context.optimization_target?.confidence ?? .55,
-		allowedValues: OPTIMIZATION_TARGETS
-	},
-	{
-		field: "context.risk_level",
-		section: "context",
-		candidateKey: "risk_level",
-		explicitValue: (input) => input.task.riskLevel,
-		fallbackValue: (det) => det.context.risk_level?.value ?? "medium",
-		defaultConfidence: (det) => det.context.risk_level?.confidence ?? .65,
-		allowedValues: RISK_LEVELS,
-		minimumCandidateConfidence: MIN_ASSISTIVE_CONTEXT_CONFIDENCE
-	},
-	{
-		field: "context.scope_size",
-		section: "context",
-		candidateKey: "scope_size",
-		explicitValue: (input) => input.task.scopeSize,
-		fallbackValue: (det) => det.context.scope_size?.value ?? "unknown",
-		defaultConfidence: (det) => det.context.scope_size?.confidence ?? .35,
-		allowedValues: SCOPE_SIZES,
-		minimumCandidateConfidence: MIN_ASSISTIVE_CONTEXT_CONFIDENCE
-	},
-	{
-		field: "context.compatibility_requirement",
-		section: "context",
-		candidateKey: "compatibility_requirement",
-		explicitValue: (input) => input.task.compatibilityRequirement,
-		fallbackValue: (det) => det.context.compatibility_requirement?.value ?? "none",
-		defaultConfidence: (det) => det.context.compatibility_requirement?.confidence ?? .5,
-		allowedValues: COMPATIBILITY_REQUIREMENTS,
-		minimumCandidateConfidence: MIN_ASSISTIVE_CONTEXT_CONFIDENCE
-	},
-	{
-		field: "context.interface_sensitivity",
-		section: "context",
-		candidateKey: "interface_sensitivity",
-		explicitValue: (input) => input.task.interfaceSensitivity,
-		fallbackValue: (det) => det.context.interface_sensitivity?.value ?? "unknown",
-		defaultConfidence: (det) => det.context.interface_sensitivity?.confidence ?? .35,
-		allowedValues: INTERFACE_SENSITIVITIES,
-		minimumCandidateConfidence: MIN_ASSISTIVE_CONTEXT_CONFIDENCE
-	},
-	{
-		field: "context.refactor_tolerance",
-		section: "context",
-		candidateKey: "refactor_tolerance",
-		explicitValue: (input) => input.task.refactorTolerance,
-		fallbackValue: (det) => det.context.refactor_tolerance?.value ?? "local-only",
-		defaultConfidence: (det) => det.context.refactor_tolerance?.confidence ?? .65,
-		allowedValues: REFACTOR_TOLERANCES,
-		minimumCandidateConfidence: MIN_ASSISTIVE_CONTEXT_CONFIDENCE
-	},
-	{
-		field: "context.migration_phase",
-		section: "context",
-		candidateKey: "migration_phase",
-		explicitValue: (input) => input.task.migrationPhase,
-		fallbackValue: (det) => det.context.migration_phase?.value ?? "none",
-		defaultConfidence: (det) => det.context.migration_phase?.confidence ?? .45,
-		allowedValues: MIGRATION_PHASES,
-		minimumCandidateConfidence: MIN_ASSISTIVE_CONTEXT_CONFIDENCE
-	},
-	{
-		field: "context.review_goal",
-		section: "context",
-		candidateKey: "review_goal",
-		explicitValue: (input) => input.task.reviewGoal,
-		fallbackValue: (det) => det.context.review_goal?.value ?? "maintainability",
-		defaultConfidence: (det) => det.context.review_goal?.confidence ?? .65,
-		allowedValues: REVIEW_GOALS,
-		minimumCandidateConfidence: MIN_ASSISTIVE_CONTEXT_CONFIDENCE
-	}
-];
-const LIST_FIELD_SPECS = [
-	{
-		field: "intent.changed_files",
-		section: "intent",
-		candidateKey: "changed_files",
-		explicitValues: (input) => input.task.changedFiles,
-		fallbackValues: (det) => det.intent.changed_files?.values ?? [],
-		defaultConfidence: (det) => det.intent.changed_files?.confidence ?? .2
-	},
-	{
-		field: "intent.tech_stack",
-		section: "intent",
-		candidateKey: "tech_stack",
-		explicitValues: (input) => input.task.techStack,
-		fallbackValues: (det) => det.intent.tech_stack?.values ?? [],
-		defaultConfidence: (det) => det.intent.tech_stack?.confidence ?? .3
-	},
-	{
-		field: "intent.tags",
-		section: "intent",
-		candidateKey: "tags",
-		explicitValues: (input) => input.task.tags,
-		fallbackValues: (det) => det.intent.tags?.values ?? [],
-		defaultConfidence: (det) => det.intent.tags?.confidence ?? .3
-	},
-	{
-		field: "context.hard_constraints",
-		section: "context",
-		candidateKey: "hard_constraints",
-		explicitValues: (input) => input.task.hardConstraints,
-		fallbackValues: (det) => det.context.hard_constraints?.values ?? [],
-		defaultConfidence: (det) => det.context.hard_constraints?.confidence ?? .2
-	},
-	{
-		field: "context.allowed_tradeoffs",
-		section: "context",
-		candidateKey: "allowed_tradeoffs",
-		explicitValues: (input) => input.task.allowedTradeoffs,
-		fallbackValues: (det) => det.context.allowed_tradeoffs?.values ?? [],
-		defaultConfidence: (det) => det.context.allowed_tradeoffs?.confidence ?? .2
-	},
-	{
-		field: "context.avoid",
-		section: "context",
-		candidateKey: "avoid",
-		explicitValues: (input) => input.task.avoid,
-		fallbackValues: (det) => det.context.avoid?.values ?? [],
-		defaultConfidence: (det) => det.context.avoid?.confidence ?? .2
-	}
-];
-function resolveTask(input) {
-	const deterministicCandidate = deterministicProvider.interpret(input.task);
-	const candidates = [...(input.taskModels ?? []).map(taskModelToCandidate), deterministicCandidate];
-	const conflicts = [];
-	const discardedInputs = [];
-	const scalarResults = /* @__PURE__ */ new Map();
-	for (const spec of SCALAR_FIELD_SPECS) scalarResults.set(spec.field, resolveField({
-		field: spec.field,
-		explicitValue: spec.explicitValue(input),
-		candidates: candidates.map((candidate) => {
-			return (spec.section === "intent" ? candidate.intent : candidate.context)[spec.candidateKey];
-		}),
-		fallbackValue: spec.fallbackValue(deterministicCandidate),
-		defaultSource: "deterministic",
-		defaultConfidence: spec.defaultConfidence(deterministicCandidate),
-		...spec.allowedValues ? { allowedValues: spec.allowedValues } : {},
-		...spec.minimumCandidateConfidence !== void 0 ? { minimumCandidateConfidence: spec.minimumCandidateConfidence } : {},
-		conflicts,
-		discardedInputs
-	}));
-	const listResults = /* @__PURE__ */ new Map();
-	for (const spec of LIST_FIELD_SPECS) listResults.set(spec.field, resolveListField({
-		field: spec.field,
-		explicitValues: spec.explicitValues(input),
-		candidates: candidates.map((candidate) => {
-			return (spec.section === "intent" ? candidate.intent : candidate.context)[spec.candidateKey];
-		}),
-		fallbackValues: spec.fallbackValues(deterministicCandidate),
-		defaultSource: "deterministic",
-		defaultConfidence: spec.defaultConfidence(deterministicCandidate),
-		conflicts
-	}));
-	const scalar = (field) => scalarResults.get(field);
-	const list = (field) => listResults.get(field);
-	const task = {
-		description: input.task.description,
-		workflow: scalar("intent.workflow").value,
-		changeType: scalar("intent.change_type").value,
-		operation: scalar("intent.operation").value,
-		targetFile: scalar("intent.target_file").value,
-		changedFiles: list("intent.changed_files").values,
-		techStack: list("intent.tech_stack").values,
-		tags: list("intent.tags").values,
-		projectStage: scalar("context.project_stage").value,
-		optimizationTarget: scalar("context.optimization_target").value,
-		hardConstraints: list("context.hard_constraints").values,
-		allowedTradeoffs: list("context.allowed_tradeoffs").values,
-		avoid: list("context.avoid").values,
-		riskLevel: scalar("context.risk_level").value,
-		scopeSize: scalar("context.scope_size").value,
-		compatibilityRequirement: scalar("context.compatibility_requirement").value,
-		interfaceSensitivity: scalar("context.interface_sensitivity").value,
-		refactorTolerance: scalar("context.refactor_tolerance").value,
-		migrationPhase: scalar("context.migration_phase").value,
-		reviewGoal: scalar("context.review_goal").value
-	};
-	const resolvedTargetFile = scalar("intent.target_file").value;
-	const intent = {
-		workflow: scalar("intent.workflow").value,
-		change_type: scalar("intent.change_type").value,
-		operation: scalar("intent.operation").value,
-		target_layer: inferTargetLayer(resolvedTargetFile),
-		tech_stack: uniqueCompact(list("intent.tech_stack").values),
-		target_file: resolvedTargetFile,
-		changed_files: uniqueCompact(list("intent.changed_files").values),
-		tags: uniqueCompact(list("intent.tags").values)
-	};
-	const contextProfile = {
-		project_stage: scalar("context.project_stage").value,
-		optimization_target: scalar("context.optimization_target").value,
-		hard_constraints: uniqueCompact(list("context.hard_constraints").values),
-		allowed_tradeoffs: uniqueCompact(list("context.allowed_tradeoffs").values),
-		avoid: uniqueCompact(list("context.avoid").values),
-		risk_level: scalar("context.risk_level").value,
-		scope_size: scalar("context.scope_size").value,
-		compatibility_requirement: scalar("context.compatibility_requirement").value,
-		interface_sensitivity: scalar("context.interface_sensitivity").value,
-		refactor_tolerance: scalar("context.refactor_tolerance").value,
-		migration_phase: scalar("context.migration_phase").value,
-		review_goal: scalar("context.review_goal").value
-	};
-	const provenance = buildProvenance$1(input, {
-		workflow: scalar("intent.workflow"),
-		change_type: scalar("intent.change_type"),
-		operation: scalar("intent.operation"),
-		target_file: scalar("intent.target_file"),
-		changed_files: list("intent.changed_files"),
-		tech_stack: list("intent.tech_stack"),
-		tags: list("intent.tags"),
-		project_stage: scalar("context.project_stage"),
-		optimization_target: scalar("context.optimization_target"),
-		hard_constraints: list("context.hard_constraints"),
-		allowed_tradeoffs: list("context.allowed_tradeoffs"),
-		avoid: list("context.avoid"),
-		risk_level: scalar("context.risk_level"),
-		scope_size: scalar("context.scope_size"),
-		compatibility_requirement: scalar("context.compatibility_requirement"),
-		interface_sensitivity: scalar("context.interface_sensitivity"),
-		refactor_tolerance: scalar("context.refactor_tolerance"),
-		migration_phase: scalar("context.migration_phase"),
-		review_goal: scalar("context.review_goal")
-	}, conflicts);
-	const trace = buildTrace(input, candidates, provenance, conflicts);
-	const diagnostics = buildDiagnostics(input, candidates, provenance, conflicts, discardedInputs);
-	return {
-		task,
-		workflow: scalar("intent.workflow").value,
-		task_models: input.taskModels ?? [],
-		task_intent: intent,
-		context_profile: contextProfile,
-		input_provenance: provenance,
-		diagnostics,
-		trace
-	};
-}
-function resolveField({ field, explicitValue, candidates, fallbackValue, defaultSource, defaultConfidence, allowedValues, minimumCandidateConfidence = 0, conflicts, discardedInputs }) {
-	const resolvedCandidates = candidates.filter((candidate) => {
-		if (candidate === void 0 || candidate.status !== "resolved") return false;
-		if (candidate.value === void 0) {
-			recordDiscarded(discardedInputs, field, "", candidate.source, "missing-value", fallbackValue);
-			return false;
-		}
-		if (candidate.confidence < minimumCandidateConfidence) {
-			recordDiscarded(discardedInputs, field, candidate.value, candidate.source, "below-confidence-threshold", fallbackValue);
-			return false;
-		}
-		if (allowedValues && !allowedValues.includes(candidate.value)) {
-			recordDiscarded(discardedInputs, field, candidate.value, candidate.source, "invalid-enum", fallbackValue);
-			return false;
-		}
-		return true;
-	});
-	if (explicitValue !== void 0) if (allowedValues && !allowedValues.includes(explicitValue)) recordDiscarded(discardedInputs, field, explicitValue, "explicit", "invalid-enum", fallbackValue);
-	else {
-		registerConflict(field, "explicit", resolvedCandidates.map((candidate) => candidate.source), conflicts, "explicit task input takes precedence");
-		return {
-			value: explicitValue,
-			source: "explicit",
-			confidence: 1,
-			status: "resolved"
-		};
-	}
-	if (resolvedCandidates.length > 0) {
-		const ordered = resolvedCandidates.slice().sort(compareCandidateField);
-		const winner = ordered[0];
-		registerConflict(field, winner.source, ordered.slice(1).map((candidate) => candidate.source), conflicts, "field-level evidence/confidence policy selected the strongest candidate");
-		return {
-			value: winner.value,
-			source: winner.source,
-			confidence: winner.confidence,
-			status: "resolved"
-		};
-	}
-	return {
-		value: fallbackValue,
-		source: defaultSource,
-		confidence: defaultConfidence,
-		status: "resolved"
-	};
-}
-function resolveListField({ field, explicitValues, candidates, fallbackValues, defaultSource, defaultConfidence, conflicts }) {
-	if (explicitValues?.length) {
-		registerConflict(field, "explicit", candidates.filter(Boolean).map((candidate) => candidate?.source ?? "deterministic"), conflicts, "explicit task input takes precedence");
-		return {
-			values: uniqueCompact(explicitValues),
-			source: "explicit",
-			confidence: 1,
-			status: "resolved"
-		};
-	}
-	const resolvedCandidates = candidates.filter((candidate) => candidate !== void 0 && candidate.status === "resolved" && candidate.values.length > 0);
-	if (resolvedCandidates.length > 0) {
-		const ordered = resolvedCandidates.slice().sort(compareCandidateListField);
-		const winner = ordered[0];
-		registerConflict(field, winner.source, ordered.slice(1).map((candidate) => candidate.source), conflicts, "field-level evidence/confidence policy selected the strongest candidate");
-		return {
-			values: uniqueCompact(winner.values),
-			source: winner.source,
-			confidence: winner.confidence,
-			status: "resolved"
-		};
-	}
-	const fallback = uniqueCompact(fallbackValues);
-	return {
-		values: fallback,
-		source: defaultSource,
-		confidence: defaultConfidence,
-		status: fallback.length ? "resolved" : "unresolved"
-	};
-}
-function buildProvenance$1(input, resolved, conflicts) {
-	const resolved_fields = [
-		summarizeScalarField("intent.workflow", resolved.workflow),
-		summarizeScalarField("intent.change_type", resolved.change_type),
-		summarizeScalarField("intent.operation", resolved.operation),
-		summarizeScalarField("intent.target_file", resolved.target_file),
-		summarizeListField("intent.changed_files", resolved.changed_files),
-		summarizeListField("intent.tech_stack", resolved.tech_stack),
-		summarizeListField("intent.tags", resolved.tags),
-		summarizeScalarField("context.project_stage", resolved.project_stage),
-		summarizeScalarField("context.optimization_target", resolved.optimization_target),
-		summarizeListField("context.hard_constraints", resolved.hard_constraints),
-		summarizeListField("context.allowed_tradeoffs", resolved.allowed_tradeoffs),
-		summarizeListField("context.avoid", resolved.avoid),
-		summarizeScalarField("context.risk_level", resolved.risk_level),
-		summarizeScalarField("context.scope_size", resolved.scope_size),
-		summarizeScalarField("context.compatibility_requirement", resolved.compatibility_requirement),
-		summarizeScalarField("context.interface_sensitivity", resolved.interface_sensitivity),
-		summarizeScalarField("context.refactor_tolerance", resolved.refactor_tolerance),
-		summarizeScalarField("context.migration_phase", resolved.migration_phase),
-		summarizeScalarField("context.review_goal", resolved.review_goal)
-	].filter((item) => Boolean(item));
-	return {
-		resolved_fields,
-		unresolved_fields: [
-			...resolved.change_type.value === "unknown" ? ["intent.change_type"] : [],
-			...resolved.target_file.value ? [] : ["intent.target_file"],
-			...resolved.project_stage.value ? [] : ["context.project_stage"]
-		],
-		context_resolution: buildContextResolution(resolved, conflicts),
-		interpretation_mode: input.interpretationMode ?? (input.taskModels?.length ? "host-agent" : "deterministic-only"),
-		resolution_quality: determineResolutionQuality(resolved_fields)
-	};
-}
-function buildTrace(input, candidates, provenance, conflicts) {
-	const candidate_summaries = candidates.map((candidate) => summarizeCandidate(candidate));
-	return {
-		mode: provenance.interpretation_mode,
-		candidate_summaries,
-		conflicts,
-		selected_sources: provenance.resolved_fields.map((field) => ({
-			field: field.field,
-			source: field.source,
-			confidence: field.confidence
-		}))
-	};
-}
-function buildContextResolution(resolved, conflicts) {
-	return [
-		contextScalar("context.project_stage", resolved.project_stage, conflicts),
-		contextScalar("context.optimization_target", resolved.optimization_target, conflicts),
-		contextList("context.hard_constraints", resolved.hard_constraints, conflicts),
-		contextList("context.allowed_tradeoffs", resolved.allowed_tradeoffs, conflicts),
-		contextList("context.avoid", resolved.avoid, conflicts),
-		contextScalar("context.risk_level", resolved.risk_level, conflicts),
-		contextScalar("context.scope_size", resolved.scope_size, conflicts),
-		contextScalar("context.compatibility_requirement", resolved.compatibility_requirement, conflicts),
-		contextScalar("context.interface_sensitivity", resolved.interface_sensitivity, conflicts),
-		contextScalar("context.refactor_tolerance", resolved.refactor_tolerance, conflicts),
-		contextScalar("context.migration_phase", resolved.migration_phase, conflicts),
-		contextScalar("context.review_goal", resolved.review_goal, conflicts)
-	];
-}
-function contextScalar(field, resolved, conflicts) {
-	const value = resolved.value === void 0 ? "" : String(resolved.value);
-	return {
-		field,
-		value,
-		source: resolved.source,
-		confidence: resolved.confidence,
-		status: contextResolutionStatus(field, resolved.source, resolved.value === void 0, conflicts),
-		influence: contextInfluenceHints(field, value, resolved.source)
-	};
-}
-function contextList(field, resolved, conflicts) {
-	return {
-		field,
-		value: resolved.values,
-		source: resolved.source,
-		confidence: resolved.confidence,
-		status: contextResolutionStatus(field, resolved.source, resolved.values.length === 0, conflicts),
-		influence: contextInfluenceHints(field, resolved.values.join(","), resolved.source)
-	};
-}
-function contextResolutionStatus(field, source, unresolved, conflicts) {
-	if (conflicts.some((conflict) => conflict.field === field)) return "conflicted";
-	if (unresolved) return "unresolved";
-	return source === "deterministic" || source === "repo-default" ? "defaulted" : "resolved";
-}
-function contextInfluenceHints(field, value, source) {
-	if (source === "deterministic") return [];
-	switch (field) {
-		case "context.risk_level": return value === "high" || value === "critical" ? ["review-focus-priority", "must-guidance-preservation"] : [];
-		case "context.scope_size": return value === "single-file" ? ["broad-guidance-ambient"] : [];
-		case "context.compatibility_requirement": return value && value !== "none" && value !== "breaking-allowed" ? ["compatibility-tension"] : [];
-		case "context.interface_sensitivity": return value && value !== "internal" && value !== "unknown" ? ["review-focus-priority"] : [];
-		case "context.refactor_tolerance": return value === "none" || value === "local-only" ? ["broad-guidance-ambient"] : [];
-		case "context.migration_phase": return value === "dual-run" || value === "cutover" ? ["migration-tension"] : [];
-		case "context.review_goal": return value === "security" || value === "regression-risk" ? ["review-focus-priority"] : [];
-		default: return [];
-	}
-}
-function buildDiagnostics(input, candidates, provenance, conflicts, discardedInputs) {
-	const ambiguity_reasons = [
-		...candidates.flatMap((candidate) => candidate.uncertainties ?? []),
-		...provenance.unresolved_fields.map((item) => `${item} unresolved`),
-		...conflicts.map((conflict) => `conflicting candidates for ${conflict.field}`)
-	];
-	const discarded = uniqueDiscardedInputs(discardedInputs);
-	return {
-		warnings: [...ambiguity_reasons.map((item) => `interpretation warning: ${item}`), ...discarded.map((item) => `interpretation discarded ${item.source} ${item.field}=${item.value || "(empty)"}: ${item.reason}`)],
-		fallback_usage: {
-			used_deterministic_interpretation: provenance.resolved_fields.some((field) => field.source === "deterministic"),
-			used_candidate_normalization: Boolean(input.taskModels?.length)
-		},
-		clarification_recommended: ambiguity_reasons.length > 0 && (!input.taskModels?.length || conflicts.length > 0),
-		ambiguity_reasons,
-		discarded_inputs: discarded
-	};
-}
-function recordDiscarded(discardedInputs, field, value, source, reason, fallbackValue) {
-	if (source === "deterministic") return;
-	discardedInputs.push({
-		field,
-		value: value === void 0 ? "" : String(value),
-		source,
-		reason,
-		action: "discarded",
-		...fallbackValue === void 0 ? {} : { fallback: String(fallbackValue) }
-	});
-}
-function uniqueDiscardedInputs(items) {
-	const seen = /* @__PURE__ */ new Set();
-	const result = [];
-	for (const item of items) {
-		const key = `${item.field}:${item.value}:${item.source}:${item.reason}:${item.fallback ?? ""}`;
-		if (seen.has(key)) continue;
-		seen.add(key);
-		result.push(item);
-	}
-	return result;
-}
-function summarizeCandidate(candidate) {
-	const scalarFields = [
-		["intent.workflow", candidate.intent.workflow],
-		["intent.change_type", candidate.intent.change_type],
-		["intent.operation", candidate.intent.operation],
-		["intent.target_layer", candidate.intent.target_layer],
-		["intent.target_file", candidate.intent.target_file],
-		["context.project_stage", candidate.context.project_stage],
-		["context.optimization_target", candidate.context.optimization_target],
-		["context.risk_level", candidate.context.risk_level],
-		["context.scope_size", candidate.context.scope_size],
-		["context.compatibility_requirement", candidate.context.compatibility_requirement],
-		["context.interface_sensitivity", candidate.context.interface_sensitivity],
-		["context.refactor_tolerance", candidate.context.refactor_tolerance],
-		["context.migration_phase", candidate.context.migration_phase],
-		["context.review_goal", candidate.context.review_goal]
-	];
-	const listFields = [
-		["intent.tech_stack", candidate.intent.tech_stack],
-		["intent.changed_files", candidate.intent.changed_files],
-		["intent.tags", candidate.intent.tags],
-		["context.hard_constraints", candidate.context.hard_constraints],
-		["context.allowed_tradeoffs", candidate.context.allowed_tradeoffs],
-		["context.avoid", candidate.context.avoid]
-	];
-	const resolved_fields = [...scalarFields.filter(([, field]) => field?.status === "resolved").map(([name]) => name), ...listFields.filter(([, field]) => field?.status === "resolved" && field.values.length > 0).map(([name]) => name)];
-	const unresolved_fields = [...scalarFields.filter(([, field]) => !field || field.status !== "resolved").map(([name]) => name), ...listFields.filter(([, field]) => !field || field.status !== "resolved" || field.values.length === 0).map(([name]) => name)];
-	const source = candidate.intent.workflow?.source ?? candidate.intent.change_type?.source ?? candidate.intent.operation?.source ?? candidate.intent.target_file?.source ?? candidate.context.optimization_target?.source ?? "deterministic";
-	const confidenceValues = [
-		candidate.intent.workflow?.confidence,
-		candidate.intent.change_type?.confidence,
-		candidate.intent.operation?.confidence,
-		candidate.intent.target_layer?.confidence,
-		candidate.intent.target_file?.confidence,
-		candidate.intent.tech_stack?.confidence,
-		candidate.intent.changed_files?.confidence,
-		candidate.intent.tags?.confidence,
-		candidate.context.project_stage?.confidence,
-		candidate.context.optimization_target?.confidence,
-		candidate.context.hard_constraints?.confidence,
-		candidate.context.allowed_tradeoffs?.confidence,
-		candidate.context.avoid?.confidence,
-		candidate.context.risk_level?.confidence,
-		candidate.context.scope_size?.confidence,
-		candidate.context.compatibility_requirement?.confidence,
-		candidate.context.interface_sensitivity?.confidence,
-		candidate.context.refactor_tolerance?.confidence,
-		candidate.context.migration_phase?.confidence,
-		candidate.context.review_goal?.confidence
-	].filter((value) => typeof value === "number");
-	return {
-		source,
-		confidence: confidenceValues.length ? Number((confidenceValues.reduce((sum, value) => sum + value, 0) / confidenceValues.length).toFixed(2)) : 0,
-		resolved_fields,
-		unresolved_fields
-	};
-}
-function taskModelToCandidate(model) {
-	return {
-		intent: {
-			workflow: scalarField(model.intent.workflow),
-			change_type: scalarField(model.intent.change_type),
-			operation: scalarField(model.intent.operation),
-			target_layer: scalarField(model.intent.target_layer),
-			target_file: scalarField(model.intent.target_file),
-			changed_files: listField(model.intent.changed_files),
-			tech_stack: listField(model.intent.tech_stack),
-			tags: listField(model.intent.tags)
-		},
-		context: {
-			project_stage: scalarField(model.context.project_stage),
-			optimization_target: scalarField(model.context.optimization_target),
-			hard_constraints: listField(model.context.hard_constraints),
-			allowed_tradeoffs: listField(model.context.allowed_tradeoffs),
-			avoid: listField(model.context.avoid),
-			risk_level: scalarField(model.context.risk_level),
-			scope_size: scalarField(model.context.scope_size),
-			compatibility_requirement: scalarField(model.context.compatibility_requirement),
-			interface_sensitivity: scalarField(model.context.interface_sensitivity),
-			refactor_tolerance: scalarField(model.context.refactor_tolerance),
-			migration_phase: scalarField(model.context.migration_phase),
-			review_goal: scalarField(model.context.review_goal)
-		},
-		uncertainties: model.uncertainties
-	};
-}
-function scalarField(field) {
-	if (!field || field.value === void 0) return void 0;
-	return {
-		value: field.value,
-		source: "host-agent",
-		confidence: field.confidence,
-		status: "resolved",
-		rationale: `task-model evidence_refs=${field.evidence_refs.map((ref) => ref.ref).join(", ")}`
-	};
-}
-function listField(field) {
-	if (!field) return void 0;
-	return {
-		values: field.values,
-		source: "host-agent",
-		confidence: field.confidence,
-		status: field.values.length ? "resolved" : "unresolved",
-		rationale: `task-model evidence_refs=${field.evidence_refs.map((ref) => ref.ref).join(", ")}`
-	};
-}
-function compareCandidateField(left, right) {
-	return sourceRank(right.source) - sourceRank(left.source) || right.confidence - left.confidence;
-}
-function compareCandidateListField(left, right) {
-	return sourceRank(right.source) - sourceRank(left.source) || right.confidence - left.confidence || right.values.length - left.values.length;
-}
-function sourceRank(source) {
-	switch (source) {
-		case "explicit": return 5;
-		case "host-agent":
-		case "assistive-ai": return 4;
-		case "derived": return 3;
-		case "repo-default": return 2;
-		case "deterministic": return 1;
-	}
-}
-function summarizeScalarField(field, resolved) {
-	if (resolved.value === void 0) return null;
-	return {
-		field,
-		source: resolved.source,
-		confidence: resolved.confidence
-	};
-}
-function summarizeListField(field, resolved) {
-	if (!resolved.values.length) return null;
-	return {
-		field,
-		source: resolved.source,
-		confidence: resolved.confidence
-	};
-}
-function determineResolutionQuality(resolvedFields) {
-	if (resolvedFields.every((field) => field.source === "explicit")) return "explicit";
-	if (resolvedFields.some((field) => field.source === "host-agent" || field.source === "assistive-ai")) return "ai-assisted";
-	if (resolvedFields.some((field) => field.source === "deterministic")) return "deterministic";
-	return "degraded";
-}
-function registerConflict(field, winner, discarded, conflicts, rationale) {
-	const uniqueDiscarded = [...new Set(discarded.filter((source) => source !== winner))];
-	if (!uniqueDiscarded.length) return;
-	conflicts.push({
-		field,
-		winner,
-		discarded: uniqueDiscarded,
-		rationale
-	});
-}
-//#endregion
-//#region src/ir/activation/resolve-activation.ts
-function resolveActivationDecisionsIR(bundle) {
-	return sortActivationDecisions(bundle.directives.map((directive) => resolveDirectiveActivation(directive, bundle.task)));
-}
-function activatedDirectiveIdsIR(decisions) {
-	return new Set(decisions.filter((decision) => decision.status === "activated").map((decision) => decision.directiveId));
-}
-function resolveDirectiveActivation(directive, task) {
-	if (directive.local.suppressed) return buildSkippedDecision(directive, "suppressed-by-local", directive.local.suppressionReason ? `directive suppressed by local playbook: ${directive.local.suppressionReason}` : "directive suppressed by local playbook");
-	if (!layerMatchesTask(directive, task)) return buildSkippedDecision(directive, "layer-mismatch", "directive layer does not match resolved task intent");
-	if (!scopeMatchesTask$2(directive.scope.path, task)) return buildSkippedDecision(directive, "scope-mismatch", "directive scope does not match target or changed files");
-	return {
-		directiveId: directive.id,
-		layerId: directive.layer.id,
-		sourcePath: directive.source.path,
-		status: "activated",
-		reason: "matched",
-		note: buildActivationNote(directive, task),
-		effectivePrescription: directive.prescription,
-		effectiveWeight: directive.weight,
-		priority: directive.priority,
-		localState: directive.local
-	};
-}
-function buildSkippedDecision(directive, reason, note) {
-	return {
-		directiveId: directive.id,
-		layerId: directive.layer.id,
-		sourcePath: directive.source.path,
-		status: "skipped",
-		reason,
-		note,
-		effectivePrescription: directive.prescription,
-		effectiveWeight: directive.weight,
-		priority: directive.priority,
-		localState: directive.local
-	};
-}
-function buildActivationNote(directive, task) {
-	const reasons = [`directive matched ${task.workflow}/${task.changeType}/${task.operation} task context`];
-	if (directive.source.kind === "local-playbook") reasons.push("local directive addition applied");
-	if (directive.local.overrideApplied) reasons.push("local override applied");
-	if (directive.local.augmentApplied) reasons.push("local examples augment applied");
-	if (directive.layer.id === "builtin/core") reasons.push("core guidance always eligible");
-	return reasons.join("; ");
-}
-function layerMatchesTask(directive, task) {
-	const sourceLayer = directive.layer.id;
-	if (sourceLayer === "builtin/core" || directive.source.kind === "local-playbook" || sourceLayer.startsWith("local")) return true;
-	if (sourceLayer.startsWith("builtin/task-types/")) return task.changeType !== "unknown" && sourceLayer.endsWith(`/${task.changeType}`);
-	if (sourceLayer.startsWith("builtin/languages/")) return task.techStack.some((tech) => sourceLayer.endsWith(`/${tech}`));
-	if (sourceLayer.startsWith("builtin/frameworks/")) return task.techStack.some((tech) => sourceLayer.endsWith(`/${tech}`));
-	return true;
-}
-function scopeMatchesTask$2(scope, task) {
-	if (task.targets.length === 0) return true;
-	return task.targets.some((target) => minimatch(target.path, scope));
-}
-function sortActivationDecisions(items) {
-	return [...items].sort((a, b) => {
-		if (a.status !== b.status) return a.status === "activated" ? -1 : 1;
-		if (a.priority.prescriptionRank !== b.priority.prescriptionRank) return b.priority.prescriptionRank - a.priority.prescriptionRank;
-		if (a.priority.layerRank !== b.priority.layerRank) return b.priority.layerRank - a.priority.layerRank;
-		if (a.priority.weightRank !== b.priority.weightRank) return b.priority.weightRank - a.priority.weightRank;
-		if (a.priority.localOverrideRank !== b.priority.localOverrideRank) return b.priority.localOverrideRank - a.priority.localOverrideRank;
-		return a.directiveId.localeCompare(b.directiveId);
-	});
-}
-//#endregion
-//#region ../node_modules/yaml/dist/nodes/identity.js
+//#region ../node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/nodes/identity.js
 var require_identity = /* @__PURE__ */ __commonJSMin(((exports) => {
 	const ALIAS = Symbol.for("yaml.alias");
 	const DOC = Symbol.for("yaml.document");
@@ -1504,7 +76,7 @@ var require_identity = /* @__PURE__ */ __commonJSMin(((exports) => {
 	exports.isSeq = isSeq;
 }));
 //#endregion
-//#region ../node_modules/yaml/dist/visit.js
+//#region ../node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/visit.js
 var require_visit = /* @__PURE__ */ __commonJSMin(((exports) => {
 	var identity = require_identity();
 	const BREAK = Symbol("break visit");
@@ -1694,7 +266,7 @@ var require_visit = /* @__PURE__ */ __commonJSMin(((exports) => {
 	exports.visitAsync = visitAsync;
 }));
 //#endregion
-//#region ../node_modules/yaml/dist/doc/directives.js
+//#region ../node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/doc/directives.js
 var require_directives = /* @__PURE__ */ __commonJSMin(((exports) => {
 	var identity = require_identity();
 	var visit = require_visit();
@@ -1859,7 +431,7 @@ var require_directives = /* @__PURE__ */ __commonJSMin(((exports) => {
 	exports.Directives = Directives;
 }));
 //#endregion
-//#region ../node_modules/yaml/dist/doc/anchors.js
+//#region ../node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/doc/anchors.js
 var require_anchors = /* @__PURE__ */ __commonJSMin(((exports) => {
 	var identity = require_identity();
 	var visit = require_visit();
@@ -1921,7 +493,7 @@ var require_anchors = /* @__PURE__ */ __commonJSMin(((exports) => {
 	exports.findNewAnchor = findNewAnchor;
 }));
 //#endregion
-//#region ../node_modules/yaml/dist/doc/applyReviver.js
+//#region ../node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/doc/applyReviver.js
 var require_applyReviver = /* @__PURE__ */ __commonJSMin(((exports) => {
 	/**
 	* Applies the JSON.parse reviver algorithm as defined in the ECMA-262 spec,
@@ -1961,7 +533,7 @@ var require_applyReviver = /* @__PURE__ */ __commonJSMin(((exports) => {
 	exports.applyReviver = applyReviver;
 }));
 //#endregion
-//#region ../node_modules/yaml/dist/nodes/toJS.js
+//#region ../node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/nodes/toJS.js
 var require_toJS = /* @__PURE__ */ __commonJSMin(((exports) => {
 	var identity = require_identity();
 	/**
@@ -1998,7 +570,7 @@ var require_toJS = /* @__PURE__ */ __commonJSMin(((exports) => {
 	exports.toJS = toJS;
 }));
 //#endregion
-//#region ../node_modules/yaml/dist/nodes/Node.js
+//#region ../node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/nodes/Node.js
 var require_Node = /* @__PURE__ */ __commonJSMin(((exports) => {
 	var applyReviver = require_applyReviver();
 	var identity = require_identity();
@@ -2032,7 +604,7 @@ var require_Node = /* @__PURE__ */ __commonJSMin(((exports) => {
 	exports.NodeBase = NodeBase;
 }));
 //#endregion
-//#region ../node_modules/yaml/dist/nodes/Alias.js
+//#region ../node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/nodes/Alias.js
 var require_Alias = /* @__PURE__ */ __commonJSMin(((exports) => {
 	var anchors = require_anchors();
 	var visit = require_visit();
@@ -2126,7 +698,7 @@ var require_Alias = /* @__PURE__ */ __commonJSMin(((exports) => {
 	exports.Alias = Alias;
 }));
 //#endregion
-//#region ../node_modules/yaml/dist/nodes/Scalar.js
+//#region ../node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/nodes/Scalar.js
 var require_Scalar = /* @__PURE__ */ __commonJSMin(((exports) => {
 	var identity = require_identity();
 	var Node = require_Node();
@@ -2153,7 +725,7 @@ var require_Scalar = /* @__PURE__ */ __commonJSMin(((exports) => {
 	exports.isScalarValue = isScalarValue;
 }));
 //#endregion
-//#region ../node_modules/yaml/dist/doc/createNode.js
+//#region ../node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/doc/createNode.js
 var require_createNode = /* @__PURE__ */ __commonJSMin(((exports) => {
 	var Alias = require_Alias();
 	var identity = require_identity();
@@ -2216,7 +788,7 @@ var require_createNode = /* @__PURE__ */ __commonJSMin(((exports) => {
 	exports.createNode = createNode;
 }));
 //#endregion
-//#region ../node_modules/yaml/dist/nodes/Collection.js
+//#region ../node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/nodes/Collection.js
 var require_Collection = /* @__PURE__ */ __commonJSMin(((exports) => {
 	var createNode = require_createNode();
 	var identity = require_identity();
@@ -2337,7 +909,7 @@ var require_Collection = /* @__PURE__ */ __commonJSMin(((exports) => {
 	exports.isEmptyPath = isEmptyPath;
 }));
 //#endregion
-//#region ../node_modules/yaml/dist/stringify/stringifyComment.js
+//#region ../node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/stringify/stringifyComment.js
 var require_stringifyComment = /* @__PURE__ */ __commonJSMin(((exports) => {
 	/**
 	* Stringifies a comment.
@@ -2357,7 +929,7 @@ var require_stringifyComment = /* @__PURE__ */ __commonJSMin(((exports) => {
 	exports.stringifyComment = stringifyComment;
 }));
 //#endregion
-//#region ../node_modules/yaml/dist/stringify/foldFlowLines.js
+//#region ../node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/stringify/foldFlowLines.js
 var require_foldFlowLines = /* @__PURE__ */ __commonJSMin(((exports) => {
 	const FOLD_FLOW = "flow";
 	const FOLD_BLOCK = "block";
@@ -2473,7 +1045,7 @@ var require_foldFlowLines = /* @__PURE__ */ __commonJSMin(((exports) => {
 	exports.foldFlowLines = foldFlowLines;
 }));
 //#endregion
-//#region ../node_modules/yaml/dist/stringify/stringifyString.js
+//#region ../node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/stringify/stringifyString.js
 var require_stringifyString = /* @__PURE__ */ __commonJSMin(((exports) => {
 	var Scalar = require_Scalar();
 	var foldFlowLines = require_foldFlowLines();
@@ -2697,7 +1269,7 @@ var require_stringifyString = /* @__PURE__ */ __commonJSMin(((exports) => {
 	exports.stringifyString = stringifyString;
 }));
 //#endregion
-//#region ../node_modules/yaml/dist/stringify/stringify.js
+//#region ../node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/stringify/stringify.js
 var require_stringify = /* @__PURE__ */ __commonJSMin(((exports) => {
 	var anchors = require_anchors();
 	var identity = require_identity();
@@ -2805,7 +1377,7 @@ var require_stringify = /* @__PURE__ */ __commonJSMin(((exports) => {
 	exports.stringify = stringify;
 }));
 //#endregion
-//#region ../node_modules/yaml/dist/stringify/stringifyPair.js
+//#region ../node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/stringify/stringifyPair.js
 var require_stringifyPair = /* @__PURE__ */ __commonJSMin(((exports) => {
 	var identity = require_identity();
 	var Scalar = require_Scalar();
@@ -2902,7 +1474,7 @@ var require_stringifyPair = /* @__PURE__ */ __commonJSMin(((exports) => {
 	exports.stringifyPair = stringifyPair;
 }));
 //#endregion
-//#region ../node_modules/yaml/dist/log.js
+//#region ../node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/log.js
 var require_log = /* @__PURE__ */ __commonJSMin(((exports) => {
 	var node_process$2 = __require("process");
 	function debug(logLevel, ...messages) {
@@ -2916,7 +1488,7 @@ var require_log = /* @__PURE__ */ __commonJSMin(((exports) => {
 	exports.warn = warn;
 }));
 //#endregion
-//#region ../node_modules/yaml/dist/schema/yaml-1.1/merge.js
+//#region ../node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/schema/yaml-1.1/merge.js
 var require_merge = /* @__PURE__ */ __commonJSMin(((exports) => {
 	var identity = require_identity();
 	var Scalar = require_Scalar();
@@ -2959,7 +1531,7 @@ var require_merge = /* @__PURE__ */ __commonJSMin(((exports) => {
 	exports.merge = merge;
 }));
 //#endregion
-//#region ../node_modules/yaml/dist/nodes/addPairToJSMap.js
+//#region ../node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/nodes/addPairToJSMap.js
 var require_addPairToJSMap = /* @__PURE__ */ __commonJSMin(((exports) => {
 	var log = require_log();
 	var merge = require_merge();
@@ -3010,7 +1582,7 @@ var require_addPairToJSMap = /* @__PURE__ */ __commonJSMin(((exports) => {
 	exports.addPairToJSMap = addPairToJSMap;
 }));
 //#endregion
-//#region ../node_modules/yaml/dist/nodes/Pair.js
+//#region ../node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/nodes/Pair.js
 var require_Pair = /* @__PURE__ */ __commonJSMin(((exports) => {
 	var createNode = require_createNode();
 	var stringifyPair = require_stringifyPair();
@@ -3043,7 +1615,7 @@ var require_Pair = /* @__PURE__ */ __commonJSMin(((exports) => {
 	exports.createPair = createPair;
 }));
 //#endregion
-//#region ../node_modules/yaml/dist/stringify/stringifyCollection.js
+//#region ../node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/stringify/stringifyCollection.js
 var require_stringifyCollection = /* @__PURE__ */ __commonJSMin(((exports) => {
 	var identity = require_identity();
 	var stringify = require_stringify();
@@ -3161,7 +1733,7 @@ var require_stringifyCollection = /* @__PURE__ */ __commonJSMin(((exports) => {
 	exports.stringifyCollection = stringifyCollection;
 }));
 //#endregion
-//#region ../node_modules/yaml/dist/nodes/YAMLMap.js
+//#region ../node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/nodes/YAMLMap.js
 var require_YAMLMap = /* @__PURE__ */ __commonJSMin(((exports) => {
 	var stringifyCollection = require_stringifyCollection();
 	var addPairToJSMap = require_addPairToJSMap();
@@ -3270,7 +1842,7 @@ var require_YAMLMap = /* @__PURE__ */ __commonJSMin(((exports) => {
 	exports.findPair = findPair;
 }));
 //#endregion
-//#region ../node_modules/yaml/dist/schema/common/map.js
+//#region ../node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/schema/common/map.js
 var require_map = /* @__PURE__ */ __commonJSMin(((exports) => {
 	var identity = require_identity();
 	var YAMLMap = require_YAMLMap();
@@ -3287,7 +1859,7 @@ var require_map = /* @__PURE__ */ __commonJSMin(((exports) => {
 	};
 }));
 //#endregion
-//#region ../node_modules/yaml/dist/nodes/YAMLSeq.js
+//#region ../node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/nodes/YAMLSeq.js
 var require_YAMLSeq = /* @__PURE__ */ __commonJSMin(((exports) => {
 	var createNode = require_createNode();
 	var stringifyCollection = require_stringifyCollection();
@@ -3393,7 +1965,7 @@ var require_YAMLSeq = /* @__PURE__ */ __commonJSMin(((exports) => {
 	exports.YAMLSeq = YAMLSeq;
 }));
 //#endregion
-//#region ../node_modules/yaml/dist/schema/common/seq.js
+//#region ../node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/schema/common/seq.js
 var require_seq = /* @__PURE__ */ __commonJSMin(((exports) => {
 	var identity = require_identity();
 	var YAMLSeq = require_YAMLSeq();
@@ -3410,7 +1982,7 @@ var require_seq = /* @__PURE__ */ __commonJSMin(((exports) => {
 	};
 }));
 //#endregion
-//#region ../node_modules/yaml/dist/schema/common/string.js
+//#region ../node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/schema/common/string.js
 var require_string = /* @__PURE__ */ __commonJSMin(((exports) => {
 	var stringifyString = require_stringifyString();
 	exports.string = {
@@ -3425,7 +1997,7 @@ var require_string = /* @__PURE__ */ __commonJSMin(((exports) => {
 	};
 }));
 //#endregion
-//#region ../node_modules/yaml/dist/schema/common/null.js
+//#region ../node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/schema/common/null.js
 var require_null = /* @__PURE__ */ __commonJSMin(((exports) => {
 	var Scalar = require_Scalar();
 	const nullTag = {
@@ -3440,7 +2012,7 @@ var require_null = /* @__PURE__ */ __commonJSMin(((exports) => {
 	exports.nullTag = nullTag;
 }));
 //#endregion
-//#region ../node_modules/yaml/dist/schema/core/bool.js
+//#region ../node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/schema/core/bool.js
 var require_bool$1 = /* @__PURE__ */ __commonJSMin(((exports) => {
 	var Scalar = require_Scalar();
 	const boolTag = {
@@ -3459,7 +2031,7 @@ var require_bool$1 = /* @__PURE__ */ __commonJSMin(((exports) => {
 	exports.boolTag = boolTag;
 }));
 //#endregion
-//#region ../node_modules/yaml/dist/stringify/stringifyNumber.js
+//#region ../node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/stringify/stringifyNumber.js
 var require_stringifyNumber = /* @__PURE__ */ __commonJSMin(((exports) => {
 	function stringifyNumber({ format, minFractionDigits, tag, value }) {
 		if (typeof value === "bigint") return String(value);
@@ -3480,7 +2052,7 @@ var require_stringifyNumber = /* @__PURE__ */ __commonJSMin(((exports) => {
 	exports.stringifyNumber = stringifyNumber;
 }));
 //#endregion
-//#region ../node_modules/yaml/dist/schema/core/float.js
+//#region ../node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/schema/core/float.js
 var require_float$1 = /* @__PURE__ */ __commonJSMin(((exports) => {
 	var Scalar = require_Scalar();
 	var stringifyNumber = require_stringifyNumber();
@@ -3521,7 +2093,7 @@ var require_float$1 = /* @__PURE__ */ __commonJSMin(((exports) => {
 	exports.floatNaN = floatNaN;
 }));
 //#endregion
-//#region ../node_modules/yaml/dist/schema/core/int.js
+//#region ../node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/schema/core/int.js
 var require_int$1 = /* @__PURE__ */ __commonJSMin(((exports) => {
 	var stringifyNumber = require_stringifyNumber();
 	const intIdentify = (value) => typeof value === "bigint" || Number.isInteger(value);
@@ -3562,7 +2134,7 @@ var require_int$1 = /* @__PURE__ */ __commonJSMin(((exports) => {
 	exports.intOct = intOct;
 }));
 //#endregion
-//#region ../node_modules/yaml/dist/schema/core/schema.js
+//#region ../node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/schema/core/schema.js
 var require_schema$2 = /* @__PURE__ */ __commonJSMin(((exports) => {
 	var map = require_map();
 	var _null = require_null();
@@ -3586,7 +2158,7 @@ var require_schema$2 = /* @__PURE__ */ __commonJSMin(((exports) => {
 	];
 }));
 //#endregion
-//#region ../node_modules/yaml/dist/schema/json/schema.js
+//#region ../node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/schema/json/schema.js
 var require_schema$1 = /* @__PURE__ */ __commonJSMin(((exports) => {
 	var Scalar = require_Scalar();
 	var map = require_map();
@@ -3648,7 +2220,7 @@ var require_schema$1 = /* @__PURE__ */ __commonJSMin(((exports) => {
 	});
 }));
 //#endregion
-//#region ../node_modules/yaml/dist/schema/yaml-1.1/binary.js
+//#region ../node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/schema/yaml-1.1/binary.js
 var require_binary = /* @__PURE__ */ __commonJSMin(((exports) => {
 	var node_buffer = __require("buffer");
 	var Scalar = require_Scalar();
@@ -3696,7 +2268,7 @@ var require_binary = /* @__PURE__ */ __commonJSMin(((exports) => {
 	};
 }));
 //#endregion
-//#region ../node_modules/yaml/dist/schema/yaml-1.1/pairs.js
+//#region ../node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/schema/yaml-1.1/pairs.js
 var require_pairs = /* @__PURE__ */ __commonJSMin(((exports) => {
 	var identity = require_identity();
 	var Pair = require_Pair();
@@ -3756,7 +2328,7 @@ var require_pairs = /* @__PURE__ */ __commonJSMin(((exports) => {
 	exports.resolvePairs = resolvePairs;
 }));
 //#endregion
-//#region ../node_modules/yaml/dist/schema/yaml-1.1/omap.js
+//#region ../node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/schema/yaml-1.1/omap.js
 var require_omap = /* @__PURE__ */ __commonJSMin(((exports) => {
 	var identity = require_identity();
 	var toJS = require_toJS();
@@ -3819,7 +2391,7 @@ var require_omap = /* @__PURE__ */ __commonJSMin(((exports) => {
 	exports.omap = omap;
 }));
 //#endregion
-//#region ../node_modules/yaml/dist/schema/yaml-1.1/bool.js
+//#region ../node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/schema/yaml-1.1/bool.js
 var require_bool = /* @__PURE__ */ __commonJSMin(((exports) => {
 	var Scalar = require_Scalar();
 	function boolStringify({ value, source }, ctx) {
@@ -3846,7 +2418,7 @@ var require_bool = /* @__PURE__ */ __commonJSMin(((exports) => {
 	exports.trueTag = trueTag;
 }));
 //#endregion
-//#region ../node_modules/yaml/dist/schema/yaml-1.1/float.js
+//#region ../node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/schema/yaml-1.1/float.js
 var require_float = /* @__PURE__ */ __commonJSMin(((exports) => {
 	var Scalar = require_Scalar();
 	var stringifyNumber = require_stringifyNumber();
@@ -3890,7 +2462,7 @@ var require_float = /* @__PURE__ */ __commonJSMin(((exports) => {
 	exports.floatNaN = floatNaN;
 }));
 //#endregion
-//#region ../node_modules/yaml/dist/schema/yaml-1.1/int.js
+//#region ../node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/schema/yaml-1.1/int.js
 var require_int = /* @__PURE__ */ __commonJSMin(((exports) => {
 	var stringifyNumber = require_stringifyNumber();
 	const intIdentify = (value) => typeof value === "bigint" || Number.isInteger(value);
@@ -3965,7 +2537,7 @@ var require_int = /* @__PURE__ */ __commonJSMin(((exports) => {
 	exports.intOct = intOct;
 }));
 //#endregion
-//#region ../node_modules/yaml/dist/schema/yaml-1.1/set.js
+//#region ../node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/schema/yaml-1.1/set.js
 var require_set = /* @__PURE__ */ __commonJSMin(((exports) => {
 	var identity = require_identity();
 	var Pair = require_Pair();
@@ -4033,7 +2605,7 @@ var require_set = /* @__PURE__ */ __commonJSMin(((exports) => {
 	exports.set = set;
 }));
 //#endregion
-//#region ../node_modules/yaml/dist/schema/yaml-1.1/timestamp.js
+//#region ../node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/schema/yaml-1.1/timestamp.js
 var require_timestamp = /* @__PURE__ */ __commonJSMin(((exports) => {
 	var stringifyNumber = require_stringifyNumber();
 	/** Internal types handle bigint as number, because TS can't figure it out. */
@@ -4116,7 +2688,7 @@ var require_timestamp = /* @__PURE__ */ __commonJSMin(((exports) => {
 	exports.timestamp = timestamp;
 }));
 //#endregion
-//#region ../node_modules/yaml/dist/schema/yaml-1.1/schema.js
+//#region ../node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/schema/yaml-1.1/schema.js
 var require_schema = /* @__PURE__ */ __commonJSMin(((exports) => {
 	var map = require_map();
 	var _null = require_null();
@@ -4156,7 +2728,7 @@ var require_schema = /* @__PURE__ */ __commonJSMin(((exports) => {
 	];
 }));
 //#endregion
-//#region ../node_modules/yaml/dist/schema/tags.js
+//#region ../node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/schema/tags.js
 var require_tags = /* @__PURE__ */ __commonJSMin(((exports) => {
 	var map = require_map();
 	var _null = require_null();
@@ -4240,7 +2812,7 @@ var require_tags = /* @__PURE__ */ __commonJSMin(((exports) => {
 	exports.getTags = getTags;
 }));
 //#endregion
-//#region ../node_modules/yaml/dist/schema/Schema.js
+//#region ../node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/schema/Schema.js
 var require_Schema = /* @__PURE__ */ __commonJSMin(((exports) => {
 	var identity = require_identity();
 	var map = require_map();
@@ -4268,7 +2840,7 @@ var require_Schema = /* @__PURE__ */ __commonJSMin(((exports) => {
 	};
 }));
 //#endregion
-//#region ../node_modules/yaml/dist/stringify/stringifyDocument.js
+//#region ../node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/stringify/stringifyDocument.js
 var require_stringifyDocument = /* @__PURE__ */ __commonJSMin(((exports) => {
 	var identity = require_identity();
 	var stringify = require_stringify();
@@ -4329,7 +2901,7 @@ var require_stringifyDocument = /* @__PURE__ */ __commonJSMin(((exports) => {
 	exports.stringifyDocument = stringifyDocument;
 }));
 //#endregion
-//#region ../node_modules/yaml/dist/doc/Document.js
+//#region ../node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/doc/Document.js
 var require_Document = /* @__PURE__ */ __commonJSMin(((exports) => {
 	var Alias = require_Alias();
 	var Collection = require_Collection();
@@ -4610,7 +3182,7 @@ var require_Document = /* @__PURE__ */ __commonJSMin(((exports) => {
 	exports.Document = Document;
 }));
 //#endregion
-//#region ../node_modules/yaml/dist/errors.js
+//#region ../node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/errors.js
 var require_errors = /* @__PURE__ */ __commonJSMin(((exports) => {
 	var YAMLError = class extends Error {
 		constructor(name, pos, code, message) {
@@ -4663,7 +3235,7 @@ var require_errors = /* @__PURE__ */ __commonJSMin(((exports) => {
 	exports.prettifyError = prettifyError;
 }));
 //#endregion
-//#region ../node_modules/yaml/dist/compose/resolve-props.js
+//#region ../node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/compose/resolve-props.js
 var require_resolve_props = /* @__PURE__ */ __commonJSMin(((exports) => {
 	function resolveProps(tokens, { flow, indicator, next, offset, onError, parentIndent, startOnNewline }) {
 		let spaceBefore = false;
@@ -4770,7 +3342,7 @@ var require_resolve_props = /* @__PURE__ */ __commonJSMin(((exports) => {
 	exports.resolveProps = resolveProps;
 }));
 //#endregion
-//#region ../node_modules/yaml/dist/compose/util-contains-newline.js
+//#region ../node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/compose/util-contains-newline.js
 var require_util_contains_newline = /* @__PURE__ */ __commonJSMin(((exports) => {
 	function containsNewline(key) {
 		if (!key) return null;
@@ -4799,7 +3371,7 @@ var require_util_contains_newline = /* @__PURE__ */ __commonJSMin(((exports) => 
 	exports.containsNewline = containsNewline;
 }));
 //#endregion
-//#region ../node_modules/yaml/dist/compose/util-flow-indent-check.js
+//#region ../node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/compose/util-flow-indent-check.js
 var require_util_flow_indent_check = /* @__PURE__ */ __commonJSMin(((exports) => {
 	var utilContainsNewline = require_util_contains_newline();
 	function flowIndentCheck(indent, fc, onError) {
@@ -4811,7 +3383,7 @@ var require_util_flow_indent_check = /* @__PURE__ */ __commonJSMin(((exports) =>
 	exports.flowIndentCheck = flowIndentCheck;
 }));
 //#endregion
-//#region ../node_modules/yaml/dist/compose/util-map-includes.js
+//#region ../node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/compose/util-map-includes.js
 var require_util_map_includes = /* @__PURE__ */ __commonJSMin(((exports) => {
 	var identity = require_identity();
 	function mapIncludes(ctx, items, search) {
@@ -4823,7 +3395,7 @@ var require_util_map_includes = /* @__PURE__ */ __commonJSMin(((exports) => {
 	exports.mapIncludes = mapIncludes;
 }));
 //#endregion
-//#region ../node_modules/yaml/dist/compose/resolve-block-map.js
+//#region ../node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/compose/resolve-block-map.js
 var require_resolve_block_map = /* @__PURE__ */ __commonJSMin(((exports) => {
 	var Pair = require_Pair();
 	var YAMLMap = require_YAMLMap();
@@ -4907,7 +3479,7 @@ var require_resolve_block_map = /* @__PURE__ */ __commonJSMin(((exports) => {
 	exports.resolveBlockMap = resolveBlockMap;
 }));
 //#endregion
-//#region ../node_modules/yaml/dist/compose/resolve-block-seq.js
+//#region ../node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/compose/resolve-block-seq.js
 var require_resolve_block_seq = /* @__PURE__ */ __commonJSMin(((exports) => {
 	var YAMLSeq = require_YAMLSeq();
 	var resolveProps = require_resolve_props();
@@ -4949,7 +3521,7 @@ var require_resolve_block_seq = /* @__PURE__ */ __commonJSMin(((exports) => {
 	exports.resolveBlockSeq = resolveBlockSeq;
 }));
 //#endregion
-//#region ../node_modules/yaml/dist/compose/resolve-end.js
+//#region ../node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/compose/resolve-end.js
 var require_resolve_end = /* @__PURE__ */ __commonJSMin(((exports) => {
 	function resolveEnd(end, offset, reqSpace, onError) {
 		let comment = "";
@@ -4987,7 +3559,7 @@ var require_resolve_end = /* @__PURE__ */ __commonJSMin(((exports) => {
 	exports.resolveEnd = resolveEnd;
 }));
 //#endregion
-//#region ../node_modules/yaml/dist/compose/resolve-flow-collection.js
+//#region ../node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/compose/resolve-flow-collection.js
 var require_resolve_flow_collection = /* @__PURE__ */ __commonJSMin(((exports) => {
 	var identity = require_identity();
 	var Pair = require_Pair();
@@ -5142,7 +3714,7 @@ var require_resolve_flow_collection = /* @__PURE__ */ __commonJSMin(((exports) =
 	exports.resolveFlowCollection = resolveFlowCollection;
 }));
 //#endregion
-//#region ../node_modules/yaml/dist/compose/compose-collection.js
+//#region ../node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/compose/compose-collection.js
 var require_compose_collection = /* @__PURE__ */ __commonJSMin(((exports) => {
 	var identity = require_identity();
 	var Scalar = require_Scalar();
@@ -5194,7 +3766,7 @@ var require_compose_collection = /* @__PURE__ */ __commonJSMin(((exports) => {
 	exports.composeCollection = composeCollection;
 }));
 //#endregion
-//#region ../node_modules/yaml/dist/compose/resolve-block-scalar.js
+//#region ../node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/compose/resolve-block-scalar.js
 var require_resolve_block_scalar = /* @__PURE__ */ __commonJSMin(((exports) => {
 	var Scalar = require_Scalar();
 	function resolveBlockScalar(ctx, scalar, onError) {
@@ -5370,7 +3942,7 @@ var require_resolve_block_scalar = /* @__PURE__ */ __commonJSMin(((exports) => {
 	exports.resolveBlockScalar = resolveBlockScalar;
 }));
 //#endregion
-//#region ../node_modules/yaml/dist/compose/resolve-flow-scalar.js
+//#region ../node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/compose/resolve-flow-scalar.js
 var require_resolve_flow_scalar = /* @__PURE__ */ __commonJSMin(((exports) => {
 	var Scalar = require_Scalar();
 	var resolveEnd = require_resolve_end();
@@ -5575,7 +4147,7 @@ var require_resolve_flow_scalar = /* @__PURE__ */ __commonJSMin(((exports) => {
 	exports.resolveFlowScalar = resolveFlowScalar;
 }));
 //#endregion
-//#region ../node_modules/yaml/dist/compose/compose-scalar.js
+//#region ../node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/compose/compose-scalar.js
 var require_compose_scalar = /* @__PURE__ */ __commonJSMin(((exports) => {
 	var identity = require_identity();
 	var Scalar = require_Scalar();
@@ -5634,7 +4206,7 @@ var require_compose_scalar = /* @__PURE__ */ __commonJSMin(((exports) => {
 	exports.composeScalar = composeScalar;
 }));
 //#endregion
-//#region ../node_modules/yaml/dist/compose/util-empty-scalar-position.js
+//#region ../node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/compose/util-empty-scalar-position.js
 var require_util_empty_scalar_position = /* @__PURE__ */ __commonJSMin(((exports) => {
 	function emptyScalarPosition(offset, before, pos) {
 		if (before) {
@@ -5661,7 +4233,7 @@ var require_util_empty_scalar_position = /* @__PURE__ */ __commonJSMin(((exports
 	exports.emptyScalarPosition = emptyScalarPosition;
 }));
 //#endregion
-//#region ../node_modules/yaml/dist/compose/compose-node.js
+//#region ../node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/compose/compose-node.js
 var require_compose_node = /* @__PURE__ */ __commonJSMin(((exports) => {
 	var Alias = require_Alias();
 	var identity = require_identity();
@@ -5750,7 +4322,7 @@ var require_compose_node = /* @__PURE__ */ __commonJSMin(((exports) => {
 	exports.composeNode = composeNode;
 }));
 //#endregion
-//#region ../node_modules/yaml/dist/compose/compose-doc.js
+//#region ../node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/compose/compose-doc.js
 var require_compose_doc = /* @__PURE__ */ __commonJSMin(((exports) => {
 	var Document = require_Document();
 	var composeNode = require_compose_node();
@@ -5792,7 +4364,7 @@ var require_compose_doc = /* @__PURE__ */ __commonJSMin(((exports) => {
 	exports.composeDoc = composeDoc;
 }));
 //#endregion
-//#region ../node_modules/yaml/dist/compose/composer.js
+//#region ../node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/compose/composer.js
 var require_composer = /* @__PURE__ */ __commonJSMin(((exports) => {
 	var node_process$1 = __require("process");
 	var directives = require_directives();
@@ -5990,7 +4562,7 @@ var require_composer = /* @__PURE__ */ __commonJSMin(((exports) => {
 	exports.Composer = Composer;
 }));
 //#endregion
-//#region ../node_modules/yaml/dist/parse/cst-scalar.js
+//#region ../node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/parse/cst-scalar.js
 var require_cst_scalar = /* @__PURE__ */ __commonJSMin(((exports) => {
 	var resolveBlockScalar = require_resolve_block_scalar();
 	var resolveFlowScalar = require_resolve_flow_scalar();
@@ -6257,7 +4829,7 @@ var require_cst_scalar = /* @__PURE__ */ __commonJSMin(((exports) => {
 	exports.setScalarValue = setScalarValue;
 }));
 //#endregion
-//#region ../node_modules/yaml/dist/parse/cst-stringify.js
+//#region ../node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/parse/cst-stringify.js
 var require_cst_stringify = /* @__PURE__ */ __commonJSMin(((exports) => {
 	/**
 	* Stringify a CST document, token, or collection item
@@ -6308,7 +4880,7 @@ var require_cst_stringify = /* @__PURE__ */ __commonJSMin(((exports) => {
 	exports.stringify = stringify;
 }));
 //#endregion
-//#region ../node_modules/yaml/dist/parse/cst-visit.js
+//#region ../node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/parse/cst-visit.js
 var require_cst_visit = /* @__PURE__ */ __commonJSMin(((exports) => {
 	const BREAK = Symbol("break visit");
 	const SKIP = Symbol("skip children");
@@ -6399,7 +4971,7 @@ var require_cst_visit = /* @__PURE__ */ __commonJSMin(((exports) => {
 	exports.visit = visit;
 }));
 //#endregion
-//#region ../node_modules/yaml/dist/parse/cst.js
+//#region ../node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/parse/cst.js
 var require_cst = /* @__PURE__ */ __commonJSMin(((exports) => {
 	var cstScalar = require_cst_scalar();
 	var cstStringify = require_cst_stringify();
@@ -6478,7 +5050,7 @@ var require_cst = /* @__PURE__ */ __commonJSMin(((exports) => {
 	exports.tokenType = tokenType;
 }));
 //#endregion
-//#region ../node_modules/yaml/dist/parse/lexer.js
+//#region ../node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/parse/lexer.js
 var require_lexer = /* @__PURE__ */ __commonJSMin(((exports) => {
 	var cst = require_cst();
 	function isEmpty(ch) {
@@ -7009,7 +5581,7 @@ var require_lexer = /* @__PURE__ */ __commonJSMin(((exports) => {
 	exports.Lexer = Lexer;
 }));
 //#endregion
-//#region ../node_modules/yaml/dist/parse/line-counter.js
+//#region ../node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/parse/line-counter.js
 var require_line_counter = /* @__PURE__ */ __commonJSMin(((exports) => {
 	/**
 	* Tracks newlines during parsing in order to provide an efficient API for
@@ -7056,7 +5628,7 @@ var require_line_counter = /* @__PURE__ */ __commonJSMin(((exports) => {
 	exports.LineCounter = LineCounter;
 }));
 //#endregion
-//#region ../node_modules/yaml/dist/parse/parser.js
+//#region ../node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/parse/parser.js
 var require_parser = /* @__PURE__ */ __commonJSMin(((exports) => {
 	var node_process = __require("process");
 	var cst = require_cst();
@@ -7919,7 +6491,7 @@ var require_parser = /* @__PURE__ */ __commonJSMin(((exports) => {
 	exports.Parser = Parser;
 }));
 //#endregion
-//#region ../node_modules/yaml/dist/public-api.js
+//#region ../node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/public-api.js
 var require_public_api = /* @__PURE__ */ __commonJSMin(((exports) => {
 	var composer = require_composer();
 	var Document = require_Document();
@@ -8006,7 +6578,7 @@ var require_public_api = /* @__PURE__ */ __commonJSMin(((exports) => {
 	exports.stringify = stringify;
 }));
 //#endregion
-//#region src/utils/yaml.ts
+//#region ../rccl/dist/evidence.mjs
 var import_dist = /* @__PURE__ */ __toESM((/* @__PURE__ */ __commonJSMin(((exports) => {
 	var composer = require_composer();
 	var Document = require_Document();
@@ -8056,8 +6628,272 @@ var import_dist = /* @__PURE__ */ __toESM((/* @__PURE__ */ __commonJSMin(((expor
 function parseYaml$1(text) {
 	return import_dist.parse(text);
 }
-function toYaml(value) {
-	return import_dist.stringify(value, { lineWidth: 0 });
+const RCCL_CATEGORIES = [
+	"architecture",
+	"constraint",
+	"compatibility",
+	"legacy",
+	"anti-pattern",
+	"migration",
+	"convention"
+];
+const DECISION_DIMENSIONS = [
+	"compatibility",
+	"api-shape",
+	"architecture-boundary",
+	"data-flow",
+	"migration",
+	"testing",
+	"error-handling",
+	"module-format",
+	"review-focus"
+];
+const OBSERVATION_ID = /^obs-[a-z0-9]+(?:-[a-z0-9]+)*$/;
+function parseRcclDocument(text) {
+	const parsed = parseText(text);
+	if (!parsed.value) return {
+		valid: false,
+		diagnostics: parsed.diagnostics
+	};
+	const diagnostics = validateDocument(parsed.value);
+	if (diagnostics.length) return {
+		valid: false,
+		diagnostics
+	};
+	return {
+		valid: true,
+		data: normalizeDocument(parsed.value),
+		diagnostics: []
+	};
+}
+function validateDocument(value) {
+	if (!isRecord$1(value)) return [diagnostic("", "MALFORMED_DOCUMENT", "RCCL must be an object.")];
+	const diagnostics = [];
+	if (value.version !== "1.0") diagnostics.push(diagnostic("version", "UNSUPPORTED_SCHEMA_VERSION", `Expected RCCL 1.0.`));
+	if (!Array.isArray(value.observations)) diagnostics.push(diagnostic("observations", "INVALID_OBSERVATIONS", "observations must be an array."));
+	const ids = /* @__PURE__ */ new Set();
+	for (const [index, item] of (Array.isArray(value.observations) ? value.observations : []).entries()) {
+		diagnostics.push(...validateFinalObservation(item, index));
+		if (isRecord$1(item) && typeof item.id === "string") {
+			if (ids.has(item.id)) diagnostics.push(diagnostic(`observations[${index}].id`, "DUPLICATE_ID", `Duplicate observation id ${item.id}.`));
+			ids.add(item.id);
+		}
+	}
+	return diagnostics;
+}
+function validateFinalObservation(value, index) {
+	if (!isRecord$1(value)) return [diagnostic(`observations[${index}]`, "MALFORMED_OBSERVATION", "Observation must be an object.")];
+	const prefix = `observations[${index}]`;
+	const diagnostics = validateObservationCore(value, prefix);
+	if (!isRecord$1(value.evidenceVerification)) diagnostics.push(diagnostic(`${prefix}.evidenceVerification`, "MISSING_EVIDENCE_STATUS", "evidenceVerification is required."));
+	else {
+		const verification = value.evidenceVerification;
+		if (![
+			"current",
+			"partial",
+			"stale",
+			"broken"
+		].includes(String(verification.status))) diagnostics.push(diagnostic(`${prefix}.evidenceVerification.status`, "INVALID_EVIDENCE_STATUS", "Invalid evidence status."));
+		if (!Number.isInteger(verification.verifiedCount) || Number(verification.verifiedCount) < 0) diagnostics.push(diagnostic(`${prefix}.evidenceVerification.verifiedCount`, "INVALID_COUNT", "verifiedCount must be a non-negative integer."));
+		if (!Number.isInteger(verification.totalCount) || Number(verification.totalCount) < 0) diagnostics.push(diagnostic(`${prefix}.evidenceVerification.totalCount`, "INVALID_COUNT", "totalCount must be a non-negative integer."));
+		if (!nonEmpty(verification.checkedAt)) diagnostics.push(diagnostic(`${prefix}.evidenceVerification.checkedAt`, "MISSING_CHECKED_AT", "checkedAt is required."));
+	}
+	if (!isRecord$1(value.lifecycle)) diagnostics.push(diagnostic(`${prefix}.lifecycle`, "MISSING_LIFECYCLE", "lifecycle is required."));
+	else {
+		if (![
+			"active",
+			"stale",
+			"superseded"
+		].includes(String(value.lifecycle.status))) diagnostics.push(diagnostic(`${prefix}.lifecycle.status`, "INVALID_LIFECYCLE", "Invalid lifecycle status."));
+		if (!nonEmpty(value.lifecycle.contentFingerprint)) diagnostics.push(diagnostic(`${prefix}.lifecycle.contentFingerprint`, "MISSING_FINGERPRINT", "contentFingerprint is required."));
+	}
+	return diagnostics;
+}
+function validateObservationCore(value, prefix) {
+	const diagnostics = [];
+	if ("traits" in value) diagnostics.push(diagnostic(`${prefix}.traits`, "UNSUPPORTED_FIELD", "RCCL uses category and affects directly; traits are not supported."));
+	if (typeof value.id !== "string" || !OBSERVATION_ID.test(value.id)) diagnostics.push(diagnostic(`${prefix}.id`, "INVALID_ID", "id must match obs-<kebab-case>."));
+	if (!RCCL_CATEGORIES.includes(value.category)) diagnostics.push(diagnostic(`${prefix}.category`, "INVALID_CATEGORY", `category must be one of ${RCCL_CATEGORIES.join(", ")}.`));
+	if (!nonEmpty(value.scope)) diagnostics.push(diagnostic(`${prefix}.scope`, "INVALID_SCOPE", "scope is required."));
+	if (!nonEmpty(value.statement)) diagnostics.push(diagnostic(`${prefix}.statement`, "INVALID_STATEMENT", "statement is required."));
+	if (!nonEmpty(value.decisionImpact)) diagnostics.push(diagnostic(`${prefix}.decisionImpact`, "MISSING_DECISION_IMPACT", "Explain how removing this observation could worsen a code decision."));
+	if (![
+		"low",
+		"medium",
+		"high"
+	].includes(String(value.semanticConfidence))) diagnostics.push(diagnostic(`${prefix}.semanticConfidence`, "INVALID_SEMANTIC_CONFIDENCE", "semanticConfidence must be low, medium, or high."));
+	if (value.reviewStatus !== void 0 && !["generated", "reviewed"].includes(String(value.reviewStatus))) diagnostics.push(diagnostic(`${prefix}.reviewStatus`, "INVALID_REVIEW_STATUS", "reviewStatus must be generated or reviewed."));
+	if (!Array.isArray(value.affects) || value.affects.length === 0) diagnostics.push(diagnostic(`${prefix}.affects`, "MISSING_DECISION_DIMENSION", "affects must contain at least one decision dimension."));
+	else value.affects.forEach((dimension, index) => {
+		if (!DECISION_DIMENSIONS.includes(dimension)) diagnostics.push(diagnostic(`${prefix}.affects[${index}]`, "INVALID_DECISION_DIMENSION", `Unknown decision dimension ${String(dimension)}.`));
+	});
+	if (!Array.isArray(value.evidence) || value.evidence.length === 0) diagnostics.push(diagnostic(`${prefix}.evidence`, "MISSING_EVIDENCE", "evidence must be non-empty."));
+	else value.evidence.forEach((evidence, index) => diagnostics.push(...validateEvidence(evidence, `${prefix}.evidence[${index}]`)));
+	return diagnostics;
+}
+function validateEvidence(value, prefix) {
+	if (!isRecord$1(value)) return [diagnostic(prefix, "MALFORMED_EVIDENCE", "Evidence must be an object.")];
+	const diagnostics = [];
+	if (!nonEmpty(value.file)) diagnostics.push(diagnostic(`${prefix}.file`, "INVALID_FILE", "file is required."));
+	if (!Array.isArray(value.lineRange) || value.lineRange.length !== 2 || !value.lineRange.every(Number.isInteger)) diagnostics.push(diagnostic(`${prefix}.lineRange`, "INVALID_LINE_RANGE", "lineRange must be [start, end]."));
+	if (!nonEmpty(value.snippet)) diagnostics.push(diagnostic(`${prefix}.snippet`, "INVALID_SNIPPET", "snippet is required."));
+	return diagnostics;
+}
+function normalizeDocument(value) {
+	return {
+		version: "1.0",
+		generatedAt: typeof value.generatedAt === "string" ? value.generatedAt : "",
+		gitRef: typeof value.gitRef === "string" ? value.gitRef : null,
+		observations: value.observations.map((item) => normalizeFinalObservation(item))
+	};
+}
+function normalizeFinalObservation(value) {
+	const proposal = normalizeProposalObservation(value);
+	const verification = value.evidenceVerification;
+	const lifecycle = value.lifecycle;
+	return {
+		...proposal,
+		reviewStatus: proposal.reviewStatus ?? "generated",
+		evidenceVerification: {
+			status: verification.status,
+			verifiedCount: Number(verification.verifiedCount),
+			totalCount: Number(verification.totalCount),
+			checkedAt: String(verification.checkedAt)
+		},
+		lifecycle: {
+			status: lifecycle.status,
+			contentFingerprint: String(lifecycle.contentFingerprint),
+			firstSeenGitRef: typeof lifecycle.firstSeenGitRef === "string" ? lifecycle.firstSeenGitRef : null,
+			lastSeenGitRef: typeof lifecycle.lastSeenGitRef === "string" ? lifecycle.lastSeenGitRef : null,
+			lastVerifiedAt: String(lifecycle.lastVerifiedAt ?? verification.checkedAt),
+			...typeof lifecycle.supersededBy === "string" ? { supersededBy: lifecycle.supersededBy } : {}
+		}
+	};
+}
+function normalizeProposalObservation(value) {
+	const item = value;
+	return {
+		id: String(item.id),
+		category: item.category,
+		scope: String(item.scope).replace(/\\/g, "/"),
+		statement: String(item.statement).trim(),
+		affects: [...new Set(item.affects.map(String))].sort(),
+		decisionImpact: String(item.decisionImpact).trim(),
+		semanticConfidence: item.semanticConfidence,
+		reviewStatus: item.reviewStatus ?? "generated",
+		evidence: item.evidence.map(normalizeEvidence)
+	};
+}
+function normalizeEvidence(value) {
+	const item = value;
+	return {
+		file: String(item.file).replace(/\\/g, "/"),
+		lineRange: [Number(item.lineRange[0]), Number(item.lineRange[1])],
+		snippet: String(item.snippet)
+	};
+}
+function parseText(text) {
+	try {
+		return {
+			value: parseYaml$1(text.trim().replace(/^```(?:ya?ml|json)?\s*/i, "").replace(/```\s*$/, "")),
+			diagnostics: []
+		};
+	} catch (error) {
+		return { diagnostics: [diagnostic("", "PARSE_ERROR", error instanceof Error ? error.message : String(error))] };
+	}
+}
+function diagnostic(path, code, message) {
+	return {
+		path,
+		code,
+		message
+	};
+}
+function nonEmpty(value) {
+	return typeof value === "string" && Boolean(value.trim());
+}
+function isRecord$1(value) {
+	return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+function verifyEvidence(evidence, projectRoot) {
+	if (!safeRelativeEvidencePath(evidence.file)) return { status: "path-outside-project" };
+	const root = realpathSync(resolve(projectRoot));
+	const fullPath = resolve(root, evidence.file);
+	if (!existsSync(fullPath)) return { status: "file-not-found" };
+	let realFile;
+	try {
+		realFile = realpathSync(fullPath);
+	} catch {
+		return { status: "file-not-found" };
+	}
+	const rel = relative(root, realFile);
+	if (!rel || rel === ".." || rel.startsWith(`..${process.platform === "win32" ? "\\" : "/"}`) || isAbsolute(rel)) return { status: "path-outside-project" };
+	const lines = readFileSync(realFile, "utf8").replace(/\r\n/g, "\n").split("\n");
+	const [start, end] = evidence.lineRange;
+	if (start < 1 || end < start || end > lines.length) return { status: "range-out-of-bounds" };
+	return tokenOverlapSimilarity(lines.slice(start - 1, end).join("\n"), evidence.snippet) >= .75 ? { status: "match" } : { status: "mismatch" };
+}
+function safeRelativeEvidencePath(file) {
+	if (!file || isAbsolute(file) || win32.isAbsolute(file)) return false;
+	const normalized = file.replace(/\\/g, "/");
+	return !normalized.split("/").some((segment) => segment === "..") && !normalized.startsWith("/");
+}
+function tokenOverlapSimilarity(left, right) {
+	const leftTokens = tokenize(left);
+	const rightTokens = tokenize(right);
+	if (!leftTokens.length || !rightTokens.length) return 0;
+	const counts = /* @__PURE__ */ new Map();
+	for (const token of leftTokens) counts.set(token, (counts.get(token) ?? 0) + 1);
+	let overlap = 0;
+	for (const token of rightTokens) {
+		const count = counts.get(token) ?? 0;
+		if (count > 0) {
+			overlap += 1;
+			counts.set(token, count - 1);
+		}
+	}
+	return overlap / Math.max(leftTokens.length, rightTokens.length);
+}
+function tokenize(text) {
+	return text.replace(/\r\n/g, "\n").replace(/['"`]/g, "\"").replace(/\s+/g, " ").trim().match(/[A-Za-z_][A-Za-z0-9_]*|\d+|==|!=|<=|>=|=>|&&|\|\||[()[\]{}.,;:+\-*/%<>!=?]/g) ?? [];
+}
+//#endregion
+//#region ../rccl/dist/runtime.mjs
+/** Narrow integration surface consumed by the Runtime hard kernel. */
+function parseRccl(text) {
+	const parsed = parseRcclDocument(text);
+	if (!parsed.valid || !parsed.data) return {
+		valid: false,
+		errors: parsed.diagnostics.map((diagnostic) => `${diagnostic.path || "document"}: ${diagnostic.code}: ${diagnostic.message}`)
+	};
+	return {
+		valid: true,
+		data: parsed.data
+	};
+}
+function verifyObservationEvidence(observation, projectRoot, checkedAt) {
+	const verifiedCount = observation.evidence.map((evidence) => verifyEvidence(evidence, projectRoot)).filter((result) => result.status === "match").length;
+	const priorCurrent = observation.evidenceVerification.status === "current" || observation.evidenceVerification.status === "partial";
+	const status = verifiedCount === observation.evidence.length ? "current" : verifiedCount > 0 ? "partial" : priorCurrent ? "stale" : "broken";
+	return {
+		...observation,
+		evidenceVerification: {
+			status,
+			verifiedCount,
+			totalCount: observation.evidence.length,
+			checkedAt
+		},
+		lifecycle: {
+			...observation.lifecycle,
+			status: observation.lifecycle.status === "superseded" ? "superseded" : status === "stale" || status === "broken" ? "stale" : "active",
+			lastVerifiedAt: checkedAt
+		}
+	};
+}
+//#endregion
+//#region src/utils/yaml.ts
+function parseYaml(text) {
+	return import_dist.parse(text);
 }
 //#endregion
 //#region src/load/load-playbook.ts
@@ -8112,7 +6948,7 @@ function resolveExtendedLayers(extendsEntries, layers) {
 * Loads directives for one built-in layer file.
 */
 function loadDirectiveFile(filePath, layerId) {
-	const parsed = parseYaml$1(readFileSync(filePath, "utf-8"));
+	const parsed = parseYaml(readFileSync(filePath, "utf-8"));
 	if (!Array.isArray(parsed)) throw new Error(`Directive file must contain a top-level array: ${filePath}`);
 	return parsed.map((item, index) => normalizeDirective(assertRecord(item, `${filePath}[${index}]`), layerId, filePath, "builtin"));
 }
@@ -8121,8 +6957,8 @@ function loadDirectiveFile(filePath, layerId) {
 */
 function loadLocalPlaybook(filePath) {
 	if (!filePath || !existsSync(filePath)) return null;
-	const parsed = assertRecord(parseYaml$1(readFileSync(filePath, "utf-8")), filePath);
-	if (parsed.version !== 1 && parsed.version !== "1.0") throw new Error(`UNSUPPORTED_SCHEMA_VERSION: ${filePath} must use local playbook schema 1. Re-run init; existing data was not modified.`);
+	const parsed = assertRecord(parseYaml(readFileSync(filePath, "utf-8")), filePath);
+	if (parsed.version !== 1 && parsed.version !== "1.0") throw new Error(`UNSUPPORTED_SCHEMA_VERSION: ${filePath} does not match the current local Playbook schema. Re-run init; existing data was not modified.`);
 	const meta = parsed.meta ?? {};
 	return {
 		version: "1.0",
@@ -8139,15 +6975,17 @@ function loadLocalPlaybook(filePath) {
 function normalizeDirective(input, layerId, filePath, kind) {
 	rejectConditionalBranching(input, filePath);
 	const id = nonEmptyString(input.id, "id", filePath);
-	const type = enumValue(input.type, [
+	const type = enumValue$1(input.type, [
 		"constraint",
 		"preference",
 		"convention",
 		"architecture",
 		"anti-pattern"
 	], "type", filePath);
-	const prescription = enumValue(input.prescription, ["must", "should"], "prescription", filePath);
-	const weight = enumValue(input.weight ?? "normal", [
+	const layer = nonEmptyString(input.layer, "layer", filePath);
+	validateDeclaredLayer(layer, layerId, kind, filePath);
+	const prescription = enumValue$1(input.prescription, ["must", "should"], "prescription", filePath);
+	const weight = enumValue$1(input.weight ?? "normal", [
 		"low",
 		"normal",
 		"high",
@@ -8159,8 +6997,8 @@ function normalizeDirective(input, layerId, filePath, kind) {
 	return {
 		id,
 		type,
-		layer: typeof input.layer === "string" ? input.layer : layerId,
-		scope: normalizeScope$1(input.scope),
+		layer,
+		scope: normalizeScope(input.scope),
 		prescription,
 		weight,
 		description,
@@ -8168,7 +7006,7 @@ function normalizeDirective(input, layerId, filePath, kind) {
 		exceptions: Array.isArray(input.exceptions) ? input.exceptions.map(String) : [],
 		examples,
 		rccl_immune: Boolean(input.rccl_immune),
-		traits: normalizeTraits$1(input.traits),
+		traits: normalizeTraits(input.traits),
 		source: {
 			kind,
 			layerId,
@@ -8176,7 +7014,7 @@ function normalizeDirective(input, layerId, filePath, kind) {
 		}
 	};
 }
-function normalizeScope$1(input) {
+function normalizeScope(input) {
 	if (typeof input === "string" && input.trim()) return { path: input.trim() };
 	if (input && typeof input === "object" && typeof input.path === "string") return { path: String(input.path) };
 	throw new Error("Invalid playbook directive scope: expected a non-empty path string or { path }.");
@@ -8216,9 +7054,9 @@ function normalizeOverride(value, location) {
 	if ("id" in item && !("supersedes" in item)) throw new Error(`Invalid local override at ${location}: use explicit supersedes instead of id.`);
 	return {
 		supersedes: nonEmptyString(item.supersedes, "supersedes", location),
-		...item.scope !== void 0 ? { scope: normalizeScope$1(item.scope) } : {},
-		...item.prescription !== void 0 ? { prescription: enumValue(item.prescription, ["must", "should"], "prescription", location) } : {},
-		...item.weight !== void 0 ? { weight: enumValue(item.weight, [
+		...item.scope !== void 0 ? { scope: normalizeScope(item.scope) } : {},
+		...item.prescription !== void 0 ? { prescription: enumValue$1(item.prescription, ["must", "should"], "prescription", location) } : {},
+		...item.weight !== void 0 ? { weight: enumValue$1(item.weight, [
 			"low",
 			"normal",
 			"high",
@@ -8250,7 +7088,7 @@ function nonEmptyString(value, field, location) {
 	if (typeof value !== "string" || !value.trim()) throw new Error(`Invalid ${field} at ${location}: expected a non-empty string.`);
 	return value.trim();
 }
-function enumValue(value, allowed, field, location) {
+function enumValue$1(value, allowed, field, location) {
 	if (typeof value !== "string" || !allowed.includes(value)) throw new Error(`Invalid ${field} at ${location}: expected one of ${allowed.join(", ")}.`);
 	return value;
 }
@@ -8273,435 +7111,27 @@ function rejectConditionalBranching(input, location) {
 		"else"
 	]) if (key in input) throw new Error(`Invalid directive at ${location}: internal conditional branch "${key}" is not allowed.`);
 }
-function normalizeTraits$1(input) {
-	if (!input || typeof input !== "object" || Array.isArray(input)) return void 0;
-	const value = input;
-	const traits = {
-		safety_critical: booleanTrait$1(value.safety_critical),
-		broad_scope: booleanTrait$1(value.broad_scope),
-		compatibility_sensitive: booleanTrait$1(value.compatibility_sensitive),
-		migration_sensitive: booleanTrait$1(value.migration_sensitive)
-	};
-	return Object.values(traits).some((item) => item !== void 0) ? traits : void 0;
-}
-function booleanTrait$1(input) {
-	return typeof input === "boolean" ? input : void 0;
-}
-//#endregion
-//#region ../rccl/src/utils/yaml.ts
-function parseYaml(text) {
-	return import_dist.parse(text);
-}
-//#endregion
-//#region ../rccl/src/validate-observation.ts
-const RCCL_OBSERVATION_ID_PATTERN = /^obs-[a-z0-9-]+$/;
-const RCCL_CATEGORIES = new Set([
-	"style",
-	"architecture",
-	"pattern",
-	"constraint",
-	"legacy",
-	"anti-pattern",
-	"migration"
-]);
-const RCCL_ADHERENCE_QUALITIES = new Set([
-	"good",
-	"inconsistent",
-	"poor"
-]);
-const RCCL_SCOPE_BASES = new Set([
-	"single-file",
-	"directory-cluster",
-	"module-cluster",
-	"cross-root"
-]);
-function validateEvidenceSnippet(snippet, prefix, index) {
-	if (typeof snippet !== "string") return [];
-	const normalized = snippet.replace(/\r\n/g, "\n").trim();
-	if (!normalized) return [`${prefix}.evidence[${index}]: snippet must not be empty`];
-	const lines = normalized.split("\n").map((line) => line.trim()).filter(Boolean);
-	const tokenMatches = normalized.match(/[A-Za-z_][A-Za-z0-9_]*|\d+|==|!=|<=|>=|=>|&&|\|\||[()[\]{}.,;:+\-*/%<>!=?]/g) ?? [];
-	const identifierCount = tokenMatches.filter((token) => /^[A-Za-z_][A-Za-z0-9_]*$/.test(token)).length;
-	const punctuationCount = tokenMatches.length - identifierCount;
-	const hasDistinctiveStructure = /[{}();=>]|\b(import|export|return|const|let|var|function|class|interface|type|if|for|while|switch|case|await|async)\b/.test(normalized);
-	if (lines.length >= 2 || hasDistinctiveStructure) return [];
-	if (tokenMatches.length < 4) return [`${prefix}.evidence[${index}]: snippet is too short to verify reliably; include at least a distinctive statement or 2+ lines of code`];
-	if (identifierCount <= 2 && punctuationCount === 0) return [`${prefix}.evidence[${index}]: snippet looks like an identifier or label, not a verifiable code fragment`];
-	return [];
-}
-function validateTraitsRecord(value, prefix) {
-	if (value == null) return [];
-	const errors = [];
-	if (!isRecord(value)) return [`${prefix}: must be an object when present`];
-	const allowed = new Set([
-		"legacy",
-		"migration_boundary",
-		"anti_pattern",
-		"compatibility_boundary"
-	]);
-	for (const [key, item] of Object.entries(value)) {
-		if (item === void 0) continue;
-		if (!allowed.has(key)) errors.push(`${prefix}.${key}: unsupported trait`);
-		else if (typeof item !== "boolean") errors.push(`${prefix}.${key}: must be boolean`);
-	}
-	return errors;
-}
-function isRecord(value) {
-	return Boolean(value) && typeof value === "object" && !Array.isArray(value);
-}
-//#endregion
-//#region ../rccl/src/io/parse-rccl.ts
-const RCCL_VERSION = "1.0";
-function isRcclVersion(value) {
-	return value === RCCL_VERSION || value === 1;
-}
-const REQUIRED_VERIFICATION_FIELDS = [
-	"evidence_status",
-	"evidence_verified_count",
-	"evidence_confidence",
-	"induction_status",
-	"induction_confidence",
-	"checked_at",
-	"disposition"
-];
-function parseRccl(yamlText, options = {}) {
-	const allowVerifiedFields = options.allowVerifiedFields === true;
-	const parsed = parseRawRcclDocument(yamlText);
-	if (!parsed.valid || !parsed.doc) return {
-		valid: false,
-		errors: parsed.errors
-	};
-	const errors = validateFinalRcclDocument(parsed.doc, allowVerifiedFields);
-	if (errors.length > 0) return {
-		valid: false,
-		errors
-	};
-	return {
-		valid: true,
-		data: normalizeDocument(parsed.doc)
-	};
-}
-function parseRawRcclDocument(yamlText) {
-	let cleaned = yamlText.trim();
-	if (cleaned.startsWith("```")) cleaned = cleaned.replace(/^```(?:yaml|yml)?\s*\n?/, "").replace(/\n?```\s*$/, "");
-	let doc;
-	try {
-		doc = parseYaml(cleaned);
-	} catch (err) {
-		return {
-			valid: false,
-			errors: [`YAML parse error: ${err instanceof Error ? err.message : String(err)}`]
-		};
-	}
-	if (!doc || typeof doc !== "object" || Array.isArray(doc)) return {
-		valid: false,
-		errors: ["Document must be a YAML object"]
-	};
-	return {
-		valid: true,
-		doc
-	};
-}
-function validateFinalRcclDocument(doc, allowVerifiedFields) {
-	const errors = validateDocumentEnvelope(doc);
-	if (errors.length > 0) return errors;
-	const observations = doc.observations;
-	const ids = /* @__PURE__ */ new Set();
-	for (let i = 0; i < observations.length; i += 1) {
-		const obs = observations[i];
-		const rawId = String(obs.id ?? "");
-		if (rawId) {
-			if (ids.has(rawId)) errors.push(`Duplicate observation id: "${rawId}"`);
-			ids.add(rawId);
-		}
-		errors.push(...validateFinalObservation(obs, i, allowVerifiedFields));
-	}
-	return errors;
-}
-function validateDocumentEnvelope(doc) {
-	const errors = [];
-	if (!isRcclVersion(doc.version)) errors.push(`'version' must be "${RCCL_VERSION}", got "${doc.version}"`);
-	if (!Array.isArray(doc.observations) || doc.observations.length === 0) errors.push("'observations' must be a non-empty array");
-	return errors;
-}
-function validateFinalObservation(obs, index, allowVerifiedFields) {
-	const errors = validateObservationCore(obs, index, "id", "scope");
-	const prefix = `observations[${index}]`;
-	if ("provisional_id" in obs) errors.push(`${prefix}: final RCCL observations must use 'id', not 'provisional_id'`);
-	if ("scope_hint" in obs) errors.push(`${prefix}: final RCCL observations must use 'scope', not 'scope_hint'`);
-	if ("source_slice_ids" in obs) errors.push(`${prefix}: final RCCL observations must store source slices in 'support.source_slices'`);
-	if ("support_hint" in obs) errors.push(`${prefix}: final RCCL observations must use 'support', not 'support_hint'`);
-	errors.push(...validateTraitsRecord(obs.traits, `${prefix}.traits`));
-	const support = obs.support;
-	if (!support || typeof support !== "object" || Array.isArray(support)) errors.push(`${prefix}: missing or invalid 'support'`);
-	else errors.push(...validateSupport(support, `${prefix}.support`));
-	const verification = obs.verification;
-	if (!verification || typeof verification !== "object" || Array.isArray(verification)) errors.push(`${prefix}: missing or invalid 'verification'`);
-	else errors.push(...validateVerification(verification, prefix, allowVerifiedFields));
-	errors.push(...validateLifecycle(obs.lifecycle, prefix));
-	return errors;
-}
-function validateObservationCore(obs, index, idField, scopeField) {
-	const errors = [];
-	const prefix = `observations[${index}]`;
-	const id = obs[idField];
-	const scope = obs[scopeField];
-	if (!id || typeof id !== "string") errors.push(`${prefix}: missing or invalid '${idField}'`);
-	else if (!RCCL_OBSERVATION_ID_PATTERN.test(String(id))) errors.push(`${prefix}: '${idField}' "${id}" does not match /^obs-[a-z0-9-]+$/`);
-	if (!RCCL_CATEGORIES.has(String(obs.category))) errors.push(`${prefix}: 'category' is invalid`);
-	if (!obs.semantic_key || typeof obs.semantic_key !== "string") errors.push(`${prefix}: missing or invalid 'semantic_key'`);
-	if (!scope || typeof scope !== "string") errors.push(`${prefix}: missing or invalid '${scopeField}'`);
-	if (!obs.pattern || typeof obs.pattern !== "string") errors.push(`${prefix}: missing or invalid 'pattern'`);
-	if (typeof obs.confidence !== "number" || Number.isNaN(obs.confidence) || obs.confidence < 0 || obs.confidence > 1) errors.push(`${prefix}: 'confidence' must be a number between 0 and 1, got ${obs.confidence}`);
-	if (!RCCL_ADHERENCE_QUALITIES.has(String(obs.adherence_quality))) errors.push(`${prefix}: 'adherence_quality' is invalid`);
-	if (!Array.isArray(obs.evidence) || obs.evidence.length === 0) errors.push(`${prefix}: 'evidence' must be a non-empty array`);
-	else for (let i = 0; i < obs.evidence.length; i += 1) {
-		const evidence = obs.evidence[i];
-		if (!evidence.file || typeof evidence.file !== "string") errors.push(`${prefix}.evidence[${i}]: missing or invalid 'file'`);
-		if (!Array.isArray(evidence.line_range) || evidence.line_range.length !== 2) errors.push(`${prefix}.evidence[${i}]: invalid 'line_range'`);
-		if (!evidence.snippet || typeof evidence.snippet !== "string") errors.push(`${prefix}.evidence[${i}]: missing or invalid 'snippet'`);
-		else errors.push(...validateEvidenceSnippet(evidence.snippet, prefix, i));
-	}
-	return errors;
-}
-function validateSupport(support, prefix) {
-	const errors = [];
-	if (!Array.isArray(support.source_slices)) errors.push(`${prefix}.source_slices: must be an array`);
-	if (typeof support.file_count !== "number") errors.push(`${prefix}.file_count: must be a number`);
-	if (typeof support.cluster_count !== "number") errors.push(`${prefix}.cluster_count: must be a number`);
-	if (!RCCL_SCOPE_BASES.has(String(support.scope_basis))) errors.push(`${prefix}.scope_basis: invalid value`);
-	return errors;
-}
-function validateVerification(verification, prefix, allowVerifiedFields) {
-	const errors = [];
-	for (const field of REQUIRED_VERIFICATION_FIELDS) if (!(field in verification)) errors.push(`${prefix}.verification.${field}: missing required field`);
-	if (!allowVerifiedFields) {
-		for (const field of REQUIRED_VERIFICATION_FIELDS) if (verification[field] !== null && verification[field] !== void 0) errors.push(`${prefix}.verification.${field}: must be null (runtime fills this), got "${verification[field]}"`);
-	}
-	return errors;
-}
-function validateLifecycle(lifecycle, prefix) {
-	if (lifecycle == null) return [];
-	const errors = [];
-	if (lifecycle.status != null && lifecycle.status !== "active" && lifecycle.status !== "stale" && lifecycle.status !== "superseded") errors.push(`${prefix}.lifecycle.status: invalid value`);
-	if (lifecycle.content_fingerprint != null && typeof lifecycle.content_fingerprint !== "string") errors.push(`${prefix}.lifecycle.content_fingerprint: must be a string`);
-	if (lifecycle.supersedes != null) {
-		if (!Array.isArray(lifecycle.supersedes)) errors.push(`${prefix}.lifecycle.supersedes: must be an array`);
-		else for (const id of lifecycle.supersedes) if (typeof id !== "string" || !RCCL_OBSERVATION_ID_PATTERN.test(id)) errors.push(`${prefix}.lifecycle.supersedes: contains invalid observation id`);
-	}
-	if (lifecycle.superseded_by != null && (typeof lifecycle.superseded_by !== "string" || !RCCL_OBSERVATION_ID_PATTERN.test(lifecycle.superseded_by))) errors.push(`${prefix}.lifecycle.superseded_by: must be a valid observation id`);
-	return errors;
-}
-function normalizeDocument(input) {
-	return {
-		version: RCCL_VERSION,
-		generated_at: typeof input.generated_at === "string" ? input.generated_at : null,
-		git_ref: typeof input.git_ref === "string" ? input.git_ref : null,
-		observations: Array.isArray(input.observations) ? input.observations.map(normalizeObservation) : []
-	};
-}
-function normalizeObservation(input) {
-	const item = input;
-	return {
-		id: String(item.id),
-		semantic_key: normalizeSemanticKey(String(item.semantic_key)),
-		category: item.category,
-		scope: normalizeScope(String(item.scope)),
-		pattern: String(item.pattern),
-		confidence: Number(item.confidence),
-		adherence_quality: item.adherence_quality,
-		evidence: Array.isArray(item.evidence) ? item.evidence.map(normalizeEvidence) : [],
-		support: normalizeSupport(item.support),
-		verification: normalizeVerification(item.verification),
-		lifecycle: normalizeLifecycle(item.lifecycle),
-		traits: normalizeTraits(item.traits)
-	};
-}
-function normalizeEvidence(input) {
-	const value = input;
-	const lineRange = value.line_range;
-	return {
-		file: normalizePath(String(value.file)),
-		line_range: [Number(lineRange[0]), Number(lineRange[1])],
-		snippet: String(value.snippet ?? "")
-	};
-}
-function normalizeSupport(input) {
-	return {
-		source_slices: Array.isArray(input.source_slices) ? Array.from(new Set(input.source_slices.map(String))).sort() : [],
-		file_count: Number(input.file_count),
-		cluster_count: Number(input.cluster_count),
-		scope_basis: normalizeScopeBasis(String(input.scope_basis))
-	};
-}
-function normalizeVerification(input) {
-	return {
-		evidence_status: input.evidence_status ?? null,
-		evidence_verified_count: input.evidence_verified_count == null ? null : Number(input.evidence_verified_count),
-		evidence_confidence: input.evidence_confidence == null ? null : Number(input.evidence_confidence),
-		induction_status: input.induction_status ?? null,
-		induction_confidence: input.induction_confidence == null ? null : Number(input.induction_confidence),
-		checked_at: typeof input.checked_at === "string" ? input.checked_at : null,
-		disposition: input.disposition ?? null
-	};
-}
-function normalizeLifecycle(input) {
-	if (!input) return void 0;
-	const status = input.status === "stale" || input.status === "superseded" ? input.status : "active";
-	return {
-		first_seen_git_ref: typeof input.first_seen_git_ref === "string" ? input.first_seen_git_ref : null,
-		last_seen_git_ref: typeof input.last_seen_git_ref === "string" ? input.last_seen_git_ref : null,
-		last_verified_at: typeof input.last_verified_at === "string" ? input.last_verified_at : null,
-		content_fingerprint: typeof input.content_fingerprint === "string" ? input.content_fingerprint : "",
-		status,
-		supersedes: Array.isArray(input.supersedes) ? input.supersedes.map(String).sort() : void 0,
-		superseded_by: typeof input.superseded_by === "string" ? input.superseded_by : void 0,
-		stale_since_git_ref: typeof input.stale_since_git_ref === "string" ? input.stale_since_git_ref : null,
-		superseded_at_git_ref: typeof input.superseded_at_git_ref === "string" ? input.superseded_at_git_ref : null
-	};
-}
 function normalizeTraits(input) {
 	if (!input || typeof input !== "object" || Array.isArray(input)) return void 0;
 	const value = input;
 	const traits = {
-		legacy: booleanTrait(value.legacy),
-		migration_boundary: booleanTrait(value.migration_boundary),
-		anti_pattern: booleanTrait(value.anti_pattern),
-		compatibility_boundary: booleanTrait(value.compatibility_boundary)
+		safety_critical: booleanTrait(value.safety_critical),
+		broad_scope: booleanTrait(value.broad_scope),
+		compatibility_sensitive: booleanTrait(value.compatibility_sensitive),
+		migration_sensitive: booleanTrait(value.migration_sensitive)
 	};
 	return Object.values(traits).some((item) => item !== void 0) ? traits : void 0;
 }
+function validateDeclaredLayer(declared, sourceLayerId, kind, location) {
+	if (kind === "local-addition") {
+		if (!declared.startsWith("local")) throw new Error(`Invalid layer at ${location}: local additions must use a local layer.`);
+		return;
+	}
+	const expected = sourceLayerId === "builtin/core" ? "core" : sourceLayerId.split("/")[1];
+	if (declared !== expected) throw new Error(`Invalid layer at ${location}: declared ${declared}, but the physical source belongs to ${expected}.`);
+}
 function booleanTrait(input) {
 	return typeof input === "boolean" ? input : void 0;
-}
-function normalizeScopeBasis(value) {
-	if (value === "single-file" || value === "directory-cluster" || value === "module-cluster" || value === "cross-root") return value;
-	return "module-cluster";
-}
-function normalizeScope(scope) {
-	const trimmed = scope.trim();
-	return trimmed.length > 0 ? trimmed : "**";
-}
-function normalizePath(filePath) {
-	return filePath.replace(/\\/g, "/").replace(/^\.\//, "");
-}
-function normalizeSemanticKey(value) {
-	return value.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "") || "unknown";
-}
-//#endregion
-//#region ../rccl/src/policies.ts
-const DEFAULT_VERIFICATION_POLICY = {
-	snippet_similarity_threshold: .75,
-	min_evidence_for_directory_scope: 2,
-	min_evidence_for_cross_root_scope: 3,
-	anti_pattern_min_evidence: 2,
-	migration_min_evidence: 2
-};
-//#endregion
-//#region ../rccl/src/verify/verify-evidence.ts
-function verifyObservationEvidence(observation, projectRoot, checkedAt, policy = DEFAULT_VERIFICATION_POLICY) {
-	if (observation.evidence.length === 0) return applyEvidenceVerification(observation, "unverifiable", 0, 0, checkedAt, "demote-to-ambient");
-	const results = observation.evidence.map((item) => verifyEvidence(item, projectRoot, policy));
-	const verifiedCount = results.filter((result) => result.status === "match").length;
-	const ratio = verifiedCount / results.length;
-	if (verifiedCount === results.length) return applyEvidenceVerification(observation, "verified", verifiedCount, observation.confidence, checkedAt, "keep");
-	if (verifiedCount > 0) {
-		const confidence = Math.max(observation.confidence * ratio, .3);
-		return applyEvidenceVerification(observation, "partial", verifiedCount, confidence, checkedAt, confidence < .7 ? "keep-with-reduced-confidence" : "keep");
-	}
-	return applyEvidenceVerification(observation, "failed", 0, 0, checkedAt, "demote-to-ambient");
-}
-function applyEvidenceVerification(observation, status, verifiedCount, evidenceConfidence, checkedAt, disposition) {
-	return {
-		...observation,
-		verification: {
-			...observation.verification,
-			evidence_status: status,
-			evidence_verified_count: verifiedCount,
-			evidence_confidence: Number(evidenceConfidence.toFixed(2)),
-			checked_at: checkedAt,
-			disposition
-		}
-	};
-}
-function verifyEvidence(evidence, projectRoot, policy = DEFAULT_VERIFICATION_POLICY) {
-	if (!safeRelativeEvidencePath(evidence.file)) return { status: "path-outside-project" };
-	const root = realpathSync(resolve(projectRoot));
-	const fullPath = resolve(root, evidence.file);
-	if (!existsSync(fullPath)) return { status: "file-not-found" };
-	let realFile;
-	try {
-		realFile = realpathSync(fullPath);
-	} catch {
-		return { status: "file-not-found" };
-	}
-	const rel = relative(root, realFile);
-	if (!rel || rel === ".." || rel.startsWith(`..${process.platform === "win32" ? "\\" : "/"}`) || isAbsolute(rel)) return { status: "path-outside-project" };
-	const lines = readFileSync(realFile, "utf-8").replace(/\r\n/g, "\n").split("\n");
-	const [start, end] = evidence.line_range;
-	if (start < 1 || end < start || end > lines.length) return { status: "range-out-of-bounds" };
-	return tokenOverlapSimilarity(lines.slice(start - 1, end).join("\n"), evidence.snippet) >= policy.snippet_similarity_threshold ? { status: "match" } : { status: "mismatch" };
-}
-function safeRelativeEvidencePath(file) {
-	if (!file || isAbsolute(file) || win32.isAbsolute(file)) return false;
-	const normalized = file.replace(/\\/g, "/");
-	return !normalized.split("/").some((segment) => segment === "..") && !normalized.startsWith("/");
-}
-function tokenOverlapSimilarity(a, b) {
-	const aTokens = tokenize(a);
-	const bTokens = tokenize(b);
-	if (aTokens.length === 0 || bTokens.length === 0) return 0;
-	const counts = /* @__PURE__ */ new Map();
-	for (const token of aTokens) counts.set(token, (counts.get(token) ?? 0) + 1);
-	let overlap = 0;
-	for (const token of bTokens) {
-		const count = counts.get(token) ?? 0;
-		if (count > 0) {
-			overlap += 1;
-			counts.set(token, count - 1);
-		}
-	}
-	return overlap / Math.max(aTokens.length, bTokens.length);
-}
-function tokenize(text) {
-	return text.replace(/\r\n/g, "\n").replace(/['"`]/g, "\"").replace(/\s+/g, " ").trim().match(/[A-Za-z_][A-Za-z0-9_]*|\d+|==|!=|<=|>=|=>|&&|\|\||[()[\]{}.,;:+\-*/%<>!=?]/g) ?? [];
-}
-//#endregion
-//#region ../rccl/src/verify/verify-induction.ts
-function verifyObservationInduction(observation, policy = DEFAULT_VERIFICATION_POLICY) {
-	const evidenceCount = observation.verification.evidence_verified_count ?? 0;
-	const minRequired = minimumEvidence(observation, policy);
-	const distinctFiles = new Set(observation.evidence.map((item) => item.file.replace(/\\/g, "/"))).size;
-	const distinctRoots = new Set(observation.evidence.map((item) => item.file.replace(/\\/g, "/").split("/")[0])).size;
-	let induction_status = "well-supported";
-	let induction_confidence = observation.verification.evidence_confidence ?? 0;
-	if (observation.support.scope_basis === "cross-root" && (evidenceCount < 3 || distinctFiles < 3 || distinctRoots < 2)) {
-		induction_status = "overgeneralized";
-		induction_confidence = Math.min(induction_confidence, .35);
-	} else if ((observation.support.scope_basis === "directory-cluster" || observation.support.scope_basis === "module-cluster") && (evidenceCount < 2 || distinctFiles < 2)) {
-		induction_status = "overgeneralized";
-		induction_confidence = Math.min(induction_confidence, .35);
-	} else if (evidenceCount < minRequired) {
-		induction_status = "narrowly-supported";
-		induction_confidence = Math.min(induction_confidence, .55);
-	}
-	let disposition = observation.verification.disposition ?? "keep";
-	if (induction_status === "overgeneralized") disposition = "demote-to-ambient";
-	else if (induction_status === "narrowly-supported" && disposition === "keep") disposition = "keep-with-reduced-confidence";
-	return {
-		...observation,
-		verification: {
-			...observation.verification,
-			induction_status,
-			induction_confidence: Number(induction_confidence.toFixed(2)),
-			disposition
-		}
-	};
-}
-function minimumEvidence(observation, policy) {
-	if (observation.category === "anti-pattern") return policy.anti_pattern_min_evidence;
-	if (observation.category === "migration") return policy.migration_min_evidence;
-	return 1;
 }
 //#endregion
 //#region src/load/load-rccl.ts
@@ -8710,1213 +7140,12 @@ function minimumEvidence(observation, policy) {
 */
 async function loadRccl(filePath) {
 	if (!filePath || !existsSync(filePath)) return null;
-	const parsed = parseRccl(readFileSync(filePath, "utf-8"), { allowVerifiedFields: true });
+	const parsed = parseRccl(readFileSync(filePath, "utf-8"));
 	if (!parsed.valid || !parsed.data) {
-		if (parsed.errors?.some((error) => error.includes("'version' must be"))) throw new Error(`UNSUPPORTED_SCHEMA_VERSION: RCCL must use schema 1. Re-run calibrate-repo-context; ${filePath} was not modified.`);
+		if (parsed.errors?.some((error) => error.includes("UNSUPPORTED_SCHEMA_VERSION"))) throw new Error(`UNSUPPORTED_SCHEMA_VERSION: RCCL does not match the current schema. Re-run calibrate-repo-context; ${filePath} was not modified.`);
 		throw new Error(`Failed to parse RCCL document: ${parsed.errors?.join("; ") || "unknown parse error"}`);
 	}
 	return parsed.data;
-}
-//#endregion
-//#region src/verify/verify-rccl.ts
-/**
-* Verifies RCCL observations according to the Runtime task-time trust policy.
-*/
-async function verifyRcclDocumentWithSummary(rccl, options) {
-	const checkedAt = (options.now ?? /* @__PURE__ */ new Date()).toISOString();
-	const policy = options.policy ?? "task-relevant";
-	const targets = taskTargets$1(options.resolvedTask);
-	const records = [];
-	const observations = rccl.observations.map((observation) => {
-		const relevance = observationTaskRelevance(observation, targets);
-		const before = verificationSnapshot(observation);
-		if (!shouldReverifyObservation(observation, policy, relevance.taskRelevant)) {
-			const action = policy === "task-relevant" && !relevance.taskRelevant ? "skipped-not-task-relevant" : "reused";
-			records.push({
-				observation_id: observation.id,
-				action,
-				task_relevant: relevance.taskRelevant,
-				reason: action === "skipped-not-task-relevant" ? relevance.reason : reuseReason(policy, relevance.reason),
-				before,
-				after: before
-			});
-			return observation;
-		}
-		const verified = verifyObservationInduction(verifyObservationEvidence(observation, options.projectRoot, checkedAt));
-		const after = verificationSnapshot(verified);
-		records.push({
-			observation_id: observation.id,
-			action: dispositionWasReduced(before.disposition, after.disposition) ? "demoted" : "reverified",
-			task_relevant: relevance.taskRelevant,
-			reason: verificationReason(policy, relevance.reason),
-			before,
-			after
-		});
-		return verified;
-	});
-	const summary = summarizeVerification(policy, records);
-	return {
-		document: {
-			...rccl,
-			observations
-		},
-		summary
-	};
-}
-function summarizeVerification(policy, records) {
-	return {
-		policy,
-		reverified_count: records.filter((record) => record.action === "reverified").length,
-		reused_count: records.filter((record) => record.action === "reused").length,
-		demoted_count: records.filter((record) => record.action === "demoted").length,
-		skipped_not_task_relevant_count: records.filter((record) => record.action === "skipped-not-task-relevant").length,
-		records
-	};
-}
-function shouldReverifyObservation(observation, policy, taskRelevant) {
-	if (policy === "deep") return true;
-	if (policy === "task-relevant") return taskRelevant;
-	return false;
-}
-function taskTargets$1(resolvedTask) {
-	if (!resolvedTask) return [];
-	return unique([
-		resolvedTask.task.targetFile,
-		...resolvedTask.task.changedFiles ?? [],
-		resolvedTask.task_intent.target_file,
-		...resolvedTask.task_intent.changed_files
-	].filter((value) => Boolean(value)).map(normalizePath$1));
-}
-function observationTaskRelevance(observation, targets) {
-	if (targets.length === 0) return {
-		taskRelevant: true,
-		reason: "no task file scope was provided; observation may enter semantic relation candidates"
-	};
-	for (const target of targets) {
-		if (scopeOverlapsPath(observation.scope, target)) return {
-			taskRelevant: true,
-			reason: `observation scope overlaps task target ${target}`
-		};
-		const evidenceHit = observation.evidence.find((evidence) => fileOverlapsTarget(evidence.file, target));
-		if (evidenceHit) return {
-			taskRelevant: true,
-			reason: `evidence file ${evidenceHit.file} overlaps task target ${target}`
-		};
-	}
-	return {
-		taskRelevant: false,
-		reason: "observation scope and evidence do not overlap current task targets"
-	};
-}
-function verificationSnapshot(observation) {
-	return {
-		evidence_status: observation.verification.evidence_status,
-		induction_status: observation.verification.induction_status,
-		disposition: observation.verification.disposition,
-		checked_at: observation.verification.checked_at
-	};
-}
-function dispositionWasReduced(before, after) {
-	return dispositionRank(after) > dispositionRank(before);
-}
-function dispositionRank(disposition) {
-	if (disposition === "demote-to-ambient") return 2;
-	if (disposition === "keep-with-reduced-confidence") return 1;
-	return 0;
-}
-function verificationReason(policy, relevanceReason) {
-	if (policy === "deep") return "deep policy reverified all RCCL observations";
-	return relevanceReason;
-}
-function reuseReason(policy, relevanceReason) {
-	if (policy === "trust-existing") return "trust-existing policy reused stored RCCL verification; incomplete verification remains ambient downstream";
-	if (policy === "deep") return "deep policy should not reuse observations";
-	return relevanceReason;
-}
-//#endregion
-//#region src/load/compile-sources.ts
-async function loadCompileSources(input) {
-	const builtinLayers = discoverBuiltinLayers(input.builtinRoot);
-	const local = loadLocalPlaybook(input.localAugmentPath);
-	const configuredLayerIds = local?.meta.extends.length ? resolveExtendedLayers(local.meta.extends, builtinLayers) : ["builtin/core"];
-	const inferredLayerIds = inferTaskLayers(input.resolvedTask, builtinLayers);
-	const selectedLayerIds = [...new Set([...configuredLayerIds, ...inferredLayerIds])];
-	const builtinDirectives = selectedLayerIds.flatMap((layerId) => {
-		const filePath = builtinLayers.get(layerId);
-		return filePath ? loadDirectiveFile(filePath, layerId) : [];
-	});
-	const allBuiltinDirectives = [...builtinLayers.entries()].flatMap(([layerId, filePath]) => loadDirectiveFile(filePath, layerId));
-	assertUniqueDirectiveIds([...allBuiltinDirectives, ...local?.additions ?? []]);
-	validateLocalReferences(local, allBuiltinDirectives);
-	return verifyCompileSourcesRccl(input, {
-		builtinLayers,
-		local,
-		selectedLayerIds,
-		builtinDirectives,
-		allDirectives: [...builtinDirectives, ...local?.additions ?? []],
-		rccl: await loadRccl(input.rcclPath)
-	});
-}
-function inferTaskLayers(task, layers) {
-	if (!task) return [];
-	const result = [];
-	const changeType = task.task_intent.change_type;
-	if (changeType !== "unknown") {
-		const taskLayer = `builtin/task-types/${changeType}`;
-		if (layers.has(taskLayer)) result.push(taskLayer);
-	}
-	for (const tech of task.task_intent.tech_stack) for (const prefix of ["builtin/languages/", "builtin/frameworks/"]) {
-		const layer = `${prefix}${tech}`;
-		if (layers.has(layer)) result.push(layer);
-	}
-	return result.sort();
-}
-async function loadOrVerifyCompileSources(input, preloadedSources) {
-	return preloadedSources ? verifyCompileSourcesRccl(input, preloadedSources) : loadCompileSources(input);
-}
-async function verifyCompileSourcesRccl(input, sources) {
-	if (!sources.rccl) return {
-		...sources,
-		rcclVerificationSummary: void 0
-	};
-	const verifiedRccl = await verifyRcclDocumentWithSummary(sources.rccl, {
-		projectRoot: input.projectRoot,
-		resolvedTask: input.resolvedTask,
-		policy: input.verificationPolicy ?? "task-relevant"
-	});
-	return {
-		...sources,
-		rccl: verifiedRccl.document,
-		rcclVerificationSummary: verifiedRccl.summary
-	};
-}
-//#endregion
-//#region src/ir/types.ts
-const GOVERNANCE_IR_VERSION = "governance-ir/v1";
-//#endregion
-//#region src/ir/relations/policy.ts
-const SEMANTIC_RELATION_POLICY = {
-	hostSemantic: {
-		minConfidence: .72,
-		maxCandidatesPerDirective: 5
-	},
-	feedback: {
-		frequentlyIgnoredFollowRate: .5,
-		frequentlyIgnoredMinIgnored: 2,
-		recurringTensionSeenCount: 2,
-		noisyObservationRelationCount: 3
-	}
-};
-function semanticRelationPolicyTraceRecord() {
-	return {
-		host_semantic: {
-			min_confidence: SEMANTIC_RELATION_POLICY.hostSemantic.minConfidence,
-			max_candidates_per_directive: SEMANTIC_RELATION_POLICY.hostSemantic.maxCandidatesPerDirective
-		},
-		feedback: {
-			frequently_ignored_follow_rate: SEMANTIC_RELATION_POLICY.feedback.frequentlyIgnoredFollowRate,
-			frequently_ignored_min_ignored: SEMANTIC_RELATION_POLICY.feedback.frequentlyIgnoredMinIgnored,
-			recurring_tension_seen_count: SEMANTIC_RELATION_POLICY.feedback.recurringTensionSeenCount,
-			noisy_observation_relation_count: SEMANTIC_RELATION_POLICY.feedback.noisyObservationRelationCount
-		}
-	};
-}
-//#endregion
-//#region src/ai-contracts/evidence.ts
-function verifyEvidenceRefs(refs, context = {}) {
-	const entries = refs.map((ref) => verifyEvidenceRef(ref, context));
-	const verified = entries.filter((entry) => entry.status === "verified").length;
-	const staticVerified = entries.filter((entry) => entry.status === "verified" && entry.static).length;
-	const conversationCount = entries.filter((entry) => entry.ref.kind === "conversation").length;
-	return {
-		total: entries.length,
-		verified,
-		staticVerified,
-		conversationOnly: entries.length > 0 && conversationCount === entries.length,
-		hasStaticEvidence: staticVerified > 0,
-		entries
-	};
-}
-function verifyEvidenceRef(ref, context) {
-	if (ref.kind === "conversation") return {
-		ref,
-		status: "verified",
-		static: false,
-		reason: "conversation evidence is contextual only"
-	};
-	if (ref.kind === "file") return verifyFileEvidence(ref, context);
-	if (ref.kind === "rccl-evidence") return verifyRcclEvidence(ref, context);
-	if (ref.kind === "runtime-trace") return verifyListedRef(ref, context.runtimeTraceRefs, "runtime trace reference", false);
-	if (ref.kind === "command") return verifyHashEvidence(ref, context.commandOutputHashes, "command output hash");
-	if (ref.kind === "diff") return verifyHashEvidence(ref, context.diffSnapshotHashes, "diff snapshot hash");
-	return {
-		ref,
-		status: "unverified",
-		static: false,
-		reason: "unsupported evidence kind"
-	};
-}
-function verifyFileEvidence(ref, context) {
-	if (!context.projectRoot) return {
-		ref,
-		status: "unverified",
-		static: false,
-		reason: "projectRoot is required for file evidence verification"
-	};
-	const parsed = parseRefLocation(ref.ref);
-	const file = ref.file ?? parsed.file;
-	const lineRange = ref.line_range ?? parsed.line_range;
-	if (!file) return {
-		ref,
-		status: "unverified",
-		static: false,
-		reason: "file evidence must include file or parseable ref"
-	};
-	const filePath = isAbsolute(file) ? file : resolve(context.projectRoot, file);
-	if (!existsSync(filePath)) return {
-		ref,
-		status: "unverified",
-		static: false,
-		reason: `file evidence target does not exist: ${file}`
-	};
-	if (!lineRange) return {
-		ref,
-		status: "unverified",
-		static: false,
-		reason: "file evidence must include line_range"
-	};
-	const lines = readFileSync(filePath, "utf-8").replace(/\r\n/g, "\n").split("\n");
-	if (lineRange[0] < 1 || lineRange[1] < lineRange[0] || lineRange[1] > lines.length) return {
-		ref,
-		status: "unverified",
-		static: false,
-		reason: `line_range ${lineRange[0]}-${lineRange[1]} is outside ${file}`
-	};
-	if (ref.snippet_hash && !matchesSnippetHash(lines.slice(lineRange[0] - 1, lineRange[1]).join("\n"), ref.snippet_hash)) return {
-		ref,
-		status: "unverified",
-		static: false,
-		reason: "snippet_hash does not match file line range"
-	};
-	return {
-		ref,
-		status: "verified",
-		static: true,
-		reason: "file and line range verified"
-	};
-}
-function verifyRcclEvidence(ref, context) {
-	const observations = context.observations ?? [];
-	if (!observations.length) return {
-		ref,
-		status: "unverified",
-		static: false,
-		reason: "RCCL observations are required for rccl-evidence verification"
-	};
-	const parsed = parseRefLocation(ref.ref);
-	const file = ref.file ?? parsed.file;
-	const lineRange = ref.line_range ?? parsed.line_range;
-	if (!file || !lineRange) return {
-		ref,
-		status: "unverified",
-		static: false,
-		reason: "rccl-evidence must reference a concrete evidence file and line range"
-	};
-	if (!observations.some((observation) => observationCanSupportRcclEvidence(observation) && observation.evidence.some((evidence) => {
-		const evidenceRef = `${evidence.file}:${evidence.line_range[0]}-${evidence.line_range[1]}`;
-		const sameRef = ref.ref === evidenceRef || ref.ref === `${observation.id}:${evidenceRef}`;
-		const sameLocation = normalizePathSeparators(file) === normalizePathSeparators(evidence.file) && lineRange[0] === evidence.line_range[0] && lineRange[1] === evidence.line_range[1];
-		return sameRef || sameLocation;
-	}))) return {
-		ref,
-		status: "unverified",
-		static: false,
-		reason: "rccl-evidence ref does not match loaded observation evidence"
-	};
-	return {
-		ref,
-		status: "verified",
-		static: true,
-		reason: "rccl-evidence matches loaded observation evidence"
-	};
-}
-function verifyListedRef(ref, refs, label, isStatic = true) {
-	if (refs?.includes(ref.ref)) return {
-		ref,
-		status: "verified",
-		static: isStatic,
-		reason: `${label} verified`
-	};
-	if (!refs) return {
-		ref,
-		status: "unverified",
-		static: false,
-		reason: `${label} is unavailable in the current workflow`
-	};
-	return {
-		ref,
-		status: "unverified",
-		static: false,
-		reason: `${label} was not captured by workflow`
-	};
-}
-function verifyHashEvidence(ref, hashes, label) {
-	if (ref.output_hash && hashes?.includes(ref.output_hash)) return {
-		ref,
-		status: "verified",
-		static: true,
-		reason: `${label} verified`
-	};
-	if (!ref.output_hash) return {
-		ref,
-		status: "unverified",
-		static: false,
-		reason: `${label} missing output_hash`
-	};
-	if (!hashes) return {
-		ref,
-		status: "unverified",
-		static: false,
-		reason: `${label} is unavailable in the current workflow`
-	};
-	return {
-		ref,
-		status: "unverified",
-		static: false,
-		reason: `${label} was not captured by workflow`
-	};
-}
-function parseRefLocation(ref) {
-	const match = /^(.*):(\d+)-(\d+)$/.exec(ref);
-	if (!match) return {};
-	const start = Number(match[2]);
-	const end = Number(match[3]);
-	if (!Number.isInteger(start) || !Number.isInteger(end) || start < 1 || end < start) return { file: match[1] };
-	return {
-		file: match[1],
-		line_range: [start, end]
-	};
-}
-function matchesSnippetHash(snippet, expected) {
-	const normalizedExpected = expected.replace(/^sha(1|256):/, "");
-	return hash("sha1", snippet) === normalizedExpected || hash("sha256", snippet) === normalizedExpected;
-}
-function hash(algorithm, value) {
-	return createHash(algorithm).update(value).digest("hex");
-}
-function observationCanSupportRcclEvidence(observation) {
-	const verification = observation.verification;
-	if (!verification) return true;
-	if (verification.disposition === "demote-to-ambient") return false;
-	return verification.evidence_status !== "failed" && verification.evidence_status !== "unverifiable";
-}
-//#endregion
-//#region src/ai-contracts/adherence-evidence.ts
-const MINIMUM_ADHERENCE_CONFIDENCE = .5;
-const VERDICTS = new Set([
-	"followed",
-	"ignored",
-	"partial",
-	"unverified"
-]);
-const IGNORED_REASONS = new Set([
-	"not-applicable",
-	"conflicts-with-task",
-	"too-broad",
-	"repo-reality",
-	"false-positive",
-	"user-corrected",
-	"other"
-]);
-const ADHERENCE_EVIDENCE_SCHEMA = {
-	type: "object",
-	additionalProperties: false,
-	properties: { verdicts: { type: "array" } },
-	required: ["verdicts"]
-};
-function prepareAdherenceEvidenceContract(input) {
-	const prompt = buildEvidencePrompt(input.directives, input.taskDescription);
-	const artifact = {
-		suggestedPath: input.artifactPath,
-		format: "json",
-		usage: `Write a v1 envelope to ${input.artifactPath}: schema_version 1, kind adherence-evidence, the issued requestId/contextFingerprint as request_id/context_fingerprint, and verdicts under payload; then pass it to complete with --adherence-file ${input.artifactPath}.`
-	};
-	return {
-		evidencePrompt: prompt,
-		evidenceSchema: JSON.stringify(ADHERENCE_EVIDENCE_SCHEMA, null, 2),
-		evidenceArtifact: artifact,
-		contract: {
-			contractVersion: AI_CONTRACT_VERSION,
-			kind: "adherence-evidence",
-			...artifactIdentity("adherence-evidence", {
-				directiveIds: input.directives.map((directive) => directive.id),
-				schemaId: "runtime.adherence-evidence"
-			}),
-			schemaId: "runtime.adherence-evidence",
-			schemaVersion: "1.0",
-			prompt,
-			schema: ADHERENCE_EVIDENCE_SCHEMA,
-			artifact,
-			allowedIds: { directiveIds: input.directives.map((directive) => directive.id) },
-			provenance: {
-				owner: "runtime",
-				deterministic: true
-			},
-			cacheKeyMaterial: {
-				directiveIds: input.directives.map((directive) => directive.id),
-				schemaId: "runtime.adherence-evidence"
-			}
-		}
-	};
-}
-function validateAdherenceEvidencePayload(raw, allowedDirectiveIds, evidenceContext) {
-	const entries = [];
-	const verdicts = [];
-	const allowedIds = new Set(allowedDirectiveIds);
-	const versionDiagnostic = contractVersionDiagnostic(raw, "adherence-evidence");
-	if (versionDiagnostic) return {
-		verdicts,
-		diagnostics: buildContractPayloadDiagnostics("adherence-evidence", [versionDiagnostic])
-	};
-	if (!isAdherencePayload(raw)) {
-		entries.push({
-			status: raw == null ? "unused" : "rejected",
-			reason: raw == null ? "empty-payload" : "malformed-payload",
-			path: "payload",
-			message: raw == null ? "No adherence evidence payload was provided." : "Adherence evidence payload must be an object with a verdicts array."
-		});
-		return {
-			verdicts,
-			diagnostics: buildContractPayloadDiagnostics("adherence-evidence", entries)
-		};
-	}
-	const seen = /* @__PURE__ */ new Set();
-	raw.verdicts.forEach((item, index) => {
-		const path = `verdicts[${index}]`;
-		if (!isVerdictEntry(item)) {
-			entries.push({
-				status: "rejected",
-				reason: "malformed-payload",
-				path,
-				message: "Verdict must include directive_id, verdict, confidence, evidence_refs, and reason.",
-				directiveId: isRecord$1(item) && typeof item.directive_id === "string" ? item.directive_id : void 0
-			});
-			return;
-		}
-		if (!allowedIds.has(item.directive_id)) {
-			entries.push(rejected$1(path, "invalid-id", `Directive id "${item.directive_id}" is not allowed.`, item));
-			return;
-		}
-		if (seen.has(item.directive_id)) {
-			entries.push(rejected$1(path, "duplicate-id", `Directive id "${item.directive_id}" already has a verdict.`, item));
-			return;
-		}
-		seen.add(item.directive_id);
-		if (item.confidence < MINIMUM_ADHERENCE_CONFIDENCE) {
-			entries.push(rejected$1(path, "low-confidence", `Confidence ${item.confidence} is below ${MINIMUM_ADHERENCE_CONFIDENCE}.`, item));
-			return;
-		}
-		const nonUnverified = item.verdict !== "unverified";
-		const evidenceRefs = validEvidenceRefs(item.evidence_refs) ? normalizeEvidenceRefs(item.evidence_refs) : [];
-		if (nonUnverified && !evidenceRefs.length) {
-			verdicts.push(toUnverified(item, evidenceRefs));
-			entries.push(downgraded(path, "missing-evidence", "Non-unverified adherence verdict lacks evidence_refs; recorded as unverified and excluded from follow rate.", item));
-			return;
-		}
-		if (nonUnverified && evidenceRefs.length) {
-			const evidence = verifyEvidenceRefs(evidenceRefs, evidenceContext);
-			if (evidence.conversationOnly) {
-				verdicts.push(toUnverified(item, evidenceRefs));
-				entries.push(downgraded(path, "conversation-only-evidence", `Conversation-only adherence evidence cannot update follow rate; recorded as unverified. Evidence verification: ${summarizeEvidenceVerification(evidence)}.`, item));
-				return;
-			}
-			if (!evidence.hasStaticEvidence) {
-				verdicts.push(toUnverified(item, evidenceRefs));
-				entries.push(downgraded(path, "insufficient-static-evidence", `Adherence verdict lacks statically verified file, diff, command, or runtime trace evidence; recorded as unverified. Evidence verification: ${summarizeEvidenceVerification(evidence)}.`, item));
-				return;
-			}
-		}
-		const ignoredReason = item.verdict === "ignored" && item.ignored_reason && IGNORED_REASONS.has(item.ignored_reason) ? item.ignored_reason : void 0;
-		verdicts.push({
-			directive_id: item.directive_id,
-			verdict: item.verdict,
-			confidence: item.confidence,
-			evidence_refs: evidenceRefs,
-			reason: item.reason,
-			...ignoredReason ? { ignored_reason: ignoredReason } : {}
-		});
-		entries.push({
-			status: "accepted",
-			reason: "accepted",
-			path,
-			message: `Adherence evidence verdict accepted: ${item.verdict}.`,
-			directiveId: item.directive_id,
-			confidence: item.confidence
-		});
-	});
-	if (!raw.verdicts.length) entries.push({
-		status: "unused",
-		reason: "empty-payload",
-		path: "verdicts",
-		message: "Adherence evidence payload contains no verdicts."
-	});
-	return {
-		verdicts,
-		diagnostics: buildContractPayloadDiagnostics("adherence-evidence", entries)
-	};
-}
-function toUnverified(item, evidenceRefs) {
-	return {
-		directive_id: item.directive_id,
-		verdict: "unverified",
-		confidence: item.confidence,
-		evidence_refs: evidenceRefs,
-		reason: item.reason
-	};
-}
-function summarizeEvidenceVerification(evidence) {
-	return evidence.entries.map((entry) => `${entry.ref.kind}:${entry.status}:${entry.reason}`).join("; ") || "none";
-}
-function isAdherencePayload(value) {
-	return isRecord$1(value) && Array.isArray(value.verdicts);
-}
-function isVerdictEntry(value) {
-	if (!isRecord$1(value)) return false;
-	return typeof value.directive_id === "string" && typeof value.verdict === "string" && VERDICTS.has(value.verdict) && validConfidence(value.confidence) && Array.isArray(value.evidence_refs) && typeof value.reason === "string";
-}
-function rejected$1(path, reason, message, item) {
-	return {
-		status: "rejected",
-		reason,
-		path,
-		message,
-		directiveId: item.directive_id,
-		confidence: item.confidence
-	};
-}
-function downgraded(path, reason, message, item) {
-	return {
-		status: "downgraded",
-		reason,
-		path,
-		message,
-		directiveId: item.directive_id,
-		confidence: item.confidence
-	};
-}
-function buildEvidencePrompt(directives, taskDescription) {
-	return [
-		"Evaluate adherence to compiled directives after implementation.",
-		"Every followed, ignored, or partial verdict must cite evidence_refs from diff, file snippets, test/command output, or implementation evidence.",
-		"Use \"unverified\" when you did not inspect enough evidence. Unverified directives do not update follow rate.",
-		"Return JSON only.",
-		"",
-		`Task description: ${taskDescription}`,
-		"",
-		"Compiled directives:",
-		...directives.map((directive) => `- ${directive.id}: [${directive.prescription}] ${directive.description} (execution_mode: ${directive.execution_mode})`)
-	].join("\n");
-}
-//#endregion
-//#region src/feedback.ts
-function evaluateGuidance(input) {
-	const release = acquireLock(`${input.lockfilePath}.lock`);
-	try {
-		const trackedDirectiveIds = getTrackedDirectiveIds(input);
-		const validation = validatePublicAdherenceArtifact(input, trackedDirectiveIds);
-		const lockfile = evaluateGuidanceUnlocked({
-			...input,
-			adherencePayload: validation.verdicts,
-			followedDirectiveIds: void 0,
-			ignoredDirectiveIds: void 0,
-			ignoredDirectiveReasons: void 0,
-			signalConfidence: void 0,
-			hostFulfillment: void 0
-		});
-		return {
-			status: validation.diagnostics.summary.rejected > 0 ? "needs-attention" : "updated",
-			lockfile,
-			contractDiagnostics: validation.diagnostics,
-			verdictCounts: summarizeCurrentVerdicts(validation.verdicts, trackedDirectiveIds)
-		};
-	} finally {
-		release();
-	}
-}
-function summarizeCurrentVerdicts(verdicts, trackedDirectiveIds) {
-	const counts = {
-		followed: 0,
-		partial: 0,
-		ignored: 0,
-		unverified: 0
-	};
-	const covered = /* @__PURE__ */ new Set();
-	for (const verdict of verdicts) {
-		if (covered.has(verdict.directive_id)) continue;
-		covered.add(verdict.directive_id);
-		counts[verdict.verdict] += 1;
-	}
-	counts.unverified += trackedDirectiveIds.filter((id) => !covered.has(id)).length;
-	return counts;
-}
-function evaluateGuidanceUnlocked(input) {
-	const existing = loadLockfile$1(input.lockfilePath);
-	const trackedDirectiveIds = getTrackedDirectiveIds(input);
-	const adherenceResolved = resolveFromAdherencePayload(input, trackedDirectiveIds);
-	const followed = adherenceResolved?.followed ?? /* @__PURE__ */ new Set();
-	const ignored = adherenceResolved?.ignored ?? /* @__PURE__ */ new Set();
-	const partial = adherenceResolved?.partial ?? /* @__PURE__ */ new Set();
-	const unverified = adherenceResolved?.unverified ?? new Set(trackedDirectiveIds);
-	const ignoredReasons = adherenceResolved?.ignoredReasons;
-	const taskType = input.ego.taskIntent.change_type;
-	const taskProfile = taskProfileKey(input);
-	const today = (/* @__PURE__ */ new Date()).toISOString().slice(0, 10);
-	const now = (/* @__PURE__ */ new Date()).toISOString();
-	const modeCounts = summarizeExecutionModes(input);
-	const tensionCount = input.packet.governance.semantic_merge.context_tensions.length;
-	const observedRccl = getObservedRccl(input);
-	existing.governance_summary.total_tasks += 1;
-	existing.governance_summary.by_task_type[taskType] = (existing.governance_summary.by_task_type[taskType] ?? 0) + 1;
-	existing.governance_summary.by_task_profile[taskProfile] = (existing.governance_summary.by_task_profile[taskProfile] ?? 0) + 1;
-	existing.governance_summary.last_execution_modes = modeCounts;
-	existing.governance_summary.last_tension_count = tensionCount;
-	existing.governance_summary.last_observation_count = observedRccl.size;
-	existing.governance_summary.last_host_fulfillment = summarizeHostFulfillmentFeedback(input);
-	existing.governance_summary.last_updated_at = now;
-	updateObservationFeedback(existing, observedRccl, input, now);
-	updateTensionFeedback(existing, input, now);
-	for (const directiveId of trackedDirectiveIds) {
-		const entry = existing.directives[directiveId] ?? createEntry();
-		const counts = entry.quality_signal.by_task_type[taskType] ?? emptySignalCounts();
-		const profileCounts = entry.quality_signal.by_task_profile[taskProfile] ?? emptySignalCounts();
-		if (ignored.has(directiveId)) {
-			entry.quality_signal.overall.ignored += 1;
-			counts.ignored += 1;
-			profileCounts.ignored += 1;
-			const ignoredReason = validIgnoredReason(ignoredReasons?.[directiveId]) ? ignoredReasons[directiveId] : void 0;
-			if (ignoredReason) {
-				entry.quality_signal.ignored_reasons[ignoredReason] = (entry.quality_signal.ignored_reasons[ignoredReason] ?? 0) + 1;
-				entry.quality_signal.last_ignored_reason = ignoredReason;
-			}
-		} else if (partial.has(directiveId)) {
-			entry.quality_signal.overall.partial += 1;
-			counts.partial += 1;
-			profileCounts.partial += 1;
-		} else if (followed.has(directiveId)) {
-			entry.quality_signal.overall.followed += 1;
-			counts.followed += 1;
-			profileCounts.followed += 1;
-		} else if (unverified.has(directiveId)) {
-			entry.quality_signal.overall.unverified += 1;
-			counts.unverified += 1;
-			profileCounts.unverified += 1;
-		}
-		entry.quality_signal.by_task_type[taskType] = counts;
-		entry.quality_signal.by_task_profile[taskProfile] = profileCounts;
-		const coveredVerdict = ignored.has(directiveId) ? "ignored" : partial.has(directiveId) ? "partial" : followed.has(directiveId) ? "followed" : null;
-		if (coveredVerdict) entry.quality_signal.overall.recent_verdicts = [...entry.quality_signal.overall.recent_verdicts, coveredVerdict].slice(-20);
-		entry.quality_signal.overall.follow_rate = computeFollowRate(entry);
-		entry.quality_signal.overall.coverage_rate = computeCoverageRate(entry);
-		entry.quality_signal.overall.trend = computeTrend(entry);
-		entry.quality_signal.signal_confidence = adherenceResolved ? "explicit" : resolveSignalConfidence(input, ignored.has(directiveId));
-		entry.quality_signal.evidence_confidence = adherenceResolved?.evidenceConfidence.get(directiveId);
-		entry.quality_signal.last_evaluation_source = adherenceResolved ? "adherence-evidence" : void 0;
-		entry.quality_signal.last_seen = today;
-		entry.governance = { outcomes: {
-			total_tasks: (entry.governance?.outcomes.total_tasks ?? 0) + 1,
-			with_tensions: (entry.governance?.outcomes.with_tensions ?? 0) + (tensionCount > 0 ? 1 : 0),
-			last_execution_modes: modeCounts,
-			last_tension_count: tensionCount,
-			last_updated_at: now
-		} };
-		existing.directives[directiveId] = entry;
-	}
-	atomicWrite(input.lockfilePath, toYaml(existing));
-	return existing;
-}
-function validatePublicAdherenceArtifact(input, trackedDirectiveIds) {
-	const artifact = input.artifacts?.adherenceEvidence;
-	if (!artifact) return {
-		verdicts: [],
-		diagnostics: buildContractPayloadDiagnostics("adherence-evidence", [{
-			status: "unused",
-			reason: "empty-payload",
-			path: "artifact",
-			message: "No adherence artifact was provided; tracked directives are recorded as unverified."
-		}])
-	};
-	const request = input.packet.post_compile_contract_requests.find((item) => item.kind === "adherence-evidence");
-	if (!request) return {
-		verdicts: [],
-		diagnostics: buildContractPayloadDiagnostics("adherence-evidence", [{
-			status: "rejected",
-			reason: "malformed-payload",
-			path: "packet.post_compile_contract_requests",
-			message: "The compiled packet does not contain the Runtime-issued adherence-evidence contract."
-		}], {
-			id: "missing-adherence-contract",
-			path: artifact.path
-		})
-	};
-	const unwrapped = unwrapHostArtifactEnvelope(artifact.raw, request.contract);
-	if (unwrapped.diagnostic) return {
-		verdicts: [],
-		diagnostics: buildContractPayloadDiagnostics("adherence-evidence", [unwrapped.diagnostic], {
-			id: request.contract.requestId,
-			path: artifact.path
-		})
-	};
-	const issuedDirectiveIds = request.contract.allowedIds?.directiveIds ?? [];
-	const trackedSet = new Set(trackedDirectiveIds);
-	return validateAdherenceEvidencePayload(unwrapped.payload, issuedDirectiveIds.filter((id) => trackedSet.has(id)), input.evidenceContext);
-}
-function loadLockfile$1(filePath) {
-	if (!existsSync(filePath)) return createDocument();
-	const parsed = parseYaml$1(readFileSync(filePath, "utf-8"));
-	if (isRecord$1(parsed) && "version" in parsed && parsed.version !== "1.0") throw new Error(`UNSUPPORTED_SCHEMA_VERSION: lockfile ${filePath} must use 1.0; found ${String(parsed.version)}. Re-run init. Existing data was not modified.`);
-	if (!isLockfileDocument(parsed)) throw new Error(`INVALID_LOCKFILE: ${filePath} is malformed and was not modified.`);
-	return {
-		version: "1.0",
-		directives: normalizeDirectiveEntries(parsed.directives),
-		observations: normalizeObservationEntries(parsed.observations),
-		tensions: normalizeTensionEntries(parsed.tensions),
-		governance_summary: {
-			...parsed.governance_summary,
-			by_task_profile: parsed.governance_summary.by_task_profile ?? {}
-		}
-	};
-}
-function isLockfileDocument(value) {
-	if (!value || typeof value !== "object" || Array.isArray(value)) return false;
-	const candidate = value;
-	return isLockfileVersion(candidate.version) && isRecord$1(candidate.directives) && isRecord$1(candidate.observations) && isRecord$1(candidate.tensions) && Boolean(candidate.governance_summary) && typeof candidate.governance_summary === "object";
-}
-function isLockfileVersion(value) {
-	return value === "1.0" || value === 1;
-}
-function normalizeObservationEntries(entries) {
-	return Object.fromEntries(Object.entries(entries).map(([id, entry]) => [id, {
-		...createObservationEntry(),
-		...entry,
-		last_content_fingerprint: entry.last_content_fingerprint ?? null
-	}]));
-}
-function normalizeDirectiveEntries(entries) {
-	return Object.fromEntries(Object.entries(entries).map(([id, entry]) => {
-		const normalized = createEntry();
-		return [id, {
-			...normalized,
-			...entry,
-			quality_signal: {
-				...normalized.quality_signal,
-				...entry.quality_signal,
-				overall: {
-					...normalized.quality_signal.overall,
-					...entry.quality_signal?.overall,
-					partial: (entry.quality_signal?.overall)?.partial ?? 0,
-					unverified: (entry.quality_signal?.overall)?.unverified ?? 0,
-					coverage_rate: (entry.quality_signal?.overall)?.coverage_rate ?? 0,
-					recent_verdicts: normalizeRecentVerdicts((entry.quality_signal?.overall)?.recent_verdicts)
-				},
-				by_task_type: normalizeSignalCountMap(entry.quality_signal?.by_task_type),
-				by_task_profile: normalizeSignalCountMap(entry.quality_signal?.by_task_profile),
-				ignored_reasons: normalizeIgnoredReasons(entry.quality_signal?.ignored_reasons),
-				...validIgnoredReason(entry.quality_signal?.last_ignored_reason) ? { last_ignored_reason: entry.quality_signal.last_ignored_reason } : {},
-				signal_confidence: validSignalConfidence$1(entry.quality_signal?.signal_confidence) ? entry.quality_signal.signal_confidence : "implicit",
-				evidence_confidence: validConfidence(entry.quality_signal?.evidence_confidence) ? entry.quality_signal.evidence_confidence : void 0,
-				last_evaluation_source: validEvaluationSource(entry.quality_signal?.last_evaluation_source) ? entry.quality_signal.last_evaluation_source : void 0,
-				last_seen: entry.quality_signal?.last_seen ?? ""
-			}
-		}];
-	}));
-}
-function normalizeTensionEntries(entries) {
-	return Object.fromEntries(Object.entries(entries).map(([id, entry]) => [id, {
-		seen_count: entry.seen_count ?? 0,
-		directive_id: entry.directive_id ?? "",
-		observation_id: entry.observation_id ?? "",
-		last_execution_mode: entry.last_execution_mode ?? "ambient",
-		last_seen: entry.last_seen ?? ""
-	}]));
-}
-function updateObservationFeedback(existing, observations, input, now) {
-	const observationStates = new Map(input.packet.governance.semantic_merge.observation_states.map((state) => [state.observation_id, state]));
-	for (const [observationId, relationCount] of observations) {
-		const entry = existing.observations[observationId] ?? createObservationEntry();
-		const state = observationStates.get(observationId);
-		entry.seen_count += 1;
-		entry.relation_count += relationCount;
-		if (state?.lifecycle_status === "active") entry.active_seen_count += 1;
-		if (state?.lifecycle_status === "stale") entry.stale_seen_count += 1;
-		if (state?.lifecycle_status === "superseded") entry.superseded_seen_count += 1;
-		entry.last_disposition = state?.disposition ?? "pending";
-		entry.last_lifecycle_status = state?.lifecycle_status ?? "unknown";
-		entry.last_content_fingerprint = state?.content_fingerprint ?? null;
-		entry.last_seen = now;
-		existing.observations[observationId] = entry;
-	}
-}
-function updateTensionFeedback(existing, input, now) {
-	for (const tension of input.packet.governance.semantic_merge.context_tensions) {
-		if (!tension.observation_id) continue;
-		const key = `${tension.directive_id}::${tension.observation_id}`;
-		const entry = existing.tensions[key] ?? createTensionEntry(tension.directive_id, tension.observation_id, tension.execution_mode);
-		entry.seen_count += 1;
-		entry.last_execution_mode = tension.execution_mode;
-		entry.last_seen = now;
-		existing.tensions[key] = entry;
-	}
-}
-function getObservedRccl(input) {
-	const counts = /* @__PURE__ */ new Map();
-	for (const relation of input.packet.governance.semantic_merge.relations) {
-		if (!relation.observation_id) continue;
-		counts.set(relation.observation_id, (counts.get(relation.observation_id) ?? 0) + 1);
-	}
-	for (const link of input.packet.governance.semantic_merge.observation_links) if (!counts.has(link.observation_id)) counts.set(link.observation_id, link.directive_ids.length);
-	return counts;
-}
-function summarizeHostFulfillmentFeedback(input) {
-	const hasAdherence = input.adherencePayload?.length;
-	const source = hasAdherence ? "adherence-evidence" : input.followedDirectiveIds?.length || input.ignoredDirectiveIds?.length ? "explicit-directives" : "no-explicit-evaluation";
-	const signal = hasAdherence ? "explicit" : validSignalConfidence$1(input.signalConfidence) ? input.signalConfidence : source === "explicit-directives" ? "explicit" : "implicit";
-	const fulfillment = input.hostFulfillment ?? input.packet.governance.trace.host_fulfillment;
-	return {
-		interpretation_mode: input.packet.interpretation.input_provenance.interpretation_mode,
-		completion_signal: signal,
-		completion_source: source,
-		artifacts: {
-			"agent-capability-profile": summarizeArtifactFeedback(fulfillment?.agentCapability),
-			"task-model": summarizeArtifactFeedback(fulfillment?.taskModel),
-			"semantic-governance-graph": summarizeArtifactFeedback(fulfillment?.semanticGovernanceGraph),
-			"adherence-evidence": summarizeArtifactFeedback(fulfillment?.adherenceEvidence)
-		}
-	};
-}
-function summarizeArtifactFeedback(artifact) {
-	const summary = artifact?.diagnostics?.summary;
-	return {
-		provided: artifact?.provided ?? false,
-		status: artifact?.status ?? "absent",
-		accepted: summary?.accepted ?? 0,
-		rejected: summary?.rejected ?? 0,
-		downgraded: summary?.downgraded ?? 0,
-		unused: summary?.unused ?? 0
-	};
-}
-function createObservationEntry() {
-	return {
-		seen_count: 0,
-		relation_count: 0,
-		active_seen_count: 0,
-		stale_seen_count: 0,
-		superseded_seen_count: 0,
-		last_disposition: "pending",
-		last_lifecycle_status: "unknown",
-		last_content_fingerprint: null,
-		last_seen: ""
-	};
-}
-function createTensionEntry(directiveId, observationId, executionMode) {
-	return {
-		seen_count: 0,
-		directive_id: directiveId,
-		observation_id: observationId,
-		last_execution_mode: executionMode,
-		last_seen: ""
-	};
-}
-function createDocument() {
-	return {
-		version: "1.0",
-		directives: {},
-		observations: {},
-		tensions: {},
-		governance_summary: {
-			total_tasks: 0,
-			by_task_type: {},
-			by_task_profile: {},
-			last_execution_modes: emptyModeCounts(),
-			last_tension_count: 0,
-			last_observation_count: 0,
-			last_updated_at: ""
-		}
-	};
-}
-function createEntry() {
-	return {
-		quality_signal: {
-			overall: {
-				followed: 0,
-				ignored: 0,
-				partial: 0,
-				unverified: 0,
-				follow_rate: 0,
-				coverage_rate: 0,
-				trend: "stable",
-				recent_verdicts: []
-			},
-			by_task_type: {},
-			by_task_profile: {},
-			ignored_reasons: {},
-			signal_confidence: "implicit",
-			last_seen: ""
-		},
-		governance: { outcomes: {
-			total_tasks: 0,
-			with_tensions: 0,
-			last_execution_modes: emptyModeCounts(),
-			last_tension_count: 0,
-			last_updated_at: ""
-		} }
-	};
-}
-function emptyModeCounts() {
-	return {
-		enforce: 0,
-		"deviation-noted": 0,
-		ambient: 0,
-		suppress: 0
-	};
-}
-function getTrackedDirectiveIds(input) {
-	return input.packet.governance.semantic_merge.directive_modes.filter((directive) => directive.execution_mode !== "suppress").map((directive) => directive.directive_id);
-}
-function summarizeExecutionModes(input) {
-	const counts = emptyModeCounts();
-	for (const directive of input.packet.governance.semantic_merge.directive_modes) counts[directive.execution_mode] += 1;
-	return counts;
-}
-function computeFollowRate(entry) {
-	const { followed, ignored, partial } = entry.quality_signal.overall;
-	const total = followed + ignored + partial;
-	return total === 0 ? 0 : Number((followed / total).toFixed(2));
-}
-function computeCoverageRate(entry) {
-	const { followed, ignored, partial, unverified } = entry.quality_signal.overall;
-	const covered = followed + ignored + partial;
-	const total = covered + unverified;
-	return total === 0 ? 0 : Number((covered / total).toFixed(2));
-}
-function emptySignalCounts() {
-	return {
-		followed: 0,
-		ignored: 0,
-		partial: 0,
-		unverified: 0
-	};
-}
-function normalizeSignalCountMap(value) {
-	if (!value || typeof value !== "object" || Array.isArray(value)) return {};
-	return Object.fromEntries(Object.entries(value).map(([key, counts]) => {
-		if (!counts || typeof counts !== "object" || Array.isArray(counts)) return [key, emptySignalCounts()];
-		const item = counts;
-		return [key, {
-			followed: validCount(item.followed) ? item.followed : 0,
-			ignored: validCount(item.ignored) ? item.ignored : 0,
-			partial: validCount(item.partial) ? item.partial : 0,
-			unverified: validCount(item.unverified) ? item.unverified : 0
-		}];
-	}));
-}
-function validCount(value) {
-	return typeof value === "number" && Number.isFinite(value) && value >= 0;
-}
-function validEvaluationSource(value) {
-	return value === "no-explicit-evaluation" || value === "explicit-directives" || value === "adherence-evidence";
-}
-function computeTrend(entry) {
-	const verdicts = entry.quality_signal.overall.recent_verdicts;
-	if (verdicts.length < 10) return "stable";
-	const difference = strictWindowRate(verdicts.slice(-5)) - strictWindowRate(verdicts.slice(-10, -5));
-	if (difference >= .1) return "improving";
-	if (difference <= -.1) return "declining";
-	return "stable";
-}
-function strictWindowRate(verdicts) {
-	return verdicts.filter((verdict) => verdict === "followed").length / verdicts.length;
-}
-function normalizeRecentVerdicts(value) {
-	return Array.isArray(value) ? value.filter((item) => item === "followed" || item === "partial" || item === "ignored").slice(-20) : [];
-}
-function acquireLock(lockPath, timeoutMs = 5e3) {
-	mkdirSync(dirname(lockPath), { recursive: true });
-	const deadline = Date.now() + timeoutMs;
-	let fd = null;
-	while (fd === null) try {
-		fd = openSync(lockPath, "wx");
-		writeFileSync(fd, `${process.pid}\n${(/* @__PURE__ */ new Date()).toISOString()}\n`, "utf8");
-		fsyncSync(fd);
-	} catch (error) {
-		if (error.code !== "EEXIST") throw error;
-		if (Date.now() >= deadline) throw new Error(`LOCKFILE_LOCK_TIMEOUT: could not acquire ${lockPath} within ${timeoutMs}ms.`);
-		Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 20);
-	}
-	return () => {
-		if (fd !== null) closeSync(fd);
-		try {
-			unlinkSync(lockPath);
-		} catch {}
-	};
-}
-function atomicWrite(filePath, contents) {
-	mkdirSync(dirname(filePath), { recursive: true });
-	const tempPath = `${filePath}.${process.pid}.${Date.now()}.tmp`;
-	const fd = openSync(tempPath, "wx");
-	try {
-		writeFileSync(fd, contents, "utf8");
-		fsyncSync(fd);
-	} finally {
-		closeSync(fd);
-	}
-	renameSync(tempPath, filePath);
-	try {
-		const directoryFd = openSync(dirname(filePath), "r");
-		try {
-			fsyncSync(directoryFd);
-		} finally {
-			closeSync(directoryFd);
-		}
-	} catch {}
-}
-function taskProfileKey(input) {
-	const context = input.packet.interpretation.resolved.context_profile;
-	return [
-		input.ego.taskIntent.change_type,
-		context.risk_level ?? "medium",
-		context.scope_size ?? "unknown",
-		context.compatibility_requirement ?? "none"
-	].join("|");
-}
-function resolveSignalConfidence(input, ignored) {
-	if (validSignalConfidence$1(input.signalConfidence)) return input.signalConfidence;
-	if (ignored) return "explicit";
-	return input.followedDirectiveIds?.length || input.ignoredDirectiveIds?.length ? "explicit" : "implicit";
-}
-function normalizeIgnoredReasons(value) {
-	if (!value || typeof value !== "object" || Array.isArray(value)) return {};
-	const result = {};
-	for (const [reason, count] of Object.entries(value)) {
-		if (!validIgnoredReason(reason) || typeof count !== "number" || !Number.isFinite(count) || count <= 0) continue;
-		result[reason] = count;
-	}
-	return result;
-}
-function validIgnoredReason(value) {
-	return value === "not-applicable" || value === "conflicts-with-task" || value === "too-broad" || value === "repo-reality" || value === "false-positive" || value === "user-corrected" || value === "other";
-}
-function validSignalConfidence$1(value) {
-	return value === "implicit" || value === "explicit" || value === "review-confirmed" || value === "user-corrected";
-}
-function resolveFromAdherencePayload(input, trackedDirectiveIds) {
-	if (!input.adherencePayload?.length) return null;
-	const followed = /* @__PURE__ */ new Set();
-	const ignored = /* @__PURE__ */ new Set();
-	const partial = /* @__PURE__ */ new Set();
-	const unverified = /* @__PURE__ */ new Set();
-	const ignoredReasons = {};
-	const evidenceConfidence = /* @__PURE__ */ new Map();
-	const trackedSet = new Set(trackedDirectiveIds);
-	const evaluated = /* @__PURE__ */ new Set();
-	for (const verdict of input.adherencePayload) {
-		if (!trackedSet.has(verdict.directive_id)) continue;
-		evaluated.add(verdict.directive_id);
-		evidenceConfidence.set(verdict.directive_id, verdict.confidence);
-		if (verdict.verdict === "followed") followed.add(verdict.directive_id);
-		else if (verdict.verdict === "ignored") {
-			ignored.add(verdict.directive_id);
-			if (verdict.ignored_reason) ignoredReasons[verdict.directive_id] = verdict.ignored_reason;
-		} else if (verdict.verdict === "partial") partial.add(verdict.directive_id);
-		else if (verdict.verdict === "unverified") unverified.add(verdict.directive_id);
-	}
-	for (const id of trackedDirectiveIds) if (!evaluated.has(id)) unverified.add(id);
-	return {
-		followed,
-		ignored,
-		partial,
-		unverified,
-		ignoredReasons,
-		evidenceConfidence
-	};
-}
-//#endregion
-//#region src/ir/adapters/feedback.ts
-function feedbackToIR(lockfilePath) {
-	const parsed = loadLockfile(lockfilePath);
-	const directiveSignals = Object.entries(parsed.directives ?? {}).map(([directiveId, entry]) => directiveSignalToIR(directiveId, entry));
-	const observationSignals = Object.entries(parsed.observations ?? {}).map(([observationId, entry]) => observationSignalToIR(observationId, entry));
-	const tensionSignals = Object.entries(parsed.tensions ?? {}).map(([tensionKey, entry]) => tensionSignalToIR(tensionKey, entry));
-	return {
-		irVersion: GOVERNANCE_IR_VERSION,
-		source: {
-			kind: "lockfile",
-			id: "playbook.lock",
-			path: lockfilePath
-		},
-		directiveSignals,
-		observationSignals,
-		tensionSignals,
-		globalSummary: {
-			totalTasks: parsed.governance_summary?.total_tasks ?? 0,
-			byTaskType: parsed.governance_summary?.by_task_type ?? {},
-			noisyDirectiveIds: [],
-			frequentlyIgnoredDirectiveIds: directiveSignals.filter((signal) => signal.ignored >= SEMANTIC_RELATION_POLICY.feedback.frequentlyIgnoredMinIgnored && signal.followRate < SEMANTIC_RELATION_POLICY.feedback.frequentlyIgnoredFollowRate).map((signal) => signal.directiveId),
-			recurringTensionKeys: tensionSignals.filter((signal) => signal.seenCount >= SEMANTIC_RELATION_POLICY.feedback.recurringTensionSeenCount).map((signal) => signal.tensionKey)
-		}
-	};
-}
-function loadLockfile(lockfilePath) {
-	if (!lockfilePath || !existsSync(lockfilePath)) return {};
-	const parsed = parseYaml$1(readFileSync(lockfilePath, "utf-8"));
-	if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
-	if ("directives" in parsed || "governance_summary" in parsed) return parsed;
-	const directives = {};
-	for (const [id, entry] of Object.entries(parsed)) if (isDirectiveEntry(entry)) directives[id] = entry;
-	return { directives };
-}
-function isDirectiveEntry(value) {
-	return value != null && typeof value === "object" && !Array.isArray(value) && "quality_signal" in value;
-}
-function directiveSignalToIR(directiveId, entry) {
-	const overall = entry.quality_signal?.overall;
-	return {
-		directiveId,
-		followed: overall?.followed ?? 0,
-		ignored: overall?.ignored ?? 0,
-		followRate: overall?.follow_rate ?? 0,
-		trend: overall?.trend ?? "stable",
-		signalConfidence: validSignalConfidence(entry.quality_signal?.signal_confidence) ? entry.quality_signal.signal_confidence : "implicit",
-		ignoredReasons: normalizeIgnoredReasons(entry.quality_signal?.ignored_reasons),
-		...validIgnoredReason(entry.quality_signal?.last_ignored_reason) ? { lastIgnoredReason: entry.quality_signal.last_ignored_reason } : {},
-		lastSeen: entry.quality_signal?.last_seen ?? ""
-	};
-}
-function validSignalConfidence(value) {
-	return value === "implicit" || value === "explicit" || value === "review-confirmed" || value === "user-corrected";
-}
-function observationSignalToIR(observationId, entry) {
-	return {
-		observationId,
-		seenCount: entry.seen_count ?? 0,
-		relationCount: entry.relation_count ?? 0,
-		activeSeenCount: entry.active_seen_count ?? 0,
-		staleSeenCount: entry.stale_seen_count ?? 0,
-		supersededSeenCount: entry.superseded_seen_count ?? 0,
-		lastDisposition: entry.last_disposition ?? "pending",
-		lastLifecycleStatus: entry.last_lifecycle_status ?? "unknown",
-		lastContentFingerprint: entry.last_content_fingerprint ?? null,
-		lastSeen: entry.last_seen ?? ""
-	};
-}
-function tensionSignalToIR(tensionKey, entry) {
-	return {
-		tensionKey,
-		seenCount: entry.seen_count ?? 0,
-		directiveId: entry.directive_id ?? "",
-		observationId: entry.observation_id ?? "",
-		lastExecutionMode: entry.last_execution_mode ?? "ambient",
-		lastSeen: entry.last_seen ?? ""
-	};
 }
 //#endregion
 //#region src/select/activation-plan.ts
@@ -9935,138 +7164,195 @@ function getDirectiveLayerRank(layerId) {
 	return LAYER_RANKS.core;
 }
 //#endregion
-//#region src/ir/adapters/playbook.ts
-const WEIGHT_RANKS = {
-	low: 0,
-	normal: 1,
-	high: 2,
-	critical: 3
-};
-const PRESCRIPTION_RANKS = {
-	should: 0,
-	must: 1
-};
-function directivesToIR(directives, local) {
-	const overrideById = new Map(local?.overrides.map((item) => [item.supersedes, item]) ?? []);
-	const augmentById = new Map(local?.augments.map((item) => [item.id, item]) ?? []);
-	const suppressById = new Map(local?.suppresses.map((item) => [item.id, item]) ?? []);
-	return directives.map((directive) => {
-		const override = overrideById.get(directive.id);
-		const augment = augmentById.get(directive.id);
-		const suppression = suppressById.get(directive.id);
-		const prescription = override?.prescription ?? directive.prescription;
-		const weight = override?.weight ?? directive.weight;
-		return {
-			irVersion: GOVERNANCE_IR_VERSION,
-			id: directive.id,
-			semanticKey: toSemanticKey(directive.id),
-			source: {
-				kind: directive.source.kind === "local-addition" ? "local-playbook" : "builtin-playbook",
-				id: directive.source.layerId,
-				path: directive.source.filePath
-			},
-			layer: {
-				id: directive.source.layerId,
-				rank: getDirectiveLayerRank(directive.source.layerId)
-			},
-			scope: { path: directive.scope.path },
-			kind: directive.type,
-			prescription,
-			weight,
-			priority: buildPriority(directive.source.layerId, prescription, weight, Boolean(override)),
-			body: {
-				description: directive.description,
-				rationale: override?.rationale ?? directive.rationale,
-				exceptions: override?.exceptions ?? directive.exceptions ?? [],
-				examples: augment ? [...directive.examples, ...augment.examples] : directive.examples
-			},
-			traits: buildTraits$1(directive),
-			local: {
-				overrideApplied: Boolean(override),
-				augmentApplied: Boolean(augment),
-				suppressed: Boolean(suppression),
-				suppressionReason: suppression?.reason
+//#region src/utils/glob.ts
+/**
+* Lightweight glob matcher for the subset used by playbook scopes and RCCL scopes.
+*/
+function minimatch(filepath, pattern) {
+	return globToRegex(pattern).test(filepath.replace(/\\/g, "/"));
+}
+function globToRegex(pattern) {
+	let i = 0;
+	let regex = "^";
+	while (i < pattern.length) {
+		const c = pattern[i];
+		if (c === "*") if (pattern[i + 1] === "*") {
+			i += 2;
+			if (pattern[i] === "/") {
+				i += 1;
+				regex += "(?:.+/)?";
+			} else regex += ".*";
+		} else {
+			i += 1;
+			regex += "[^/]*";
+		}
+		else if (c === "?") {
+			i += 1;
+			regex += "[^/]";
+		} else if (c === "{") {
+			const closeIndex = pattern.indexOf("}", i + 1);
+			if (closeIndex === -1) {
+				regex += "\\{";
+				i += 1;
+				continue;
 			}
-		};
-	});
+			const options = pattern.slice(i + 1, closeIndex).split(",").map((option) => option.trim()).filter(Boolean).map(escapeRegex);
+			regex += options.length ? `(?:${options.join("|")})` : "\\{\\}";
+			i = closeIndex + 1;
+		} else if (c === ".") {
+			i += 1;
+			regex += "\\.";
+		} else {
+			regex += escapeRegex(c);
+			i += 1;
+		}
+	}
+	return new RegExp(`${regex}$`);
 }
-function buildPriority(layerId, prescription, weight, overrideApplied) {
-	return {
-		layerRank: getDirectiveLayerRank(layerId),
-		prescriptionRank: PRESCRIPTION_RANKS[prescription],
-		weightRank: WEIGHT_RANKS[weight],
-		localOverrideRank: overrideApplied ? 1 : 0
-	};
-}
-function buildTraits$1(directive) {
-	const explicit = directive.traits ?? {};
-	return {
-		rcclImmune: directive.rccl_immune === true,
-		safetyCritical: explicit.safety_critical === true,
-		broadScope: explicit.broad_scope === true,
-		compatibilitySensitive: explicit.compatibility_sensitive === true,
-		migrationSensitive: explicit.migration_sensitive === true
-	};
-}
-function toSemanticKey(id) {
-	return id.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+function escapeRegex(value) {
+	return value.replace(/[|\\{}()[\]^$+*?.]/g, "\\$&");
 }
 //#endregion
-//#region src/ir/adapters/rccl.ts
-function observationsToIR(observations, rcclPath) {
-	return observations.map((observation) => ({
-		irVersion: GOVERNANCE_IR_VERSION,
-		id: observation.id,
-		semanticKey: observation.semantic_key,
-		source: {
-			kind: "rccl",
-			id: observation.id,
-			path: rcclPath,
-			fingerprint: observation.lifecycle?.content_fingerprint
-		},
-		category: observation.category,
-		scope: { path: observation.scope },
-		pattern: observation.pattern,
-		adherence: {
-			quality: observation.adherence_quality,
-			confidence: observation.confidence
-		},
-		evidence: observation.evidence,
-		support: {
-			sourceSlices: observation.support.source_slices,
-			fileCount: observation.support.file_count,
-			clusterCount: observation.support.cluster_count,
-			scopeBasis: observation.support.scope_basis
-		},
-		verification: {
-			evidenceStatus: observation.verification.evidence_status ?? "pending",
-			evidenceVerifiedCount: observation.verification.evidence_verified_count ?? 0,
-			evidenceConfidence: observation.verification.evidence_confidence ?? 0,
-			inductionStatus: observation.verification.induction_status ?? "pending",
-			inductionConfidence: observation.verification.induction_confidence ?? 0,
-			checkedAt: observation.verification.checked_at,
-			disposition: observation.verification.disposition ?? "demote-to-ambient"
-		},
-		lifecycle: {
-			firstSeenGitRef: observation.lifecycle?.first_seen_git_ref ?? null,
-			lastSeenGitRef: observation.lifecycle?.last_seen_git_ref ?? null,
-			lastVerifiedAt: observation.lifecycle?.last_verified_at ?? null,
-			contentFingerprint: observation.lifecycle?.content_fingerprint ?? null,
-			status: observation.lifecycle?.status ?? "unknown",
-			supersedes: observation.lifecycle?.supersedes ?? [],
-			supersededBy: observation.lifecycle?.superseded_by ?? null
-		},
-		traits: buildTraits(observation)
-	}));
+//#region src/utils/paths.ts
+function normalizePath(value) {
+	return value.replace(/\\/g, "/").replace(/^\.\//, "");
 }
-function buildTraits(observation) {
-	const explicit = observation.traits ?? {};
+function pathMatchesScope(path, scope) {
+	if (scope === "*" || scope === "**" || scope === "**/*") return true;
+	if (scope.includes("*") || scope.includes("?") || scope.includes("{")) return minimatch(path, scope);
+	const normalizedScope = scope.replace(/\/$/, "");
+	return path === normalizedScope || path.startsWith(`${normalizedScope}/`);
+}
+function scopeOverlapsPath(scope, path) {
+	const normalizedScope = normalizePath(scope);
+	const normalizedPath = normalizePath(path);
+	return pathMatchesScope(normalizedPath, normalizedScope) || pathMatchesScope(normalizedScope, normalizedPath);
+}
+//#endregion
+//#region src/task/types.ts
+const CHANGE_TYPES = [
+	"bugfix",
+	"feature",
+	"refactor",
+	"migration",
+	"maintenance",
+	"docs",
+	"test",
+	"unknown"
+];
+const RISK_LEVELS = [
+	"low",
+	"medium",
+	"high"
+];
+const SCOPE_LEVELS = [
+	"local",
+	"module",
+	"cross-module",
+	"repository"
+];
+//#endregion
+//#region src/task/normalize.ts
+function normalizeTaskContext(input) {
+	const description = requiredString(input.description, "task.description");
+	const targets = uniqueStrings(input.targets?.map(normalizePath) ?? []);
+	const explicitSource = input.interpretationSource === "host-provided" ? "host-provided" : "explicit";
+	const provenance = [];
+	const explicitChangeType = enumValue(input.changeType, CHANGE_TYPES);
+	const inferredChangeType = inferChangeType(description);
+	const changeType = explicitChangeType ?? inferredChangeType ?? "unknown";
+	provenance.push({
+		field: "changeType",
+		source: explicitChangeType ? explicitSource : inferredChangeType ? "deterministic" : "defaulted",
+		confidence: explicitChangeType ? 1 : inferredChangeType ? .72 : 0
+	});
+	provenance.push({
+		field: "targets",
+		source: targets.length ? explicitSource : "defaulted",
+		confidence: targets.length ? 1 : 0
+	});
+	const explicitStack = uniqueStrings(input.techStack ?? []);
+	const inferredStack = inferTechStack(targets);
+	const techStack = uniqueStrings([...explicitStack, ...inferredStack]);
+	provenance.push({
+		field: "techStack",
+		source: explicitStack.length ? explicitSource : inferredStack.length ? "deterministic" : "defaulted",
+		confidence: explicitStack.length ? 1 : inferredStack.length ? .95 : 0
+	});
+	const explicitRisk = enumValue(input.risk, RISK_LEVELS);
+	const risk = explicitRisk ?? inferRisk(changeType, targets, description);
+	provenance.push({
+		field: "risk",
+		source: explicitRisk ? explicitSource : "deterministic",
+		confidence: explicitRisk ? 1 : .7
+	});
+	const explicitScope = enumValue(input.scope, SCOPE_LEVELS);
+	const scope = explicitScope ?? inferScope(targets);
+	provenance.push({
+		field: "scope",
+		source: explicitScope ? explicitSource : targets.length ? "deterministic" : "defaulted",
+		confidence: explicitScope ? 1 : targets.length ? .85 : 0
+	});
 	return {
-		legacy: observation.category === "legacy" || explicit.legacy === true,
-		migrationBoundary: observation.category === "migration" || explicit.migration_boundary === true,
-		antiPattern: observation.category === "anti-pattern" || explicit.anti_pattern === true,
-		compatibilityBoundary: explicit.compatibility_boundary === true
+		description,
+		changeType,
+		targets,
+		techStack,
+		risk,
+		scope,
+		constraints: uniqueStrings(input.constraints ?? []),
+		avoid: uniqueStrings(input.avoid ?? []),
+		uncertainties: uniqueStrings(input.uncertainties ?? []),
+		provenance
 	};
+}
+function taskNeedsInterpretation(task, mode) {
+	const reasons = [];
+	if (task.changeType === "unknown" && (mode === "strict" || task.risk === "high")) reasons.push("change type is unknown for a strict or high-risk task");
+	if (task.targets.length === 0 && (mode === "strict" || task.risk === "high")) reasons.push("no target path was supplied for a strict or high-risk task");
+	if (task.uncertainties.length && mode === "strict") reasons.push("strict mode requires explicit resolution of declared uncertainties");
+	return reasons;
+}
+function inferChangeType(description) {
+	const value = description.toLowerCase();
+	if (/\b(fix|bug|defect|regression|repair)\b|修复|缺陷|回归/.test(value)) return "bugfix";
+	if (/\b(refactor|restructure|cleanup)\b|重构|整理/.test(value)) return "refactor";
+	if (/\b(migrate|migration|cutover)\b|迁移|切换/.test(value)) return "migration";
+	if (/\b(document|docs?|readme)\b|文档/.test(value)) return "docs";
+	if (/\b(test|spec|coverage)\b|测试|覆盖率/.test(value)) return "test";
+	if (/\b(add|create|implement|feature)\b|新增|实现|功能/.test(value)) return "feature";
+	if (/\b(maintain|upgrade|update|chore)\b|维护|升级|更新/.test(value)) return "maintenance";
+}
+function inferTechStack(targets) {
+	const result = [];
+	for (const target of targets) if (/\.(?:ts|tsx|mts|cts)$/.test(target)) result.push("typescript");
+	else if (/\.(?:js|jsx|mjs|cjs)$/.test(target)) result.push("javascript");
+	else if (/\.py$/.test(target)) result.push("python");
+	else if (/\.rs$/.test(target)) result.push("rust");
+	else if (/\.go$/.test(target)) result.push("go");
+	return uniqueStrings(result);
+}
+function inferRisk(changeType, targets, description) {
+	if (changeType === "migration" || /security|auth|payment|database|安全|认证|支付|数据库/i.test(description)) return "high";
+	if (changeType === "docs" || changeType === "test") return "low";
+	if (targets.length === 1) return "low";
+	return "medium";
+}
+function inferScope(targets) {
+	if (targets.length <= 1) return targets.length ? "local" : "module";
+	const roots = new Set(targets.map((target) => target.split("/").slice(0, 2).join("/")));
+	if (roots.size === 1) return "module";
+	return roots.size <= 3 ? "cross-module" : "repository";
+}
+function enumValue(value, allowed) {
+	return typeof value === "string" && allowed.includes(value) ? value : void 0;
+}
+function requiredString(value, field) {
+	if (typeof value !== "string" || !value.trim()) throw new Error(`${field} must be a non-empty string.`);
+	return value.trim();
+}
+function uniqueStrings(values) {
+	return [...new Set(values.map((value) => value.trim()).filter(Boolean))];
 }
 //#endregion
 //#region src/utils/hash.ts
@@ -10074,3390 +7360,1002 @@ function stableHash(parts) {
 	return createHash("sha256").update(JSON.stringify(parts)).digest("hex").slice(0, 16);
 }
 //#endregion
-//#region src/ir/adapters/task.ts
-function taskToIR(resolved) {
-	const intent = resolved.task_intent;
-	const context = resolved.context_profile;
-	return {
-		irVersion: GOVERNANCE_IR_VERSION,
-		id: stableHash([
-			"task-ir",
-			resolved.task.description,
-			intent,
-			context
-		]),
-		workflow: intent.workflow,
-		changeType: intent.change_type,
-		operation: intent.operation,
-		targetLayer: intent.target_layer,
-		targets: buildTargets(intent.target_file, intent.changed_files),
-		techStack: intent.tech_stack,
-		tags: intent.tags,
-		context,
-		provenance: buildProvenance(resolved),
-		unresolved: resolved.input_provenance.unresolved_fields,
-		diagnostics: {
-			clarificationRecommended: resolved.diagnostics.clarification_recommended,
-			ambiguityReasons: resolved.diagnostics.ambiguity_reasons
-		}
-	};
-}
-function buildTargets(targetFile, changedFiles) {
-	const targets = [];
-	if (targetFile) targets.push({
-		path: targetFile,
-		role: "target"
-	});
-	for (const path of changedFiles) if (path !== targetFile) targets.push({
-		path,
-		role: "changed"
-	});
-	return targets;
-}
-function buildProvenance(resolved) {
-	return resolved.input_provenance.resolved_fields.map((field) => ({
-		field: String(field.field ?? "unknown"),
-		source: String(field.source ?? "unknown"),
-		confidence: typeof field.confidence === "number" ? field.confidence : 0
-	}));
-}
-//#endregion
-//#region src/ir/fingerprint.ts
-function fingerprintPart(value) {
-	return stableHash([canonicalize(value)]);
-}
-function buildIRFingerprints(input) {
-	const task = fingerprintPart(input.task);
-	const directives = fingerprintPart(input.directives);
-	const observations = fingerprintPart(input.observations);
-	const feedback = fingerprintPart(input.feedback);
-	const hostProposals = fingerprintPart(input.hostProposals);
-	return {
-		task,
-		directives,
-		observations,
-		feedback,
-		hostProposals,
-		bundle: fingerprintPart({
-			irVersion: input.irVersion,
-			sourceManifest: input.sourceManifest,
-			task,
-			directives,
-			observations,
-			feedback,
-			hostProposals
-		})
-	};
-}
-function canonicalize(value) {
-	if (Array.isArray(value)) return value.map(canonicalize);
-	if (!value || typeof value !== "object") return value;
-	return Object.fromEntries(Object.entries(value).filter(([, item]) => item !== void 0).sort(([left], [right]) => left.localeCompare(right)).map(([key, item]) => [key, canonicalize(item)]));
-}
-//#endregion
-//#region src/ir/build-ir.ts
-async function buildGovernanceIR(input, sources) {
-	const resolvedTask = resolveCompileTask(input);
-	const loadedSources = sources?.rcclVerificationSummary ? sources : await loadOrVerifyCompileSources({
-		...input,
-		resolvedTask
-	}, sources);
-	const bundleWithoutFingerprints = {
-		irVersion: GOVERNANCE_IR_VERSION,
-		task: taskToIR(resolvedTask),
-		directives: directivesToIR(loadedSources.allDirectives, loadedSources.local),
-		observations: observationsToIR(loadedSources.rccl?.observations ?? [], input.rcclPath),
-		feedback: feedbackToIR(input.lockfilePath),
-		hostProposals: input.hostProposals ?? [],
-		sourceManifest: {
-			builtinRoot: input.builtinRoot,
-			selectedLayers: loadedSources.selectedLayerIds,
-			localAugmentPath: input.localAugmentPath,
-			rcclPath: input.rcclPath,
-			lockfilePath: input.lockfilePath,
-			projectRoot: input.projectRoot,
-			sources: [
-				{
-					kind: "builtin-playbook",
-					id: "builtin-root",
-					path: input.builtinRoot,
-					fingerprint: stableHash(loadedSources.selectedLayerIds)
-				},
-				...input.localAugmentPath ? [{
-					kind: "local-playbook",
-					id: "local-augment",
-					path: input.localAugmentPath
-				}] : [],
-				...loadedSources.rccl ? [{
-					kind: "rccl",
-					id: loadedSources.rccl.git_ref ?? "rccl",
-					path: input.rcclPath,
-					version: loadedSources.rccl.version,
-					fingerprint: stableHash(loadedSources.rccl.observations.map((observation) => observation.lifecycle?.content_fingerprint ?? observation.id))
-				}] : [],
-				...input.lockfilePath ? [{
-					kind: "lockfile",
-					id: "playbook.lock",
-					path: input.lockfilePath
-				}] : [],
-				...(input.hostProposals ?? []).map((proposal) => ({
-					kind: "host-proposal",
-					id: proposal.source.id,
-					path: proposal.source.path,
-					fingerprint: stableHash([
-						proposal.kind,
-						proposal.source.id,
-						proposal.payload
-					])
-				}))
-			]
-		}
-	};
-	return {
-		...bundleWithoutFingerprints,
-		fingerprints: buildIRFingerprints(bundleWithoutFingerprints)
-	};
-}
-//#endregion
-//#region src/compile-input.ts
-function hasResolvedTask(input) {
-	return "resolvedTask" in input;
-}
-function resolveCompileTask(input) {
-	if (hasResolvedTask(input)) return input.resolvedTask;
-	return resolveTask({
-		task: input.task,
-		taskModels: input.taskModels ?? [],
-		interpretationMode: input.interpretationMode
-	});
-}
-function toResolvedCompileInput(input) {
-	if (hasResolvedTask(input)) return input;
-	const { task: _task, taskModels: _taskModels, interpretationMode: _interpretationMode, ...base } = input;
-	return {
-		...base,
-		resolvedTask: resolveCompileTask(input)
-	};
-}
-async function resolveActivatedGovernanceContext(input) {
-	const normalizedInput = toResolvedCompileInput(input);
-	const resolvedTask = normalizedInput.resolvedTask;
-	const sources = await loadOrVerifyCompileSources(normalizedInput, normalizedInput.preloadedSources);
-	const governanceIR = await buildGovernanceIR(normalizedInput, sources);
-	const activationDecisions = resolveActivationDecisionsIR(governanceIR);
-	const activatedDirectiveIds = activatedDirectiveIdsIR(activationDecisions);
-	return {
-		normalizedInput,
-		resolvedTask,
-		sources,
-		governanceIR,
-		activationDecisions,
-		activatedDirectiveIds,
-		activeDirectives: governanceIR.directives.filter((directive) => activatedDirectiveIds.has(directive.id))
-	};
-}
-//#endregion
-//#region src/ai-contracts/semantic-governance-graph.ts
-const SEMANTIC_GRAPH_SCHEMA = {
-	type: "object",
-	additionalProperties: false,
-	properties: {
-		nodes: { type: "array" },
-		edges: { type: "array" }
-	},
-	required: ["edges"]
+//#region src/decision/budget.ts
+const GUIDANCE_BUDGET = {
+	required: 3,
+	consider: 3,
+	avoid: 2,
+	tensions: 2,
+	examplesPerItem: 1,
+	serializedCharacters: 6e3
 };
-async function prepareSemanticContractContext(input) {
-	const ctx = await resolveActivatedGovernanceContext(input.compileInput);
-	return {
-		resolvedTask: ctx.resolvedTask,
-		directives: ctx.activeDirectives.map(summarizeDirectiveForProposal),
-		observations: ctx.governanceIR.observations.filter((observation) => !skippedObservationIds(ctx.sources).has(observation.id)).map(summarizeObservationForProposal),
-		loadedSources: ctx.sources
-	};
-}
-async function prepareSemanticGovernanceGraphContractBundle(input) {
-	const context = await prepareSemanticContractContext(input);
-	return {
-		...context,
-		...prepareSemanticGovernanceGraphContract({
-			resolvedTask: context.resolvedTask,
-			directives: context.directives,
-			observations: context.observations,
-			artifactPath: input.artifactPath
-		})
-	};
-}
-function prepareSemanticGovernanceGraphContract(input) {
-	const prompt = buildGraphPrompt(input);
-	const artifact = {
-		suggestedPath: input.artifactPath,
-		format: "json",
-		usage: `Write a v1 envelope to ${input.artifactPath}: schema_version 1, kind semantic-governance-graph, the issued requestId/contextFingerprint as request_id/context_fingerprint, and the graph under payload; then re-run with --governance-graph-file ${input.artifactPath}.`
-	};
-	const cacheKeyMaterial = {
-		taskIntent: input.resolvedTask.task_intent,
-		contextProfile: input.resolvedTask.context_profile,
-		directiveIds: input.directives.map((directive) => directive.id),
-		observationIds: input.observations.map((observation) => observation.id)
-	};
-	return {
-		graphPrompt: prompt,
-		graphSchema: JSON.stringify(SEMANTIC_GRAPH_SCHEMA, null, 2),
-		graphArtifact: artifact,
-		contract: {
-			contractVersion: AI_CONTRACT_VERSION,
-			kind: "semantic-governance-graph",
-			...artifactIdentity("semantic-governance-graph", cacheKeyMaterial),
-			schemaId: "runtime.semantic-governance-graph",
-			schemaVersion: "1.0",
-			prompt,
-			schema: SEMANTIC_GRAPH_SCHEMA,
-			artifact,
-			allowedIds: allowedIds(input),
-			provenance: {
-				owner: "runtime",
-				deterministic: true
-			},
-			context: {
-				resolvedTask: {
-					task_intent: input.resolvedTask.task_intent,
-					context_profile: input.resolvedTask.context_profile
-				},
-				directives: input.directives.map(compactDirectiveForContract),
-				observations: input.observations.map(compactObservationForContract),
-				edgeGuidance: {
-					relations: [
-						"reinforce",
-						"tension",
-						"suppress",
-						"ambient-only",
-						"unrelated"
-					],
-					impacts: [
-						"execution-mode",
-						"review-focus",
-						"ambient-context",
-						"no-effect"
-					],
-					execution_intents: [
-						"enforce",
-						"deviation-noted",
-						"ambient",
-						"suppress",
-						"no-change"
-					],
-					requirement: "Create edges only when the directive and observation meaning materially affect execution, review focus, or ambient context for this task."
-				}
-			},
-			cacheKeyMaterial
-		}
-	};
-}
-function validateSemanticGovernanceGraphPayload(input) {
-	const entries = [];
-	const versionDiagnostic = contractVersionDiagnostic(input.raw, "semantic-governance-graph");
-	if (versionDiagnostic) return {
-		proposal: buildHostProposal(input.source, { edges: [] }),
-		diagnostics: buildContractPayloadDiagnostics("semantic-governance-graph", [versionDiagnostic], input.source)
-	};
-	const allowedDirectiveIds = input.allowedDirectiveIds ? new Set(input.allowedDirectiveIds) : null;
-	const allowedObservationIds = input.allowedObservationIds ? new Set(input.allowedObservationIds) : null;
-	const edges = graphEdges(input.raw, entries);
-	const candidates = [];
-	const seen = /* @__PURE__ */ new Set();
-	edges.forEach((edge, index) => {
-		const path = `edges[${index}]`;
-		if (!isGraphEdge$1(edge)) {
-			entries.push(rejected(path, "malformed-payload", "Graph edge is missing required fields or has unsupported values."));
-			return;
-		}
-		if (allowedDirectiveIds && !allowedDirectiveIds.has(edge.directive_id)) {
-			entries.push(rejected(path, "invalid-id", "Graph edge references a directive id outside allowedIds.", edge));
-			return;
-		}
-		if (allowedObservationIds && !allowedObservationIds.has(edge.observation_id)) {
-			entries.push(rejected(path, "invalid-id", "Graph edge references an observation id outside allowedIds.", edge));
-			return;
-		}
-		const duplicateKey = `${edge.directive_id}::${edge.observation_id}::${edge.relation}`;
-		if (seen.has(duplicateKey)) {
-			entries.push(rejected(path, "duplicate-id", "Duplicate graph edge for directive, observation, and relation.", edge));
-			return;
-		}
-		seen.add(duplicateKey);
-		if (edge.confidence < SEMANTIC_RELATION_POLICY.hostSemantic.minConfidence) {
-			entries.push(rejected(path, "low-confidence", "Graph edge confidence is below Runtime host semantic threshold.", edge));
-			return;
-		}
-		if (!validEvidenceRefs(edge.evidence_refs)) {
-			entries.push(rejected(path, "missing-evidence", "Graph edge must include evidence_refs.", edge));
-			return;
-		}
-		const evidenceRefs = normalizeEvidenceRefs(edge.evidence_refs);
-		const evidence = verifyEvidenceRefs(evidenceRefs, input.evidenceContext);
-		if (isExecutionImpactingEdge(edge) && evidence.conversationOnly) {
-			entries.push(rejected(path, "conversation-only-evidence", "Execution-impacting graph edges cannot be supported only by conversation evidence.", edge));
-			return;
-		}
-		if (isExecutionImpactingEdge(edge) && !evidence.hasStaticEvidence) {
-			entries.push(rejected(path, "insufficient-static-evidence", "Execution-impacting graph edges require at least one statically verified evidence ref.", edge));
-			return;
-		}
-		candidates.push({
-			edge: {
-				...edge,
-				evidence_refs: evidenceRefs
-			},
-			index
-		});
-	});
-	const accepted = [];
-	const byDirective = /* @__PURE__ */ new Map();
-	for (const candidate of candidates) {
-		const group = byDirective.get(candidate.edge.directive_id) ?? [];
-		group.push(candidate);
-		byDirective.set(candidate.edge.directive_id, group);
-	}
-	for (const directiveId of [...byDirective.keys()].sort()) byDirective.get(directiveId).sort((left, right) => compareGraphCandidates(left.edge, right.edge, input.evidenceContext)).forEach((candidate, rank) => {
-		const path = `edges[${candidate.index}]`;
-		if (rank >= SEMANTIC_RELATION_POLICY.hostSemantic.maxCandidatesPerDirective) {
-			entries.push({
-				status: "unused",
-				reason: "capped-by-policy",
-				path,
-				message: `Candidate exceeded maxCandidatesPerDirective=${SEMANTIC_RELATION_POLICY.hostSemantic.maxCandidatesPerDirective}.`,
-				directiveId: candidate.edge.directive_id,
-				observationId: candidate.edge.observation_id,
-				confidence: candidate.edge.confidence
-			});
-			return;
-		}
-		accepted.push(candidate.edge);
-		entries.push({
-			status: "accepted",
-			reason: "accepted",
-			path,
-			message: "Semantic governance graph edge accepted for Runtime adjudication.",
-			directiveId: candidate.edge.directive_id,
-			observationId: candidate.edge.observation_id,
-			confidence: candidate.edge.confidence
-		});
-	});
-	if (!edges.length && !entries.length) entries.push({
-		status: "unused",
-		reason: "empty-payload",
-		path: "edges",
-		message: "No semantic governance graph edges were provided."
-	});
-	return {
-		proposal: buildHostProposal(input.source, { edges: accepted }),
-		diagnostics: buildContractPayloadDiagnostics("semantic-governance-graph", entries, input.source)
-	};
-}
-function compareGraphCandidates(left, right, context) {
-	const dispositionRank = (edge) => {
-		const observation = context?.observations?.find((item) => item.id === edge.observation_id);
-		return observation?.verification?.disposition === "keep" ? 2 : observation?.verification?.disposition === "keep-with-reduced-confidence" ? 1 : 0;
-	};
-	const disposition = dispositionRank(right) - dispositionRank(left);
-	if (disposition) return disposition;
-	if (left.confidence !== right.confidence) return right.confidence - left.confidence;
-	if (left.evidence_refs.length !== right.evidence_refs.length) return right.evidence_refs.length - left.evidence_refs.length;
-	return `${left.observation_id}:${left.relation}:${left.reason}`.localeCompare(`${right.observation_id}:${right.relation}:${right.reason}`);
-}
-function isExecutionImpactingEdge(edge) {
-	return edge.impact === "execution-mode" || edge.execution_intent !== void 0 && edge.execution_intent !== "no-change";
-}
-function graphEdges(raw, entries) {
-	if (Array.isArray(raw)) return raw;
-	if (!raw) return [];
-	if (!isRecord$1(raw)) {
-		entries.push(rejected("payload", "malformed-payload", "Semantic governance graph payload must be an object with an edges array."));
-		return [];
-	}
-	if (!Array.isArray(raw.edges)) {
-		entries.push(rejected("edges", "malformed-payload", "Semantic governance graph edges field must be an array."));
-		return [];
-	}
-	return raw.edges;
-}
-function isGraphEdge$1(value) {
-	if (!isRecord$1(value)) return false;
-	return typeof value.directive_id === "string" && typeof value.observation_id === "string" && isRelation$1(value.relation) && validConfidence(value.confidence) && typeof value.reason === "string" && validEvidenceRefs(value.evidence_refs) && (value.impact === void 0 || isImpact(value.impact)) && (value.review_priority === void 0 || isReviewPriority(value.review_priority)) && (value.execution_intent === void 0 || isExecutionIntent(value.execution_intent));
-}
-function isRelation$1(value) {
-	return value === "reinforce" || value === "tension" || value === "suppress" || value === "ambient-only" || value === "unrelated";
-}
-function isImpact(value) {
-	return value === "execution-mode" || value === "review-focus" || value === "ambient-context" || value === "no-effect";
-}
-function isReviewPriority(value) {
-	return value === "low" || value === "normal" || value === "high" || value === "critical";
-}
-function isExecutionIntent(value) {
-	return value === "enforce" || value === "deviation-noted" || value === "ambient" || value === "suppress" || value === "no-change";
-}
-function buildHostProposal(source, payload) {
-	return {
-		irVersion: GOVERNANCE_IR_VERSION,
-		source: {
-			kind: "host-proposal",
-			id: source.id,
-			...source.path ? { path: source.path } : {}
-		},
-		kind: "semantic-governance-graph",
-		payload
-	};
-}
-function rejected(path, reason, message, edge) {
-	return {
-		status: "rejected",
-		reason,
-		path,
-		message,
-		directiveId: edge?.directive_id,
-		observationId: edge?.observation_id,
-		confidence: edge?.confidence
-	};
-}
-function summarizeDirectiveForProposal(directive) {
-	return {
-		id: directive.id,
-		semanticKey: directive.semanticKey,
-		kind: directive.kind,
-		prescription: directive.prescription,
-		weight: directive.weight,
-		layer: directive.layer.id,
-		scope: directive.scope.path,
-		description: directive.body.description,
-		rationale: directive.body.rationale,
-		traits: directive.traits
-	};
-}
-function summarizeObservationForProposal(observation) {
-	return {
-		id: observation.id,
-		semanticKey: observation.semanticKey,
-		category: observation.category,
-		scope: observation.scope.path,
-		pattern: observation.pattern,
-		adherence: observation.adherence,
-		verification: observation.verification,
-		lifecycle: observation.lifecycle,
-		traits: observation.traits,
-		evidenceRefs: observation.evidence.map((evidence) => `${evidence.file}:${evidence.line_range[0]}-${evidence.line_range[1]}`),
-		evidence: observation.evidence.map((evidence) => ({
-			file: evidence.file,
-			line_range: evidence.line_range,
-			snippet: evidence.snippet
-		}))
-	};
-}
-function skippedObservationIds(sources) {
-	return new Set((sources.rcclVerificationSummary?.records ?? []).filter((record) => record.action === "skipped-not-task-relevant").map((record) => record.observation_id));
-}
-function buildGraphPrompt(input) {
-	const directives = input.directives.map(compactDirectiveForContract);
-	const observations = input.observations.map(compactObservationForContract);
-	return [
-		"Produce a semantic-governance-graph payload for Runtime.",
-		"Edges connect active directives to RCCL observations when repository reality changes how guidance should execute for this task.",
-		"Every edge must include evidence_refs from task context, RCCL evidence, files, diff, commands, or runtime trace.",
-		"Runtime will validate IDs, confidence, scope, verification, lifecycle, and final execution mode deterministically.",
-		"Use the directive and observation summaries below; do not infer relations from IDs alone.",
-		"Return JSON only.",
-		"",
-		`Resolved task intent: ${JSON.stringify(input.resolvedTask.task_intent)}`,
-		`Resolved context profile: ${JSON.stringify(input.resolvedTask.context_profile)}`,
-		`Allowed directive ids: ${input.directives.map((item) => item.id).join(", ") || "(none)"}`,
-		`Allowed observation ids: ${input.observations.map((item) => item.id).join(", ") || "(none)"}`,
-		"",
-		"Directive summaries:",
-		JSON.stringify(directives, null, 2),
-		"",
-		"Observation summaries:",
-		JSON.stringify(observations, null, 2)
-	].join("\n");
-}
-function allowedIds(input) {
-	return {
-		directiveIds: input.directives.map((directive) => directive.id),
-		observationIds: input.observations.map((observation) => observation.id)
-	};
-}
-function compactDirectiveForContract(directive) {
-	return {
-		id: directive.id,
-		semanticKey: directive.semanticKey,
-		kind: directive.kind,
-		prescription: directive.prescription,
-		weight: directive.weight,
-		layer: directive.layer,
-		scope: directive.scope,
-		description: truncate(directive.description, 360),
-		rationale: truncate(directive.rationale, 360),
-		traits: directive.traits
-	};
-}
-function compactObservationForContract(observation) {
-	return {
-		id: observation.id,
-		semanticKey: observation.semanticKey,
-		category: observation.category,
-		scope: observation.scope,
-		pattern: truncate(observation.pattern, 420),
-		adherence: observation.adherence,
-		verification: observation.verification,
-		lifecycle: observation.lifecycle,
-		traits: observation.traits,
-		evidenceRefs: observation.evidenceRefs,
-		evidence: observation.evidence.slice(0, 4).map((evidence) => ({
-			file: evidence.file,
-			line_range: evidence.line_range,
-			snippet: truncate(evidence.snippet, 260)
-		}))
-	};
-}
-function truncate(value, maxLength) {
-	const normalized = value.replace(/\s+/g, " ").trim();
-	if (normalized.length <= maxLength) return normalized;
-	return `${normalized.slice(0, Math.max(0, maxLength - 3))}...`;
-}
-//#endregion
-//#region src/ai-contracts/task-model.ts
-const TASK_MODEL_SCHEMA = {
-	type: "object",
-	additionalProperties: false,
-	properties: {
-		intent: { type: "object" },
-		context: { type: "object" },
-		uncertainties: {
-			type: "array",
-			items: { type: "string" }
-		}
-	},
-	required: [
-		"intent",
-		"context",
-		"uncertainties"
-	]
-};
-function prepareTaskModelContract(input) {
-	const prompt = buildTaskModelPrompt(input);
-	const artifact = {
-		suggestedPath: input.artifactPath,
-		format: "json",
-		usage: `Write a v1 envelope to ${input.artifactPath}: schema_version 1, kind task-model, the issued requestId/contextFingerprint as request_id/context_fingerprint, and the task-model object or array under payload; then re-run with --task-model-file ${input.artifactPath}.`
-	};
-	return {
-		task: input.task,
-		taskModelPrompt: prompt,
-		taskModelSchema: JSON.stringify(TASK_MODEL_SCHEMA, null, 2),
-		ambiguityHints: buildAmbiguityHints(input.task),
-		modelArtifact: artifact,
-		clarificationHints: buildClarificationHints(input.task),
-		contract: {
-			contractVersion: AI_CONTRACT_VERSION,
-			kind: "task-model",
-			...artifactIdentity("task-model", {
-				task: input.task,
-				schemaId: "runtime.task-model"
-			}),
-			schemaId: "runtime.task-model",
-			schemaVersion: "1.0",
-			prompt,
-			schema: TASK_MODEL_SCHEMA,
-			artifact,
-			provenance: {
-				owner: "runtime",
-				deterministic: true
-			},
-			cacheKeyMaterial: {
-				task: input.task,
-				schemaId: "runtime.task-model"
-			}
-		}
-	};
-}
-function validateTaskModelPayload(raw) {
-	const versionDiagnostic = contractVersionDiagnostic(raw, "task-model");
-	if (versionDiagnostic) return {
-		models: [],
-		diagnostics: buildContractPayloadDiagnostics("task-model", [versionDiagnostic])
-	};
-	const values = raw == null ? [] : Array.isArray(raw) ? raw : [raw];
-	const entries = [];
-	const models = [];
-	values.forEach((value, index) => {
-		const path = Array.isArray(raw) ? `models[${index}]` : "model";
-		if (!isTaskModelProposal(value)) {
-			entries.push({
-				status: "rejected",
-				reason: value == null ? "empty-payload" : "malformed-payload",
-				path,
-				message: "Task model must include intent, context, uncertainties, and evidence-backed fields."
-			});
-			return;
-		}
-		const fieldError = firstInvalidField(value);
-		if (fieldError) {
-			entries.push({
-				status: "rejected",
-				reason: fieldError.reason,
-				path: `${path}.${fieldError.field}`,
-				message: fieldError.message,
-				confidence: fieldError.confidence
-			});
-			return;
-		}
-		models.push(value);
-		entries.push({
-			status: "accepted",
-			reason: "accepted",
-			path,
-			message: "Task model accepted for Runtime field-level adjudication."
-		});
-	});
-	if (!values.length) entries.push({
-		status: "unused",
-		reason: "empty-payload",
-		path: "model",
-		message: "No task model payload was provided."
-	});
-	return {
-		models,
-		diagnostics: buildContractPayloadDiagnostics("task-model", entries)
-	};
-}
-function isTaskModelProposal(value) {
-	if (!isRecord$1(value)) return false;
-	return isRecord$1(value.intent) && isRecord$1(value.context) && Array.isArray(value.uncertainties) && value.uncertainties.every((item) => typeof item === "string");
-}
-function firstInvalidField(model) {
-	const fields = [
-		[
-			"intent.workflow",
-			model.intent.workflow,
-			TASK_INTERPRETATION_ENUMS.intent.workflow,
-			"scalar"
-		],
-		[
-			"intent.change_type",
-			model.intent.change_type,
-			TASK_INTERPRETATION_ENUMS.intent.change_type,
-			"scalar"
-		],
-		[
-			"intent.operation",
-			model.intent.operation,
-			TASK_INTERPRETATION_ENUMS.intent.operation,
-			"scalar"
-		],
-		[
-			"intent.target_layer",
-			model.intent.target_layer,
-			null,
-			"scalar"
-		],
-		[
-			"intent.target_file",
-			model.intent.target_file,
-			null,
-			"scalar"
-		],
-		[
-			"intent.changed_files",
-			model.intent.changed_files,
-			null,
-			"list"
-		],
-		[
-			"intent.tech_stack",
-			model.intent.tech_stack,
-			null,
-			"list"
-		],
-		[
-			"intent.tags",
-			model.intent.tags,
-			null,
-			"list"
-		],
-		[
-			"context.project_stage",
-			model.context.project_stage,
-			TASK_INTERPRETATION_ENUMS.context.project_stage,
-			"scalar"
-		],
-		[
-			"context.optimization_target",
-			model.context.optimization_target,
-			TASK_INTERPRETATION_ENUMS.context.optimization_target,
-			"scalar"
-		],
-		[
-			"context.hard_constraints",
-			model.context.hard_constraints,
-			null,
-			"list"
-		],
-		[
-			"context.allowed_tradeoffs",
-			model.context.allowed_tradeoffs,
-			null,
-			"list"
-		],
-		[
-			"context.avoid",
-			model.context.avoid,
-			null,
-			"list"
-		],
-		[
-			"context.risk_level",
-			model.context.risk_level,
-			TASK_INTERPRETATION_ENUMS.context.risk_level,
-			"scalar"
-		],
-		[
-			"context.scope_size",
-			model.context.scope_size,
-			TASK_INTERPRETATION_ENUMS.context.scope_size,
-			"scalar"
-		],
-		[
-			"context.compatibility_requirement",
-			model.context.compatibility_requirement,
-			TASK_INTERPRETATION_ENUMS.context.compatibility_requirement,
-			"scalar"
-		],
-		[
-			"context.interface_sensitivity",
-			model.context.interface_sensitivity,
-			TASK_INTERPRETATION_ENUMS.context.interface_sensitivity,
-			"scalar"
-		],
-		[
-			"context.refactor_tolerance",
-			model.context.refactor_tolerance,
-			TASK_INTERPRETATION_ENUMS.context.refactor_tolerance,
-			"scalar"
-		],
-		[
-			"context.migration_phase",
-			model.context.migration_phase,
-			TASK_INTERPRETATION_ENUMS.context.migration_phase,
-			"scalar"
-		],
-		[
-			"context.review_goal",
-			model.context.review_goal,
-			TASK_INTERPRETATION_ENUMS.context.review_goal,
-			"scalar"
-		]
-	];
-	for (const [field, candidate, allowedValues, kind] of fields) {
-		if (candidate === void 0) continue;
-		if (!isRecord$1(candidate)) return {
-			field,
-			reason: "malformed-payload",
-			message: "Task model field must be an object."
-		};
-		if (!validConfidence(candidate.confidence)) return {
-			field,
-			reason: "malformed-payload",
-			message: "Task model field confidence must be between 0 and 1."
-		};
-		if (candidate.confidence < .5) return {
-			field,
-			reason: "low-confidence",
-			message: "Task model field confidence is below threshold.",
-			confidence: candidate.confidence
-		};
-		if (!validEvidenceRefs(candidate.evidence_refs)) return {
-			field,
-			reason: "missing-evidence",
-			message: "Task model field must include at least one valid evidence_ref.",
-			confidence: candidate.confidence
-		};
-		if (kind === "scalar") {
-			if (typeof candidate.value !== "string") return {
-				field,
-				reason: "missing-required-field",
-				message: "Task model scalar field must include value.",
-				confidence: candidate.confidence
-			};
-			if (allowedValues && !allowedValues.includes(candidate.value)) return {
-				field,
-				reason: "unsupported-value",
-				message: `Unsupported value "${candidate.value}".`,
-				confidence: candidate.confidence
-			};
-		} else if (!Array.isArray(candidate.values) || !candidate.values.every((item) => typeof item === "string")) return {
-			field,
-			reason: "missing-required-field",
-			message: "Task model list field must include string values.",
-			confidence: candidate.confidence
-		};
-	}
-	return null;
-}
-function buildTaskModelPrompt(input) {
-	return [
-		"Produce a task-model payload for Runtime.",
-		"Resolve only fields supported by evidence from the user request, conversation, files, diff, commands, or repository context.",
-		"Every resolved field must include confidence and at least one evidence_ref.",
-		"Runtime will validate enums, evidence shape, confidence, and field-level precedence.",
-		"Return JSON only.",
-		"",
-		`Task description: ${input.task.description}`,
-		`Explicit workflow: ${input.task.workflow ?? "(none)"}`,
-		`Explicit change type: ${input.task.changeType ?? "(none)"}`,
-		`Explicit operation: ${input.task.operation ?? "(none)"}`,
-		`Explicit target file: ${input.task.targetFile ?? "(none)"}`,
-		`Explicit changed files: ${input.task.changedFiles?.join(", ") || "(none)"}`,
-		`Explicit tech stack: ${input.task.techStack?.join(", ") || "(none)"}`,
-		`Allowed task enum values: ${JSON.stringify(TASK_INTERPRETATION_ENUMS)}`
-	].join("\n");
-}
-function buildAmbiguityHints(task) {
-	const hints = [];
-	if (!task.changeType) hints.push("change type is not explicit");
-	if (!task.operation) hints.push("operation is not explicit");
-	if (!task.targetFile && !task.changedFiles?.length) hints.push("no concrete target files are specified");
-	if (!task.techStack?.length) hints.push("tech stack is implicit");
-	if (!task.projectStage) hints.push("project stage is not specified");
-	return hints;
-}
-function buildClarificationHints(task) {
-	return [
-		...!task.changeType ? ["Clarify whether this is feature, bugfix, refactor, migration, or unknown work."] : [],
-		...!task.operation ? ["Clarify whether files are created, modified, deleted, or mixed."] : [],
-		...!task.targetFile && !task.changedFiles?.length ? ["Name the target or changed files when known."] : [],
-		...!task.optimizationTarget ? ["Specify the optimization target when the tradeoff matters."] : []
-	];
-}
-//#endregion
-//#region src/contract-policy.ts
-const DEFAULT_CAPABILITIES = {
-	can_read_files: true,
-	can_search_files: true,
-	can_run_commands: false,
-	can_inspect_diff: false,
-	can_request_context: true,
-	max_context_files: 12,
-	max_command_count: 0
-};
-function resolveContractPolicy(input) {
-	const mode = input.mode ?? "standard";
-	const policyInput = {
-		...input,
-		resolvedTask: input.resolvedTask ?? resolvePolicyTask(input)
-	};
-	const provided = input.providedContracts ?? {};
-	const capability = input.agentCapabilityProfile ?? DEFAULT_CAPABILITIES;
-	const highRiskTask = isHighRisk$1(policyRiskLevel(policyInput));
-	const taskModelRequired = shouldRequireTaskModel(policyInput, mode);
-	const semanticGraphRequired = shouldRequireSemanticGraph(policyInput, mode, taskModelRequired);
-	const deterministicFallbacks = collectDeterministicFallbackGovernance(policyInput);
-	const required = [];
-	const optional = [];
-	const skipped = [];
-	const reasons = [];
-	skipped.push({
-		kind: "agent-capability-profile",
-		reason_id: provided.agentCapability ? "already-provided" : "runtime-assumption"
-	});
-	if (!provided.agentCapability) reasons.push("agent capability profile is a Runtime assumption for policy selection, not a host artifact.");
-	if (provided.taskModel) skipped.push({
-		kind: "task-model",
-		reason_id: "already-provided"
-	});
-	else if (taskModelRequired) {
-		required.push("task-model");
-		reasons.push(mode === "strict" ? "strict mode requires task-model before deterministic compilation." : "task risk, compatibility, migration, or ambiguity requires task-model.");
-	} else {
-		optional.push("task-model");
-		skipped.push({
-			kind: "task-model",
-			reason_id: mode === "fast" ? "mode-fast" : "deterministic-fallback-allowed"
-		});
-		reasons.push("deterministic task interpretation is allowed for this mode and task shape.");
-	}
-	const needsTaskModel = taskModelRequired && !provided.taskModel;
-	if (rcclAvailable(input.sourceStatus)) if (provided.semanticGovernanceGraph) skipped.push({
-		kind: "semantic-governance-graph",
-		reason_id: "already-provided"
-	});
-	else if (!semanticGraphRequired) skipped.push({
-		kind: "semantic-governance-graph",
-		reason_id: mode === "fast" ? "mode-fast" : input.rcclRelevant === false ? "rccl-not-relevant" : "not-required-for-current-policy"
-	});
-	else if (needsTaskModel) {
-		skipped.push({
-			kind: "semantic-governance-graph",
-			reason_id: "waiting-for-task-model"
-		});
-		reasons.push("semantic-governance-graph is deferred until task-model is provided.");
-	} else {
-		required.push("semantic-governance-graph");
-		reasons.push("RCCL is relevant to this task and semantic governance should be host-assisted.");
-	}
-	else if (capability.can_request_context) {
-		if (mode === "strict" && highRiskTask) required.push("context-acquisition");
-		else optional.push("context-acquisition");
-		skipped.push({
-			kind: "semantic-governance-graph",
-			reason_id: "missing-rccl"
-		});
-	} else {
-		skipped.push({
-			kind: "semantic-governance-graph",
-			reason_id: "missing-rccl"
-		});
-		skipped.push({
-			kind: "context-acquisition",
-			reason_id: "insufficient-agent-capability"
-		});
-	}
-	if (!provided.adherenceEvidence && (capability.can_inspect_diff || capability.can_read_files || capability.can_run_commands)) {
-		if (mode === "strict") required.push("adherence-evidence");
-		else optional.push("adherence-evidence");
-		skipped.push({
-			kind: "adherence-evidence",
-			reason_id: "deferred-until-after-compile"
-		});
-	} else if (provided.adherenceEvidence) skipped.push({
-		kind: "adherence-evidence",
-		reason_id: "already-provided"
-	});
-	else skipped.push({
-		kind: "adherence-evidence",
-		reason_id: "insufficient-agent-capability"
-	});
-	if (input.sourceStatus.lockfile === "present") optional.push("governance-evolution-proposal");
-	else skipped.push({
-		kind: "governance-evolution-proposal",
-		reason_id: "not-required-for-current-policy"
-	});
-	return {
-		mode,
-		required: unique(required),
-		optional: unique(optional),
-		skipped,
-		escalation: resolveEscalation(required, optional),
-		diagnostics: {
-			task_model_required: taskModelRequired,
-			semantic_graph_required: semanticGraphRequired,
-			...input.rcclRelevant !== void 0 ? { rccl_relevant: input.rcclRelevant } : {},
-			reasons,
-			deterministic_fallbacks: deterministicFallbacks
-		}
-	};
-}
-function resolveEscalation(required, optional) {
-	if (required.includes("task-model")) return "task-model";
-	if (required.includes("semantic-governance-graph")) return "semantic-governance-graph";
-	if (required.includes("adherence-evidence")) return "adherence-required";
-	if (required.includes("context-acquisition")) return "context-acquisition";
-	return "none";
-}
-function shouldRequireTaskModel(input, mode) {
-	if (mode === "strict") return true;
-	if (mode === "fast") return false;
-	const profile = policyContextProfile(input);
-	const task = policyTask(input);
-	const workflow = input.resolvedTask?.task_intent.workflow ?? task?.workflow;
-	const changeType = input.resolvedTask?.task_intent.change_type ?? task?.changeType;
-	if (isHighRisk$1(policyRiskLevel(input)) && isPolicyAuthoritative(input, "context.risk_level", "riskLevel")) return true;
-	if (profile?.scope_size === "cross-cutting") return true;
-	if (profile?.compatibility_requirement && profile.compatibility_requirement !== "none" && profile.compatibility_requirement !== "breaking-allowed" && isPolicyAuthoritative(input, "context.compatibility_requirement", "compatibilityRequirement")) return true;
-	if (profile?.interface_sensitivity && profile.interface_sensitivity !== "internal" && profile.interface_sensitivity !== "unknown" && isPolicyAuthoritative(input, "context.interface_sensitivity", "interfaceSensitivity")) return true;
-	if (profile?.migration_phase && profile.migration_phase !== "none" && isPolicyAuthoritative(input, "context.migration_phase", "migrationPhase")) return true;
-	if ((profile?.review_goal === "security" || profile?.review_goal === "regression-risk" || profile?.review_goal === "architecture-fit") && isPolicyAuthoritative(input, "context.review_goal", "reviewGoal")) return true;
-	if (changeType === "migration" && isPolicyAuthoritative(input, "intent.change_type", "changeType")) return true;
-	if (workflow === "review" && isPolicyAuthoritative(input, "intent.workflow", "workflow")) return true;
-	return hasAmbiguousTaskResolution(input);
-}
-function shouldRequireSemanticGraph(input, mode, taskModelRequired) {
-	if (!rcclAvailable(input.sourceStatus)) return false;
-	if (mode === "fast") return false;
-	if (mode === "strict") return true;
-	if (input.rcclRelevant !== true) return false;
-	return taskModelRequired || isHighRisk$1(policyRiskLevel(input));
-}
-function hasAmbiguousTaskResolution(input) {
-	const resolved = input.resolvedTask;
-	if (!resolved?.diagnostics.clarification_recommended) return false;
-	if (Boolean(resolved.task_intent.target_file || resolved.task_intent.changed_files.length || input.task?.targetFile || input.task?.changedFiles?.length)) return false;
-	const operationField = resolved.input_provenance.resolved_fields.find((field) => field.field === "intent.operation");
-	return !input.task?.operation && (!operationField || operationField.source === "deterministic" && operationField.confidence <= .5);
-}
-function collectDeterministicFallbackGovernance(input) {
-	const result = [];
-	const profile = policyContextProfile(input);
-	if (!profile) return result;
-	addFallbackGovernance(result, input, "context.risk_level", profile.risk_level ?? "");
-	addFallbackGovernance(result, input, "context.compatibility_requirement", profile.compatibility_requirement ?? "");
-	addFallbackGovernance(result, input, "context.interface_sensitivity", profile.interface_sensitivity ?? "");
-	addFallbackGovernance(result, input, "context.migration_phase", profile.migration_phase ?? "");
-	addFallbackGovernance(result, input, "context.review_goal", profile.review_goal ?? "");
-	return result;
-}
-function addFallbackGovernance(result, input, field, value) {
-	if (!value || !isElevatedFallbackField(field, value)) return;
-	const resolved = resolvedField(input, field);
-	if (resolved?.source !== "deterministic") return;
-	result.push({
-		field,
-		value,
-		confidence: resolved.confidence,
-		action: "ignored-for-policy",
-		reason: "deterministic fallback is trace-only and does not trigger standard-mode governance contracts"
-	});
-}
-function isElevatedFallbackField(field, value) {
-	if (field === "context.risk_level") return value === "high" || value === "critical";
-	if (field === "context.compatibility_requirement") return value !== "none" && value !== "breaking-allowed";
-	if (field === "context.interface_sensitivity") return value !== "internal" && value !== "unknown";
-	if (field === "context.migration_phase") return value !== "none";
-	if (field === "context.review_goal") return value === "security" || value === "regression-risk" || value === "architecture-fit";
-	return false;
-}
-function isPolicyAuthoritative(input, field, rawTaskField) {
-	if (rawTaskField === "riskLevel" && input.taskRisk && isHighRisk$1(input.taskRisk)) return true;
-	return Boolean(input.task?.[rawTaskField]) && isFieldAuthoritative(input, field);
-}
-function isFieldAuthoritative(input, field) {
-	const source = resolvedField(input, field)?.source;
-	return source === "explicit" || source === "host-agent" || source === "assistive-ai" || source === "repo-default";
-}
-function resolvedField(input, field) {
-	return input.resolvedTask?.input_provenance.resolved_fields.find((item) => item.field === field);
-}
-function rcclAvailable(sourceStatus) {
-	return sourceStatus.rccl === "present" || sourceStatus.rccl === "stale" || sourceStatus.rccl === "unverified";
-}
-function resolvePolicyTask(input) {
-	if (!input.task) return void 0;
-	return resolveTask({
-		task: input.task,
-		taskModels: input.taskModels ?? [],
-		interpretationMode: input.taskModels?.length ? "host-agent" : "deterministic-only"
-	});
-}
-function policyTask(input) {
-	return input.resolvedTask?.task ?? input.task;
-}
-function policyContextProfile(input) {
-	return input.resolvedTask?.context_profile;
-}
-function policyRiskLevel(input) {
-	return input.resolvedTask?.context_profile.risk_level ?? input.taskRisk ?? input.task?.riskLevel;
-}
-function isHighRisk$1(value) {
-	return value === "high" || value === "critical";
-}
-//#endregion
-//#region src/plan-guidance.ts
-async function planGuidance(input) {
-	const notes = [];
-	const contractDiagnostics = [];
-	const issuedCapabilityProfile = prepareAgentCapabilityProfileContract({
-		task: input.task,
-		artifactPath: input.artifactPaths.agentCapabilityProfile
-	});
-	let agentCapabilityProfile = null;
-	if (input.artifacts?.agentCapabilityProfile) {
-		const unwrapped = unwrapHostArtifactEnvelope(input.artifacts.agentCapabilityProfile.raw, issuedCapabilityProfile.contract);
-		if (unwrapped.diagnostic) contractDiagnostics.push(buildContractPayloadDiagnostics("agent-capability-profile", [unwrapped.diagnostic], {
-			id: issuedCapabilityProfile.contract.requestId,
-			path: input.artifacts.agentCapabilityProfile.path
-		}));
-		else {
-			const validated = validateAgentCapabilityProfilePayload(unwrapped.payload);
-			contractDiagnostics.push(validated.diagnostics);
-			agentCapabilityProfile = validated.profile;
-		}
-	}
-	const issuedTaskModel = prepareTaskModelContract({
-		task: input.task,
-		artifactPath: input.artifactPaths.taskModel
-	});
-	let taskModels = [];
-	if (input.artifacts?.taskModel) {
-		const unwrapped = unwrapHostArtifactEnvelope(input.artifacts.taskModel.raw, issuedTaskModel.contract);
-		if (unwrapped.diagnostic) contractDiagnostics.push(buildContractPayloadDiagnostics("task-model", [unwrapped.diagnostic], {
-			id: issuedTaskModel.contract.requestId,
-			path: input.artifacts.taskModel.path
-		}));
-		else {
-			const validated = validateTaskModelPayload(unwrapped.payload);
-			contractDiagnostics.push(validated.diagnostics);
-			taskModels = validated.models;
-		}
-	}
-	const sourceStatus = resolveSourceStatus(input, notes);
-	const guidanceMode = input.mode ?? "standard";
-	const resolvedTask = resolveTask({
-		task: input.task,
-		taskModels,
-		interpretationMode: taskModels.length ? "host-agent" : "deterministic-only"
-	});
-	const rcclRelevant = await resolveRcclRelevance(input, sourceStatus, resolvedTask, notes);
-	const policy = resolveContractPolicy({
-		sourceStatus,
-		providedContracts: {
-			...input.providedContracts,
-			agentCapability: Boolean(agentCapabilityProfile),
-			taskModel: taskModels.length > 0,
-			semanticGovernanceGraph: Boolean(input.artifacts?.semanticGovernanceGraph)
-		},
-		agentCapabilityProfile,
-		task: input.task,
-		resolvedTask,
-		mode: guidanceMode,
-		rcclRelevant
-	});
-	const requiredContracts = [];
-	if (policy.required.includes("agent-capability-profile")) {
-		requiredContracts.push({
-			kind: "agent-capability-profile",
-			artifact: issuedCapabilityProfile.profileArtifact,
-			contract: issuedCapabilityProfile.contract
-		});
-		notes.push("Agent capability profile requested so Runtime can select agentic contracts from concrete host capabilities.");
-	}
-	if (policy.required.includes("task-model")) {
-		requiredContracts.push({
-			kind: "task-model",
-			artifact: issuedTaskModel.modelArtifact,
-			contract: issuedTaskModel.contract
-		});
-		notes.push("Task model contract requested; deterministic interpretation is fallback only.");
-	}
-	if (policy.required.includes("context-acquisition")) {
-		const acquisition = prepareContextAcquisitionContract({
-			task: input.task,
-			artifactPath: input.artifactPaths.contextAcquisition ?? input.artifactPaths.taskModel
-		});
-		requiredContracts.push({
-			kind: "context-acquisition",
-			artifact: acquisition.acquisitionArtifact,
-			contract: acquisition.contract
-		});
-		notes.push("Context acquisition is required because task risk is high and RCCL is absent.");
-	}
-	if (policy.required.includes("semantic-governance-graph")) {
-		const graph = await prepareSemanticGovernanceGraphContractBundle({
-			compileInput: guidancePlanCompileInput(input, taskModels),
-			artifactPath: input.artifactPaths.semanticGovernanceGraph ?? defaultSemanticGovernanceGraphPath(input.projectRoot)
-		});
-		requiredContracts.push({
-			kind: "semantic-governance-graph",
-			artifact: graph.graphArtifact,
-			contract: graph.contract,
-			context: {
-				resolvedTask: graph.resolvedTask,
-				directives: graph.directives,
-				observations: graph.observations
-			}
-		});
-		notes.push("Semantic governance graph is required because RCCL is available and host semantic evidence should drive merge relations.");
-	}
-	if (policy.required.includes("adherence-evidence")) notes.push("Adherence evidence is required by strict mode after implementation; it is prepared after guidance compilation.");
-	if (policy.optional.includes("context-acquisition")) notes.push("RCCL is absent; context acquisition or repository calibration is recommended before semantic graph compilation.");
-	if (policy.optional.includes("adherence-evidence")) notes.push("Adherence evidence is optional in this mode; use prepare-adherence and complete when you want directive follow-rate updates.");
-	if (policy.optional.includes("governance-evolution-proposal")) notes.push("Governance evolution proposal is available from lockfile signals, but it is review-only and never writes automatically.");
-	notes.push(...policy.diagnostics.reasons);
-	return {
-		mode: requiredContracts.length ? "contracts-required" : "ready",
-		guidanceMode,
-		requiredContracts,
-		recommendedContracts: unique([...policy.required, ...policy.optional]),
-		sourceStatus,
-		outputPolicy: {
-			stdout: "compact",
-			trace: "session-only"
-		},
-		policy,
-		diagnostics: {
-			policy: requiredContracts.length ? "contracts-required" : "ready",
-			notes
-		},
-		resolvedTask,
-		contractDiagnostics
-	};
-}
-function resolveSourceStatus(input, notes) {
-	return {
-		localAugment: input.localAugmentPath && existsSync(input.localAugmentPath) ? "present" : "absent",
-		rccl: resolveRcclSourceStatus(input.rcclPath, notes),
-		lockfile: input.lockfilePath && existsSync(input.lockfilePath) ? "present" : "absent",
-		cache: resolveCacheStatus(input.projectRoot)
-	};
-}
-function resolveRcclSourceStatus(rcclPath, notes) {
-	if (!rcclPath || !existsSync(rcclPath)) return "absent";
-	try {
-		const parsed = parseYaml$1(readFileSync(rcclPath, "utf-8"));
-		if (!isRecord$1(parsed) || !Array.isArray(parsed.observations)) return "unverified";
-		if (parsed.version !== "1.0" && parsed.version !== 1) {
-			notes?.push("UNSUPPORTED_SCHEMA_VERSION: RCCL must use schema 1; re-run calibrate-repo-context.");
-			return "unverified";
-		}
-		if (parsed.observations.length === 0) return "present";
-		const observations = parsed.observations.filter(isRecord$1);
-		if (observations.length !== parsed.observations.length) return "unverified";
-		if (observations.some((observation) => {
-			const verification = isRecord$1(observation.verification) ? observation.verification : null;
-			if (!verification) return true;
-			return !hasVerificationValue(verification, "evidence_status") || !hasVerificationValue(verification, "evidence_verified_count") || !hasVerificationValue(verification, "evidence_confidence") || !hasVerificationValue(verification, "induction_status") || !hasVerificationValue(verification, "induction_confidence") || !hasVerificationValue(verification, "checked_at") || !hasVerificationValue(verification, "disposition");
-		})) return "unverified";
-		return observations.some((observation) => {
-			const lifecycle = isRecord$1(observation.lifecycle) ? observation.lifecycle : null;
-			return lifecycle?.status === "stale" || lifecycle?.status === "superseded";
-		}) ? "stale" : "present";
-	} catch (error) {
-		notes?.push(`RCCL status check failed: ${error instanceof Error ? error.message : String(error)}`);
-		return "unverified";
-	}
-}
-function resolveCacheStatus(projectRoot) {
-	const cacheRoot = join(projectRoot, ".resonant-code", "context", "cache", "runtime");
-	if (!existsSync(cacheRoot)) return "miss";
-	const populatedLevels = [
-		"l1",
-		"l2",
-		"l3"
-	].filter((level) => hasFiles(join(cacheRoot, level))).length;
-	if (populatedLevels === 3) return "hit";
-	return populatedLevels > 0 ? "partial" : "miss";
-}
-function guidancePlanCompileInput(input, taskModels) {
-	return {
-		builtinRoot: input.builtinRoot,
-		localAugmentPath: input.localAugmentPath,
-		rcclPath: input.rcclPath,
-		projectRoot: input.projectRoot,
-		lockfilePath: input.lockfilePath,
-		verificationPolicy: input.verificationPolicy,
-		task: input.task,
-		taskModels
-	};
-}
-function defaultSemanticGovernanceGraphPath(projectRoot) {
-	return join(projectRoot, ".resonant-code", "context", "semantic-governance-graphs", "semantic-governance-graph.json");
-}
-async function resolveRcclRelevance(input, sourceStatus, resolvedTask, notes) {
-	if (sourceStatus.rccl === "absent" || !input.rcclPath) return void 0;
-	const targets = taskTargets(input.task, resolvedTask);
-	if (targets.length === 0) return void 0;
-	let rccl = null;
-	try {
-		rccl = await loadRccl(input.rcclPath);
-	} catch (error) {
-		notes?.push(`RCCL relevance check failed: ${error instanceof Error ? error.message : String(error)}`);
-		return;
-	}
-	if (!rccl) return void 0;
-	return rccl.observations.some((observation) => targets.some((target) => scopeOverlapsPath(observation.scope, target) || observation.evidence.some((evidence) => fileOverlapsTarget(evidence.file, target))));
-}
-function taskTargets(task, resolvedTask) {
-	return unique([
-		task.targetFile,
-		...task.changedFiles ?? [],
-		resolvedTask.task_intent.target_file,
-		...resolvedTask.task_intent.changed_files
-	].filter((value) => Boolean(value)).map(normalizePath$1));
-}
-function hasFiles(directory) {
-	try {
-		return readdirSync(directory).some((entry) => entry.endsWith(".json"));
-	} catch (_error) {
-		return false;
-	}
-}
-function hasVerificationValue(record, key) {
-	return record[key] !== void 0 && record[key] !== null && record[key] !== "";
-}
-//#endregion
-//#region src/ir/activation/public-adapter.ts
-function projectIRActivationToPublic(bundle, decisions) {
-	const directiveById = new Map(bundle.directives.map((directive) => [directive.id, directive]));
-	const activatedDecisions = decisions.filter((decision) => decision.status === "activated");
-	return {
-		activationView: {
-			selected_layers: bundle.sourceManifest.selectedLayers,
-			activated: activatedDecisions.map(activationDecisionIRToPublicActivated),
-			skipped: decisions.filter((decision) => decision.status === "skipped").map(activationDecisionIRToPublicSkipped)
-		},
-		activeDirectives: activatedDecisions.map((decision) => {
-			const directive = directiveById.get(decision.directiveId);
-			if (!directive) throw new Error(`Activated IR directive ${decision.directiveId} is missing from governance bundle`);
-			return directiveIRToPublicDirective(directive);
-		})
-	};
-}
-function activationDecisionIRToPublicActivated(decision) {
-	return {
-		directive_id: decision.directiveId,
-		layer_id: decision.layerId,
-		source_file: decision.sourcePath ?? "",
-		effective_prescription: decision.effectivePrescription,
-		effective_weight: decision.effectiveWeight,
-		effective_priority: {
-			layer_rank: decision.priority.layerRank,
-			prescription_rank: decision.priority.prescriptionRank,
-			weight_rank: decision.priority.weightRank,
-			context_rank: decision.priority.localOverrideRank
-		},
-		activation_reason: decision.note,
-		override_applied: decision.localState.overrideApplied,
-		augment_applied: decision.localState.augmentApplied
-	};
-}
-function activationDecisionIRToPublicSkipped(decision) {
-	return {
-		directive_id: decision.directiveId,
-		layer_id: decision.layerId,
-		reason: toPublicSkippedReason(decision),
-		note: decision.note
-	};
-}
-function toPublicSkippedReason(decision) {
-	if (decision.reason === "matched") throw new Error(`Activated IR directive ${decision.directiveId} cannot be projected as skipped`);
-	return decision.reason;
-}
-function directiveIRToPublicDirective(directive) {
-	return {
-		id: directive.id,
-		type: directive.kind,
-		layer: directive.layer.id,
-		scope: directive.scope,
-		prescription: directive.prescription,
-		weight: directive.weight,
-		description: directive.body.description,
-		rationale: directive.body.rationale,
-		exceptions: directive.body.exceptions,
-		examples: directive.body.examples,
-		rccl_immune: directive.traits.rcclImmune,
-		source: {
-			kind: directive.source.kind === "local-playbook" ? "local-addition" : "builtin",
-			layerId: directive.layer.id,
-			filePath: directive.source.path ?? ""
-		}
-	};
-}
-//#endregion
-//#region src/ir/ego/public-adapter.ts
-function projectIREgoToPublic(activatedBundle, semanticMergeResult, taskIntent) {
-	const modeByDirectiveId = new Map(semanticMergeResult.directive_modes.map((item) => [item.directive_id, item.execution_mode]));
-	const decisionByDirectiveId = new Map(semanticMergeResult.directive_modes.map((item) => [item.directive_id, item]));
-	const must_follow = activatedBundle.directives.filter((directive) => directive.kind !== "anti-pattern").sort((a, b) => compareDirectives(a, b, decisionByDirectiveId)).map((directive) => {
-		const decision = decisionByDirectiveId.get(directive.id);
-		const mergeContext = decision ? buildMergeContext(decision) : void 0;
-		return {
-			id: directive.id,
-			statement: directive.body.description,
-			rationale: directive.body.rationale,
-			prescription: directive.prescription,
-			exceptions: directive.body.exceptions,
-			examples: directive.body.examples,
-			execution_mode: modeByDirectiveId.get(directive.id) ?? "ambient",
-			...mergeContext ? { merge_context: mergeContext } : {}
-		};
-	});
-	const avoid = activatedBundle.observations.filter((observation) => observation.category === "anti-pattern").filter((observation) => observation.verification.disposition !== "demote-to-ambient").map((observation) => ({
-		statement: observation.pattern,
-		trigger: `anti-pattern:${observation.id}`
-	}));
-	const ambient = activatedBundle.observations.filter((observation) => observation.category !== "anti-pattern").map((observation) => {
-		return `${observation.verification.disposition === "demote-to-ambient" ? "demoted" : "observed"}: ${observation.pattern}`;
-	});
-	return {
-		taskIntent,
-		guidance: {
-			must_follow,
-			avoid,
-			context_tensions: semanticMergeResult.context_tensions,
-			ambient
-		}
-	};
-}
-function buildMergeContext(decision) {
-	if (!decision.relation_summaries.length) return decision.feedback_applied.length ? `feedback influenced ${decision.execution_mode}: ${decision.feedback_applied.join(", ")}` : void 0;
-	const highPriority = decision.relation_summaries.find((relation) => relation.review_priority === "critical" || relation.review_priority === "high");
-	if (!(decision.execution_mode !== decision.default_execution_mode) && !highPriority && !decision.feedback_applied.length) return void 0;
-	const relation = highPriority ?? decision.relation_summaries[0];
-	const feedback = decision.feedback_applied.length ? ` feedback=${decision.feedback_applied.join(", ")}` : "";
-	return `${relation.relation} relation ${relation.relation_id} influenced ${decision.execution_mode}: ${relation.reason}${feedback}`;
-}
-function compareDirectives(a, b, decisionByDirectiveId) {
-	const prescriptionScore = a.prescription === b.prescription ? 0 : a.prescription === "must" ? -1 : 1;
-	if (prescriptionScore !== 0) return prescriptionScore;
-	const layerScore = getDirectiveLayerRank(b.layer.id) - getDirectiveLayerRank(a.layer.id);
-	if (layerScore !== 0) return layerScore;
-	const weights = {
-		low: 0,
-		normal: 1,
-		high: 2,
-		critical: 3
-	};
-	const weightScore = weights[b.weight] - weights[a.weight];
-	if (weightScore !== 0) return weightScore;
-	const contextAppliedScore = (decisionByDirectiveId.get(b.id)?.context_applied.length ?? 0) - (decisionByDirectiveId.get(a.id)?.context_applied.length ?? 0);
-	if (contextAppliedScore !== 0) return contextAppliedScore;
-	return a.id.localeCompare(b.id);
-}
-//#endregion
-//#region src/ir/ego/budget.ts
-const EGO_BUDGET = {
-	totalItems: 32,
-	hardItems: 24,
-	ambientItems: 6,
-	examplesPerDirective: 1,
-	serializedCharacters: 24e3
-};
-function applyEgoBudget(input) {
+function applyGuidanceBudget(input) {
 	const omissions = [];
-	const must = input.guidance.must_follow.map((item) => ({
-		...item,
-		examples: item.examples.slice(0, EGO_BUDGET.examplesPerDirective)
-	}));
-	const hardMust = must.filter((item) => item.prescription === "must");
-	const soft = must.filter((item) => item.prescription !== "must");
-	const avoid = input.guidance.avoid;
-	const hard = [...hardMust.map((item) => ({
-		kind: "must",
-		id: item.id,
-		value: item,
-		priority: `must:${item.execution_mode}`
-	})), ...avoid.map((item) => ({
-		kind: "avoid",
-		id: item.trigger,
-		value: item,
-		priority: "avoid:verified-anti-pattern"
-	}))];
-	const selectedHard = hard.slice(0, EGO_BUDGET.hardItems);
-	for (const item of hard.slice(EGO_BUDGET.hardItems)) omissions.push({
-		id: item.id,
-		reason: "hard-item-limit",
-		original_priority: item.priority
-	});
-	let remaining = EGO_BUDGET.totalItems - selectedHard.length;
-	const selectedSoft = soft.slice(0, Math.max(0, remaining));
-	remaining -= selectedSoft.length;
-	for (const item of soft.slice(selectedSoft.length)) omissions.push({
-		id: item.id,
-		reason: "total-item-limit",
-		original_priority: `should:${item.execution_mode}`
-	});
-	const selectedTensions = input.guidance.context_tensions.slice(0, Math.max(0, remaining));
-	remaining -= selectedTensions.length;
-	for (const item of input.guidance.context_tensions.slice(selectedTensions.length)) omissions.push({
-		id: `${item.directive_id}:tension`,
-		reason: "total-item-limit",
-		original_priority: `tension:${item.review_priority ?? "normal"}`
-	});
-	const ambientLimit = Math.min(EGO_BUDGET.ambientItems, Math.max(0, remaining));
-	const selectedAmbient = input.guidance.ambient.slice(0, ambientLimit);
-	for (let index = ambientLimit; index < input.guidance.ambient.length; index += 1) omissions.push({
-		id: `ambient:${index}`,
-		reason: index >= EGO_BUDGET.ambientItems ? "ambient-limit" : "total-item-limit",
-		original_priority: "ambient"
-	});
-	const ego = {
-		...input,
-		guidance: {
-			must_follow: [...selectedHard.filter((item) => item.kind === "must").map((item) => item.value), ...selectedSoft],
-			avoid: selectedHard.filter((item) => item.kind === "avoid").map((item) => item.value),
-			context_tensions: selectedTensions,
-			ambient: selectedAmbient
-		}
+	const guidance = {
+		required: limitItems(input.required, "required", GUIDANCE_BUDGET.required, omissions).map((item) => ({
+			...item,
+			examples: item.examples.slice(0, GUIDANCE_BUDGET.examplesPerItem)
+		})),
+		consider: limitItems(input.consider, "consider", GUIDANCE_BUDGET.consider, omissions).map((item) => ({
+			...item,
+			examples: item.examples.slice(0, GUIDANCE_BUDGET.examplesPerItem)
+		})),
+		avoid: limitItems(input.avoid, "avoid", GUIDANCE_BUDGET.avoid, omissions),
+		tensions: limitItems(input.tensions, "tensions", GUIDANCE_BUDGET.tensions, omissions)
 	};
-	trimToCharacterBudget(ego, omissions);
+	trimToCharacterLimit(guidance, omissions);
 	return {
-		ego,
-		exceeded: hard.length > EGO_BUDGET.hardItems || hardPayloadLength(hard) > EGO_BUDGET.serializedCharacters,
-		omissions,
-		serializedCharacters: JSON.stringify(ego).length
+		guidance,
+		omissions
 	};
 }
-function trimToCharacterBudget(ego, omissions) {
-	while (JSON.stringify(ego).length > EGO_BUDGET.serializedCharacters) {
-		if (ego.guidance.ambient.length) {
-			const index = ego.guidance.ambient.length - 1;
-			ego.guidance.ambient.pop();
-			omissions.push({
-				id: `ambient:${index}`,
-				reason: "character-limit",
-				original_priority: "ambient"
-			});
-			continue;
-		}
-		const softIndex = findLastIndex(ego.guidance.must_follow, (item) => item.prescription === "should");
-		if (softIndex >= 0) {
-			const [item] = ego.guidance.must_follow.splice(softIndex, 1);
-			omissions.push({
-				id: item.id,
-				reason: "character-limit",
-				original_priority: `should:${item.execution_mode}`
-			});
-			continue;
-		}
-		if (ego.guidance.context_tensions.length) {
-			const item = ego.guidance.context_tensions.pop();
-			omissions.push({
-				id: `${item.directive_id}:tension`,
-				reason: "character-limit",
-				original_priority: `tension:${item.review_priority ?? "normal"}`
-			});
-			continue;
-		}
-		const item = ego.guidance.must_follow.pop();
-		if (item) {
+function limitItems(items, section, limit, omissions) {
+	for (const item of items.slice(limit)) omissions.push({
+		id: item.id,
+		section,
+		reason: "section-limit"
+	});
+	return items.slice(0, limit);
+}
+function trimToCharacterLimit(guidance, omissions) {
+	const exampleCandidates = [...guidance.consider, ...guidance.required].reverse();
+	for (const item of exampleCandidates) {
+		if (JSON.stringify(guidance).length <= GUIDANCE_BUDGET.serializedCharacters) break;
+		item.examples = [];
+	}
+	while (JSON.stringify(guidance).length > GUIDANCE_BUDGET.serializedCharacters) {
+		if (guidance.consider.length) {
+			const item = guidance.consider.pop();
 			omissions.push({
 				id: item.id,
-				reason: "character-limit",
-				original_priority: `must:${item.execution_mode}`
+				section: "consider",
+				reason: "character-limit"
 			});
 			continue;
 		}
-		const avoid = ego.guidance.avoid.pop();
-		if (avoid) {
+		if (guidance.tensions.length) {
+			const item = guidance.tensions.pop();
 			omissions.push({
-				id: avoid.trigger,
-				reason: "character-limit",
-				original_priority: "avoid:verified-anti-pattern"
+				id: item.id,
+				section: "tensions",
+				reason: "character-limit"
+			});
+			continue;
+		}
+		if (guidance.required.length) {
+			const item = guidance.required.pop();
+			omissions.push({
+				id: item.id,
+				section: "required",
+				reason: "character-limit"
+			});
+			continue;
+		}
+		if (guidance.avoid.length) {
+			const item = guidance.avoid.pop();
+			omissions.push({
+				id: item.id,
+				section: "avoid",
+				reason: "character-limit"
 			});
 			continue;
 		}
 		break;
 	}
 }
-function hardPayloadLength(hard) {
-	return JSON.stringify(hard.map((item) => item.value)).length;
-}
-function findLastIndex(items, predicate) {
-	for (let index = items.length - 1; index >= 0; index -= 1) if (predicate(items[index])) return index;
-	return -1;
-}
-const CONSTRAINT_NARROW_SCOPE = "prefer narrow change scope";
-const AVOID_BROAD_REWRITES = "broad rewrites";
-const AUTHORITATIVE_CONTEXT_SOURCES = new Set([
-	"explicit",
-	"host-agent",
-	"assistive-ai",
-	"repo-default",
-	"derived"
-]);
-function applyContextExecutionPolicy(input) {
-	let decision = {
-		...input.defaultDecision,
-		contextApplied: [...input.defaultDecision.contextApplied],
-		contextRulesApplied: [...input.defaultDecision.contextRulesApplied]
-	};
-	const hasTension = input.relations.some((relation) => relation.adjudication.finalRelation === "tension" && relation.impact === "execution-mode");
-	for (const rule of CONTEXT_EXECUTION_RULES) {
-		const ruleInput = {
-			directive: input.directive,
-			relations: input.relations,
-			defaultDecision: input.defaultDecision,
-			decision,
-			context: input.context,
-			provenance: input.provenance ?? [],
-			hasTension
-		};
-		if (!rule.matches(ruleInput)) continue;
-		const result = rule.apply(ruleInput);
-		decision = {
-			...decision,
-			mode: result.mode ?? decision.mode,
-			basis: result.basis ?? decision.basis,
-			reason: `${decision.reason} ${result.reasonSuffix}`,
-			contextApplied: unique([...decision.contextApplied, ...result.contextApplied]),
-			contextRulesApplied: unique([...decision.contextRulesApplied, rule.id])
-		};
-	}
-	return {
-		...decision,
-		contextApplied: unique(decision.contextApplied),
-		contextRulesApplied: unique(decision.contextRulesApplied)
-	};
-}
-function contextInfluenceEffect(context, mode) {
-	if (context.startsWith("optimization_target:")) return `adjusted execution to ${mode} for the task optimization target`;
-	if (context.startsWith("hard_constraints:")) return `adjusted execution to ${mode} for explicit task constraints`;
-	if (context.startsWith("allowed_tradeoffs:")) return `adjusted execution to ${mode} for allowed task tradeoffs`;
-	if (context.startsWith("avoid:")) return `adjusted execution to ${mode} for task avoidance guidance`;
-	if (context.startsWith("risk_level:")) return `raised execution or review attention to ${mode} for task risk`;
-	if (context.startsWith("scope_size:")) return `adjusted execution to ${mode} for task scope size`;
-	if (context.startsWith("compatibility_requirement:")) return `adjusted execution to ${mode} for compatibility requirements`;
-	if (context.startsWith("interface_sensitivity:")) return `raised review attention while resolving execution to ${mode} for sensitive interfaces`;
-	if (context.startsWith("refactor_tolerance:")) return `adjusted execution to ${mode} for refactor tolerance`;
-	if (context.startsWith("migration_phase:")) return `adjusted execution to ${mode} for migration phase`;
-	if (context.startsWith("review_goal:")) return `raised review attention while resolving execution to ${mode} for review goal`;
-	if (context.startsWith("feedback:")) return `recorded feedback influence while resolving execution to ${mode}`;
-	return `adjusted execution to ${mode} for task context`;
-}
-function contextReviewPriorityBoost(contextApplied) {
-	if (contextApplied.includes("risk_level:critical") || contextApplied.includes("interface_sensitivity:auth-security")) return "critical";
-	if (contextApplied.includes("risk_level:high") || contextApplied.some((context) => context.startsWith("compatibility_requirement:") && !context.endsWith(":none")) || contextApplied.some((context) => context.startsWith("interface_sensitivity:") && !context.endsWith(":internal") && !context.endsWith(":unknown")) || contextApplied.includes("migration_phase:dual-run") || contextApplied.includes("migration_phase:cutover")) return "high";
-	return null;
-}
-const CONTEXT_EXECUTION_RULES = [
-	{
-		id: "context.safety.promote-compatible-should",
-		field: "optimization_target",
-		effect: "mode-adjustment",
-		matches: (input) => hasAuthoritativeContextField(input, "optimization_target") && input.context.optimization_target === "safety" && input.directive.prescription === "should" && input.defaultDecision.mode === "ambient" && input.hasTension && isCompatibilitySensitiveDirective(input.directive),
-		apply: () => ({
-			mode: "deviation-noted",
-			basis: "task-context",
-			reasonSuffix: "Safety-focused context promotes compatibility-sensitive guidance from ambient to deviation-noted when repository reality conflicts with it.",
-			contextApplied: ["optimization_target:safety"]
-		})
-	},
-	{
-		id: "context.safety.preserve-must-deviation",
-		field: "optimization_target",
-		effect: "review-priority",
-		matches: (input) => hasAuthoritativeContextField(input, "optimization_target") && input.context.optimization_target === "safety" && input.directive.prescription === "must" && input.defaultDecision.mode === "deviation-noted",
-		apply: () => ({
-			basis: "task-context",
-			reasonSuffix: "Safety-focused context preserves stricter enforcement intent even though repository compatibility still requires a deviation-noted posture.",
-			contextApplied: ["optimization_target:safety"]
-		})
-	},
-	{
-		id: "context.compatibility.must-with-tension",
-		field: "compatibility_requirement",
-		effect: "mode-adjustment",
-		matches: (input) => (hasAuthoritativeConstraint(input, "hard_constraints", [
-			"preserve compatibility",
-			"avoid breaking changes",
-			"preserve public api"
-		]) || hasAuthoritativeContextField(input, "compatibility_requirement") && hasCompatibilityRequirement(input.context)) && input.directive.prescription === "must" && input.decision.mode === "enforce" && input.hasTension,
-		apply: (input) => ({
-			mode: "deviation-noted",
-			basis: "task-context",
-			reasonSuffix: "Explicit compatibility constraints shift execution to deviation-noted because legacy or migration realities must be preserved at touched interfaces.",
-			contextApplied: [hasAuthoritativeContextField(input, "compatibility_requirement") && input.context.compatibility_requirement !== "none" ? `compatibility_requirement:${input.context.compatibility_requirement}` : "hard_constraints:compatibility"]
-		})
-	},
-	{
-		id: "context.scope.keep-broad-guidance-ambient",
-		field: "scope_size",
-		effect: "ambienting",
-		matches: (input) => (hasAuthoritativeConstraint(input, "allowed_tradeoffs", ["prefer narrow change scope"]) || input.context.scope_size === "single-file" && hasAuthoritativeScopeEvidence(input) || hasAuthoritativeContextField(input, "refactor_tolerance") && (input.context.refactor_tolerance === "none" || input.context.refactor_tolerance === "local-only")) && input.directive.prescription === "should" && input.directive.traits.broadScope,
-		apply: (input) => ({
-			mode: "ambient",
-			basis: "task-context",
-			reasonSuffix: "Narrow-scope tradeoff guidance keeps broad architectural guidance ambient for this task.",
-			contextApplied: [
-				...hasAuthoritativeConstraint(input, "allowed_tradeoffs", ["prefer narrow change scope"]) ? [`allowed_tradeoffs:${CONSTRAINT_NARROW_SCOPE}`] : [],
-				...input.context.scope_size === "single-file" && hasAuthoritativeScopeEvidence(input) ? ["scope_size:single-file"] : [],
-				...hasAuthoritativeContextField(input, "refactor_tolerance") && (input.context.refactor_tolerance === "none" || input.context.refactor_tolerance === "local-only") ? [`refactor_tolerance:${input.context.refactor_tolerance}`] : []
-			]
-		})
-	},
-	{
-		id: "context.avoid.keep-broad-rewrite-ambient",
-		field: "avoid",
-		effect: "ambienting",
-		matches: (input) => hasAuthoritativeConstraint(input, "avoid", ["broad rewrites", "overengineering"]) && input.directive.prescription === "should" && input.directive.traits.broadScope,
-		apply: () => ({
-			mode: "ambient",
-			basis: "task-context",
-			reasonSuffix: "Avoiding broad rewrites or overengineering keeps expansive guidance ambient unless it is already a must-level requirement.",
-			contextApplied: [`avoid:${AVOID_BROAD_REWRITES}`]
-		})
-	},
-	{
-		id: "context.compatibility.promote-compatible-should",
-		field: "compatibility_requirement",
-		effect: "mode-adjustment",
-		matches: (input) => hasAuthoritativeContextField(input, "compatibility_requirement") && hasCompatibilityRequirement(input.context) && input.directive.prescription === "should" && input.defaultDecision.mode === "ambient" && input.hasTension && isCompatibilitySensitiveDirective(input.directive),
-		apply: (input) => ({
-			mode: "deviation-noted",
-			basis: "task-context",
-			reasonSuffix: "Compatibility requirements promote compatible should-level guidance to deviation-noted when verified repository tension exists.",
-			contextApplied: [`compatibility_requirement:${input.context.compatibility_requirement}`]
-		})
-	},
-	{
-		id: "context.risk.raise-review-attention",
-		field: "risk_level",
-		effect: "review-priority",
-		matches: (input) => hasAuthoritativeContextField(input, "risk_level") && isHighRisk(input.context) && (input.directive.prescription === "must" || input.directive.traits.safetyCritical || input.decision.mode === "deviation-noted") && input.decision.mode !== "suppress",
-		apply: ({ context, decision }) => ({
-			basis: decision.basis === "prescription" ? "task-context" : decision.basis,
-			reasonSuffix: "High-risk context keeps this directive prominent for execution and review.",
-			contextApplied: [`risk_level:${context.risk_level}`]
-		})
-	},
-	{
-		id: "context.interface.raise-review-attention",
-		field: "interface_sensitivity",
-		effect: "review-priority",
-		matches: (input) => hasAuthoritativeContextField(input, "interface_sensitivity") && isSensitiveInterface(input.context) && (input.directive.prescription === "must" || isCompatibilitySensitiveDirective(input.directive)) && input.decision.mode !== "suppress",
-		apply: ({ context, decision }) => ({
-			basis: decision.basis === "prescription" ? "task-context" : decision.basis,
-			reasonSuffix: "Sensitive interface context raises review attention for this directive.",
-			contextApplied: [`interface_sensitivity:${context.interface_sensitivity}`]
-		})
-	},
-	{
-		id: "context.migration.keep-boundary-tension-explicit",
-		field: "migration_phase",
-		effect: "mode-adjustment",
-		matches: (input) => hasAuthoritativeContextField(input, "migration_phase") && isMigrationExecutionPhase(input.context) && input.directive.traits.migrationSensitive && input.hasTension && input.decision.mode !== "suppress",
-		apply: ({ context, directive }) => ({
-			mode: directive.prescription === "must" ? "deviation-noted" : void 0,
-			basis: "task-context",
-			reasonSuffix: "Migration phase context keeps migration-boundary tension explicit for this task.",
-			contextApplied: [`migration_phase:${context.migration_phase}`]
-		})
-	}
-];
-function hasAuthoritativeContextField(input, field) {
-	return isAuthoritativeProvenance(findProvenance(input.provenance, `context.${field}`));
-}
-function hasAuthoritativeConstraint(input, field, expected) {
-	return hasAuthoritativeContextField(input, field) && hasConstraint(input.context[field], expected);
-}
-function hasAuthoritativeScopeEvidence(input) {
-	return hasAuthoritativeContextField(input, "scope_size") || isAuthoritativeProvenance(findProvenance(input.provenance, "intent.target_file")) || isAuthoritativeProvenance(findProvenance(input.provenance, "intent.changed_files"));
-}
-function findProvenance(provenance, field) {
-	return provenance.find((item) => item.field === field);
-}
-function isAuthoritativeProvenance(provenance) {
-	return provenance !== void 0 && provenance.confidence > 0 && AUTHORITATIVE_CONTEXT_SOURCES.has(provenance.source);
-}
-function isCompatibilitySensitiveDirective(directive) {
-	return directive.traits.compatibilitySensitive || directive.traits.rcclImmune || directive.prescription === "must";
-}
-function hasCompatibilityRequirement(context) {
-	return context.compatibility_requirement === "preserve-api" || context.compatibility_requirement === "preserve-behavior" || context.compatibility_requirement === "migration-compatible";
-}
-function isHighRisk(context) {
-	return context.risk_level === "high" || context.risk_level === "critical";
-}
-function isSensitiveInterface(context) {
-	return context.interface_sensitivity === "public-api" || context.interface_sensitivity === "persistence" || context.interface_sensitivity === "external-integration" || context.interface_sensitivity === "auth-security";
-}
-function isMigrationExecutionPhase(context) {
-	return context.migration_phase === "dual-run" || context.migration_phase === "cutover";
-}
 //#endregion
-//#region src/ir/execution/resolve-execution.ts
-function resolveExecutionDecisionsIR(bundle, relations) {
-	const relationsByDirective = groupEffectiveRelations(relations);
-	return bundle.directives.map((directive) => {
-		const linkedRelations = relationsByDirective.get(directive.id) ?? [];
-		const defaultDecision = deriveDirectiveDecision(directive, linkedRelations);
-		const contextDecision = applyContextAdjustments(directive, linkedRelations, defaultDecision, bundle.task.context, bundle.task.provenance);
-		const feedbackEffects = feedbackSignalsForDirective(bundle, directive, linkedRelations);
-		const decision = applyFeedbackAdjustments(directive, contextDecision, feedbackEffects);
-		return {
-			directiveId: directive.id,
-			mode: decision.mode,
-			defaultMode: defaultDecision.mode,
-			basis: decision.basis,
-			relationIds: linkedRelations.map((relation) => relation.id),
-			contextApplied: decision.contextApplied,
-			contextRulesApplied: decision.contextRulesApplied,
-			feedbackApplied: feedbackEffects.labels,
-			reason: decision.reason
-		};
+//#region src/decision/compile-change.ts
+const RELATION_MIN_CONFIDENCE = .72;
+const WEIGHT_RANK = {
+	low: 0,
+	normal: 1,
+	high: 2,
+	critical: 3
+};
+async function compileChange(input) {
+	if (!input || typeof input !== "object") throw new Error("compileChange input must be an object.");
+	if (typeof input.projectRoot !== "string" || !input.projectRoot.trim()) throw new Error("compileChange projectRoot must be non-empty.");
+	if (typeof input.builtinRoot !== "string" || !input.builtinRoot.trim()) throw new Error("compileChange builtinRoot must be non-empty.");
+	if (!input.task || typeof input.task !== "object") throw new Error("compileChange task must be an object.");
+	const mode = input.mode ?? "standard";
+	if (mode !== "standard" && mode !== "strict") throw new Error("compileChange mode must be standard or strict.");
+	const relationProposals = validateRelationProposals(input.relationProposals);
+	const task = normalizeTaskContext(input.task);
+	const interpretationReasons = taskNeedsInterpretation(task, mode);
+	if (interpretationReasons.length) return {
+		schemaVersion: "1.0",
+		status: "needs-interpretation",
+		task,
+		reasons: interpretationReasons,
+		requiredFields: requiredInterpretationFields(task)
+	};
+	const loaded = await loadGovernanceSources(input, task);
+	const diagnostics = [];
+	if (!loaded.rccl) diagnostics.push({
+		code: "RCCL_NOT_LOADED",
+		message: "No RCCL source was supplied for this task."
 	});
-}
-function groupEffectiveRelations(relations) {
-	const grouped = /* @__PURE__ */ new Map();
-	for (const relation of relations) {
-		if (relation.adjudication.status === "rejected") continue;
-		if (relation.adjudication.finalRelation === "unrelated") continue;
-		const current = grouped.get(relation.directiveId) ?? [];
-		current.push(relation);
-		grouped.set(relation.directiveId, current);
-	}
-	return grouped;
-}
-function deriveDirectiveDecision(directive, relations) {
-	if (directive.kind === "anti-pattern") return {
-		mode: "suppress",
-		reason: "directive is classified as an anti-pattern and should suppress matching behavior",
-		basis: "anti-pattern",
-		contextApplied: [],
-		contextRulesApplied: []
-	};
-	if (directive.traits.rcclImmune) return {
-		mode: "enforce",
-		reason: "directive is marked rccl_immune and should not be downgraded by repository observations",
-		basis: "verification",
-		contextApplied: [],
-		contextRulesApplied: []
-	};
-	const hasTension = relations.some((relation) => relation.adjudication.finalRelation === "tension" && relation.impact === "execution-mode");
-	if (relations.some((relation) => relation.adjudication.finalRelation === "suppress")) return {
-		mode: "suppress",
-		reason: "anti-pattern observations materially overlap this directive and should suppress matching behavior",
-		basis: "anti-pattern",
-		contextApplied: [],
-		contextRulesApplied: []
-	};
-	const graphIntentDecision = resolveGraphExecutionIntent(directive, relations);
-	if (graphIntentDecision) return graphIntentDecision;
-	if (!hasTension) return {
-		mode: directive.prescription === "must" ? "enforce" : "ambient",
-		reason: "no strong repository tension matched this directive, so default execution behavior applies",
-		basis: "prescription",
-		contextApplied: [],
-		contextRulesApplied: []
-	};
-	return {
-		mode: directive.prescription === "must" ? "deviation-noted" : "ambient",
-		reason: "repository observations materially overlap this directive, so execution is adjusted to reflect current repository reality",
-		basis: "governance-graph",
-		contextApplied: [],
-		contextRulesApplied: []
-	};
-}
-function resolveGraphExecutionIntent(directive, relations) {
-	const candidates = relations.filter((relation) => relation.adjudication.status === "accepted" && relation.impact === "execution-mode" && relation.executionIntent != null && relation.executionIntent !== "no-change").sort((left, right) => executionIntentRank(right.executionIntent) - executionIntentRank(left.executionIntent));
-	for (const selected of candidates) {
-		const decision = resolveGraphExecutionIntentCandidate(directive, selected, relations);
-		if (decision) return decision;
-	}
-	return null;
-}
-function resolveGraphExecutionIntentCandidate(directive, selected, relations) {
-	if (!selected.executionIntent) return null;
-	if (selected.executionIntent === "suppress") {
-		if (selected.adjudication.finalRelation !== "suppress") return null;
-		return {
-			mode: "suppress",
-			reason: `semantic governance graph requested suppress execution for ${directive.id}, and Runtime accepted a suppress relation`,
-			basis: "governance-graph",
-			contextApplied: ["execution_intent:suppress"],
-			contextRulesApplied: []
-		};
-	}
-	if (selected.executionIntent === "deviation-noted") {
-		if (selected.adjudication.finalRelation !== "tension") return null;
-		return {
-			mode: "deviation-noted",
-			reason: `semantic governance graph requested deviation-noted execution for ${directive.id}, and Runtime accepted the execution-mode relation ${selected.id}`,
-			basis: "governance-graph",
-			contextApplied: ["execution_intent:deviation-noted"],
-			contextRulesApplied: []
-		};
-	}
-	if (selected.executionIntent === "ambient") {
-		if (selected.adjudication.finalRelation !== "ambient-only" && selected.adjudication.finalRelation !== "tension") return null;
-		if (directive.prescription === "must" || directive.weight === "critical") {
-			if (selected.adjudication.finalRelation !== "tension") return null;
-			return {
-				mode: "deviation-noted",
-				reason: `semantic governance graph requested ambient execution for must-or-critical ${directive.id}; Runtime floors accepted tension to deviation-noted instead of silently weakening protected guidance`,
-				basis: "governance-graph",
-				contextApplied: ["execution_intent:ambient", "execution_intent_floor:must-deviation-noted"],
-				contextRulesApplied: []
-			};
-		}
-		return {
-			mode: "ambient",
-			reason: `semantic governance graph requested ambient execution for ${directive.id}, and Runtime accepted the execution-mode relation ${selected.id}`,
-			basis: "governance-graph",
-			contextApplied: ["execution_intent:ambient"],
-			contextRulesApplied: []
-		};
-	}
-	if (selected.executionIntent === "enforce") {
-		if (selected.adjudication.finalRelation !== "reinforce") return null;
-		if (relations.some((relation) => relation.adjudication.finalRelation === "tension" || relation.adjudication.finalRelation === "suppress")) return null;
-		return {
-			mode: "enforce",
-			reason: `semantic governance graph requested enforce execution for ${directive.id}, and Runtime accepted the execution-mode relation ${selected.id}`,
-			basis: "governance-graph",
-			contextApplied: ["execution_intent:enforce"],
-			contextRulesApplied: []
-		};
-	}
-	return null;
-}
-function executionIntentRank(intent) {
-	switch (intent) {
-		case "suppress": return 5;
-		case "deviation-noted": return 4;
-		case "enforce": return 3;
-		case "ambient": return 2;
-		case "no-change": return 1;
-		default: return 0;
-	}
-}
-function applyContextAdjustments(directive, relations, defaultDecision, context, provenance) {
-	return applyContextExecutionPolicy({
-		directive,
-		relations,
-		defaultDecision,
-		context,
-		provenance
+	const relationDecisions = buildRelationDecisions(loaded.directives, loaded.relevantObservations, relationProposals, diagnostics);
+	if (loaded.relevantObservations.length && !relationDecisions.some((relation) => relation.impact === "execution-mode" && relation.status === "accepted")) diagnostics.push({
+		code: "RCCL_NO_DECISION_IMPACT",
+		message: "Task-relevant RCCL observations were delivered as context but did not change directive execution.",
+		ids: loaded.relevantObservations.map((observation) => observation.id)
 	});
-}
-function applyFeedbackAdjustments(directive, decision, effects) {
-	let result = {
-		...decision,
-		contextApplied: [...decision.contextApplied],
-		contextRulesApplied: [...decision.contextRulesApplied]
-	};
-	if (effects.recurringTension && directive.prescription === "must") result = {
-		...result,
-		reason: `${result.reason} Recurring lockfile tension keeps this must-level directive visible for review, but feedback alone does not alter execution mode without a host semantic graph or explicit task context.`
-	};
-	if (effects.frequentlyIgnored && directive.prescription === "should") result = {
-		...result,
-		mode: "ambient",
-		basis: "feedback",
-		reason: `${result.reason} Lockfile feedback shows this should-level directive is frequently ignored, so it remains ambient unless stronger verified relations require attention.`
-	};
-	if (effects.frequentlyIgnoredMust) result = {
-		...result,
-		basis: result.basis === "prescription" ? "feedback" : result.basis,
-		reason: `${result.reason} Lockfile feedback shows a must-level directive was frequently ignored; execution is not weakened, but review focus should verify the outcome.`
-	};
-	if (effects.noisyObservation) result = {
-		...result,
-		reason: `${result.reason} Feedback marks one linked observation as noisy, so Runtime keeps the relation reviewable and still relies on RCCL verification before changing execution.`
-	};
-	return result;
-}
-function feedbackSignalsForDirective(bundle, directive, relations) {
-	const labels = [];
-	const directiveSignal = bundle.feedback.directiveSignals.find((signal) => signal.directiveId === directive.id);
-	const frequentlyIgnored = directiveSignal !== void 0 && directiveSignal.ignored >= SEMANTIC_RELATION_POLICY.feedback.frequentlyIgnoredMinIgnored && directiveSignal.followRate < SEMANTIC_RELATION_POLICY.feedback.frequentlyIgnoredFollowRate;
-	const recurringTension = relations.some((relation) => relation.basis.feedback && relation.adjudication.status !== "rejected" && relation.adjudication.finalRelation === "tension");
-	const noisyObservation = relations.some((relation) => {
-		const signal = bundle.feedback.observationSignals.find((item) => item.observationId === relation.observationId);
-		return signal !== void 0 && signal.relationCount >= SEMANTIC_RELATION_POLICY.feedback.noisyObservationRelationCount && signal.lastDisposition === "demote-to-ambient";
+	const executionModes = resolveExecutionModes(loaded.directives, relationDecisions);
+	const budgeted = applyGuidanceBudget(buildEffectiveGuidance(loaded.directives, loaded.relevantObservations, executionModes, relationDecisions, task));
+	if (budgeted.omissions.length) diagnostics.push({
+		code: "GUIDANCE_BUDGET_TRIMMED",
+		message: `Guidance budget omitted ${budgeted.omissions.length} lower-priority item(s).`,
+		ids: budgeted.omissions.map((item) => item.id)
 	});
-	if (frequentlyIgnored) labels.push("feedback:frequently-ignored");
-	if (frequentlyIgnored && directive.prescription === "must") labels.push("feedback:frequently-ignored-must-review");
-	if (directiveSignal?.trend === "declining") labels.push("feedback:declining");
-	if (directiveSignal?.signalConfidence === "user-corrected") labels.push("feedback:user-corrected");
-	if (recurringTension) labels.push("feedback:recurring-tension");
-	if (noisyObservation) labels.push("feedback:noisy-observation");
-	return {
-		labels: unique(labels),
-		frequentlyIgnored,
-		frequentlyIgnoredMust: frequentlyIgnored && directive.prescription === "must",
-		recurringTension,
-		noisyObservation
-	};
-}
-//#endregion
-//#region src/ir/relations/adjudicate-relations.ts
-function adjudicateSemanticRelations(relations, bundle) {
-	const directiveById = new Map(bundle.directives.map((directive) => [directive.id, directive]));
-	const observationById = new Map(bundle.observations.map((observation) => [observation.id, observation]));
-	return relations.map((relation) => {
-		const directive = directiveById.get(relation.directiveId);
-		const observation = observationById.get(relation.observationId);
-		if (!directive) return rejectRelation(relation, "directive is missing from the IR bundle");
-		if (!observation) return rejectRelation(relation, "observation is missing from the IR bundle");
-		if (observation.lifecycle.status === "superseded") return rejectRelation(relation, "observation lifecycle is superseded and must not influence current execution");
-		if (observation.lifecycle.status === "stale") return downgradeRelation(relation, "observation lifecycle is stale, so it can only provide ambient context");
-		if (observation.verification.disposition === "demote-to-ambient") return downgradeRelation(relation, "verify gate demoted the observation, so it can only provide ambient context");
-		switch (relation.relation) {
-			case "suppress": return adjudicateSuppressRelation(relation, {
-				observationAntiPattern: observation.traits.antiPattern,
-				observationVerified: observation.verification.evidenceStatus === "verified"
-			});
-			case "tension":
-			case "reinforce": return adjudicateDirectionalRelation(relation);
-			case "ambient-only": return acceptRelation(relation, "ambient-only relation is valid contextual input");
-			case "unrelated": return rejectRelation(relation, "proposal did not establish a semantic relation");
-		}
-	});
-}
-function adjudicateSuppressRelation(relation, context) {
-	if (!relation.basis.scope) return rejectRelation(relation, "suppression is outside the task scope");
-	if (!hasSemanticBasis(relation)) return rejectRelation(relation, "suppression lacks semantic basis");
-	if (!context.observationAntiPattern || !context.observationVerified) return rejectRelation(relation, "suppression requires a statically verified anti-pattern observation under Runtime policy");
-	if (!relation.basis.evidence) return downgradeRelation(relation, "suppression lacks verified observation evidence");
-	return acceptRelation(relation, acceptedReason(relation, "suppression"));
-}
-function adjudicateDirectionalRelation(relation) {
-	if (!relation.basis.scope) return rejectRelation(relation, "directional relation is outside the task scope");
-	if (!hasSemanticBasis(relation)) return rejectRelation(relation, "directional relation lacks semantic basis");
-	if (!relation.basis.evidence) return downgradeRelation(relation, "directional relation lacks verified observation evidence");
-	return acceptRelation(relation, acceptedReason(relation, relation.relation));
-}
-function hasSemanticBasis(relation) {
-	return relation.basis.hostReasoning || relation.basis.feedback || relation.basis.semanticKey || relation.basis.category || relation.signals.some((signal) => signal.kind === "host-proposal" || signal.kind === "semantic-key");
-}
-function acceptedReason(relation, label) {
-	return `${label} relation accepted from ${relation.proposedBy === "multi-source" ? "merged semantic relation sources" : relation.proposedBy} after scope, lifecycle, and verification adjudication`;
-}
-function acceptRelation(relation, reason) {
-	return {
-		...relation,
-		adjudication: {
-			status: "accepted",
-			finalRelation: relation.relation,
-			reason
-		}
-	};
-}
-function downgradeRelation(relation, reason) {
-	return {
-		...relation,
-		adjudication: {
-			status: "downgraded",
-			finalRelation: "ambient-only",
-			reason
-		}
-	};
-}
-function rejectRelation(relation, reason) {
-	return {
-		...relation,
-		adjudication: {
-			status: "rejected",
-			finalRelation: "unrelated",
-			reason
-		}
-	};
-}
-//#endregion
-//#region src/ir/relations/propose-feedback-relations.ts
-function proposeFeedbackRelations(bundle) {
-	const directiveById = new Map(bundle.directives.map((directive) => [directive.id, directive]));
-	const observationById = new Map(bundle.observations.map((observation) => [observation.id, observation]));
-	const observationFeedbackById = new Map(bundle.feedback.observationSignals.map((signal) => [signal.observationId, signal]));
-	return bundle.feedback.tensionSignals.flatMap((signal) => {
-		if (signal.seenCount < SEMANTIC_RELATION_POLICY.feedback.recurringTensionSeenCount) return [];
-		const directive = directiveById.get(signal.directiveId);
-		const observation = observationById.get(signal.observationId);
-		if (!directive || !observation) return [];
-		if (!observationFeedbackSupportsInfluence(observation, observationFeedbackById.get(observation.id))) return [];
-		if (!hasVerifiedEvidence$1(observation)) return [];
-		const taskScoped = scopeMatchesTask$1(directive.scope.path, bundle.task) && scopeMatchesTask$1(observation.scope.path, bundle.task);
-		if (!taskScoped) return [];
-		return [toFeedbackTensionRelation(signal, directive, observation, bundle.task, taskScoped)];
-	});
-}
-function toFeedbackTensionRelation(signal, directive, observation, task, taskScoped) {
-	const signals = buildFeedbackSignals(signal, observation, taskScoped);
-	return {
-		irVersion: GOVERNANCE_IR_VERSION,
-		id: stableHash([
-			"semantic-relation-ir",
-			"feedback",
-			signal.tensionKey,
-			signal.seenCount,
-			directive.id,
-			observation.id,
-			signals
-		]),
-		directiveId: directive.id,
-		observationId: observation.id,
-		proposedBy: "feedback",
-		relation: "tension",
-		conflictClass: inferFeedbackConflictClass(observation),
-		confidence: feedbackConfidence(signal.seenCount),
-		basis: {
-			scope: taskScoped,
-			semanticKey: false,
-			category: false,
-			evidence: true,
-			hostReasoning: false,
-			feedback: true
-		},
-		signals,
-		evidenceRefs: observationEvidenceRefs$1(observation),
-		reasoningSummary: `lockfile feedback recorded recurring tension ${signal.tensionKey} across ${signal.seenCount} task(s) for ${task.operation} work`,
-		impact: "review-focus",
-		reviewPriority: directive.prescription === "must" ? "high" : "normal",
-		mergeIntent: "Treat the recurring lockfile tension as a reviewable repository reality, without bypassing RCCL verification.",
-		adjudication: {
-			status: "accepted",
-			finalRelation: "tension",
-			reason: "initial feedback relation proposal before adjudication"
-		}
-	};
-}
-function observationFeedbackSupportsInfluence(observation, signal) {
-	if (!signal) return false;
-	if (signal.lastDisposition === "demote-to-ambient") return false;
-	if (signal.lastLifecycleStatus !== "active") return false;
-	if (observation.lifecycle.status !== "active") return false;
-	const currentFingerprint = observation.lifecycle.contentFingerprint;
-	if (currentFingerprint && signal.lastContentFingerprint !== currentFingerprint) return false;
-	return true;
-}
-function buildFeedbackSignals(signal, observation, taskScoped) {
-	return [
-		{
-			kind: "feedback",
-			strength: signal.seenCount >= SEMANTIC_RELATION_POLICY.feedback.recurringTensionSeenCount + 2 ? "strong" : "moderate",
-			direction: "tension",
-			reason: `lockfile tension ${signal.tensionKey} has appeared ${signal.seenCount} time(s)`
-		},
-		{
-			kind: "scope",
-			strength: taskScoped ? "strong" : "weak",
-			direction: taskScoped ? "neutral" : "ambient",
-			reason: taskScoped ? "recurring feedback tension matches the current task scope" : "recurring feedback tension is outside the current task scope"
-		},
-		{
-			kind: "verification",
-			strength: verificationStrength$1(observation),
-			direction: observation.verification.disposition === "demote-to-ambient" ? "ambient" : "neutral",
-			reason: `RCCL verification disposition is ${observation.verification.disposition}`
-		},
-		{
-			kind: "lifecycle",
-			strength: observation.lifecycle.status === "active" ? "strong" : "weak",
-			direction: observation.lifecycle.status === "active" ? "neutral" : "ambient",
-			reason: `RCCL lifecycle status is ${observation.lifecycle.status}`
-		}
-	];
-}
-function feedbackConfidence(seenCount) {
-	return Number(Math.min(.9, .62 + seenCount * .07).toFixed(2));
-}
-function inferFeedbackConflictClass(observation) {
-	if (observation.traits.migrationBoundary) return "migration-tension";
-	if (observation.traits.compatibilityBoundary || observation.traits.legacy) return "legacy-interface";
-	if (observation.category === "style") return "style-drift";
-	if (observation.category === "architecture") return "architecture-drift";
-	return "local-deviation";
-}
-function hasVerifiedEvidence$1(observation) {
-	return observation.verification.evidenceVerifiedCount > 0 || observation.verification.evidenceStatus === "verified" || observation.verification.evidenceStatus === "partial";
-}
-function verificationStrength$1(observation) {
-	if (observation.verification.evidenceStatus === "verified" || observation.verification.evidenceConfidence >= .8) return "strong";
-	if (observation.verification.evidenceStatus === "partial" || observation.verification.evidenceConfidence >= .5) return "moderate";
-	return "weak";
-}
-function observationEvidenceRefs$1(observation) {
-	return observation.evidence.map((evidence) => `${evidence.file}:${evidence.line_range[0]}-${evidence.line_range[1]}`);
-}
-function scopeMatchesTask$1(scope, task) {
-	if (task.targets.length === 0) return true;
-	return task.targets.some((target) => pathMatchesScope(target.path, scope));
-}
-//#endregion
-//#region src/ir/relations/propose-relations.ts
-function proposeSemanticRelations(bundle) {
-	return [
-		...proposeRuntimeStructuralRelations(bundle),
-		...proposeHostGovernanceGraphRelations(bundle),
-		...proposeFeedbackRelations(bundle)
-	];
-}
-function proposeRuntimeStructuralRelations(bundle) {
-	return bundle.directives.flatMap((directive) => bundle.observations.flatMap((observation) => {
-		const relation = proposeRuntimeStructuralRelation(directive, observation, bundle.task);
-		return relation ? [relation] : [];
+	const deliveredGuidanceIds = guidanceIds(budgeted.guidance);
+	const verificationPlan = buildVerificationPlan(budgeted.guidance);
+	const relationTrace = relationDecisions.map((relation) => ({
+		directiveId: relation.directiveId,
+		observationId: relation.observationId,
+		relation: relation.relation,
+		status: relation.status,
+		impact: relation.impact,
+		reason: relation.reason,
+		proposedBy: relation.proposedBy
 	}));
-}
-function proposeRuntimeStructuralRelation(directive, observation, task) {
-	if (observation.lifecycle.status === "superseded") return null;
-	const taskScoped = scopeMatchesTask(directive.scope.path, task) && scopeMatchesTask(observation.scope.path, task);
-	const semanticKey = semanticKeysOverlap(directive.semanticKey, observation.semanticKey);
-	if (!semanticKey) return null;
-	const evidence = hasVerifiedEvidence(observation);
-	if (!taskScoped || !evidence) return null;
-	const relation = "ambient-only";
-	const signals = buildRuntimeSignals(observation, taskScoped, semanticKey, relation);
-	const conflictClass = inferConflictClass(directive, observation, relation);
+	const fingerprints = {
+		task: stableHash([task]),
+		directives: stableHash(loaded.directives.map(directiveFingerprintInput)),
+		observations: stableHash(loaded.relevantObservations.map(observationFingerprintInput)),
+		relations: stableHash(relationTrace)
+	};
 	return {
-		irVersion: GOVERNANCE_IR_VERSION,
-		id: stableHash([
-			"semantic-relation-ir",
-			"runtime-structural",
-			directive.id,
-			observation.id,
-			relation,
-			signals
+		schemaVersion: "1.0",
+		decisionId: stableHash([
+			"1.0",
+			task,
+			deliveredGuidanceIds,
+			fingerprints
 		]),
-		directiveId: directive.id,
-		observationId: observation.id,
-		proposedBy: "runtime-structural",
-		relation,
-		...conflictClass ? { conflictClass } : {},
-		confidence: runtimeRelationConfidence(observation),
-		basis: {
-			scope: taskScoped,
-			semanticKey,
-			category: false,
-			evidence,
-			hostReasoning: false,
-			feedback: false
+		status: diagnostics.some((item) => item.code === "RELATION_PROPOSAL_REJECTED") ? "needs-attention" : "compiled",
+		mode,
+		task,
+		guidance: budgeted.guidance,
+		verificationPlan,
+		trace: {
+			selectedLayers: loaded.selectedLayers,
+			activatedDirectiveIds: loaded.directives.map((directive) => directive.id),
+			deliveredGuidanceIds,
+			suppressedDirectiveIds: loaded.directives.filter((directive) => executionModes.get(directive.id) === "suppress").map((directive) => directive.id),
+			relevantObservationIds: loaded.relevantObservations.map((observation) => observation.id),
+			observationEvidence: loaded.observationVerification,
+			relationDecisions: relationTrace,
+			omissions: budgeted.omissions,
+			diagnostics
 		},
-		signals,
-		evidenceRefs: observationEvidenceRefs(observation),
-		reasoningSummary: summarizeRuntimeProposal(relation),
-		impact: defaultImpact(relation),
-		reviewPriority: defaultReviewPriority(directive, relation),
-		adjudication: {
-			status: "accepted",
-			finalRelation: relation,
-			reason: "initial runtime structural context shortlist before adjudication"
-		}
+		fingerprints
 	};
 }
-function proposeHostGovernanceGraphRelations(bundle) {
-	const directiveIds = new Set(bundle.directives.map((directive) => directive.id));
-	const observationIds = new Set(bundle.observations.map((observation) => observation.id));
-	return bundle.hostProposals.flatMap((proposal) => {
-		if (proposal.kind !== "semantic-governance-graph") return [];
-		return graphPayload(proposal).edges.flatMap((edge) => {
-			if (!directiveIds.has(edge.directive_id) || !observationIds.has(edge.observation_id)) return [];
-			if (!Number.isFinite(edge.confidence) || edge.confidence < .5) return [];
-			return [toHostGraphRelationIR(proposal, edge, bundle)];
+async function loadGovernanceSources(input, task) {
+	const builtinLayers = discoverBuiltinLayers(input.builtinRoot);
+	const local = loadLocalPlaybook(input.localAugmentPath);
+	const configuredLayers = local?.meta.extends.length ? resolveExtendedLayers(local.meta.extends, builtinLayers) : ["builtin/core"];
+	const inferredLayers = inferTaskLayers(task, builtinLayers);
+	const selectedLayers = [...new Set([...configuredLayers, ...inferredLayers])];
+	const selectedBuiltins = selectedLayers.flatMap((layerId) => {
+		const path = builtinLayers.get(layerId);
+		return path ? loadDirectiveFile(path, layerId) : [];
+	});
+	const allBuiltins = [...builtinLayers.entries()].flatMap(([layerId, path]) => loadDirectiveFile(path, layerId));
+	assertUniqueDirectiveIds([...allBuiltins, ...local?.additions ?? []]);
+	validateLocalReferences(local, allBuiltins);
+	const directives = applyLocalPlaybook([...selectedBuiltins, ...local?.additions ?? []], local).filter((directive) => directiveMatchesTask(directive, task)).sort(compareDirectives);
+	const loadedRccl = await loadRccl(input.rcclPath);
+	if (!loadedRccl) return {
+		selectedLayers,
+		directives,
+		rccl: null,
+		relevantObservations: [],
+		observationVerification: []
+	};
+	const observationVerification = [];
+	const observations = loadedRccl.observations.map((observation) => {
+		const relevant = observationMatchesTask(observation, task);
+		const verified = relevant ? verifyObservationEvidence(observation, input.projectRoot, (/* @__PURE__ */ new Date()).toISOString()) : observation;
+		if (relevant) observationVerification.push({
+			observationId: verified.id,
+			status: verified.evidenceVerification.status,
+			disposition: observationDisposition(verified),
+			verifiedCount: verified.evidenceVerification.verifiedCount,
+			totalCount: verified.evidence.length,
+			action: "reverified"
 		});
-	});
-}
-function graphPayload(proposal) {
-	const payload = proposal.payload;
-	if (!payload || typeof payload !== "object" || Array.isArray(payload)) return { edges: [] };
-	const edges = payload.edges;
-	if (!Array.isArray(edges)) return { edges: [] };
-	return { edges: edges.filter(isGraphEdge) };
-}
-function isGraphEdge(value) {
-	if (!value || typeof value !== "object" || Array.isArray(value)) return false;
-	const edge = value;
-	return typeof edge.directive_id === "string" && typeof edge.observation_id === "string" && isRelation(edge.relation) && typeof edge.confidence === "number" && typeof edge.reason === "string" && Array.isArray(edge.evidence_refs);
-}
-function toHostGraphRelationIR(proposal, edge, bundle) {
-	const directive = requiredDirective(bundle.directives, edge.directive_id);
-	const observation = requiredObservation(bundle.observations, edge.observation_id);
-	const taskScoped = scopeMatchesTask(directive.scope.path, bundle.task) && scopeMatchesTask(observation.scope.path, bundle.task);
-	const relation = edge.execution_intent === "suppress" ? "suppress" : edge.relation;
-	const signals = buildHostGraphSignals(edge, observation, taskScoped, relation);
-	const conflictClass = edge.conflict_class ?? inferConflictClass(directive, observation, relation);
-	const impact = edge.impact ?? defaultImpact(relation);
-	const reviewPriority = edge.review_priority ?? defaultReviewPriority(directive, relation);
-	const evidenceRefs = edge.evidence_refs.map((ref) => ref.ref);
-	return {
-		irVersion: GOVERNANCE_IR_VERSION,
-		id: stableHash([
-			"semantic-relation-ir",
-			proposal.source.id,
-			edge.directive_id,
-			edge.observation_id,
-			relation,
-			edge.reason,
-			edge.evidence_refs,
-			edge.execution_intent,
-			edge.group_id
-		]),
-		directiveId: edge.directive_id,
-		observationId: edge.observation_id,
-		proposedBy: "host-agent",
-		relation,
-		...conflictClass ? { conflictClass } : {},
-		confidence: clampConfidence(edge.confidence),
-		basis: {
-			scope: taskScoped,
-			semanticKey: false,
-			category: false,
-			evidence: hasVerifiedEvidence(observation),
-			hostReasoning: true,
-			feedback: false
-		},
-		signals,
-		evidenceRefs,
-		reasoningSummary: edge.reason.trim(),
-		impact,
-		reviewPriority,
-		...edge.execution_intent ? { executionIntent: edge.execution_intent } : {},
-		...edge.merge_intent ? { mergeIntent: edge.merge_intent.slice(0, 360) } : {},
-		...edge.group_id ? { groupId: edge.group_id.slice(0, 120) } : {},
-		adjudication: {
-			status: "accepted",
-			finalRelation: relation,
-			reason: "initial semantic governance graph edge before Runtime adjudication"
-		}
-	};
-}
-function requiredDirective(directives, id) {
-	const directive = directives.find((item) => item.id === id);
-	if (!directive) throw new Error(`Missing directive for semantic graph edge: ${id}`);
-	return directive;
-}
-function requiredObservation(observations, id) {
-	const observation = observations.find((item) => item.id === id);
-	if (!observation) throw new Error(`Missing observation for semantic graph edge: ${id}`);
-	return observation;
-}
-function buildHostGraphSignals(edge, observation, taskScoped, relation) {
-	return [
-		{
-			kind: "host-proposal",
-			strength: edge.confidence >= .85 ? "strong" : "moderate",
-			direction: relationToSignalDirection(relation),
-			reason: edge.reason.trim()
-		},
-		{
-			kind: "scope",
-			strength: taskScoped ? "strong" : "weak",
-			direction: taskScoped ? "neutral" : "ambient",
-			reason: taskScoped ? "graph edge matches task-scoped directive and observation" : "graph edge is outside the concrete task scope"
-		},
-		{
-			kind: "verification",
-			strength: verificationStrength(observation),
-			direction: observation.verification.disposition === "demote-to-ambient" ? "ambient" : "neutral",
-			reason: `RCCL verification disposition is ${observation.verification.disposition}`
-		},
-		{
-			kind: "lifecycle",
-			strength: observation.lifecycle.status === "active" ? "strong" : "weak",
-			direction: observation.lifecycle.status === "superseded" || observation.lifecycle.status === "stale" ? "ambient" : "neutral",
-			reason: `RCCL lifecycle status is ${observation.lifecycle.status}`
-		}
-	];
-}
-function buildRuntimeSignals(observation, taskScoped, semanticKey, relation) {
-	return [
-		{
-			kind: "scope",
-			strength: taskScoped ? "strong" : "weak",
-			direction: taskScoped ? "neutral" : "ambient",
-			reason: taskScoped ? "directive and observation scopes match the resolved task" : "directive or observation is outside the resolved task scope"
-		},
-		{
-			kind: "verification",
-			strength: verificationStrength(observation),
-			direction: observation.verification.disposition === "demote-to-ambient" ? "ambient" : "neutral",
-			reason: `RCCL verification disposition is ${observation.verification.disposition}`
-		},
-		{
-			kind: "lifecycle",
-			strength: observation.lifecycle.status === "active" ? "strong" : "weak",
-			direction: observation.lifecycle.status === "superseded" || observation.lifecycle.status === "stale" ? "ambient" : "neutral",
-			reason: `RCCL lifecycle status is ${observation.lifecycle.status}`
-		},
-		...semanticKey ? [{
-			kind: "semantic-key",
-			strength: "moderate",
-			direction: relationToSignalDirection(relation),
-			reason: "directive and observation semantic keys overlap"
-		}] : []
-	];
-}
-function isRelation(value) {
-	return value === "reinforce" || value === "tension" || value === "suppress" || value === "ambient-only" || value === "unrelated";
-}
-function relationToSignalDirection(relation) {
-	if (relation === "ambient-only" || relation === "unrelated") return "ambient";
-	return relation;
-}
-function verificationStrength(observation) {
-	if (observation.verification.evidenceStatus === "verified" || observation.verification.evidenceConfidence >= .8) return "strong";
-	if (observation.verification.evidenceStatus === "partial" || observation.verification.evidenceConfidence >= .5) return "moderate";
-	return "weak";
-}
-function hasVerifiedEvidence(observation) {
-	return observation.verification.evidenceVerifiedCount > 0 || observation.verification.evidenceStatus === "verified" || observation.verification.evidenceStatus === "partial";
-}
-function runtimeRelationConfidence(observation) {
-	const verificationConfidence = Math.max(observation.verification.evidenceConfidence, observation.verification.inductionConfidence, observation.adherence.confidence);
-	return Number(Math.min(1, Math.max(verificationConfidence, .75)).toFixed(2));
-}
-function inferConflictClass(directive, observation, relation) {
-	if (relation === "unrelated" || relation === "reinforce" || relation === "ambient-only") return void 0;
-	if (directive.kind === "anti-pattern" || observation.traits.antiPattern) return "anti-pattern";
-	if (directive.traits.migrationSensitive || observation.traits.migrationBoundary) return "migration-tension";
-	if (directive.traits.compatibilitySensitive || observation.traits.compatibilityBoundary) return "compatibility-boundary";
-	if (observation.traits.legacy) return "legacy-interface";
-	if (observation.category === "style") return "style-drift";
-	if (observation.category === "architecture") return "architecture-drift";
-	return "local-deviation";
-}
-function summarizeRuntimeProposal(relation) {
-	if (relation === "ambient-only") return "runtime structural fallback only shortlisted this verified task-scoped observation as ambient context; execution influence requires a host semantic graph or feedback signal";
-	return "runtime structural fallback did not assign execution influence";
-}
-function defaultImpact(relation) {
-	if (relation === "tension" || relation === "suppress") return "execution-mode";
-	if (relation === "reinforce") return "review-focus";
-	if (relation === "ambient-only") return "ambient-context";
-	return "no-effect";
-}
-function defaultReviewPriority(directive, relation) {
-	if (relation === "suppress") return "critical";
-	if (relation === "tension" && (directive.prescription === "must" || directive.weight === "critical")) return "critical";
-	if (relation === "tension") return "high";
-	if (directive.weight === "critical") return "high";
-	return "normal";
-}
-function semanticKeysOverlap(left, right) {
-	const leftTokens = tokenSet(left);
-	const rightTokens = tokenSet(right);
-	for (const token of leftTokens) if (rightTokens.has(token)) return true;
-	return false;
-}
-function tokenSet(value) {
-	return new Set(value.toLowerCase().split(/[^a-z0-9]+/).filter((token) => token.length >= 4));
-}
-function observationEvidenceRefs(observation) {
-	return observation.evidence.map((evidence) => `${evidence.file}:${evidence.line_range[0]}-${evidence.line_range[1]}`);
-}
-function clampConfidence(value) {
-	return Number(Math.max(0, Math.min(1, value)).toFixed(2));
-}
-function scopeMatchesTask(scope, task) {
-	if (task.targets.length === 0) return true;
-	return task.targets.some((target) => pathMatchesScope(target.path, scope));
-}
-//#endregion
-//#region src/ir/relations/build-relations.ts
-function buildSemanticRelationsIR(bundle) {
-	const proposals = proposeSemanticRelations(bundle);
-	const agenticRelations = adjudicateSemanticRelations(mergeRelationProposals(proposals.filter(isAgenticRelationProposal)), bundle);
-	const agenticPairs = effectiveRelationPairs(agenticRelations);
-	const structuralFallbackRelations = adjudicateSemanticRelations(mergeRelationProposals(proposals.filter((relation) => relation.proposedBy === "runtime-structural" && !agenticPairs.has(relationPairKey(relation)))), bundle);
-	return [...agenticRelations, ...structuralFallbackRelations].sort((left, right) => left.directiveId.localeCompare(right.directiveId) || left.observationId.localeCompare(right.observationId));
-}
-function mergeRelationProposals(relations) {
-	const grouped = /* @__PURE__ */ new Map();
-	for (const relation of relations) {
-		const key = `${relation.directiveId}::${relation.observationId}`;
-		const current = grouped.get(key) ?? [];
-		current.push(relation);
-		grouped.set(key, current);
-	}
-	return [...grouped.values()].map(mergeRelationGroup).sort((left, right) => left.directiveId.localeCompare(right.directiveId) || left.observationId.localeCompare(right.observationId));
-}
-function mergeRelationGroup(group) {
-	if (group.length === 1) return group[0];
-	return [...group].sort(compareWholeProposals)[0];
-}
-function compareWholeProposals(left, right) {
-	const sourceRank = {
-		"host-agent": 3,
-		feedback: 2,
-		"runtime-structural": 1,
-		"multi-source": 0
-	};
-	const source = sourceRank[right.proposedBy] - sourceRank[left.proposedBy];
-	if (source) return source;
-	if (left.confidence !== right.confidence) return right.confidence - left.confidence;
-	if (left.basis.evidence !== right.basis.evidence) return left.basis.evidence ? -1 : 1;
-	if (left.evidenceRefs.length !== right.evidenceRefs.length) return right.evidenceRefs.length - left.evidenceRefs.length;
-	return left.id.localeCompare(right.id);
-}
-function isAgenticRelationProposal(relation) {
-	return relation.proposedBy === "host-agent" || relation.proposedBy === "feedback";
-}
-function effectiveRelationPairs(relations) {
-	return new Set(relations.filter((relation) => relation.adjudication.status !== "rejected" && relation.adjudication.finalRelation !== "unrelated").map(relationPairKey));
-}
-function relationPairKey(relation) {
-	return `${relation.directiveId}::${relation.observationId}`;
-}
-//#endregion
-//#region src/ir/relations/public-mapping.ts
-function semanticRelationIRToPublic(relation) {
-	return {
-		id: relation.id,
-		directive_id: relation.directiveId,
-		observation_id: relation.observationId,
-		relation: publicRelationKind$1(relation.adjudication.finalRelation),
-		confidence: relation.confidence,
-		basis: publicBasis(relation),
-		reason: relation.adjudication.reason,
-		proposed_by: relation.proposedBy,
-		adjudication_status: relation.adjudication.status,
-		final_relation: publicRelationKind$1(relation.adjudication.finalRelation),
-		signals: relation.signals.map((signal) => ({
-			kind: signal.kind,
-			strength: signal.strength,
-			direction: signal.direction,
-			reason: signal.reason
-		})),
-		evidence_refs: relation.evidenceRefs,
-		reasoning_summary: relation.reasoningSummary,
-		adjudication_reason: relation.adjudication.reason,
-		...relation.conflictClass ? { conflict_class: relation.conflictClass } : {},
-		...relation.impact ? { impact: relation.impact } : {},
-		...relation.reviewPriority ? { review_priority: relation.reviewPriority } : {},
-		...relation.executionIntent ? { execution_intent: relation.executionIntent } : {},
-		...relation.mergeIntent ? { merge_intent: relation.mergeIntent } : {},
-		...relation.groupId ? { group_id: relation.groupId } : {}
-	};
-}
-function semanticRelationsIRToPublic(relations) {
-	return relations.map(semanticRelationIRToPublic);
-}
-function publicRelationKind$1(relation) {
-	switch (relation) {
-		case "reinforce":
-		case "tension":
-		case "ambient-only": return relation;
-		case "suppress": return "anti-pattern-suppress";
-		case "unrelated": return "none";
-	}
-}
-function publicBasis(relation) {
-	const basis = [];
-	if (relation.basis.scope) basis.push("scope");
-	if (relation.basis.evidence) basis.push("verification");
-	if (relation.basis.category || relation.basis.semanticKey) basis.push("category");
-	if (relation.basis.hostReasoning || relation.basis.feedback) basis.push("context");
-	return basis.length ? basis : ["context"];
-}
-//#endregion
-//#region src/ir/semantic-merge/public-adapter.ts
-function projectIRSemanticMergeToPublic(directives, observations, relationsIR, executionDecisionsIR, contextProfile) {
-	const directiveById = new Map(directives.map((directive) => [directive.id, directive]));
-	const observationById = new Map(observations.map((observation) => [observation.id, observation]));
-	const effectiveRelations = relationsIR.filter(isEffectiveRelation);
-	const relationSummaryById = new Map(relationsIR.map((relation) => [relation.id, relationSummary(relation)]));
-	const observationIdsByDirective = groupObservationIdsByDirective(effectiveRelations);
-	const directiveModes = executionDecisionsIR.map((decision) => projectExecutionDecision(decision, observationIdsByDirective.get(decision.directiveId) ?? [], relationSummaryById));
-	const contextTensions = buildContextTensions(effectiveRelations, directiveById, observationById, contextProfile);
-	const contextInfluences = buildContextInfluences(executionDecisionsIR);
-	const reviewFocus = buildReviewFocus(directiveModes, effectiveRelations, directiveById, contextTensions);
-	const observationStates = buildObservationStates(observations, directiveModes);
-	const relations = semanticRelationsIRToPublic(relationsIR);
-	return {
-		activated_directives: directiveModes.filter((item) => item.execution_mode !== "suppress").map((item) => item.directive_id),
-		suppressed_directives: directiveModes.filter((item) => item.execution_mode === "suppress").map((item) => item.directive_id),
-		context_tensions: contextTensions,
-		directive_modes: directiveModes,
-		observation_links: observationStates.map((state) => ({
-			observation_id: state.observation_id,
-			directive_ids: state.directive_ids
-		})),
-		observation_states: observationStates,
-		relations,
-		merge_summary: buildMergeSummary(relationsIR, executionDecisionsIR),
-		focus: { review_focus: uniqueFocus(reviewFocus) },
-		context_influences: contextInfluences
-	};
-}
-function isEffectiveRelation(relation) {
-	return relation.adjudication.status !== "rejected" && relation.adjudication.finalRelation !== "unrelated";
-}
-function groupObservationIdsByDirective(relations) {
-	const grouped = /* @__PURE__ */ new Map();
-	for (const relation of relations) {
-		const current = grouped.get(relation.directiveId) ?? [];
-		if (!current.includes(relation.observationId)) current.push(relation.observationId);
-		grouped.set(relation.directiveId, current);
-	}
-	return grouped;
-}
-function projectExecutionDecision(decision, observationIds, relationSummaryById) {
-	const relation_summaries = decision.relationIds.flatMap((relationId) => {
-		const summary = relationSummaryById.get(relationId);
-		return summary ? [summary] : [];
+		return verified;
 	});
 	return {
-		directive_id: decision.directiveId,
-		observation_ids: observationIds,
-		relation_ids: decision.relationIds,
-		relation_summaries,
-		execution_mode: decision.mode,
-		default_execution_mode: decision.defaultMode,
-		reason: decision.reason,
-		decision_basis: publicDecisionBasis(decision.basis),
-		context_applied: decision.contextApplied,
-		context_rule_ids: decision.contextRulesApplied,
-		feedback_applied: decision.feedbackApplied
+		selectedLayers,
+		directives,
+		rccl: {
+			...loadedRccl,
+			observations
+		},
+		relevantObservations: observations.filter((observation) => observation.lifecycle.status !== "superseded").filter((observation) => observationMatchesTask(observation, task)).sort((left, right) => left.id.localeCompare(right.id)),
+		observationVerification
 	};
 }
-function publicDecisionBasis(basis) {
-	switch (basis) {
-		case "prescription": return "default";
-		case "governance-graph": return "observed-conflict";
-		case "verification": return "rccl-immune";
-		case "task-context":
-		case "feedback": return "context-adjusted";
-		case "anti-pattern": return "anti-pattern";
+function inferTaskLayers(task, layers) {
+	const result = [];
+	const taskLayer = `builtin/task-types/${task.changeType}`;
+	if (layers.has(taskLayer)) result.push(taskLayer);
+	for (const tech of task.techStack) for (const prefix of ["builtin/languages/", "builtin/frameworks/"]) {
+		const layer = `${prefix}${tech}`;
+		if (layers.has(layer)) result.push(layer);
 	}
+	return result.sort();
 }
-function buildObservationStates(observations, directiveModes) {
-	return observations.map((observation) => ({
-		observation_id: observation.id,
-		directive_ids: directiveModes.filter((item) => item.observation_ids.includes(observation.id)).map((item) => item.directive_id),
-		disposition: observation.verification.disposition ?? "pending",
-		lifecycle_status: observation.lifecycle?.status ?? "unknown",
-		content_fingerprint: observation.lifecycle?.content_fingerprint ?? null
-	}));
-}
-function buildContextTensions(relations, directiveById, observationById, contextProfile) {
-	return relations.flatMap((relation) => {
-		if (relation.adjudication.finalRelation !== "tension") return [];
-		const directive = directiveById.get(relation.directiveId);
-		const observation = observationById.get(relation.observationId);
-		if (!directive || !observation || directive.prescription !== "must") return [];
+function applyLocalPlaybook(directives, local) {
+	const overrideById = new Map(local?.overrides.map((item) => [item.supersedes, item]) ?? []);
+	const augmentById = new Map(local?.augments.map((item) => [item.id, item]) ?? []);
+	const suppressed = new Set(local?.suppresses.map((item) => item.id) ?? []);
+	return directives.flatMap((directive) => {
+		if (suppressed.has(directive.id)) return [];
+		const override = overrideById.get(directive.id);
+		const augment = augmentById.get(directive.id);
 		return [{
-			directive_id: directive.id,
-			observation_id: observation.id,
-			relation_id: relation.id,
-			group_id: relation.groupId,
-			review_priority: relation.reviewPriority,
-			category: observation.category,
-			execution_mode: "deviation-noted",
-			conflict: `${directive.description} conflicts with observed local pattern: ${observation.pattern}`,
-			resolution: buildTensionResolution(directive.id, contextProfile, observation),
-			rccl_confidence: observation.verification.induction_confidence ?? observation.verification.evidence_confidence ?? relation.confidence
+			...directive,
+			effectivePrescription: override?.prescription ?? directive.prescription,
+			effectiveWeight: override?.weight ?? directive.weight,
+			effectiveRationale: override?.rationale ?? directive.rationale,
+			effectiveExceptions: override?.exceptions ?? directive.exceptions ?? [],
+			effectiveExamples: augment ? [...directive.examples, ...augment.examples] : directive.examples,
+			overrideApplied: Boolean(override),
+			augmentApplied: Boolean(augment)
 		}];
 	});
 }
-function buildReviewFocus(directiveModes, relations, directiveById, contextTensions) {
-	const reviewFocus = [];
-	for (const decision of directiveModes) {
-		const directive = directiveById.get(decision.directive_id);
-		if (!directive) continue;
-		if (decision.execution_mode === "deviation-noted") reviewFocus.push({
-			kind: "compatibility-boundary",
-			directive_id: directive.id,
-			reason: decision.reason,
-			priority: directiveFocusPriority(directive, decision),
-			relation_id: decision.relation_summaries[0]?.relation_id,
-			group_id: decision.relation_summaries[0]?.group_id
-		});
-		if (directive.prescription === "must" || decision.execution_mode === "deviation-noted" || directive.weight === "critical" && decision.execution_mode === "enforce") reviewFocus.push({
-			kind: "high-priority-directive",
-			directive_id: directive.id,
-			reason: `Review whether ${directive.id} was respected under ${decision.execution_mode} execution mode.`,
-			priority: directiveFocusPriority(directive, decision),
-			relation_id: decision.relation_summaries[0]?.relation_id,
-			group_id: decision.relation_summaries[0]?.group_id
-		});
-		if (decision.feedback_applied.includes("feedback:frequently-ignored-must-review")) reviewFocus.push({
-			kind: "high-priority-directive",
-			directive_id: directive.id,
-			reason: `Review ${directive.id} because lockfile feedback shows repeated ignores; Runtime did not weaken must-level execution.`,
-			priority: "high",
-			relation_id: decision.relation_summaries[0]?.relation_id,
-			group_id: decision.relation_summaries[0]?.group_id
-		});
-	}
-	for (const tension of contextTensions) reviewFocus.push({
-		kind: "tension",
-		directive_id: tension.directive_id,
-		observation_id: tension.observation_id,
-		reason: tension.resolution,
-		priority: tension.review_priority ?? "high",
-		relation_id: tension.relation_id,
-		group_id: tension.group_id
-	});
-	for (const relation of relations.filter((item) => item.adjudication.finalRelation === "suppress")) reviewFocus.push({
-		kind: "anti-pattern",
-		directive_id: relation.directiveId,
-		observation_id: relation.observationId,
-		reason: relation.adjudication.reason,
-		priority: relation.reviewPriority ?? "critical",
-		relation_id: relation.id,
-		group_id: relation.groupId
-	});
-	for (const relation of relations.filter((item) => item.reviewPriority === "high" || item.reviewPriority === "critical")) {
-		if (relation.adjudication.finalRelation === "suppress" || relation.adjudication.finalRelation === "tension") continue;
-		reviewFocus.push({
-			kind: "high-priority-directive",
-			directive_id: relation.directiveId,
-			observation_id: relation.observationId,
-			reason: relation.mergeIntent ?? relation.adjudication.reason,
-			priority: relation.reviewPriority,
-			relation_id: relation.id,
-			group_id: relation.groupId
-		});
-	}
-	return reviewFocus;
+function directiveMatchesTask(directive, task) {
+	const layer = directive.source.layerId;
+	if (layer.startsWith("builtin/task-types/") && !layer.endsWith(`/${task.changeType}`)) return false;
+	if (layer.startsWith("builtin/languages/") && !task.techStack.some((tech) => layer.endsWith(`/${tech}`))) return false;
+	if (layer.startsWith("builtin/frameworks/") && !task.techStack.some((tech) => layer.endsWith(`/${tech}`))) return false;
+	if (!task.targets.length) return true;
+	return task.targets.some((target) => pathMatchesScope(target, directive.scope.path));
 }
-function relationSummary(relation) {
+function observationMatchesTask(observation, task) {
+	if (!task.targets.length) return false;
+	return task.targets.some((target) => scopeOverlapsPath(observation.scope, target) || observation.evidence.some((evidence) => scopeOverlapsPath(evidence.file, target)));
+}
+function buildRelationDecisions(directives, observations, proposals, diagnostics) {
+	const directiveById = new Map(directives.map((directive) => [directive.id, directive]));
+	const observationById = new Map(observations.map((observation) => [observation.id, observation]));
+	const decisions = [];
+	const proposalPairs = /* @__PURE__ */ new Set();
+	for (const proposal of proposals) {
+		const key = `${proposal.directiveId}::${proposal.observationId}`;
+		const directive = directiveById.get(proposal.directiveId);
+		const observation = observationById.get(proposal.observationId);
+		const confidence = proposal.confidence ?? .85;
+		const evidenceRefs = Array.isArray(proposal.evidenceRefs) && proposal.evidenceRefs.every((ref) => typeof ref === "string" && ref.trim()) ? proposal.evidenceRefs : [];
+		const errors = [];
+		if (proposalPairs.has(key)) errors.push("duplicate directive/observation pair");
+		if (!directive) errors.push("directive is not active for this task");
+		if (!observation) errors.push("observation is not relevant to this task");
+		if (typeof proposal.rationale !== "string" || !proposal.rationale.trim()) errors.push("rationale is empty");
+		if (![
+			"supports",
+			"conflicts",
+			"limits"
+		].includes(proposal.relation)) errors.push("relation must be supports, conflicts, or limits");
+		if (!evidenceRefs.length) errors.push("evidenceRefs must be a non-empty string array");
+		if (!Number.isFinite(confidence) || confidence < RELATION_MIN_CONFIDENCE || confidence > 1) errors.push(`confidence must be between ${RELATION_MIN_CONFIDENCE} and 1`);
+		if (observation && evidenceRefs.length && !proposalEvidenceMatchesObservation(evidenceRefs, observation)) errors.push("evidenceRefs do not cite the linked observation evidence");
+		if (directive?.rccl_immune && proposal.relation !== "supports") errors.push("directive is RCCL-immune and cannot be limited or conflicted by repository observation");
+		if (errors.length) {
+			diagnostics.push({
+				code: "RELATION_PROPOSAL_REJECTED",
+				message: `${key} rejected: ${errors.join("; ")}.`,
+				ids: [proposal.directiveId, proposal.observationId]
+			});
+			continue;
+		}
+		proposalPairs.add(key);
+		const current = observation.evidenceVerification.status === "current" && observation.lifecycle.status === "active";
+		const semanticallyQualified = observation.semanticConfidence === "high" && observation.reviewStatus === "reviewed";
+		const status = current && semanticallyQualified ? "accepted" : "downgraded";
+		if (status === "downgraded") diagnostics.push({
+			code: "RELATION_PROPOSAL_DOWNGRADED",
+			message: `${key} is ambient because execution-changing relations require current evidence, high semantic confidence, and reviewed status.`,
+			ids: [proposal.directiveId, proposal.observationId]
+		});
+		decisions.push({
+			directiveId: proposal.directiveId,
+			observationId: proposal.observationId,
+			relation: status === "downgraded" ? "ambient-only" : proposal.relation === "supports" ? "reinforce" : "tension",
+			status,
+			impact: status === "downgraded" ? "ambient-context" : proposal.relation === "supports" ? "review-focus" : "execution-mode",
+			reason: status === "downgraded" ? "Host relation was structurally valid but the RCCL evidence, semantic-confidence, or review gate did not qualify it to change execution." : `Host-proposed ${proposal.relation} relation accepted after ID, scope, proposal-confidence, evidence, semantic-confidence, and review gates.`,
+			proposedBy: "host-agent",
+			evidenceRefs,
+			proposalKind: proposal.relation
+		});
+	}
+	for (const directive of directives) for (const observation of observations) {
+		const key = `${directive.id}::${observation.id}`;
+		if (proposalPairs.has(key) || !semanticKeysOverlap(directive.id, observation.id)) continue;
+		if (observationDisposition(observation) === "demote-to-ambient") continue;
+		decisions.push({
+			directiveId: directive.id,
+			observationId: observation.id,
+			relation: "ambient-only",
+			status: "accepted",
+			impact: "ambient-context",
+			reason: "Deterministic semantic-key overlap shortlisted this verified observation as context; it cannot change execution without a host proposal.",
+			proposedBy: "runtime-structural",
+			evidenceRefs: observationEvidenceRefs(observation)
+		});
+	}
+	return decisions.sort((left, right) => left.directiveId.localeCompare(right.directiveId) || left.observationId.localeCompare(right.observationId));
+}
+function resolveExecutionModes(directives, relations) {
+	const result = /* @__PURE__ */ new Map();
+	for (const directive of directives) {
+		if (directive.type === "anti-pattern") {
+			result.set(directive.id, "suppress");
+			continue;
+		}
+		if (relations.some((relation) => relation.directiveId === directive.id && relation.status === "accepted" && relation.relation === "tension" && relation.impact === "execution-mode") && directive.effectivePrescription === "must") result.set(directive.id, "deviation-noted");
+		else result.set(directive.id, directive.effectivePrescription === "must" ? "enforce" : "ambient");
+	}
+	return result;
+}
+function buildEffectiveGuidance(directives, observations, executionModes, relations, task) {
+	const required = task.constraints.map(taskConstraintGuidance);
+	const consider = [];
+	const avoid = task.avoid.map(taskAvoidGuidance);
+	for (const observation of observations) if (observation.category === "anti-pattern" && observationDisposition(observation) === "keep") avoid.push(observationAvoidItem(observation));
+	else consider.push(observationGuidanceItem(observation));
+	for (const directive of directives) {
+		const mode = executionModes.get(directive.id) ?? "ambient";
+		if (directive.type === "anti-pattern") {
+			avoid.push(directiveAvoidItem(directive));
+			continue;
+		}
+		if (mode === "suppress") continue;
+		const item = directiveGuidanceItem(directive, mode, directiveRelevance(directive, mode, relations), task);
+		if (mode === "enforce" || mode === "deviation-noted") required.push(item);
+		else consider.push(item);
+	}
 	return {
-		relation_id: relation.id,
-		observation_id: relation.observationId,
-		relation: publicRelationKind(relation.adjudication.finalRelation),
-		adjudication_status: relation.adjudication.status,
-		confidence: relation.confidence,
-		reason: relation.mergeIntent ?? relation.adjudication.reason,
-		review_priority: relation.reviewPriority,
-		impact: relation.impact,
-		group_id: relation.groupId
+		required: uniqueById(required),
+		consider: uniqueById(consider),
+		avoid: uniqueById(avoid),
+		tensions: buildTensions(relations, directives, observations)
 	};
 }
-function buildMergeSummary(relations, decisions) {
-	const final_relation_counts = emptyRelationCounts();
-	const proposed_by_counts = {};
-	const review_priority_counts = {
-		low: 0,
-		normal: 0,
-		high: 0,
-		critical: 0
-	};
-	let accepted = 0;
-	let downgraded = 0;
-	let rejected = 0;
-	let executionModeImpacting = 0;
-	for (const relation of relations) {
-		if (relation.adjudication.status === "accepted") accepted += 1;
-		if (relation.adjudication.status === "downgraded") downgraded += 1;
-		if (relation.adjudication.status === "rejected") rejected += 1;
-		final_relation_counts[publicRelationKind(relation.adjudication.finalRelation)] += 1;
-		proposed_by_counts[relation.proposedBy] = (proposed_by_counts[relation.proposedBy] ?? 0) + 1;
-		if (relation.reviewPriority) review_priority_counts[relation.reviewPriority] += 1;
-		if (relation.impact === "execution-mode" && relation.adjudication.status !== "rejected") executionModeImpacting += 1;
-	}
+function taskConstraintGuidance(constraint) {
+	const id = `task-constraint:${stableHash([constraint])}`;
 	return {
-		proposed: relations.length,
-		accepted,
-		downgraded,
-		rejected,
-		final_relation_counts,
-		proposed_by_counts,
-		execution_mode_impacting: executionModeImpacting,
-		feedback_applied_count: decisions.reduce((count, decision) => count + decision.feedbackApplied.length, 0),
-		host_graph_edge_count: relations.filter(hasHostGraphSource).length,
-		review_priority_counts,
-		policy: semanticRelationPolicyTraceRecord()
+		id,
+		instruction: constraint,
+		rationale: "Explicit task constraint supplied by the user or host.",
+		exceptions: [],
+		source: {
+			kind: "task",
+			id: "task-context"
+		},
+		relevance: "Explicit constraints have precedence for this task.",
+		executionMode: "enforce",
+		verification: [{
+			kind: "diff",
+			description: `Inspect the final diff for compliance with ${id}.`
+		}, {
+			kind: "semantic",
+			description: `Explain how the implementation satisfies the explicit constraint: ${constraint}`
+		}],
+		examples: []
 	};
 }
-function emptyRelationCounts() {
+function taskAvoidGuidance(pattern) {
 	return {
-		reinforce: 0,
-		tension: 0,
-		"anti-pattern-suppress": 0,
-		"ambient-only": 0,
-		none: 0
+		id: `task-avoid:${stableHash([pattern])}`,
+		pattern,
+		rationale: "Explicit behavior to avoid for this task.",
+		exceptions: [],
+		source: {
+			kind: "task",
+			id: "task-context"
+		},
+		verification: [{
+			kind: "diff",
+			description: "Inspect the final diff for the explicitly avoided behavior."
+		}]
 	};
 }
-function publicRelationKind(relation) {
-	switch (relation) {
-		case "reinforce":
-		case "tension":
-		case "ambient-only": return relation;
-		case "suppress": return "anti-pattern-suppress";
-		case "unrelated": return "none";
-	}
+function directiveGuidanceItem(directive, mode, relevance, task) {
+	return {
+		id: directive.id,
+		instruction: directive.description,
+		rationale: directive.effectiveRationale,
+		exceptions: directive.effectiveExceptions,
+		source: {
+			kind: directive.source.kind === "local-addition" ? "local-playbook" : "builtin-playbook",
+			id: directive.source.layerId,
+			path: directive.source.filePath
+		},
+		relevance,
+		executionMode: mode,
+		verification: verificationForDirective(directive, task),
+		examples: directive.effectiveExamples
+	};
 }
-function directiveFocusPriority(directive, decision) {
-	const executionMode = decision.execution_mode;
-	const contextBoost = contextReviewPriorityBoost(decision.context_applied);
-	if (contextBoost) return contextBoost;
-	if (executionMode === "suppress") return "critical";
-	if (executionMode === "deviation-noted") return directive.weight === "critical" || directive.prescription === "must" ? "critical" : "high";
-	if (directive.weight === "critical") return "high";
-	if (directive.prescription === "must") return "normal";
-	return "low";
+function directiveAvoidItem(directive) {
+	return {
+		id: directive.id,
+		pattern: directive.description,
+		rationale: directive.effectiveRationale,
+		exceptions: directive.effectiveExceptions,
+		source: {
+			kind: directive.source.kind === "local-addition" ? "local-playbook" : "builtin-playbook",
+			id: directive.source.layerId,
+			path: directive.source.filePath
+		},
+		verification: [{
+			kind: "diff",
+			description: `Inspect the change for the prohibited pattern described by ${directive.id}.`
+		}]
+	};
 }
-function hasHostGraphSource(relation) {
-	return relation.proposedBy === "host-agent" || relation.signals.some((signal) => signal.kind === "host-proposal");
+function observationGuidanceItem(observation) {
+	const current = observation.evidenceVerification.status === "current";
+	return {
+		id: `rccl:${observation.id}`,
+		instruction: observation.statement,
+		rationale: `${observation.decisionImpact} Affects: ${observation.affects.join(", ")}. Evidence status is ${observation.evidenceVerification.status}; semantic confidence is ${observation.semanticConfidence}; review status is ${observation.reviewStatus}.`,
+		exceptions: [],
+		source: {
+			kind: "rccl",
+			id: observation.id,
+			evidenceRefs: observationEvidenceRefs(observation)
+		},
+		relevance: "The observation scope or evidence overlaps the current task.",
+		executionMode: "ambient",
+		verification: [{
+			kind: "diff",
+			description: current ? "Check whether the change crosses or depends on this evidence-current repository boundary." : "Treat this as ambient only; do not use it to justify execution changes until evidence is refreshed."
+		}],
+		examples: []
+	};
 }
-function buildContextInfluences(decisions) {
-	return decisions.flatMap((decision) => {
-		const contextInfluences = decision.contextApplied.map((context) => {
-			const [field, value] = context.split(":");
-			return {
-				field: publicContextField(field),
-				value: value ?? "",
-				directive_id: decision.directiveId,
-				effect: contextInfluenceEffect(context, decision.mode)
-			};
-		});
-		const feedbackInfluences = decision.feedbackApplied.map((feedback) => ({
-			field: "feedback",
-			value: feedback,
-			directive_id: decision.directiveId,
-			effect: contextInfluenceEffect(feedback, decision.mode)
-		}));
-		return [...contextInfluences, ...feedbackInfluences];
+function observationAvoidItem(observation) {
+	return {
+		id: `rccl:${observation.id}`,
+		pattern: observation.statement,
+		rationale: `Evidence-current repository anti-pattern in ${observation.scope}.`,
+		exceptions: [],
+		source: {
+			kind: "rccl",
+			id: observation.id,
+			evidenceRefs: observationEvidenceRefs(observation)
+		},
+		verification: [{
+			kind: "diff",
+			description: "Inspect the change for recurrence of this repository anti-pattern."
+		}]
+	};
+}
+function buildTensions(relations, directives, observations) {
+	const directiveById = new Map(directives.map((directive) => [directive.id, directive]));
+	const observationById = new Map(observations.map((observation) => [observation.id, observation]));
+	return relations.flatMap((relation) => {
+		if (relation.status !== "accepted" || relation.relation !== "tension") return [];
+		const directive = directiveById.get(relation.directiveId);
+		const observation = observationById.get(relation.observationId);
+		if (!directive || !observation) return [];
+		return [{
+			id: `tension:${stableHash([
+				relation.directiveId,
+				relation.observationId,
+				relation.proposalKind
+			])}`,
+			directiveId: directive.id,
+			observationId: observation.id,
+			conflict: `${directive.description} is limited by repository reality: ${observation.statement}`,
+			resolution: relation.proposalKind === "limits" ? "Apply the directive within the observed boundary and preserve the existing interface where the boundary still applies." : "Follow the directive for new work while preserving compatibility at the observed boundary; record an exception if the boundary must be crossed.",
+			evidenceRefs: relation.evidenceRefs,
+			proposedBy: relation.proposedBy
+		}];
 	});
 }
-function publicContextField(field) {
-	switch (field) {
-		case "optimization_target":
-		case "hard_constraints":
-		case "allowed_tradeoffs":
-		case "avoid":
-		case "risk_level":
-		case "scope_size":
-		case "compatibility_requirement":
-		case "interface_sensitivity":
-		case "refactor_tolerance":
-		case "migration_phase":
-		case "review_goal":
-		case "feedback": return field;
-		default: return "project_stage";
+function verificationForDirective(directive, task) {
+	const result = [{
+		kind: "diff",
+		description: `Inspect the final diff for evidence that ${directive.id} was applied.`
+	}];
+	if (directive.type === "architecture" || directive.traits?.compatibility_sensitive || directive.traits?.migration_sensitive) result.push({
+		kind: "semantic",
+		description: `Explain how the implementation satisfies ${directive.id} at affected boundaries.`
+	});
+	if (task.techStack.includes("typescript") || task.techStack.includes("javascript")) result.push({
+		kind: "command",
+		commandId: "typecheck",
+		description: "Run the project typecheck command."
+	});
+	if ((directive.traits?.safety_critical || task.changeType === "bugfix" || task.changeType === "feature" || task.changeType === "migration" || task.risk === "high") && !result.some((item) => item.kind === "command" && item.commandId === "test")) result.push({
+		kind: "command",
+		commandId: "test",
+		description: "Run the relevant automated tests."
+	});
+	if (directive.traits?.broad_scope && (task.scope === "cross-module" || task.scope === "repository") && !result.some((item) => item.kind === "semantic")) result.push({
+		kind: "semantic",
+		description: `Explain how ${directive.id} remains valid across the declared ${task.scope} change scope.`
+	});
+	return result;
+}
+function buildVerificationPlan(guidance) {
+	const commands = /* @__PURE__ */ new Map();
+	const semanticChecks = [];
+	for (const item of [...guidance.required, ...guidance.consider]) for (const requirement of item.verification) {
+		if (requirement.kind === "command" && requirement.commandId) commands.set(requirement.commandId, requirement.description);
+		if (requirement.kind === "semantic") semanticChecks.push({
+			guidanceId: item.id,
+			description: requirement.description
+		});
 	}
+	return {
+		commands: [...commands.entries()].map(([id, reason]) => ({
+			id,
+			reason
+		})),
+		semanticChecks
+	};
 }
-function buildTensionResolution(directiveId, contextProfile, observation) {
-	if (hasConstraint(contextProfile.hard_constraints, [
-		"preserve compatibility",
-		"avoid breaking changes",
-		"preserve public api"
-	])) return `Follow ${directiveId} for new code, but preserve compatibility with the observed ${observation.category} repository pattern at touched interfaces.`;
-	if (hasConstraint(contextProfile.allowed_tradeoffs, ["prefer narrow change scope"])) return `Follow ${directiveId} for the touched code, but contain the change to the local boundary instead of broad cleanup around the observed repository pattern.`;
-	if (hasConstraint(contextProfile.avoid, ["broad rewrites", "overengineering"])) return `Follow ${directiveId} in the local change, but avoid turning this tension into a broad rewrite of the observed repository pattern.`;
-	return `Follow ${directiveId} for new code, but preserve compatibility with the observed repository pattern where interfaces depend on it.`;
+function directiveRelevance(directive, mode, relations) {
+	const relation = relations.find((item) => item.directiveId === directive.id && item.status !== "rejected");
+	if (relation) return `${relation.reason} Final execution mode: ${mode}.`;
+	return `${directive.source.layerId} and ${directive.scope.path} match the current task. Final execution mode: ${mode}.`;
 }
-function uniqueFocus(items) {
-	const seen = /* @__PURE__ */ new Set();
+function proposalEvidenceMatchesObservation(evidenceRefs, observation) {
+	const known = new Set(observation.evidence.flatMap((evidence) => [evidence.file, `${evidence.file}:${evidence.lineRange[0]}-${evidence.lineRange[1]}`]));
+	return evidenceRefs.every((ref) => known.has(ref));
+}
+function semanticKeysOverlap(left, right) {
+	const leftTokens = tokens(left);
+	const rightTokens = tokens(right);
+	return [...leftTokens].some((token) => rightTokens.has(token));
+}
+function tokens(value) {
+	return new Set(value.toLowerCase().split(/[^a-z0-9]+/).filter((token) => token.length >= 4));
+}
+function compareDirectives(left, right) {
+	if (left.effectivePrescription !== right.effectivePrescription) return left.effectivePrescription === "must" ? -1 : 1;
+	const layer = getDirectiveLayerRank(right.source.layerId) - getDirectiveLayerRank(left.source.layerId);
+	if (layer) return layer;
+	const weight = WEIGHT_RANK[right.effectiveWeight] - WEIGHT_RANK[left.effectiveWeight];
+	if (weight) return weight;
+	if (left.overrideApplied !== right.overrideApplied) return left.overrideApplied ? -1 : 1;
+	return left.id.localeCompare(right.id);
+}
+function requiredInterpretationFields(task) {
 	const result = [];
+	if (task.changeType === "unknown") result.push("changeType");
+	if (!task.targets.length) result.push("targets");
+	if (task.uncertainties.length) result.push("uncertainties");
+	return result;
+}
+function guidanceIds(guidance) {
+	return [
+		...guidance.required.map((item) => item.id),
+		...guidance.consider.map((item) => item.id),
+		...guidance.avoid.map((item) => item.id),
+		...guidance.tensions.map((item) => item.id)
+	];
+}
+function observationEvidenceRefs(observation) {
+	return observation.evidence.map((evidence) => `${evidence.file}:${evidence.lineRange[0]}-${evidence.lineRange[1]}`);
+}
+function directiveFingerprintInput(directive) {
+	return [
+		directive.id,
+		directive.layer,
+		directive.effectivePrescription,
+		directive.effectiveWeight,
+		directive.effectiveRationale,
+		directive.scope.path,
+		directive.source.filePath
+	];
+}
+function observationFingerprintInput(observation) {
+	return [
+		observation.id,
+		observation.statement,
+		observation.scope,
+		observation.evidenceVerification,
+		observation.semanticConfidence,
+		observation.reviewStatus,
+		observation.lifecycle
+	];
+}
+function observationDisposition(observation) {
+	if (observation.evidenceVerification.status === "current") return "keep";
+	if (observation.evidenceVerification.status === "partial") return "keep-with-reduced-confidence";
+	return "demote-to-ambient";
+}
+function uniqueById(items) {
+	const result = [];
+	const seen = /* @__PURE__ */ new Set();
 	for (const item of items) {
-		const key = `${item.kind}:${item.directive_id ?? ""}:${item.observation_id ?? ""}:${item.reason}`;
-		if (seen.has(key)) continue;
-		seen.add(key);
+		if (seen.has(item.id)) continue;
+		seen.add(item.id);
 		result.push(item);
 	}
 	return result;
 }
+function validateRelationProposals(value) {
+	if (value === void 0) return [];
+	if (!Array.isArray(value)) throw new Error("compileChange relationProposals must be an array.");
+	if (value.some((item) => !item || typeof item !== "object" || Array.isArray(item))) throw new Error("compileChange relationProposals entries must be objects.");
+	return value;
+}
 //#endregion
-//#region src/compile.ts
-function buildInterpretationPacket(resolved) {
-	return {
-		task_models: resolved.task_models,
-		input_provenance: resolved.input_provenance,
-		diagnostics: resolved.diagnostics,
-		trace: resolved.trace,
-		resolved: {
-			task_intent: resolved.task_intent,
-			context_profile: resolved.context_profile
-		}
+//#region src/feedback/record-evaluation.ts
+const FEEDBACK_SCHEMA_VERSION = "1.0";
+function recordEvaluationFeedback(feedbackPath, evaluation) {
+	const events = evaluation.results.flatMap((result) => {
+		const evidenceBackedSatisfied = result.verdict === "satisfied" && result.acceptedEvidence.length > 0;
+		const evidenceBackedViolation = result.verdict === "violated" && result.acceptedEvidence.length > 0;
+		if (!evidenceBackedSatisfied && !evidenceBackedViolation && result.verdict !== "excepted") return [];
+		return [{
+			schemaVersion: FEEDBACK_SCHEMA_VERSION,
+			eventId: stableHash([
+				evaluation.evaluationId,
+				result.guidanceId,
+				result.section,
+				result.verdict,
+				result.acceptedEvidence.map((ref) => [ref.kind, ref.ref])
+			]),
+			recordedAt: (/* @__PURE__ */ new Date()).toISOString(),
+			decisionId: evaluation.decisionId,
+			evaluationId: evaluation.evaluationId,
+			guidanceId: result.guidanceId,
+			section: result.section,
+			verdict: result.verdict,
+			evidenceKinds: [...new Set(result.acceptedEvidence.map((ref) => ref.kind))].sort(),
+			excepted: result.verdict === "excepted"
+		}];
+	});
+	if (!events.length) return {
+		recorded: 0,
+		path: feedbackPath
 	};
-}
-function buildGovernancePacket(activation, tensions, focus, semantic_merge, ego, trace) {
-	return {
-		activation,
-		tensions,
-		focus,
-		semantic_merge,
-		ego,
-		trace
-	};
-}
-function compileResolvedOutput(packet, resolvedTask, contractDiagnostics, postCompileContractRequests) {
-	return {
-		packet,
-		resolvedTask,
-		ego: packet.governance.ego,
-		trace: packet.governance.trace,
-		cache: packet.cache,
-		contractDiagnostics,
-		postCompileContractRequests
-	};
-}
-/**
-* Runs the deterministic playbook pipeline and produces a change decision packet.
-*/
-async function compile(input) {
-	const validated = await validatePublicCompileInput(input);
-	const { normalizedInput, resolvedTask: resolved, sources, governanceIR, activationDecisions: activationDecisionsIR, activeDirectives: irActiveDirectives } = await resolveActivatedGovernanceContext(validated.input);
-	const traceSteps = [];
-	const intent = resolved.task_intent;
-	const contextProfile = resolved.context_profile;
-	const hostFulfillment = normalizedInput.hostFulfillment;
-	traceSteps.push({
-		stage: "Intent Parse",
-		lines: [
-			`interpretation_mode: ${resolved.input_provenance.interpretation_mode}`,
-			`resolved_fields: ${resolved.input_provenance.resolved_fields.length}`,
-			`unresolved_fields: ${resolved.input_provenance.unresolved_fields.join(", ") || "(none)"}`,
-			`workflow: ${intent.workflow}`,
-			`change_type: ${intent.change_type}`,
-			`operation: ${intent.operation}`,
-			`target_layer: ${intent.target_layer}`,
-			`tech_stack: ${intent.tech_stack.join(", ") || "(none)"}`,
-			`target_file: ${intent.target_file ?? "(none)"}`,
-			`optimization_target: ${contextProfile.optimization_target}`,
-			`hard_constraints: ${contextProfile.hard_constraints.join(", ") || "(none)"}`,
-			`allowed_tradeoffs: ${contextProfile.allowed_tradeoffs.join(", ") || "(none)"}`,
-			`avoid: ${contextProfile.avoid.join(", ") || "(none)"}`,
-			`project_stage: ${contextProfile.project_stage ?? "(none)"}`,
-			`risk_level: ${contextProfile.risk_level}`,
-			`scope_size: ${contextProfile.scope_size}`,
-			`compatibility_requirement: ${contextProfile.compatibility_requirement}`,
-			`interface_sensitivity: ${contextProfile.interface_sensitivity}`,
-			`refactor_tolerance: ${contextProfile.refactor_tolerance}`,
-			`migration_phase: ${contextProfile.migration_phase}`,
-			`review_goal: ${contextProfile.review_goal}`
-		]
-	});
-	traceSteps.push({
-		stage: "Context Profile Resolution",
-		lines: resolved.input_provenance.context_resolution.length ? resolved.input_provenance.context_resolution.map((item) => `${item.field}: ${formatContextValue(item.value)} source=${item.source} confidence=${item.confidence} status=${item.status} influence=${item.influence.join(", ") || "(none)"}`) : ["no context profile resolution records"]
-	});
-	traceSteps.push({
-		stage: "Governance IR",
-		lines: [
-			`ir_version: ${governanceIR.irVersion}`,
-			`bundle_fingerprint: ${governanceIR.fingerprints.bundle}`,
-			`task_fingerprint: ${governanceIR.fingerprints.task}`,
-			`directives_fingerprint: ${governanceIR.fingerprints.directives}`,
-			`observations_fingerprint: ${governanceIR.fingerprints.observations}`,
-			`feedback_fingerprint: ${governanceIR.fingerprints.feedback}`,
-			`host_proposals_fingerprint: ${governanceIR.fingerprints.hostProposals}`,
-			`host_proposal_sources: ${formatRecordCounts(countSourceIds(governanceIR.hostProposals.map((proposal) => proposal.source.id)))}`,
-			`selected_layers: ${governanceIR.sourceManifest.selectedLayers.join(", ") || "(none)"}`
-		]
-	});
-	traceSteps.push({
-		stage: "Host Fulfillment",
-		lines: summarizeHostFulfillment(hostFulfillment)
-	});
-	const activatedGovernanceIR = {
-		...governanceIR,
-		directives: irActiveDirectives
-	};
-	const semanticRelationsIR = buildSemanticRelationsIR(activatedGovernanceIR);
-	traceSteps.push({
-		stage: "IR Semantic Relations",
-		lines: summarizeSemanticRelationsIR(semanticRelationsIR)
-	});
-	const { activationView, activeDirectives } = projectIRActivationToPublic(governanceIR, activationDecisionsIR);
-	const selectedLayerIds = sources.selectedLayerIds;
-	traceSteps.push({
-		stage: "Layer Filter",
-		lines: [
-			...activationView.selected_layers.length ? activationView.selected_layers.map((layerId) => `applied ${layerId}`) : ["applied builtin/core"],
-			`activated: ${activationView.activated.length}`,
-			`skipped: ${activationView.skipped.length}`
-		]
-	});
-	const rccl = sources.rccl;
-	traceSteps.push({
-		stage: "RCCL Source Evolution",
-		lines: summarizeRcclSourceEvolution(rccl)
-	});
-	traceSteps.push({
-		stage: "RCCL Verify Gate",
-		lines: rccl?.observations.length ? [...summarizeRcclVerificationPolicy(sources.rcclVerificationSummary), ...rccl.observations.map((observation) => {
-			const record = sources.rcclVerificationSummary?.records.find((item) => item.observation_id === observation.id);
-			const evidenceStatus = observation.verification.evidence_status ?? "pending";
-			const inductionStatus = observation.verification.induction_status ?? "pending";
-			const disposition = observation.verification.disposition ?? "pending";
-			const lifecycleStatus = observation.lifecycle?.status ?? "unknown";
-			const verificationAction = record ? ` verification_action=${record.action} task_relevant=${record.task_relevant}` : "";
-			return `${observation.id}: evidence=${evidenceStatus} induction=${inductionStatus} disposition=${disposition} lifecycle=${lifecycleStatus} support=${observation.support.scope_basis}/${observation.support.file_count}f/${observation.support.cluster_count}c${verificationAction}`;
-		})] : ["no rccl loaded"]
-	});
-	const executionDecisionsIR = resolveExecutionDecisionsIR(activatedGovernanceIR, semanticRelationsIR);
-	const semanticMergeResult = projectIRSemanticMergeToPublic(activeDirectives, rccl?.observations ?? [], semanticRelationsIR, executionDecisionsIR, contextProfile);
-	const tensions = { records: semanticMergeResult.context_tensions };
-	const focus = buildFocusView(semanticMergeResult, activeDirectives);
-	traceSteps.push({
-		stage: "Semantic Merge",
-		lines: [
-			`activated_directives: ${semanticMergeResult.activated_directives.length}`,
-			`suppressed_directives: ${semanticMergeResult.suppressed_directives.length}`,
-			`relations: ${semanticMergeResult.relations.length}`,
-			`accepted_relations: ${semanticMergeResult.merge_summary.accepted}`,
-			`downgraded_relations: ${semanticMergeResult.merge_summary.downgraded}`,
-			`rejected_relations: ${semanticMergeResult.merge_summary.rejected}`,
-			`final_relations: ${formatRecordCounts(semanticMergeResult.merge_summary.final_relation_counts)}`,
-			`relation_sources: ${formatRecordCounts(semanticMergeResult.merge_summary.proposed_by_counts)}`,
-			`execution_mode_impacting_relations: ${semanticMergeResult.merge_summary.execution_mode_impacting}`,
-			`host_graph_edges: ${semanticMergeResult.merge_summary.host_graph_edge_count}`,
-			`feedback_applied: ${semanticMergeResult.merge_summary.feedback_applied_count}`,
-			`semantic_relation_policy: ${formatPolicy(semanticMergeResult.merge_summary.policy)}`,
-			`review_focus_by_priority: ${formatRecordCounts(semanticMergeResult.merge_summary.review_priority_counts)}`,
-			`governance_graph_mode_changes: ${governanceGraphModeChanges(semanticMergeResult).join(", ") || "(none)"}`,
-			`context_policy_rules: ${formatListCounts(executionDecisionsIR.flatMap((decision) => decision.contextRulesApplied))}`,
-			`context_tensions: ${semanticMergeResult.context_tensions.length}`,
-			`review_focus: ${focus.review_focus.length}`,
-			`context_influences: ${semanticMergeResult.context_influences.length}`
-		]
-	});
-	const egoBudget = applyEgoBudget(projectIREgoToPublic(activatedGovernanceIR, semanticMergeResult, intent));
-	const ego = egoBudget.ego;
-	traceSteps.push({
-		stage: "Contract Diagnostics",
-		lines: validated.diagnostics.length ? validated.diagnostics.map((item) => `${item.kind}: provided=${item.summary.total} accepted=${item.summary.accepted} rejected=${item.summary.rejected} downgraded=${item.summary.downgraded} unused=${item.summary.unused}`) : ["no host artifacts provided"]
-	});
-	traceSteps.push({
-		stage: "EGO Assembly",
-		lines: [
-			`must_follow: ${ego.guidance.must_follow.length}`,
-			`avoid: ${ego.guidance.avoid.length}`,
-			`context_tensions: ${ego.guidance.context_tensions.length}`,
-			`ambient: ${ego.guidance.ambient.length}`,
-			`budget_status: ${egoBudget.exceeded ? "EGO_BUDGET_EXCEEDED" : "within-budget"}`,
-			`serialized_characters: ${egoBudget.serializedCharacters}/${EGO_BUDGET.serializedCharacters}`,
-			`omitted: ${egoBudget.omissions.length}`
-		]
-	});
-	const trace = {
-		task: intent,
-		steps: traceSteps,
-		activated_directives: semanticMergeResult.activated_directives,
-		suppressed_directives: semanticMergeResult.suppressed_directives,
-		activation: activationView,
-		tensions,
-		review_focus: focus.review_focus,
-		directive_decisions: semanticMergeResult.directive_modes,
-		observation_links: semanticMergeResult.observation_links,
-		context_influences: semanticMergeResult.context_influences,
-		...hostFulfillment ? { host_fulfillment: hostFulfillment } : {},
-		ego_budget: {
-			limits: {
-				total_items: EGO_BUDGET.totalItems,
-				hard_items: EGO_BUDGET.hardItems,
-				ambient_items: EGO_BUDGET.ambientItems,
-				examples_per_directive: EGO_BUDGET.examplesPerDirective,
-				serialized_characters: EGO_BUDGET.serializedCharacters
-			},
-			exceeded: egoBudget.exceeded,
-			serialized_characters: egoBudget.serializedCharacters,
-			omitted: egoBudget.omissions
-		}
-	};
-	const cache = buildCacheKeys({
-		builtinRoot: normalizedInput.builtinRoot,
-		localAugmentPath: normalizedInput.localAugmentPath,
-		rcclPath: normalizedInput.rcclPath,
-		task: resolved.task,
-		builtinLayers: sources.builtinLayers,
-		hostProposalsFingerprint: governanceIR.fingerprints.hostProposals,
-		verificationPolicy: normalizedInput.verificationPolicy ?? "task-relevant",
-		rcclVerificationSummary: sources.rcclVerificationSummary
-	}, selectedLayerIds, rccl);
-	const packet = {
-		version: "1",
-		status: validated.diagnostics.some((item) => item.summary.rejected > 0) || egoBudget.exceeded ? "needs-attention" : "compiled",
-		task: {
-			workflow: resolved.workflow,
-			change_type: intent.change_type,
-			operation: intent.operation,
-			input: resolved.task
-		},
-		interpretation: buildInterpretationPacket(resolved),
-		governance: buildGovernancePacket(activationView, tensions, focus, semanticMergeResult, ego, trace),
-		cache,
-		fingerprints: governanceIR.fingerprints,
-		contract_diagnostics: validated.diagnostics,
-		post_compile_contract_requests: []
-	};
-	const adherence = prepareAdherenceEvidenceContract({
-		directives: activeDirectives.map((directive) => ({
-			id: directive.id,
-			description: directive.description,
-			prescription: directive.prescription,
-			execution_mode: semanticMergeResult.directive_modes.find((item) => item.directive_id === directive.id)?.execution_mode ?? "ambient"
-		})),
-		taskDescription: resolved.task.description,
-		artifactPath: join(normalizedInput.projectRoot, ".resonant-code", "context", "adherence-evidence", "code", `${adherenceArtifactName(resolved)}.json`)
-	});
-	const postCompileContractRequests = [{
-		kind: "adherence-evidence",
-		artifact: adherence.evidenceArtifact,
-		contract: adherence.contract
-	}];
-	packet.post_compile_contract_requests = postCompileContractRequests;
-	return compileResolvedOutput(packet, resolved, validated.diagnostics, postCompileContractRequests);
-}
-async function validatePublicCompileInput(input) {
-	if (!("task" in input)) throw new Error("compile() v1 requires a raw task input; pre-resolved task objects are not accepted.");
-	const diagnostics = [];
-	const taskContract = prepareTaskModelContract({
-		task: input.task,
-		artifactPath: input.artifacts?.taskModel?.path ?? join(input.projectRoot, ".resonant-code", "context", "task-models", "code", "task-model.json")
-	});
-	let taskModels = [];
-	if (input.artifacts?.taskModel) {
-		const unwrapped = unwrapHostArtifactEnvelope(input.artifacts.taskModel.raw, taskContract.contract);
-		if (unwrapped.diagnostic) diagnostics.push(buildContractPayloadDiagnostics("task-model", [unwrapped.diagnostic], {
-			id: taskContract.contract.requestId,
-			path: input.artifacts.taskModel.path
-		}));
-		else {
-			const validated = validateTaskModelPayload(unwrapped.payload);
-			diagnostics.push(validated.diagnostics);
-			taskModels = validated.models;
-		}
-	}
-	const preliminary = {
-		...input,
-		taskModels,
-		hostProposals: [],
-		hostFulfillment: void 0
-	};
-	const graphContract = await prepareSemanticGovernanceGraphContractBundle({
-		compileInput: preliminary,
-		artifactPath: input.artifacts?.semanticGovernanceGraph?.path ?? join(input.projectRoot, ".resonant-code", "context", "semantic-governance-graphs", "code", "semantic-governance-graph.json")
-	});
-	const proposals = [];
-	let graphDiagnostics = null;
-	if (input.artifacts?.semanticGovernanceGraph) {
-		const unwrapped = unwrapHostArtifactEnvelope(input.artifacts.semanticGovernanceGraph.raw, graphContract.contract);
-		if (unwrapped.diagnostic) graphDiagnostics = buildContractPayloadDiagnostics("semantic-governance-graph", [unwrapped.diagnostic], {
-			id: graphContract.contract.requestId,
-			path: input.artifacts.semanticGovernanceGraph.path
-		});
-		else {
-			const validated = validateSemanticGovernanceGraphPayload({
-				raw: unwrapped.payload,
-				source: {
-					id: graphContract.contract.requestId,
-					path: input.artifacts.semanticGovernanceGraph.path
-				},
-				allowedDirectiveIds: graphContract.contract.allowedIds?.directiveIds,
-				allowedObservationIds: graphContract.contract.allowedIds?.observationIds,
-				evidenceContext: {
-					projectRoot: input.projectRoot,
-					observations: graphContract.loadedSources?.rccl?.observations
-				}
-			});
-			graphDiagnostics = validated.diagnostics;
-			if ((validated.proposal.payload.edges ?? []).length) proposals.push(validated.proposal);
-		}
-		diagnostics.push(graphDiagnostics);
-	}
-	const taskDiagnostics = diagnostics.find((item) => item.kind === "task-model") ?? null;
-	return {
-		input: {
-			...preliminary,
-			hostProposals: proposals,
-			hostFulfillment: {
-				status: summarizeFulfillment(taskDiagnostics, graphDiagnostics),
-				agentCapability: {
-					kind: "agent-capability-profile",
-					provided: false,
-					path: null,
-					status: "absent",
-					diagnostics: null
-				},
-				taskModel: artifactSummary("task-model", input.artifacts?.taskModel, taskDiagnostics),
-				semanticGovernanceGraph: artifactSummary("semantic-governance-graph", input.artifacts?.semanticGovernanceGraph, graphDiagnostics)
+	mkdirSync(dirname(feedbackPath), { recursive: true });
+	return withFileLock(feedbackPath, () => {
+		const prior = existsSync(feedbackPath) ? readFileSync(feedbackPath, "utf8") : "";
+		const existingIds = new Set(prior.split(/\r?\n/).filter(Boolean).flatMap((line) => {
+			try {
+				const value = JSON.parse(line);
+				return typeof value.eventId === "string" ? [value.eventId] : [];
+			} catch {
+				return [];
 			}
-		},
-		diagnostics
-	};
-}
-function artifactSummary(kind, artifact, diagnostics) {
-	const summary = diagnostics?.summary;
-	const accepted = (summary?.accepted ?? 0) > 0;
-	const rejected = (summary?.rejected ?? 0) > 0;
-	return {
-		kind,
-		provided: Boolean(artifact),
-		path: artifact?.path ?? null,
-		status: !artifact ? "absent" : accepted && rejected ? "partially-accepted" : accepted ? "accepted" : rejected ? "rejected" : "unused",
-		diagnostics
-	};
-}
-function summarizeFulfillment(task, graph) {
-	const summaries = [task, graph].filter(Boolean).map((item) => item.summary);
-	if (!summaries.length) return "absent";
-	if (summaries.some((item) => item.rejected > 0) && summaries.some((item) => item.accepted > 0)) return "partially-accepted";
-	if (summaries.some((item) => item.rejected > 0)) return "rejected";
-	if (summaries.some((item) => item.accepted > 0)) return "accepted";
-	return "unused";
-}
-function adherenceArtifactName(resolved) {
-	return `adherence-${stableHash([resolved.task_intent, resolved.task.description]).slice(0, 12)}`;
-}
-function summarizeRcclSourceEvolution(rccl) {
-	if (!rccl) return ["no rccl loaded"];
-	const lifecycleCounts = countBy(rccl.observations, (observation) => observation.lifecycle?.status ?? "unknown");
-	const fingerprints = rccl.observations.filter((observation) => observation.lifecycle?.content_fingerprint).map((observation) => `${observation.id}:${observation.lifecycle?.content_fingerprint.slice(0, 10)}`);
-	return [
-		`version: ${rccl.version}`,
-		`git_ref: ${rccl.git_ref ?? "(none)"}`,
-		`generated_at: ${rccl.generated_at ?? "(none)"}`,
-		`observations: ${rccl.observations.length}`,
-		`lifecycle_statuses: ${formatCounts(lifecycleCounts)}`,
-		`fingerprints: ${fingerprints.join(", ") || "(none)"}`
-	];
-}
-function summarizeSemanticRelationsIR(relations) {
-	const statusCounts = countBy(relations, (relation) => relation.adjudication.status);
-	const finalRelationCounts = countBy(relations, (relation) => relation.adjudication.finalRelation);
-	const proposedRelationCounts = countBy(relations, (relation) => relation.relation);
-	const proposedByCounts = countBy(relations, (relation) => relation.proposedBy);
-	return [
-		`proposed: ${relations.length}`,
-		`accepted: ${statusCounts.get("accepted") ?? 0}`,
-		`downgraded: ${statusCounts.get("downgraded") ?? 0}`,
-		`rejected: ${statusCounts.get("rejected") ?? 0}`,
-		`proposed_relations: ${formatCounts(proposedRelationCounts)}`,
-		`final_relations: ${formatCounts(finalRelationCounts)}`,
-		`proposed_by: ${formatCounts(proposedByCounts)}`
-	];
-}
-function countBy(items, key) {
-	const counts = /* @__PURE__ */ new Map();
-	for (const item of items) {
-		const value = key(item);
-		counts.set(value, (counts.get(value) ?? 0) + 1);
-	}
-	return counts;
-}
-function formatCounts(counts) {
-	if (counts.size === 0) return "(none)";
-	return [...counts.entries()].sort(([left], [right]) => left.localeCompare(right)).map(([key, count]) => `${key}=${count}`).join(", ");
-}
-function buildFocusView(semanticMergeResult, directives) {
-	const directiveById = new Map(directives.map((directive) => [directive.id, directive]));
-	return { review_focus: semanticMergeResult.focus.review_focus.map((item) => {
-		const directive = item.directive_id ? directiveById.get(item.directive_id) : void 0;
+		}));
+		const next = events.filter((event) => !existingIds.has(event.eventId));
+		if (next.length) appendFileSync(feedbackPath, `${next.map((event) => JSON.stringify(event)).join("\n")}\n`, "utf8");
 		return {
-			kind: item.kind,
-			title: buildFocusTitle(item.kind, directive?.description, item.directive_id, item.observation_id),
-			reason: item.reason,
-			directive_id: item.directive_id,
-			observation_id: item.observation_id,
-			priority: item.priority,
-			relation_id: item.relation_id,
-			group_id: item.group_id
+			recorded: next.length,
+			path: feedbackPath
 		};
-	}) };
+	});
 }
-function buildFocusTitle(kind, directiveDescription, directiveId, observationId) {
-	const directiveLabel = directiveDescription ?? directiveId ?? "directive";
-	switch (kind) {
-		case "tension": return `Review tension around ${directiveLabel}`;
-		case "anti-pattern": return `Check anti-pattern suppression for ${observationId ?? directiveLabel}`;
-		case "high-priority-directive": return `Confirm high-priority guidance for ${directiveLabel}`;
-		case "compatibility-boundary": return `Inspect compatibility boundary for ${directiveLabel}`;
+function withFileLock(feedbackPath, action) {
+	const lockPath = `${feedbackPath}.lock`;
+	let handle = null;
+	for (let attempt = 0; attempt < 50; attempt += 1) try {
+		handle = openSync(lockPath, "wx");
+		break;
+	} catch (error) {
+		if (error.code !== "EEXIST") throw error;
+		Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
 	}
-}
-function governanceGraphModeChanges(semanticMergeResult) {
-	return semanticMergeResult.directive_modes.filter((item) => item.relation_ids.length > 0 && item.execution_mode !== item.default_execution_mode).map((item) => `${item.directive_id}:${item.default_execution_mode}->${item.execution_mode}`);
-}
-function countSourceIds(sourceIds) {
-	const counts = {};
-	for (const sourceId of sourceIds) counts[sourceId] = (counts[sourceId] ?? 0) + 1;
-	return counts;
-}
-function summarizeHostFulfillment(hostFulfillment) {
-	if (!hostFulfillment) return ["no host fulfillment summary provided"];
-	return [
-		`status: ${hostFulfillment.status}`,
-		formatHostFulfillmentArtifact("agent_capability_profile", hostFulfillment.agentCapability),
-		formatHostFulfillmentArtifact("task_model", hostFulfillment.taskModel),
-		formatHostFulfillmentArtifact("semantic_governance_graph", hostFulfillment.semanticGovernanceGraph),
-		...hostFulfillment.adherenceEvidence ? [formatHostFulfillmentArtifact("adherence_evidence", hostFulfillment.adherenceEvidence)] : [],
-		`evidence_coverage: ${formatEvidenceCoverage(hostFulfillment)}`
-	];
-}
-function summarizeRcclVerificationPolicy(summary) {
-	if (!summary) return ["verification_policy: none"];
-	return [
-		`verification_policy: ${summary.policy}`,
-		`reverified_count: ${summary.reverified_count}`,
-		`reused_count: ${summary.reused_count}`,
-		`demoted_count: ${summary.demoted_count}`,
-		`skipped_not_task_relevant_count: ${summary.skipped_not_task_relevant_count}`
-	];
-}
-function formatHostFulfillmentArtifact(label, artifact) {
-	const diagnostics = artifact.diagnostics?.summary;
-	return `${label}: provided=${artifact.provided} status=${artifact.status} accepted=${diagnostics?.accepted ?? 0} rejected=${diagnostics?.rejected ?? 0} downgraded=${diagnostics?.downgraded ?? 0} unused=${diagnostics?.unused ?? 0}`;
-}
-function formatEvidenceCoverage(hostFulfillment) {
-	const totals = [
-		hostFulfillment.taskModel,
-		hostFulfillment.semanticGovernanceGraph,
-		...hostFulfillment.adherenceEvidence ? [hostFulfillment.adherenceEvidence] : []
-	].reduce((acc, artifact) => {
-		const summary = artifact.diagnostics?.summary;
-		acc.total += summary?.total ?? 0;
-		acc.accepted += summary?.accepted ?? 0;
-		acc.rejected += summary?.rejected ?? 0;
-		acc.downgraded += summary?.downgraded ?? 0;
-		acc.unused += summary?.unused ?? 0;
-		return acc;
-	}, {
-		total: 0,
-		accepted: 0,
-		rejected: 0,
-		downgraded: 0,
-		unused: 0
-	});
-	if (totals.total === 0) return "none";
-	return `accepted=${totals.accepted}/${totals.total} rejected=${totals.rejected} downgraded=${totals.downgraded} unused=${totals.unused}`;
-}
-function formatRecordCounts(counts) {
-	const entries = Object.entries(counts).filter(([, count]) => count > 0);
-	return entries.length ? entries.sort(([left], [right]) => left.localeCompare(right)).map(([key, count]) => `${key}=${count}`).join(", ") : "(none)";
-}
-function formatListCounts(values) {
-	const counts = {};
-	for (const value of values) counts[value] = (counts[value] ?? 0) + 1;
-	return formatRecordCounts(counts);
-}
-function formatContextValue(value) {
-	return Array.isArray(value) ? value.join(",") || "(none)" : value || "(none)";
-}
-function formatPolicy(policy) {
-	return [
-		`host_min_confidence=${policy.host_semantic.min_confidence}`,
-		`host_candidate_cap=${policy.host_semantic.max_candidates_per_directive}`,
-		`feedback_follow_rate=${policy.feedback.frequently_ignored_follow_rate}`,
-		`feedback_min_ignored=${policy.feedback.frequently_ignored_min_ignored}`,
-		`recurring_tension_seen=${policy.feedback.recurring_tension_seen_count}`
-	].join(", ");
-}
-/**
-* Derives stable cache keys for layered inputs and the concrete task payload.
-*/
-function buildCacheKeys(input, selectedLayerIds, rccl) {
-	const builtinFingerprints = selectedLayerIds.map((layerId) => {
-		const filePath = input.builtinLayers.get(layerId);
-		return `${layerId}:${filePath ? stableHash([readFileSync(filePath, "utf-8")]) : stableHash(["missing"])}`;
-	});
-	const localSource = input.localAugmentPath ? readFileSync(input.localAugmentPath, "utf-8") : "";
-	const rcclSource = input.rcclPath && rccl ? JSON.stringify(rccl.observations.map((item) => [
-		item.id,
-		item.verification.evidence_status,
-		item.verification.disposition
-	])) : "";
-	const rcclVerificationKey = fingerprintRcclVerificationSummary(input.rcclVerificationSummary);
-	const l1Key = stableHash(builtinFingerprints);
-	const l2Key = stableHash([
-		l1Key,
-		localSource,
-		rcclSource,
-		input.verificationPolicy,
-		rcclVerificationKey
-	]);
-	return {
-		l1Key,
-		l2Key,
-		l3Key: stableHash([
-			l2Key,
-			input.task,
-			input.hostProposalsFingerprint
-		]),
-		verificationPolicy: input.verificationPolicy,
-		rcclVerificationKey
-	};
-}
-function fingerprintRcclVerificationSummary(summary) {
-	if (!summary) return stableHash(["no-rccl-verification"]);
-	return stableHash([
-		summary.policy,
-		summary.reverified_count,
-		summary.reused_count,
-		summary.demoted_count,
-		summary.skipped_not_task_relevant_count,
-		summary.records.map((record) => [
-			record.observation_id,
-			record.action,
-			record.task_relevant,
-			record.before.evidence_status,
-			record.before.induction_status,
-			record.before.disposition,
-			record.after.evidence_status,
-			record.after.induction_status,
-			record.after.disposition
-		])
-	]);
+	if (handle === null) throw new Error(`Timed out waiting for feedback lock: ${lockPath}`);
+	try {
+		return action();
+	} finally {
+		closeSync(handle);
+		rmSync(lockPath, { force: true });
+	}
 }
 //#endregion
-export { compile, evaluateGuidance, planGuidance };
+//#region src/evaluation/evaluate-change.ts
+function evaluateChange(input) {
+	assertEvaluateShape(input);
+	if (input.decision.schemaVersion !== "1.0") throw new Error(`UNSUPPORTED_SCHEMA_VERSION: evaluateChange requires decision schema 1.0.`);
+	const changes = normalizeChangedFiles(input.changes.files);
+	const checks = uniqueChecks(input.checks ?? []);
+	const checkById = new Map(checks.map((check) => [check.id, check]));
+	const evidenceById = uniqueEvidence(input.evidence ?? []);
+	const exceptionById = uniqueExceptions(input.exceptions ?? []);
+	const deliveredIds = new Set(input.decision.trace.deliveredGuidanceIds);
+	for (const guidanceId of [...evidenceById.keys(), ...exceptionById.keys()]) if (!deliveredIds.has(guidanceId)) throw new Error(`Evaluation references guidance "${guidanceId}" that was not delivered by decision ${input.decision.decisionId}.`);
+	const results = [];
+	for (const item of input.decision.guidance.required) results.push(evaluateGuidanceItem({
+		guidanceId: item.id,
+		section: "required",
+		requirements: item.verification,
+		evidence: evidenceById.get(item.id),
+		exception: exceptionById.get(item.id),
+		changes,
+		checkById
+	}));
+	for (const item of input.decision.guidance.consider) results.push(evaluateGuidanceItem({
+		guidanceId: item.id,
+		section: "consider",
+		requirements: item.verification,
+		evidence: evidenceById.get(item.id),
+		exception: exceptionById.get(item.id),
+		changes,
+		checkById
+	}));
+	for (const item of input.decision.guidance.avoid) results.push(evaluateGuidanceItem({
+		guidanceId: item.id,
+		section: "avoid",
+		requirements: item.verification,
+		evidence: evidenceById.get(item.id),
+		exception: exceptionById.get(item.id),
+		changes,
+		checkById,
+		invertSatisfiedMeaning: true
+	}));
+	for (const item of input.decision.guidance.tensions) results.push(evaluateGuidanceItem({
+		guidanceId: item.id,
+		section: "tension",
+		requirements: [{
+			kind: "semantic",
+			description: item.resolution
+		}],
+		evidence: evidenceById.get(item.id),
+		exception: exceptionById.get(item.id),
+		changes,
+		checkById
+	}));
+	const status = resolveEvaluationStatus(results, input.decision.mode);
+	const summary = {
+		requiredSatisfied: results.filter((result) => result.section === "required" && (result.verdict === "satisfied" || result.verdict === "excepted")).length,
+		requiredViolated: results.filter((result) => result.section === "required" && result.verdict === "violated").length,
+		requiredUnverified: results.filter((result) => result.section === "required" && (result.verdict === "unverified" || result.verdict === "partial")).length,
+		warningCount: countWarnings(results)
+	};
+	const operation = inferOperation(changes);
+	const evaluation = {
+		schemaVersion: "1.0",
+		evaluationId: stableHash([
+			"1.0",
+			input.decision.decisionId,
+			changes,
+			checks,
+			results
+		]),
+		decisionId: input.decision.decisionId,
+		status,
+		operation,
+		results,
+		checks,
+		summary
+	};
+	if (input.feedbackPath) evaluation.feedback = recordEvaluationFeedback(input.feedbackPath, evaluation);
+	return evaluation;
+}
+function assertEvaluateShape(input) {
+	if (!input || typeof input !== "object") throw new Error("evaluateChange input must be an object.");
+	const decision = input.decision;
+	if (!isRecord(decision)) throw new Error("evaluateChange decision must be an object.");
+	const guidance = decision.guidance;
+	if (!isRecord(guidance)) throw new Error("evaluateChange decision.guidance must be an object.");
+	for (const section of [
+		"required",
+		"consider",
+		"avoid",
+		"tensions"
+	]) if (!Array.isArray(guidance[section])) throw new Error(`evaluateChange decision.guidance.${section} must be an array.`);
+	const required = guidance.required;
+	const consider = guidance.consider;
+	const avoid = guidance.avoid;
+	const tensions = guidance.tensions;
+	for (const item of [
+		...required,
+		...consider,
+		...avoid
+	]) if (!isRecord(item) || typeof item.id !== "string" || !Array.isArray(item.verification)) throw new Error("evaluateChange delivered guidance entries require string id and verification array.");
+	for (const item of tensions) if (!isRecord(item) || typeof item.id !== "string" || typeof item.resolution !== "string") throw new Error("evaluateChange tension entries require string id and resolution.");
+	if (!isRecord(decision.trace) || !Array.isArray(decision.trace.deliveredGuidanceIds)) throw new Error("evaluateChange decision.trace.deliveredGuidanceIds must be an array.");
+	if (!input.changes || !Array.isArray(input.changes.files)) throw new Error("evaluateChange changes.files must be an array.");
+	for (const file of input.changes.files) if (!file || typeof file.path !== "string" || ![
+		"added",
+		"modified",
+		"deleted",
+		"renamed"
+	].includes(file.status)) throw new Error("evaluateChange changed files require path and a valid status.");
+	if (input.checks !== void 0 && !Array.isArray(input.checks)) throw new Error("evaluateChange checks must be an array.");
+	for (const check of input.checks ?? []) if (!check || typeof check.id !== "string" || ![
+		"passed",
+		"failed",
+		"skipped"
+	].includes(check.status)) throw new Error("evaluateChange checks require id and a valid status.");
+	if (input.evidence !== void 0 && !Array.isArray(input.evidence)) throw new Error("evaluateChange evidence must be an array.");
+	for (const evidence of input.evidence ?? []) {
+		if (!evidence || typeof evidence.guidanceId !== "string" || ![
+			"satisfied",
+			"violated",
+			"partial",
+			"unverified"
+		].includes(evidence.verdict)) throw new Error("evaluateChange guidance evidence requires guidanceId and a valid verdict.");
+		if (!Array.isArray(evidence.evidenceRefs)) throw new Error("evaluateChange guidance evidenceRefs must be an array.");
+		for (const ref of evidence.evidenceRefs) if (!ref || typeof ref.ref !== "string" || ![
+			"diff",
+			"file",
+			"check",
+			"semantic",
+			"static"
+		].includes(ref.kind)) throw new Error("evaluateChange evidence refs require ref and a valid kind.");
+	}
+	if (input.exceptions !== void 0 && !Array.isArray(input.exceptions)) throw new Error("evaluateChange exceptions must be an array.");
+	for (const exception of input.exceptions ?? []) {
+		if (!exception || typeof exception.guidanceId !== "string" || typeof exception.reason !== "string" || !exception.reason.trim()) throw new Error("evaluateChange exceptions require guidanceId and non-empty reason.");
+		if (exception.status !== void 0 && !["requested", "approved"].includes(exception.status)) throw new Error("evaluateChange exception status must be requested or approved.");
+	}
+}
+function isRecord(value) {
+	return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+function evaluateGuidanceItem(input) {
+	const acceptedEvidence = [];
+	const rejectedEvidence = [];
+	const reasons = [];
+	const evidence = input.evidence;
+	const failedRequiredChecks = input.requirements.filter((requirement) => requirement.kind === "command" && requirement.commandId).flatMap((requirement) => {
+		return input.checkById.get(requirement.commandId)?.status === "failed" ? [requirement.commandId] : [];
+	});
+	for (const ref of evidence?.evidenceRefs ?? []) {
+		const reason = invalidEvidenceReason(ref, input.changes, input.checkById);
+		if (reason) rejectedEvidence.push({
+			ref,
+			reason
+		});
+		else acceptedEvidence.push(ref);
+	}
+	let verdict = "unverified";
+	if (failedRequiredChecks.length) {
+		for (const checkId of failedRequiredChecks) {
+			const check = input.checkById.get(checkId);
+			if (!acceptedEvidence.some((ref) => ref.kind === "check" && ref.checkId === checkId)) acceptedEvidence.push({
+				kind: "check",
+				ref: check.outputRef ?? `check:${checkId}`,
+				checkId,
+				description: "Runtime accepted the supplied failed required check as violation evidence."
+			});
+		}
+		verdict = "violated";
+		reasons.push(`Required check(s) failed: ${failedRequiredChecks.join(", ")}.`);
+	} else if (evidence?.verdict === "violated") {
+		verdict = acceptedEvidence.length ? "violated" : "unverified";
+		reasons.push(acceptedEvidence.length ? "Evidence reports a concrete violation." : "Violation verdict lacked valid evidence.");
+	} else if (evidence?.verdict === "partial") {
+		verdict = acceptedEvidence.length ? "partial" : "unverified";
+		reasons.push(acceptedEvidence.length ? "Evidence only partially covers the guidance." : "Partial verdict lacked valid evidence.");
+	} else if (evidence?.verdict === "satisfied") {
+		const uncovered = uncoveredRequirements(input.requirements, acceptedEvidence, input.checkById);
+		if (uncovered.length) {
+			verdict = "partial";
+			reasons.push(`Missing evidence for: ${uncovered.join(", ")}.`);
+		} else {
+			verdict = input.invertSatisfiedMeaning ? "satisfied" : "satisfied";
+			reasons.push(input.invertSatisfiedMeaning ? "Evidence confirms the prohibited pattern is absent." : "All declared verification requirements have valid evidence.");
+		}
+	} else reasons.push("No evidence-backed verdict was provided.");
+	if (input.exception) if (input.exception.status === "approved" && input.exception.approvedBy?.trim() && input.exception.reason.trim()) {
+		verdict = "excepted";
+		reasons.push(`Approved exception recorded by ${input.exception.approvedBy}.`);
+	} else reasons.push("Exception is requested but not approved.");
+	return {
+		guidanceId: input.guidanceId,
+		section: input.section,
+		verdict,
+		reasons,
+		acceptedEvidence,
+		rejectedEvidence,
+		...input.exception ? { exception: input.exception } : {}
+	};
+}
+function invalidEvidenceReason(ref, changes, checkById) {
+	if (!ref.ref?.trim()) return "evidence ref is empty";
+	if (ref.kind === "diff" || ref.kind === "file") {
+		if (!ref.file) return `${ref.kind} evidence requires a file`;
+		const file = normalizePath(ref.file);
+		if (!changes.some((change) => change.path === file || change.previousPath === file)) return `file ${file} is not in the supplied change set`;
+	}
+	if (ref.kind === "check") {
+		if (!ref.checkId) return "check evidence requires checkId";
+		const check = checkById.get(ref.checkId);
+		if (!check) return `check ${ref.checkId} was not supplied`;
+		if (check.status !== "passed") return `check ${ref.checkId} did not pass`;
+	}
+	if (ref.kind === "semantic" && !ref.description?.trim()) return "semantic evidence requires a description";
+	return null;
+}
+function uncoveredRequirements(requirements, evidence, checkById) {
+	const result = [];
+	const kinds = new Set(evidence.map((ref) => ref.kind));
+	for (const requirement of requirements) {
+		if (requirement.kind === "command") {
+			if (!requirement.commandId || checkById.get(requirement.commandId)?.status !== "passed") result.push(`command:${requirement.commandId ?? "unknown"}`);
+			continue;
+		}
+		if (requirement.kind === "diff" && !kinds.has("diff") && !kinds.has("file")) result.push("diff");
+		if (requirement.kind === "semantic" && !kinds.has("semantic")) result.push("semantic");
+		if (requirement.kind === "static" && !kinds.has("static")) result.push("static");
+	}
+	return [...new Set(result)];
+}
+function resolveEvaluationStatus(results, mode) {
+	if (results.some((result) => (result.section === "required" || result.section === "avoid") && result.verdict === "violated" && result.exception?.status !== "approved")) return "rejected";
+	const pendingException = results.some((result) => result.exception && result.exception.status !== "approved");
+	const hardUnverified = results.some((result) => (result.section === "required" || result.section === "tension") && (result.verdict === "unverified" || result.verdict === "partial"));
+	if (pendingException || mode === "strict" && hardUnverified) return "exception-required";
+	return hardUnverified || results.some((result) => (result.section === "consider" || result.section === "avoid") && result.verdict !== "satisfied" && result.verdict !== "excepted") ? "warning" : "accepted";
+}
+function countWarnings(results) {
+	return results.filter((result) => result.verdict === "violated" || result.verdict === "partial" || result.verdict === "unverified").length;
+}
+function normalizeChangedFiles(files) {
+	const result = [];
+	const seen = /* @__PURE__ */ new Set();
+	for (const file of files) {
+		const path = normalizePath(file.path);
+		if (!path || seen.has(path)) continue;
+		seen.add(path);
+		result.push({
+			...file,
+			path,
+			...file.previousPath ? { previousPath: normalizePath(file.previousPath) } : {}
+		});
+	}
+	return result.sort((left, right) => left.path.localeCompare(right.path));
+}
+function inferOperation(files) {
+	if (!files.length) return "none";
+	const operations = new Set(files.map((file) => {
+		if (file.status === "added") return "create";
+		if (file.status === "deleted") return "delete";
+		return "modify";
+	}));
+	if (operations.size > 1) return "mixed";
+	return [...operations][0];
+}
+function uniqueChecks(checks) {
+	const result = /* @__PURE__ */ new Map();
+	for (const check of checks) {
+		if (!check.id?.trim()) throw new Error("Check result id must be non-empty.");
+		if (result.has(check.id)) throw new Error(`Duplicate check result id: ${check.id}.`);
+		result.set(check.id, {
+			...check,
+			id: check.id.trim()
+		});
+	}
+	return [...result.values()].sort((left, right) => left.id.localeCompare(right.id));
+}
+function uniqueEvidence(evidence) {
+	const result = /* @__PURE__ */ new Map();
+	for (const item of evidence) {
+		if (result.has(item.guidanceId)) throw new Error(`Duplicate guidance evidence id: ${item.guidanceId}.`);
+		result.set(item.guidanceId, item);
+	}
+	return result;
+}
+function uniqueExceptions(exceptions) {
+	const result = /* @__PURE__ */ new Map();
+	for (const item of exceptions) {
+		if (result.has(item.guidanceId)) throw new Error(`Duplicate exception guidance id: ${item.guidanceId}.`);
+		result.set(item.guidanceId, {
+			...item,
+			status: item.status ?? "requested"
+		});
+	}
+	return result;
+}
+//#endregion
+export { compileChange, evaluateChange };

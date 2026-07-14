@@ -6,7 +6,7 @@
   "scripts": {
     "build": "tsdown --config ./tsdown.config.ts",
     "typecheck": "tsc --noEmit",
-    "test": "tsx test/agentic-contracts.test.mjs && tsx --test test/activation-v1.test.ts test/v1-boundaries.test.ts test/feedback-v1.test.ts test/feedback-concurrency.test.ts"
+    "test": "tsx --test test/harness.test.ts"
   },
   "dependencies": {
     "@resonant-code/rccl": "workspace:*",

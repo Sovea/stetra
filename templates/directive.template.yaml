@@ -1,71 +1,33 @@
-# directive.template.yaml
-# Full reference template for a Directive. All fields shown.
-# Copy into local-augment.yaml under `additions:` and modify.
-# Comments explain why, not what — field names speak for themselves.
+# Full local directive example. Add under local-augment.yaml `additions:`.
 
-- id: react-hook-deps-01
-  # Globally unique, stable across the entire extends chain — this is the cache key
-  # and the reference used in overrides / augments / suppresses.
-  # Never rename a shipped id. Pattern: {layer-prefix}-{topic}-{sequence}
-
+- id: local-public-api-validation-01
+  # Stable join key for overrides, evaluation, trace, and feedback.
   type: constraint
-  # Taxonomy label for Layer Filter. Does NOT affect conflict resolution weight.
-  # Options: constraint | preference | convention | architecture | anti-pattern
-
-  scope: "**/*.tsx"
-  # File matcher only. Do not use scope to express domain ownership —
-  # that is the job of the directory (frameworks/react.yaml, domains/payments.yaml).
-  # Prefer the narrowest scope that is correct. Overly wide globs increase noise.
-
+  layer: local
+  scope:
+    path: "src/api/**"
   prescription: must
-  # Intra-bucket tuning only. Options: low | normal | high | critical.
-  # weight adjusts priority among directives of similar base strength.
-  # It never allows a should to outrank a must, and never replaces scope or evidence.
+  weight: critical
 
-  weight: high
-  # Fine-tuning multiplier within the same Layer and prescription level only.
-  # Options: low(0.5) | normal(1.0) | high(1.5) | critical(2.0)
-  # Defaults to normal. Only set this if you have a specific reason to amplify or suppress.
-  # weight never causes a should to outscore a must.
-
-  rccl_immune: true
-  # When true, RCCL observed patterns cannot downgrade this directive's
-  # execution mode. Regardless of adherence_quality, mode is always enforce.
-  # Use for security and compliance rules only.
-
-  description: "Hooks dependency array must be exhaustive."
-
+  description: "Validate untrusted request data before it enters domain code."
   rationale: >
-    Incomplete deps arrays cause stale closures: the callback captures an outdated
-    variable reference and silently produces wrong results after re-renders.
-    The linter catches this statically; there is no valid reason to suppress it.
-  # Consumed by the agent during code generation to understand the trade-off.
-  # Write it as the reason you would give a new teammate —
-  # not as a restatement of the description.
+    Static types do not establish runtime input validity. Keeping validation at
+    the API boundary prevents malformed state from spreading into trusted code.
 
   exceptions:
-    - "Empty deps [] is allowed ONLY for pure mount/unmount operations. Requires an
-       explicit inline comment: // mount only — no reactive deps"
-  # Read by the agent, not parsed by the runtime.
-  # Write each exception as a complete condition + required mitigation.
-  # Do not use exceptions to soften a rule you are unsure about — downgrade prescription instead.
+    - "An upstream boundary may satisfy this rule only when its validation contract is explicit and covered by an integration check."
+
+  # A conflict/limit relation cannot soften this directive. Use sparingly.
+  rccl_immune: true
+  traits:
+    safety_critical: true
+    compatibility_sensitive: true
+    migration_sensitive: false
+    broad_scope: false
 
   examples:
     - avoid:
-        code: "useEffect(() => { submit(id); }, []);"
+        code: "const input = request.body as CreateUserInput;"
       good:
-        code: "useEffect(() => { submit(id); }, [id, submit]);"
-      note: "Empty deps captures the initial id value only. After a re-render with a new id,
-             submit still fires against the stale value — silent data corruption."
-
-    - avoid:
-        code: "useEffect(() => { fetchData(obj.id); }, [obj]);"
-      good:
-        code: "const id = obj.id;\nuseEffect(() => { fetchData(id); }, [id]);"
-      note: "Object reference changes on every render even when contents are identical.
-             Depending on obj causes an infinite fetch loop. Extract the primitive."
-  # Primary surface for taste learning. Each scenario must be self-contained.
-  # note must be > 10 characters and must explain WHY, not just WHAT changed.
-  # Add a new scenario rather than making one example cover two distinct cases.
-
-  # quality_signal: written by runtime — do not edit
+        code: "const input = CreateUserSchema.parse(request.body);"
+      note: "Parsing converts unknown external data into a trusted internal value through an actual runtime check."

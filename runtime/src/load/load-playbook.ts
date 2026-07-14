@@ -81,7 +81,7 @@ export function loadLocalPlaybook(filePath?: string): LocalPlaybook | null {
   if (!filePath || !existsSync(filePath)) return null;
   const parsed = assertRecord(parseYaml(readFileSync(filePath, 'utf-8')), filePath);
   if (parsed.version !== 1 && parsed.version !== '1.0') {
-    throw new Error(`UNSUPPORTED_SCHEMA_VERSION: ${filePath} must use local playbook schema 1. Re-run init; existing data was not modified.`);
+    throw new Error(`UNSUPPORTED_SCHEMA_VERSION: ${filePath} does not match the current local Playbook schema. Re-run init; existing data was not modified.`);
   }
   const meta = ((parsed.meta ?? {}) as Record<string, unknown>);
   return {
@@ -108,6 +108,8 @@ function normalizeDirective(
   rejectConditionalBranching(input, filePath);
   const id = nonEmptyString(input.id, 'id', filePath);
   const type = enumValue(input.type, ['constraint', 'preference', 'convention', 'architecture', 'anti-pattern'] as const, 'type', filePath);
+  const layer = nonEmptyString(input.layer, 'layer', filePath);
+  validateDeclaredLayer(layer, layerId, kind, filePath);
   const prescription = enumValue(input.prescription, ['must', 'should'] as const, 'prescription', filePath);
   const weight = enumValue(input.weight ?? 'normal', ['low', 'normal', 'high', 'critical'] as const, 'weight', filePath);
   const description = nonEmptyString(input.description, 'description', filePath);
@@ -116,7 +118,7 @@ function normalizeDirective(
   return {
     id,
     type: type as DirectiveType,
-    layer: typeof input.layer === 'string' ? input.layer : layerId,
+    layer,
     scope: normalizeScope(input.scope),
     prescription: prescription as Prescription,
     weight: weight as Weight,
@@ -244,6 +246,22 @@ function normalizeTraits(input: unknown): DirectiveTraits | undefined {
     migration_sensitive: booleanTrait(value.migration_sensitive),
   };
   return Object.values(traits).some((item) => item !== undefined) ? traits : undefined;
+}
+
+function validateDeclaredLayer(
+  declared: string,
+  sourceLayerId: string,
+  kind: 'builtin' | 'local-addition',
+  location: string,
+): void {
+  if (kind === 'local-addition') {
+    if (!declared.startsWith('local')) throw new Error(`Invalid layer at ${location}: local additions must use a local layer.`);
+    return;
+  }
+  const expected = sourceLayerId === 'builtin/core' ? 'core' : sourceLayerId.split('/')[1];
+  if (declared !== expected) {
+    throw new Error(`Invalid layer at ${location}: declared ${declared}, but the physical source belongs to ${expected}.`);
+  }
 }
 
 function booleanTrait(input: unknown): boolean | undefined {

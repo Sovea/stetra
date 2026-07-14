@@ -1,194 +1,266 @@
-import { parseRcclCritiqueArtifact, parseRcclDiscoveryArtifact } from './io/parse-rccl-workflow.ts';
-import { prepareIncrementalRccl, prepareRccl, prepareRcclWorkflowStage } from './prepare.ts';
-import { validateRcclCandidatePayload } from './validate-candidates.ts';
-import { consolidateObservations, materializeRcclObservations } from './consolidate/consolidate-observations.ts';
-import { verifyEvidenceForDocument } from './verify/verify-evidence.ts';
-import { verifyInductionForDocument } from './verify/verify-induction.ts';
-import { emitRccl, writeCandidateArtifact, writeConsolidationArtifact } from './io/emit-rccl.ts';
-import { commitRcclObservationRefresh } from './commit-refresh.ts';
-import type { CandidateRcclDocument, RcclWorkflowCritiqueDocument, RcclWorkflowDiscoveryDocument } from './types.ts';
-import type { RcclAIContractEnvelope } from './types.ts';
-import { parseYaml, toYaml } from './utils/yaml.ts';
+import { createHash } from 'node:crypto';
+import { execFileSync } from 'node:child_process';
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { dirname, join, resolve } from 'node:path';
+import { buildRepoIndex } from './indexing/build-repo-index.ts';
+import { extractWindowsForFiles } from './slicing/extract-windows.ts';
+import { toYaml } from './utils/yaml.ts';
+import { parseCalibrationProposal, parseRcclDocument } from './parse.ts';
+import { materializeVerifiedObservation, refreshObservationEvidence } from './verify.ts';
+import {
+  RCCL_SCHEMA_VERSION,
+  type CalibrationContract,
+  type CalibrationDiagnostic,
+  type CommitCalibrationInput,
+  type CommitCalibrationOutput,
+  type PrepareCalibrationInput,
+  type PrepareCalibrationOutput,
+  type RcclDocument,
+  type ValidateContextInput,
+  type ValidateContextOutput,
+} from './types.ts';
 
-export interface PrepareCalibrationInput {
-  projectRoot: string;
-  mode: 'full' | 'incremental' | 'discover' | 'critique' | 'synthesize';
-  scope?: string;
-  targetFiles?: string[];
-  changedFiles?: string[];
-  incrementalMode?: 'task-scoped' | 'changed-files' | 'full';
-  fileLimit?: number;
-  windowLimit?: number;
-  debugArtifacts?: boolean;
-  artifacts?: { discovery?: string | RcclWorkflowDiscoveryDocument; critique?: string | RcclWorkflowCritiqueDocument };
+const DEFAULT_MAX_FILES = 8;
+const MAX_ALLOWED_FILES = 20;
+
+export function prepareCalibration(input: PrepareCalibrationInput): PrepareCalibrationOutput {
+  const projectRoot = resolve(input.projectRoot);
+  const maxFiles = Math.min(MAX_ALLOWED_FILES, Math.max(1, input.maxFiles ?? DEFAULT_MAX_FILES));
+  const indexed = buildRepoIndex(projectRoot, input.scope ?? 'auto');
+  const requestedPaths = uniquePaths(input.paths ?? []);
+  const selectedFiles = (requestedPaths.length
+    ? indexed.files.filter((file) => requestedPaths.some((path) => overlaps(path, file.path)))
+    : rankFiles(indexed.files))
+    .slice(0, maxFiles);
+  const windows = extractWindowsForFiles(projectRoot, selectedFiles, {
+    max_slices: 1,
+    max_files_per_slice: maxFiles,
+    max_windows_per_file: 2,
+    target_coverage: {
+      roots: false,
+      modules: true,
+      boundaries: true,
+      migrations: true,
+      style_clusters: false,
+    },
+  }).map((window) => ({
+    file: window.file,
+    lineRange: [window.start_line, window.end_line] as [number, number],
+    purpose: window.purpose,
+    snippet: window.snippet,
+  }));
+  const selectedPaths = selectedFiles.map((file) => file.path);
+  const contextFingerprint = hash([
+    RCCL_SCHEMA_VERSION,
+    selectedPaths,
+    windows.map((window) => [window.file, window.lineRange, window.snippet]),
+  ]);
+  const contract: CalibrationContract = {
+    schemaVersion: RCCL_SCHEMA_VERSION,
+    requestId: `rccl-calibration:${contextFingerprint}`,
+    contextFingerprint,
+    selectedPaths,
+    prompt: buildPrompt(selectedPaths),
+    proposalSchema: proposalSchema(),
+  };
+  return {
+    status: 'ready',
+    contract,
+    context: { files: selectedFiles.length, windows },
+  };
 }
 
-export function prepareCalibration(input: PrepareCalibrationInput) {
-  if (input.mode === 'full') return prepareRccl(input.projectRoot, { scope: input.scope, debugArtifacts: input.debugArtifacts });
-  if (input.mode === 'incremental') {
-    return prepareIncrementalRccl(input.projectRoot, {
-      scope: input.scope,
-      targetFiles: input.targetFiles,
-      changedFiles: input.changedFiles,
-      mode: input.incrementalMode,
-      fileLimit: input.fileLimit,
-      windowLimit: input.windowLimit,
-      debugArtifacts: input.debugArtifacts,
-    });
-  }
-  return prepareRcclWorkflowStage(input.projectRoot, {
-    stage: input.mode,
-    scope: input.scope,
-    discovery: parseDiscovery(input.artifacts?.discovery),
-    critique: parseCritique(input.artifacts?.critique),
-    debugArtifacts: input.debugArtifacts,
+export function commitCalibration(input: CommitCalibrationInput): CommitCalibrationOutput {
+  const projectRoot = resolve(input.projectRoot);
+  const parsed = parseCalibrationProposal(input.proposal);
+  const proposedCount = parsed.data?.observations.length ?? 0;
+  if (!parsed.valid || !parsed.data) return rejected(parsed.diagnostics, proposedCount);
+
+  const issued = prepareCalibration(input);
+  const identityDiagnostics = validateIdentity(parsed.data, issued.contract);
+  if (identityDiagnostics.length) return rejected(identityDiagnostics, proposedCount);
+
+  const rcclPath = resolve(input.rcclPath ?? join(projectRoot, '.resonant-code', 'rccl.yaml'));
+  const existing = loadExistingDocument(rcclPath);
+  if (existing.diagnostics.length) return rejected(existing.diagnostics, proposedCount);
+  const gitRef = currentGitRef(projectRoot);
+  const existingById = new Map(existing.document?.observations.map((observation) => [observation.id, observation]) ?? []);
+  const verified = parsed.data.observations.map((proposal) =>
+    materializeVerifiedObservation(proposal, projectRoot, gitRef, existingById.get(proposal.id)));
+  const verifiedById = new Map(verified.map((observation) => [observation.id, observation]));
+  const observations = parsed.data.replace
+    ? verified
+    : [
+        ...(existing.document?.observations ?? []).filter((observation) => !verifiedById.has(observation.id)),
+        ...verified,
+      ].sort((left, right) => left.id.localeCompare(right.id));
+  const document: RcclDocument = {
+    version: RCCL_SCHEMA_VERSION,
+    generatedAt: new Date().toISOString(),
+    gitRef,
+    observations,
+  };
+  writeYamlAtomic(rcclPath, document);
+  return {
+    status: 'committed',
+    written: rcclPath,
+    document,
+    diagnostics: verificationDiagnostics(verified),
+    summary: summarize(proposedCount, verified, 0),
+  };
+}
+
+export function validateContext(input: ValidateContextInput): ValidateContextOutput {
+  const projectRoot = resolve(input.projectRoot);
+  const rcclPath = resolve(input.rcclPath ?? join(projectRoot, '.resonant-code', 'rccl.yaml'));
+  if (!existsSync(rcclPath)) return { status: 'missing', diagnostics: [], changedObservationIds: [] };
+  const parsed = parseRcclDocument(readFileSync(rcclPath, 'utf8'));
+  if (!parsed.valid || !parsed.data) return { status: 'invalid', diagnostics: parsed.diagnostics, changedObservationIds: [] };
+  const gitRef = currentGitRef(projectRoot);
+  const observations = parsed.data.observations.map((observation) => refreshObservationEvidence(observation, projectRoot, gitRef));
+  const changedObservationIds = observations
+    .filter((observation, index) => observation.evidenceVerification.status !== parsed.data!.observations[index].evidenceVerification.status)
+    .map((observation) => observation.id);
+  const document: RcclDocument = {
+    ...parsed.data,
+    generatedAt: input.write ? new Date().toISOString() : parsed.data.generatedAt,
+    gitRef,
+    observations,
+  };
+  if (input.write) writeYamlAtomic(rcclPath, document);
+  return {
+    status: 'valid',
+    document,
+    diagnostics: verificationDiagnostics(observations),
+    changedObservationIds,
+  };
+}
+
+function validateIdentity(
+  proposal: { requestId: string; contextFingerprint: string },
+  contract: CalibrationContract,
+): CalibrationDiagnostic[] {
+  const diagnostics: CalibrationDiagnostic[] = [];
+  if (proposal.requestId !== contract.requestId) diagnostics.push({ path: 'requestId', code: 'REQUEST_ID_MISMATCH', message: 'Proposal does not match the currently issued calibration request.' });
+  if (proposal.contextFingerprint !== contract.contextFingerprint) diagnostics.push({ path: 'contextFingerprint', code: 'CONTEXT_FINGERPRINT_MISMATCH', message: 'Repository context changed; rerun prepare.' });
+  return diagnostics;
+}
+
+function loadExistingDocument(rcclPath: string): { document?: RcclDocument; diagnostics: CalibrationDiagnostic[] } {
+  if (!existsSync(rcclPath)) return { diagnostics: [] };
+  const parsed = parseRcclDocument(readFileSync(rcclPath, 'utf8'));
+  if (!parsed.valid) return { diagnostics: parsed.diagnostics };
+  return { document: parsed.data, diagnostics: [] };
+}
+
+function verificationDiagnostics(observations: RcclDocument['observations']): CalibrationDiagnostic[] {
+  return observations.flatMap((observation) => {
+    if (observation.evidenceVerification.status === 'current') return [];
+    return [{
+      path: `observations.${observation.id}.evidence`,
+      code: `EVIDENCE_${observation.evidenceVerification.status.toUpperCase()}`,
+      message: `${observation.evidenceVerification.verifiedCount}/${observation.evidenceVerification.totalCount} evidence references match the current repository.`,
+    }];
   });
 }
 
-export interface CommitCalibrationInput {
-  projectRoot: string;
-  plan: {
-    mode: 'full' | 'refresh';
-    contract: RcclAIContractEnvelope;
-    scope?: string;
-    targetFiles?: string[];
-    changedFiles?: string[];
-    incrementalMode?: 'task-scoped' | 'changed-files' | 'full';
-    fileLimit?: number;
-    windowLimit?: number;
-    debugArtifacts?: boolean;
-  };
-  artifacts: { candidate: string };
-}
-
-export function commitCalibration(input: CommitCalibrationInput) {
-  const expectedKind = input.plan.mode === 'refresh' ? 'rccl-observation-refresh' : 'rccl-observation-generation';
-  const issuedContract = reissueCalibrationContract(input);
-  if (!issuedContract.valid) return { status: 'failed' as const, reason: issuedContract.reason, diagnostics: issuedContract.diagnostics };
-  const artifact = unwrapArtifact(input.artifacts.candidate, expectedKind, issuedContract.contract);
-  if (!artifact.valid) return { status: 'failed' as const, reason: artifact.reason, diagnostics: artifact.diagnostics };
-  const candidateYaml = toYaml(artifact.payload);
-  if (input.plan.mode === 'refresh') {
-    return commitRcclObservationRefresh(input.projectRoot, candidateYaml, { debugArtifacts: input.plan.debugArtifacts });
-  }
-  const validated = validateRcclCandidatePayload(candidateYaml);
-  if (!validated.valid) return { status: 'failed' as const, reason: 'invalid-candidate-payload', diagnostics: validated.diagnostics };
-  const candidateDocument: CandidateRcclDocument = {
-    version: '1.0',
-    generated_at: validated.document?.generated_at ?? null,
-    git_ref: validated.document?.git_ref ?? null,
-    observations: validated.observations,
-  };
-  const consolidation = consolidateObservations(candidateDocument.observations);
-  const draft = {
-    version: '1.0' as const,
-    generated_at: candidateDocument.generated_at,
-    git_ref: candidateDocument.git_ref,
-    observations: materializeRcclObservations(consolidation.observations),
-  };
-  const verified = verifyInductionForDocument(verifyEvidenceForDocument(draft, input.projectRoot));
-  const result = emitRccl(verified, input.projectRoot);
+function summarize(
+  proposed: number,
+  observations: RcclDocument['observations'],
+  rejectedCount: number,
+): CommitCalibrationOutput['summary'] {
   return {
-    status: 'committed' as const,
-    ...result,
-    diagnostics: validated.diagnostics,
-    debugArtifacts: input.plan.debugArtifacts
-      ? { enabled: true, candidates: writeCandidateArtifact(input.projectRoot, candidateDocument), consolidation: writeConsolidationArtifact(input.projectRoot, consolidation, verified) }
-      : { enabled: false },
+    proposed,
+    accepted: proposed - rejectedCount,
+    rejected: rejectedCount,
+    current: observations.filter((observation) => observation.evidenceVerification.status === 'current').length,
+    partial: observations.filter((observation) => observation.evidenceVerification.status === 'partial').length,
+    stale: observations.filter((observation) => observation.evidenceVerification.status === 'stale').length,
+    broken: observations.filter((observation) => observation.evidenceVerification.status === 'broken').length,
   };
 }
 
-function reissueCalibrationContract(input: CommitCalibrationInput):
-  | { valid: true; contract: RcclAIContractEnvelope }
-  | { valid: false; reason: string; diagnostics: { code: string; message: string } } {
-  if (!input.plan?.contract) {
-    return {
-      valid: false,
-      reason: 'missing-calibration-contract',
-      diagnostics: { code: 'MISSING_CALIBRATION_CONTRACT', message: 'commitCalibration requires the contract issued by prepareCalibration.' },
-    };
-  }
-
-  const currentPlan = input.plan.mode === 'full'
-    ? prepareRccl(input.projectRoot, { scope: input.plan.scope })
-    : prepareIncrementalRccl(input.projectRoot, {
-      scope: input.plan.scope,
-      targetFiles: input.plan.targetFiles,
-      changedFiles: input.plan.changedFiles,
-      mode: input.plan.incrementalMode,
-      fileLimit: input.plan.fileLimit,
-      windowLimit: input.plan.windowLimit,
-    });
-  const expected = currentPlan.contract;
-  if (!expected || expected.kind !== (input.plan.mode === 'full' ? 'rccl-observation-generation' : 'rccl-observation-refresh')) {
-    return {
-      valid: false,
-      reason: 'calibration-contract-unavailable',
-      diagnostics: { code: 'CALIBRATION_CONTRACT_UNAVAILABLE', message: 'The current repository state does not issue the requested calibration contract. Re-run prepareCalibration.' },
-    };
-  }
-  if (
-    input.plan.contract.requestId !== expected.requestId
-    || input.plan.contract.contextFingerprint !== expected.contextFingerprint
-    || input.plan.contract.kind !== expected.kind
-    || input.plan.contract.schemaId !== expected.schemaId
-    || input.plan.contract.schemaVersion !== expected.schemaVersion
-  ) {
-    return {
-      valid: false,
-      reason: 'calibration-plan-stale',
-      diagnostics: { code: 'CALIBRATION_PLAN_STALE', message: 'The supplied plan is not the contract currently issued for this repository state. Re-run prepareCalibration.' },
-    };
-  }
-  return { valid: true, contract: expected };
+function rejected(diagnostics: CalibrationDiagnostic[], proposed: number): CommitCalibrationOutput {
+  return {
+    status: 'rejected',
+    diagnostics,
+    summary: { proposed, accepted: 0, rejected: proposed, current: 0, partial: 0, stale: 0, broken: 0 },
+  };
 }
 
-function unwrapArtifact(text: string, expectedKind: string, contract: RcclAIContractEnvelope):
-  | { valid: true; payload: unknown }
-  | { valid: false; reason: string; diagnostics: { code: string; message: string } } {
-  let raw: unknown;
+function rankFiles<T extends { path: string; role_hints: string[]; exports_count: number; imports_count: number }>(files: T[]): T[] {
+  return [...files].sort((left, right) => fileScore(right) - fileScore(left) || left.path.localeCompare(right.path));
+}
+
+function fileScore(file: { path: string; role_hints: string[]; exports_count: number; imports_count: number }): number {
+  return file.exports_count * 3
+    + file.imports_count
+    + (file.role_hints.includes('schema-or-migration') ? 20 : 0)
+    + (/index\.|runtime|public|api|boundary/.test(file.path) ? 10 : 0)
+    - (file.role_hints.includes('test') ? 5 : 0)
+    - (file.role_hints.includes('documentation') ? 5 : 0);
+}
+
+function overlaps(requested: string, file: string): boolean {
+  const path = requested.replace(/\\/g, '/').replace(/^\.\//, '').replace(/\/$/, '');
+  return file === path || file.startsWith(`${path}/`) || path.startsWith(`${file}/`);
+}
+
+function uniquePaths(paths: string[]): string[] {
+  return [...new Set(paths.map((path) => path.replace(/\\/g, '/').replace(/^\.\//, '').trim()).filter(Boolean))];
+}
+
+function currentGitRef(projectRoot: string): string | null {
   try {
-    raw = parseYaml(text);
-  } catch (error) {
-    return { valid: false, reason: 'malformed-yaml', diagnostics: { code: 'MALFORMED_YAML', message: error instanceof Error ? error.message : String(error) } };
+    return execFileSync('git', ['rev-parse', 'HEAD'], {
+      cwd: projectRoot,
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+    }).trim() || null;
+  } catch {
+    return null;
   }
-  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
-    return { valid: false, reason: 'invalid-artifact-envelope', diagnostics: { code: 'MALFORMED_ARTIFACT', message: 'RCCL artifact must use the v1 envelope.' } };
-  }
-  const envelope = raw as Record<string, unknown>;
-  if (envelope.schema_version !== 1) {
-    return { valid: false, reason: 'unsupported-schema-version', diagnostics: { code: 'UNSUPPORTED_SCHEMA_VERSION', message: `Expected schema_version 1; found ${String(envelope.schema_version)}. Re-run calibrate-repo-context prepare. Existing files were not modified.` } };
-  }
-  if (envelope.kind !== expectedKind) {
-    return { valid: false, reason: 'artifact-kind-mismatch', diagnostics: { code: 'ARTIFACT_KIND_MISMATCH', message: `Expected ${expectedKind}; found ${String(envelope.kind)}.` } };
-  }
-  if (typeof envelope.context_fingerprint !== 'string' || typeof envelope.request_id !== 'string') {
-    return { valid: false, reason: 'missing-artifact-identity', diagnostics: { code: 'MISSING_ARTIFACT_IDENTITY', message: 'request_id and context_fingerprint are required.' } };
-  }
-  if (envelope.request_id !== `${expectedKind}:${envelope.context_fingerprint}`) {
-    return { valid: false, reason: 'request-id-mismatch', diagnostics: { code: 'REQUEST_ID_MISMATCH', message: 'request_id is not bound to the supplied context_fingerprint.' } };
-  }
-  if (envelope.request_id !== contract.requestId || envelope.context_fingerprint !== contract.contextFingerprint) {
-    return { valid: false, reason: 'context-fingerprint-mismatch', diagnostics: { code: 'CONTEXT_FINGERPRINT_MISMATCH', message: 'Artifact identity does not match the issued calibration plan.' } };
-  }
-  if (!('payload' in envelope)) {
-    return { valid: false, reason: 'missing-payload', diagnostics: { code: 'MISSING_PAYLOAD', message: 'Artifact envelope is missing payload.' } };
-  }
-  return { valid: true, payload: envelope.payload };
 }
 
-function parseDiscovery(value: string | RcclWorkflowDiscoveryDocument | undefined): RcclWorkflowDiscoveryDocument | undefined {
-  if (!value) return undefined;
-  if (typeof value !== 'string') return value;
-  const parsed = parseRcclDiscoveryArtifact(value);
-  if (!parsed.valid || !parsed.data) throw new Error(`Invalid RCCL discovery artifact: ${(parsed.errors ?? []).join('; ')}`);
-  return parsed.data;
+function writeYamlAtomic(path: string, value: unknown): void {
+  mkdirSync(dirname(path), { recursive: true });
+  const temporary = `${path}.tmp-${process.pid}`;
+  writeFileSync(temporary, toYaml(value), 'utf8');
+  renameSync(temporary, path);
 }
 
-function parseCritique(value: string | RcclWorkflowCritiqueDocument | undefined): RcclWorkflowCritiqueDocument | undefined {
-  if (!value) return undefined;
-  if (typeof value !== 'string') return value;
-  const parsed = parseRcclCritiqueArtifact(value);
-  if (!parsed.valid || !parsed.data) throw new Error(`Invalid RCCL critique artifact: ${(parsed.errors ?? []).join('; ')}`);
-  return parsed.data;
+function hash(value: unknown): string {
+  return createHash('sha256').update(JSON.stringify(value)).digest('hex').slice(0, 16);
+}
+
+function buildPrompt(paths: string[]): string {
+  return [
+    'Propose only repository observations that can change a code implementation or review decision.',
+    'Do not summarize metadata, schemas, exports, versions, or facts that a tool can read on demand unless they establish a compatibility or architecture boundary.',
+    'For every observation, explain the decision impact and cite exact evidence from the supplied windows.',
+    'Prefer zero observations over weak observations.',
+    `Selected paths: ${paths.join(', ') || '(none)'}`,
+  ].join('\n');
+}
+
+function proposalSchema(): string {
+  return [
+    'schemaVersion: "1.0"',
+    'requestId: "<from-contract>"',
+    'contextFingerprint: "<from-contract>"',
+    'replace: false',
+    'observations:',
+    '  - id: "obs-kebab-case"',
+    '    category: "architecture|constraint|compatibility|legacy|anti-pattern|migration|convention"',
+    '    scope: "path/or/glob"',
+    '    statement: "observed repository fact"',
+    '    affects: ["compatibility"]',
+    '    decisionImpact: "how omitting this fact could worsen a code decision"',
+    '    semanticConfidence: "low|medium|high"',
+    '    reviewStatus: "generated|reviewed"',
+    '    evidence:',
+    '      - file: "relative/path"',
+    '        lineRange: [1, 10]',
+    '        snippet: "exact source excerpt"',
+  ].join('\n');
 }

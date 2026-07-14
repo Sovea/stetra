@@ -8,7 +8,7 @@
   layer: task-types
   scope:
     path: "**/*"
-  prescription: must
+  prescription: should
   weight: high
 
   description: "Implement the feature around the actual behavior the user or system needs, not around architecture."
