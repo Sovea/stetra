@@ -29,10 +29,18 @@ Long-lived guidance has two project-facing layers:
 2. A user-scoped personal overlay may add preferences and examples but may not
    silently weaken a team obligation or prohibition.
 
+Personal additions are `should`-level preferences, conventions, or architecture
+guidance with `personal-` IDs. Personal overlays cannot extend built-in layers,
+override, suppress, weight-rank, create hard constraints/anti-patterns, or
+revive team-suppressed guidance. Base and overlay contributors remain visible
+in Decision Trace.
+
 Explicit task constraints apply to the current task. Built-in Playbook guidance
 is the fallback baseline. Team changes to built-ins require explicit
-`supersedes` or `suppresses` references. A personal/team conflict is visible as
-a tension or rejected as an invalid overlay; numeric ranking never decides it.
+`supersedes` or `suppresses` references. Structurally conflicting personal
+operations are rejected; semantic contradictions remain jointly inspectable as
+team and personal guidance and require host judgment. Numeric ranking never
+decides them.
 
 Scope matching and declared task/language layers determine structural
 eligibility. Runtime delivers every eligible obligation and prohibition.

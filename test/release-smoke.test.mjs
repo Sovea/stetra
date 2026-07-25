@@ -18,6 +18,27 @@ try {
   cpSync(join(workspace, 'skills'), join(plugin, 'skills'), { recursive: true });
 
   writeFileSync(join(project, 'example.ts'), 'export const answer = 42;\n', 'utf8');
+  mkdirSync(join(project, '.resonant-code', 'playbook'), { recursive: true });
+  const personalOverlayPath = join(project, '.resonant-code', 'playbook', 'personal-overlay.yaml');
+  writeFileSync(personalOverlayPath, `version: "1.0"
+meta:
+  name: smoke-personal-taste
+augments: []
+additions:
+  - id: personal-explicit-export-names-01
+    type: preference
+    layer: personal
+    scope:
+      path: "**/*.ts"
+    prescription: should
+    description: Prefer descriptive named exports at module boundaries.
+    rationale: Named exports are easier for me to review and search.
+    exceptions: []
+    examples:
+      - good:
+          code: "export const answer = 42;"
+        note: The export name communicates its role.
+`, 'utf8');
   writeFileSync(join(project, '.resonant-code', 'rccl.yaml'), `version: "1.0"
 generatedAt: "2026-07-14T00:00:00.000Z"
 gitRef: null
@@ -51,6 +72,7 @@ observations:
   assert.deepEqual(Object.keys(runtime).sort(), ['compileChange', 'evaluateChange']);
   const compileInput = {
     builtinRoot: join(plugin, 'playbook'),
+    personalOverlayPath,
     rcclPath: join(project, '.resonant-code', 'rccl.yaml'),
     projectRoot: project,
     task: {
@@ -82,6 +104,7 @@ observations:
         'feature-start-from-requested-behavior-01',
         'ts-explicit-public-interfaces-01',
         'rccl:obs-export-boundary',
+        'personal-explicit-export-names-01',
       ],
       rationale: 'The selected optional guidance covers requested behavior, the public TypeScript API, and the observed export boundary.',
     },
@@ -95,11 +118,19 @@ observations:
   assert.deepEqual(
     decision.guidance.consider.map((item) => item.id),
     [
+      'personal-explicit-export-names-01',
       'feature-start-from-requested-behavior-01',
       'ts-explicit-public-interfaces-01',
       'rccl:obs-export-boundary',
     ],
   );
+  assert.equal(
+    decision.guidance.consider
+      .find((item) => item.id === 'personal-explicit-export-names-01')
+      ?.source.kind,
+    'personal-playbook',
+  );
+  assert.equal(decision.trace.playbookSources.personal, 'present');
   assert.ok(decision.trace.deliveredGuidanceIds.length > 0);
 
   const checks = decision.verificationPlan.commands.map((command) => ({

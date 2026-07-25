@@ -25,7 +25,7 @@ function parseCli(argv) {
     assertAllowedFlags(flags, [
       'task', 'plugin-root', 'mode', 'change-type', 'target', 'tech', 'risk', 'scope',
       'constraint', 'uncertainty', 'avoid', 'relation-file', 'selection-file',
-      'guidance-byte-limit',
+      'guidance-byte-limit', 'personal-overlay',
     ]);
     const projectRoot = positionals[0];
     if (!projectRoot) throw new Error(`${command} requires <project-root>.`);
@@ -49,6 +49,7 @@ function parseCli(argv) {
         relationFile: single(flags, 'relation-file'),
         selectionFile: single(flags, 'selection-file'),
         guidanceByteLimit: single(flags, 'guidance-byte-limit'),
+        personalOverlayPath: single(flags, 'personal-overlay'),
       },
     };
   }
@@ -79,10 +80,17 @@ function parseCli(argv) {
 
   if (command === 'status' || command === 'doctor') {
     const { positionals, flags } = parseFlags(rest);
-    assertAllowedFlags(flags, ['plugin-root']);
+    assertAllowedFlags(flags, ['plugin-root', 'personal-overlay']);
     const projectRoot = positionals[0];
     if (!projectRoot) throw new Error(`${command} requires <project-root>.`);
-    return { command, options: { projectRoot, pluginRoot: single(flags, 'plugin-root') } };
+    return {
+      command,
+      options: {
+        projectRoot,
+        pluginRoot: single(flags, 'plugin-root'),
+        personalOverlayPath: single(flags, 'personal-overlay'),
+      },
+    };
   }
 
   throw new Error(`Unknown command: ${command}`);

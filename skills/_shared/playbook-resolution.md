@@ -8,6 +8,7 @@ Pass these sources to `compileChange`:
 
 - the plugin `playbook/` directory
 - optional `.resonant-code/playbook/local-augment.yaml`
+- optional user-scoped `~/.resonant-code/playbook/personal-overlay.yaml`
 - optional `.resonant-code/rccl.yaml`
 - a concrete task with change type and target paths when known
 - optional bounded directive/observation relation proposals
@@ -24,6 +25,7 @@ const decision = await runtime.compileChange({
   projectRoot,
   builtinRoot,
   localAugmentPath,
+  personalOverlayPath,
   rcclPath,
   task: {
     description,

@@ -8,5 +8,8 @@
 - Bounds guidance with one configurable UTF-8 byte ceiling, requires an
   explicit host selection when optional items overflow, never silently removes
   mandatory guidance, and evaluates only delivered IDs.
+- Layers a user-scoped personal preference/example overlay beneath the
+  repository-committed team Playbook, with structural guards against weakening
+  shared policy.
 - Records idempotent, evidence-backed feedback events instead of optimistic adherence rates.
 - Keeps task understanding and semantic relations as bounded host inputs rather than mandatory multi-stage artifacts.

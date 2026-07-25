@@ -1,0 +1,36 @@
+# User-scoped taste layered over a repository's team Playbook.
+# Default location: ~/.resonant-code/playbook/personal-overlay.yaml
+#
+# Personal guidance is always optional. This schema intentionally has no
+# extends, overrides, suppresses, weights, constraints, or anti-patterns.
+version: "1.0"
+
+meta:
+  name: "my-personal-taste"
+
+# Add a personal example to a known built-in or team directive.
+augments:
+  - id: "core-clarity-and-legibility-01"
+    examples:
+      - good:
+          code: "const parsedConfig = parseConfig(rawConfig);"
+        note: "I prefer a named intermediate value when it makes intent easier to review."
+
+# Add optional personal preferences. Examples are required.
+additions:
+  - id: "personal-prefer-early-returns-01"
+    type: preference
+    layer: personal
+    scope:
+      path: "**/*"
+    prescription: should
+    description: "Prefer early returns when they make failure paths obvious."
+    rationale: "Flat control flow is easier for me to scan and review."
+    exceptions:
+      - "Keep one structured branch when several outcomes must be compared together."
+    examples:
+      - good:
+          code: "if (!input) return null;"
+        avoid:
+          code: "if (input) { /* entire main behavior nested here */ }"
+        note: "Exit the invalid path before the main behavior."

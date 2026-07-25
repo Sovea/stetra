@@ -27,6 +27,7 @@ node <skill-directory>/scripts/code.mjs prepare <project-root> \
   [--risk <low|medium|high>] \
   [--scope <local|module|cross-module|repository>] \
   [--mode <standard|strict>] \
+  [--personal-overlay <path>] \
   [--selection-file <path>] \
   [--guidance-byte-limit <positive-integer>]
 ```
@@ -36,6 +37,13 @@ node <skill-directory>/scripts/code.mjs prepare <project-root> \
 Optional task flags are deliberately narrow: `--tech`, `--constraint`, `--avoid`, and `--uncertainty`. Express compatibility, migration, or public-boundary requirements as concrete constraints instead of selecting from a context taxonomy that does not change Runtime behavior.
 
 Standard mode compiles directly for ordinary tasks. Strict mode requests missing interpretation only when change type, targets, or declared uncertainties prevent a trustworthy decision. It does not require a task-model file by default.
+
+The workflow automatically loads
+`~/.resonant-code/playbook/personal-overlay.yaml` when present.
+`--personal-overlay <path>` selects a different user-scoped file. Personal
+guidance may add only optional preferences/conventions/architecture guidance or
+examples; it cannot override, suppress, score-rank, or create hard team policy.
+The repository-committed team Playbook remains authoritative.
 
 If Runtime returns `needs-interpretation`, provide the listed task fields and rerun `prepare`.
 

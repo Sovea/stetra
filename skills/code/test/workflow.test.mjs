@@ -17,6 +17,25 @@ try {
   mkdirSync(join(root, 'src'), { recursive: true });
   writeFileSync(join(root, 'package.json'), '{"type":"module"}\n', 'utf8');
   writeFileSync(join(root, 'src', 'example.ts'), 'export const value = 1;\n', 'utf8');
+  const personalOverlayPath = join(root, 'personal-overlay.yaml');
+  writeFileSync(personalOverlayPath, [
+    'version: "1.0"',
+    'meta: { name: workflow-personal-taste }',
+    'augments: []',
+    'additions:',
+    '  - id: personal-readable-control-flow-01',
+    '    type: preference',
+    '    layer: personal',
+    '    scope: { path: "src/**" }',
+    '    prescription: should',
+    '    description: Prefer control flow that reads from validation to the main behavior.',
+    '    rationale: This ordering is faster for me to review.',
+    '    exceptions: []',
+    '    examples:',
+    '      - good: { code: "if (!input) return null;" }',
+    '        note: Handle the invalid path first.',
+    '',
+  ].join('\n'), 'utf8');
 
   const taskOptions = {
     projectRoot: root,
@@ -27,6 +46,7 @@ try {
     targets: ['src/example.ts'],
     risk: 'low',
     scope: 'local',
+    personalOverlayPath,
   };
   const overflow = await autoCodeTask(taskOptions);
   assert.equal(overflow.status, 'guidance-overflow');
@@ -38,6 +58,7 @@ try {
     considerIds: [
       'bugfix-add-supporting-validation-01',
       'ts-honest-and-precise-types-01',
+      'personal-readable-control-flow-01',
     ],
     rationale: 'The defect requires a regression test and precise TypeScript boundary handling.',
   }, null, 2), 'utf8');
@@ -52,7 +73,11 @@ try {
   assert.equal(prepared.task.changeType, 'bugfix');
   assert.deepEqual(
     prepared.guidance.consider.map((item) => item.id),
-    ['bugfix-add-supporting-validation-01', 'ts-honest-and-precise-types-01'],
+    [
+      'personal-readable-control-flow-01',
+      'bugfix-add-supporting-validation-01',
+      'ts-honest-and-precise-types-01',
+    ],
   );
   assert.ok(prepared.sessionPath);
   assert.ok(!('postCompileContracts' in prepared));
@@ -107,12 +132,13 @@ try {
   assert.equal(strict.status, 'needs-interpretation');
   assert.deepEqual(strict.requiredFields, ['changeType', 'targets']);
 
-  const status = await getCodeStatus({ projectRoot: root, pluginRoot });
+  const status = await getCodeStatus({ projectRoot: root, pluginRoot, personalOverlayPath });
   assert.equal(status.status, 'ok');
   assert.equal(status.plugin.status, 'ok');
   assert.equal(status.readiness.status, 'needs-attention');
   assert.ok(status.readiness.nextActions.some((item) => item.code === 'local-augment-absent'));
   assert.ok(status.readiness.nextActions.some((item) => item.code === 'rccl-absent'));
+  assert.equal(status.sources.personalOverlay, 'present');
   assert.equal(status.sources.feedback, 'present');
 
   const incompletePluginRoot = join(root, 'incomplete-plugin');

@@ -8,6 +8,7 @@ import {
   statSync,
   writeFileSync,
 } from 'node:fs';
+import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
@@ -35,6 +36,7 @@ export async function prepareCodeTask(options) {
     projectRoot: paths.projectRoot,
     builtinRoot: paths.builtinRoot,
     ...(existsSync(paths.localAugmentPath) ? { localAugmentPath: paths.localAugmentPath } : {}),
+    ...(existsSync(paths.personalOverlayPath) ? { personalOverlayPath: paths.personalOverlayPath } : {}),
     ...(existsSync(paths.rcclPath) ? { rcclPath: paths.rcclPath } : {}),
     mode: normalizeEnum(options.guidanceMode, ['standard', 'strict'], 'mode') ?? 'standard',
     task: buildTaskInput(options),
@@ -133,6 +135,7 @@ export async function getCodeStatus(options) {
   ];
   const missingPluginFiles = requiredPluginFiles.filter((path) => !existsSync(path));
   const localAugment = existsSync(paths.localAugmentPath) ? 'present' : 'absent';
+  const personalOverlay = existsSync(paths.personalOverlayPath) ? 'present' : 'absent';
   const rccl = sourceFileStatus(paths.rcclPath, 'observations');
   const feedbackPath = join(paths.projectRoot, '.resonant-code', 'feedback', 'verified-events.jsonl');
   const nextActions = [];
@@ -156,6 +159,7 @@ export async function getCodeStatus(options) {
     },
     sources: {
       localAugment,
+      personalOverlay,
       rccl,
       feedback: existsSync(feedbackPath) ? 'present' : 'absent',
     },
@@ -167,6 +171,7 @@ export async function getCodeStatus(options) {
       projectRoot: paths.projectRoot,
       pluginRoot: paths.pluginRoot,
       localAugmentPath: paths.localAugmentPath,
+      personalOverlayPath: paths.personalOverlayPath,
       rcclPath: paths.rcclPath,
       feedbackPath,
     },
@@ -217,6 +222,10 @@ function resolvePaths(options) {
     pluginRoot,
     builtinRoot: join(pluginRoot, 'playbook'),
     localAugmentPath: join(projectRoot, '.resonant-code', 'playbook', 'local-augment.yaml'),
+    personalOverlayPath: resolve(
+      options.personalOverlayPath
+        ?? join(homedir(), '.resonant-code', 'playbook', 'personal-overlay.yaml'),
+    ),
     rcclPath: join(projectRoot, '.resonant-code', 'rccl.yaml'),
   };
 }

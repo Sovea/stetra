@@ -24,7 +24,8 @@ If not, remove it.
 
 The execution loop has four parts:
 
-1. Playbook — prescriptive built-in and project-local directives.
+1. Playbook — prescriptive built-in, repository-committed team, and
+   user-scoped personal directives.
 2. RCCL — observational repository context with separate evidence, semantic-confidence, and review signals.
 3. Runtime — the deterministic `compileChange` / `evaluateChange` hard kernel.
 4. Skills — thin host workflows for IO, lifecycle sequencing, and presentation.
@@ -42,7 +43,9 @@ Do not expose task helpers, parsers, merge functions, feedback helpers, or skill
 
 ### Compile boundary
 
-`compileChange` accepts a canonical task context and optional bounded directive/observation relation proposals. It owns:
+`compileChange` accepts a canonical task context, the team Playbook, an
+optional personal overlay, and optional bounded directive/observation relation
+proposals. It owns:
 
 - deterministic task normalization and strict-mode interpretation gates
 - Playbook loading, validation, local override, scope selection, and explicit
@@ -63,6 +66,12 @@ Guidance budgeting is hard product behavior:
 - overflow returns an actionable result instead of truncating guidance
 
 Only delivered guidance IDs may be evaluated later.
+
+The team Playbook is the shared authority. A personal overlay may add only
+`should`-level preferences, conventions, architecture guidance, and examples.
+It may not extend layers, override, suppress, weight-rank, create constraints or
+anti-patterns, or revive team-suppressed guidance. Runtime surfaces both base
+and overlay contributors in Decision Trace.
 
 ### RCCL boundary
 

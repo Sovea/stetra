@@ -19,10 +19,11 @@ resonant-code makes those boundaries executable and inspectable. Host agents sti
 ## The change loop
 
 ```text
-Playbook (prescriptive) ─┐
-Local augment ──────────┼─> compileChange ─> compact guidance ─> implementation
-RCCL (observational) ───┤          │                                  │
-Task context ───────────┘          └─> Decision Trace                 │
+Built-in Playbook ─────┐
+Team Playbook ─────────┤
+Personal overlay ──────┼─> compileChange ─> compact guidance ─> implementation
+RCCL (observational) ──┤          │                                  │
+Task context ──────────┘          └─> Decision Trace                 │
                                                                        v
 verified feedback <──────── evaluateChange <──── diff + checks + evidence
 ```
@@ -45,7 +46,8 @@ compilation untrustworthy.
 | Input | Meaning | Authority |
 |---|---|---|
 | Built-in Playbook | General prescriptive guidance | Runtime validates and activates |
-| Local augment | Project-specific prescription and taste | Runtime validates and applies |
+| Team Playbook | Repository-committed project prescription | Runtime validates and applies above built-ins |
+| Personal overlay | User-scoped optional preferences and examples | Runtime permits additions/augments but forbids weakening team policy |
 | RCCL | Decision-relevant repository observations | RCCL owns schema and evidence state |
 | Task context | The concrete requested change | Host supplies; Runtime normalizes |
 | Relation proposal | Optional semantic link between an active directive and relevant observation | Host proposes; Runtime gates |
@@ -130,11 +132,19 @@ Durable, reviewable project data:
 - `.resonant-code/rccl.yaml` — evidence-current repository observations
 - `.resonant-code/feedback/verified-events.jsonl` — bounded evidence-backed outcomes
 
+Optional user-scoped data:
+
+- `~/.resonant-code/playbook/personal-overlay.yaml` — personal `should`-level
+  preferences and examples; use
+  `templates/personal-overlay.template.yaml` as the schema example
+
 Generated task sessions live under `.resonant-code/context/` and should normally remain ignored.
 
 ## Design constraints
 
 - Runtime exposes only `compileChange` and `evaluateChange` as public value APIs.
+- Team policy outranks personal taste. Personal overlays cannot override,
+  suppress, score-rank, or create hard constraints/prohibitions.
 - RCCL stores only observations with an explicit decision impact and non-empty evidence.
 - Only current, fully matched RCCL evidence with high semantic confidence, reviewed status, and an accepted semantic relation may change directive execution.
 - Scope overlap may make an RCCL observation task-relevant and ambient; only an
