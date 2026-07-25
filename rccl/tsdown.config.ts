@@ -10,4 +10,7 @@ export default {
   fixedExtension: true,
   tsconfig: './tsconfig.json',
   hash: false,
+  deps: {
+    alwaysBundle: ['yaml'],
+  },
 };
