@@ -86,6 +86,12 @@ RCCL stores observations only when omitting one could cause a different and wors
 
 Evidence verification checks safe repository-relative paths, file existence, line ranges, and snippet similarity. It proves evidence currency, not semantic truth or representativeness.
 
+Calibration never ranks repository files or guesses meaningful syntax windows.
+The host selects exact file/line windows, and proposals may reference only the
+window IDs in that prepare contract. A proposal cannot mark itself reviewed.
+Approval is a separate action with reviewer, timestamp, and content-fingerprint
+provenance; changing observation content invalidates approval.
+
 Only a task-relevant observation with current fully matched evidence, high semantic confidence, reviewed status, and an accepted host semantic relation may change directive execution. Partial, stale, broken, low-confidence, or unreviewed observations are ambient at most. Token overlap may not create a relation, conflict, enforcement, or delivery decision.
 
 ### Evaluation and feedback boundary
@@ -159,6 +165,7 @@ Tests must cover the behavior that justifies the harness:
 - byte-ceiling overflow, explicit delivery selection, and delivered-ID
   boundaries
 - current versus stale RCCL evidence
+- exact RCCL prepare-contract evidence and independent approval provenance
 - accepted, rejected, and downgraded semantic relations
 - strict interpretation and exception gates
 - evaluation against actual diff/check evidence

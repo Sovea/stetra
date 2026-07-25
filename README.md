@@ -116,14 +116,20 @@ node skills/code/scripts/code.mjs complete \
   --evaluation-file <evaluation.json>
 ```
 
-For RCCL, use a prepare/commit contract so proposed observations cite the exact sampled repository state:
+For RCCL, the host first selects exact decision-relevant source windows. Save
+the prepare contract, commit a generated proposal that references only its
+window IDs, then approve reviewed observations separately:
 
 ```sh
 node skills/calibrate-repo-context/scripts/calibrate-repo-context.mjs prepare . \
-  --path runtime/src
+  --evidence runtime/src/index.ts:1-17 \
+  > .resonant-code/context/rccl-prepare.json
 node skills/calibrate-repo-context/scripts/calibrate-repo-context.mjs commit . \
-  --path runtime/src \
+  --contract .resonant-code/context/rccl-prepare.json \
   --input <proposal.yaml>
+node skills/calibrate-repo-context/scripts/calibrate-repo-context.mjs approve . \
+  --id <observation-id> \
+  --approved-by <reviewer>
 ```
 
 ## Project state

@@ -40,34 +40,40 @@ additions:
           code: "export const answer = 42;"
         note: The export name communicates its role.
 `, 'utf8');
-  writeFileSync(join(project, '.resonant-code', 'rccl.yaml'), `version: "1.0"
-generatedAt: "2026-07-14T00:00:00.000Z"
-gitRef: null
-observations:
-  - id: obs-export-boundary
-    category: architecture
-    scope: "**/*.ts"
-    statement: Named exports define the module boundary in the sampled TypeScript entrypoint.
-    affects: [api-shape, architecture-boundary]
-    decisionImpact: A new export style would make the feature inconsistent with the existing module boundary.
-    semanticConfidence: high
-    reviewStatus: reviewed
-    evidence:
-      - file: example.ts
-        lineRange: [1, 1]
-        snippet: "export const answer = 42;"
-    evidenceVerification:
-      status: current
-      verifiedCount: 1
-      totalCount: 1
-      checkedAt: "2026-07-14T00:00:00.000Z"
-    lifecycle:
-      status: active
-      contentFingerprint: smoke-observation
-      firstSeenGitRef: null
-      lastSeenGitRef: null
-      lastVerifiedAt: "2026-07-14T00:00:00.000Z"
-`, 'utf8');
+  const rccl = await import(pathToFileURL(join(plugin, 'rccl', 'dist', 'index.mjs')).href);
+  const preparedRccl = rccl.prepareCalibration({
+    projectRoot: project,
+    evidenceSelections: [{ file: 'example.ts', lineRange: [1, 1] }],
+  });
+  assert.equal(preparedRccl.status, 'ready');
+  const committedRccl = rccl.commitCalibration({
+    projectRoot: project,
+    contract: preparedRccl.contract,
+    proposal: {
+      schemaVersion: '1.0',
+      requestId: preparedRccl.contract.requestId,
+      contextFingerprint: preparedRccl.contract.contextFingerprint,
+      observations: [{
+        id: 'obs-export-boundary',
+        category: 'architecture',
+        scope: '**/*.ts',
+        statement: 'Named exports define the module boundary in the selected TypeScript entrypoint.',
+        affects: ['api-shape', 'architecture-boundary'],
+        decisionImpact: 'A new export style would make the feature inconsistent with the existing module boundary.',
+        semanticConfidence: 'high',
+        evidence: [{ windowId: preparedRccl.contract.evidenceWindows[0].windowId }],
+      }],
+    },
+  });
+  assert.equal(committedRccl.status, 'committed');
+  assert.equal(committedRccl.document.observations[0].reviewStatus, 'generated');
+  const approvedRccl = rccl.approveContext({
+    projectRoot: project,
+    observationIds: ['obs-export-boundary'],
+    approvedBy: 'release-smoke-reviewer',
+  });
+  assert.equal(approvedRccl.status, 'approved');
+  assert.equal(approvedRccl.document.observations[0].reviewStatus, 'reviewed');
 
   const runtime = await import(pathToFileURL(join(plugin, 'runtime', 'dist', 'index.mjs')).href);
   assert.deepEqual(Object.keys(runtime).sort(), ['compileChange', 'evaluateChange']);

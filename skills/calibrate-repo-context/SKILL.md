@@ -16,16 +16,24 @@ Do not store package versions, schema existence, exported symbol lists, generic 
 
 ## Prepare
 
-Prefer targeted calibration:
+Inspect the repository with normal host tools, then select the exact source
+windows that could support a decision-relevant observation. RCCL does not
+choose or rank files, and it does not infer meaningful ranges from syntax.
 
 ```sh
 node <skill-directory>/scripts/calibrate-repo-context.mjs prepare <project-root> \
-  --path <file-or-directory> \
-  [--path <file-or-directory>] \
-  [--max-files <n>]
+  --evidence <repository-file>:<start>-<end> \
+  [--evidence <repository-file>:<start>-<end>] \
+  > <prepare-output.json>
 ```
 
-If no path is supplied, RCCL chooses a bounded set of likely architecture and migration boundary files. The returned contract contains selected paths, evidence windows, a context fingerprint, and the proposal schema.
+At least one explicit window is required. A request accepts at most 20 windows,
+each at most 200 lines, and at most 128 KiB of source in total. These are
+operational bounds, not semantic selection rules.
+
+The returned JSON contains a contract with the exact evidence text, stable
+window IDs, a context fingerprint, and the proposal schema. Keep the complete
+prepare output for commit.
 
 The host writes one YAML or JSON proposal using the exact `requestId` and `contextFingerprint`:
 
@@ -42,11 +50,8 @@ observations:
     affects: ["api-shape", "architecture-boundary"]
     decisionImpact: "Adding a second entrypoint would split the supported public API."
     semanticConfidence: "high"
-    reviewStatus: "reviewed"
     evidence:
-      - file: "src/api/index.ts"
-        lineRange: [1, 24]
-        snippet: "<exact excerpt from a supplied window>"
+      - windowId: "window:<from-contract>"
 ```
 
 Categories are `architecture`, `constraint`, `compatibility`, `legacy`, `anti-pattern`, `migration`, and `convention`.
@@ -57,19 +62,42 @@ Prefer zero observations over weak observations.
 
 ## Commit
 
-Use the same path selectors as prepare:
-
 ```sh
 node <skill-directory>/scripts/calibrate-repo-context.mjs commit <project-root> \
+  --contract <prepare-output.json> \
   --input <proposal.yaml|proposal.json|-> \
-  --path <file-or-directory>
+  [--rccl-path <path>]
 ```
 
-RCCL reissues the current contract. A stale request ID or context fingerprint is rejected without modifying `.resonant-code/rccl.yaml`.
+RCCL verifies the contract fingerprint and checks every exact source window
+again. A changed window, mismatched request, or evidence reference outside the
+contract is rejected without modifying `.resonant-code/rccl.yaml`.
 
-RCCL validates schema, unique IDs, decision impact, decision dimensions, and exact evidence integrity. It owns `evidenceVerification` and `lifecycle`; proposals cannot set those fields.
+RCCL validates schema, unique IDs, decision impact, decision dimensions, and
+exact evidence integrity. It owns `reviewStatus`, `approval`,
+`evidenceVerification`, and `lifecycle`; proposals cannot set those fields.
+New or changed proposals are always stored as `generated`. Recommitting
+identical content preserves an existing valid approval.
 
 Evidence verification proves only that cited source excerpts still exist. It does not prove that the observation's semantic statement is universally true. Semantic confidence and human review status remain separate fields.
+
+## Approve
+
+Review the stored statement, decision impact, confidence, scope, and evidence.
+Approval is a separate explicit action:
+
+```sh
+node <skill-directory>/scripts/calibrate-repo-context.mjs approve <project-root> \
+  --id <observation-id> \
+  [--id <observation-id>] \
+  --approved-by <reviewer>
+```
+
+Approval requires fully current evidence and records reviewer attribution,
+timestamp, and the exact observation content fingerprint. Changing semantic
+content, confidence, scope, or evidence invalidates it. `approvedBy` is an
+auditable attribution supplied by the host; it is not an authentication
+mechanism.
 
 ## Validate And Refresh
 
@@ -80,4 +108,6 @@ node <skill-directory>/scripts/calibrate-repo-context.mjs refresh-stale <project
 
 `validate` checks current evidence without writing. `refresh-stale` writes current evidence states back to RCCL. Evidence states are `current`, `partial`, `stale`, and `broken`.
 
-Stale or broken observations can provide ambient context but cannot change directive execution until refreshed with current evidence.
+Stale or broken observations can provide ambient context but cannot change
+directive execution. Restoring evidence currency does not create semantic
+approval; generated observations still require the separate approve action.
