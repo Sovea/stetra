@@ -18,6 +18,7 @@ export interface CompileChangeInput {
   projectRoot: string;
   builtinRoot: string;
   localAugmentPath?: string;
+  personalOverlayPath?: string;
   rcclPath?: string;
   task: TaskContextInput;
   mode?: GuidanceMode;
@@ -48,7 +49,7 @@ export interface VerificationRequirement {
 }
 
 export interface GuidanceSource {
-  kind: 'builtin-playbook' | 'local-playbook' | 'rccl' | 'task';
+  kind: 'builtin-playbook' | 'local-playbook' | 'personal-playbook' | 'rccl' | 'task';
   id: string;
 }
 
@@ -60,6 +61,7 @@ export interface GuidanceItem {
   executionMode: ExecutionMode;
   verification: VerificationRequirement[];
   example?: DirectiveExample;
+  exampleSource?: GuidanceSource;
 }
 
 export interface AvoidGuidanceItem {
@@ -112,11 +114,20 @@ export interface GuidanceDetail {
     logicalPath?: string;
     evidenceRefs?: string[];
   };
+  contributors: Array<{
+    kind: GuidanceSource['kind'];
+    id: string;
+    logicalPath?: string;
+  }>;
   examples: DirectiveExample[];
 }
 
 export interface DecisionTrace {
   selectedLayers: string[];
+  playbookSources: {
+    team: 'present' | 'absent';
+    personal: 'present' | 'absent';
+  };
   activatedDirectiveIds: string[];
   deliveredGuidanceIds: string[];
   suppressedDirectiveIds: string[];

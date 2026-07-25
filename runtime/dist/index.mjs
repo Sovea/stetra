@@ -6972,6 +6972,46 @@ function loadLocalPlaybook(filePath) {
 		additions: Array.isArray(parsed.additions) ? parsed.additions.map((item) => normalizeDirective(item, "local", filePath, "local-addition")) : []
 	};
 }
+/**
+* Loads a user-scoped overlay. Its schema deliberately excludes team-policy
+* operations: a personal overlay may add optional taste or examples, but may
+* not override, suppress, or create hard policy.
+*/
+function loadPersonalPlaybook(filePath) {
+	if (!filePath || !existsSync(filePath)) return null;
+	const parsed = assertRecord(parseYaml(readFileSync(filePath, "utf-8")), filePath);
+	assertAllowedFields(parsed, [
+		"version",
+		"meta",
+		"augments",
+		"additions"
+	], filePath);
+	if (parsed.version !== 1 && parsed.version !== "1.0") throw new Error(`UNSUPPORTED_SCHEMA_VERSION: ${filePath} does not match the current personal Playbook schema.`);
+	const meta = assertRecord(parsed.meta ?? {}, `${filePath}.meta`);
+	assertAllowedFields(meta, ["name"], `${filePath}.meta`);
+	if (meta.name !== void 0 && (typeof meta.name !== "string" || !meta.name.trim())) throw new Error(`Invalid personal Playbook at ${filePath}.meta: name must be a non-empty string.`);
+	const additions = arrayField(parsed.additions, "additions", filePath).map((value, index) => {
+		const location = `${filePath}.additions[${index}]`;
+		const item = assertRecord(value, location);
+		if ("weight" in item) throw new Error(`Invalid personal directive at ${location}: weight is not accepted because personal additions are optional and are not score-ranked.`);
+		const directive = normalizeDirective(item, "personal", filePath, "personal-addition");
+		if (!directive.id.startsWith("personal-")) throw new Error(`Invalid personal directive "${directive.id}": id must start with personal-.`);
+		if (directive.prescription !== "should") throw new Error(`Invalid personal directive "${directive.id}": prescription must be should.`);
+		if (![
+			"preference",
+			"convention",
+			"architecture"
+		].includes(directive.type)) throw new Error(`Invalid personal directive "${directive.id}": type must be preference, convention, or architecture.`);
+		if (directive.rccl_immune) throw new Error(`Invalid personal directive "${directive.id}": personal guidance cannot be RCCL-immune.`);
+		return directive;
+	});
+	return {
+		version: "1.0",
+		meta: { name: typeof meta.name === "string" && meta.name.trim() ? meta.name.trim() : void 0 },
+		augments: arrayField(parsed.augments, "augments", filePath).map((item, index) => normalizeAugment(item, `${filePath}.augments[${index}]`)),
+		additions
+	};
+}
 function normalizeDirective(input, layerId, filePath, kind) {
 	rejectConditionalBranching(input, filePath);
 	const id = nonEmptyString(input.id, "id", filePath);
@@ -7048,6 +7088,11 @@ function validateLocalReferences(local, builtins) {
 		if (override.scope && override.scope.path !== target.scope.path) throw new Error(`Local override scope "${override.scope.path}" is incompatible with ${override.supersedes} scope "${target.scope.path}".`);
 	}
 	for (const item of [...local.augments, ...local.suppresses]) if (!byId.has(item.id)) throw new Error(`Local playbook references unknown directive "${item.id}".`);
+}
+function validatePersonalReferences(personal, teamAvailable) {
+	if (!personal) return;
+	const byId = new Map(teamAvailable.map((directive) => [directive.id, directive]));
+	for (const augment of personal.augments) if (!byId.has(augment.id)) throw new Error(`Personal playbook augments unknown team/built-in directive "${augment.id}".`);
 }
 function normalizeOverride(value, location) {
 	const item = assertRecord(value, location);
@@ -7127,11 +7172,19 @@ function validateDeclaredLayer(declared, sourceLayerId, kind, location) {
 		if (!declared.startsWith("local")) throw new Error(`Invalid layer at ${location}: local additions must use a local layer.`);
 		return;
 	}
+	if (kind === "personal-addition") {
+		if (!declared.startsWith("personal")) throw new Error(`Invalid layer at ${location}: personal additions must use a personal layer.`);
+		return;
+	}
 	const expected = sourceLayerId === "builtin/core" ? "core" : sourceLayerId.split("/")[1];
 	if (declared !== expected) throw new Error(`Invalid layer at ${location}: declared ${declared}, but the physical source belongs to ${expected}.`);
 }
 function booleanTrait(input) {
 	return typeof input === "boolean" ? input : void 0;
+}
+function assertAllowedFields(value, allowed, location) {
+	const unknown = Object.keys(value).filter((key) => !allowed.includes(key));
+	if (unknown.length) throw new Error(`Invalid personal Playbook at ${location}: unsupported field(s) ${unknown.join(", ")}.`);
 }
 //#endregion
 //#region src/load/load-rccl.ts
@@ -7416,12 +7469,13 @@ function normalizeSelection(selection, guidance) {
 	if (!selection || typeof selection !== "object" || Array.isArray(selection)) throw new Error("compileChange deliverySelection must be an object.");
 	if (!Array.isArray(selection.considerIds) || selection.considerIds.some((id) => typeof id !== "string" || !id.trim())) throw new Error("compileChange deliverySelection.considerIds must be a string array.");
 	if (typeof selection.rationale !== "string" || !selection.rationale.trim()) throw new Error("compileChange deliverySelection.rationale must be non-empty.");
-	const considerIds = [...new Set(selection.considerIds.map((id) => id.trim()))];
+	const requestedIds = [...new Set(selection.considerIds.map((id) => id.trim()))];
 	const active = new Set(guidance.consider.map((item) => item.id));
-	const unknown = considerIds.filter((id) => !active.has(id));
+	const unknown = requestedIds.filter((id) => !active.has(id));
 	if (unknown.length) throw new Error(`compileChange deliverySelection references inactive consider guidance: ${unknown.join(", ")}.`);
+	const requested = new Set(requestedIds);
 	return {
-		considerIds,
+		considerIds: guidance.consider.map((item) => item.id).filter((id) => requested.has(id)),
 		rationale: selection.rationale.trim()
 	};
 }
@@ -7516,6 +7570,7 @@ async function compileChange(input) {
 		verificationPlan,
 		trace: {
 			selectedLayers: loaded.selectedLayers,
+			playbookSources: loaded.playbookSources,
 			activatedDirectiveIds: loaded.directives.map((directive) => directive.id),
 			deliveredGuidanceIds,
 			suppressedDirectiveIds: loaded.suppressedDirectiveIds,
@@ -7538,6 +7593,7 @@ async function compileChange(input) {
 async function loadGovernanceSources(input, task) {
 	const builtinLayers = discoverBuiltinLayers(input.builtinRoot);
 	const local = loadLocalPlaybook(input.localAugmentPath);
+	const personal = loadPersonalPlaybook(input.personalOverlayPath);
 	const configuredLayers = local?.meta.extends.length ? resolveExtendedLayers(local.meta.extends, builtinLayers) : ["builtin/core"];
 	const inferredLayers = inferTaskLayers(task, builtinLayers);
 	const selectedLayers = [...new Set([...configuredLayers, ...inferredLayers])];
@@ -7546,13 +7602,24 @@ async function loadGovernanceSources(input, task) {
 		return path ? loadDirectiveFile(path, layerId) : [];
 	});
 	const allBuiltins = [...builtinLayers.entries()].flatMap(([layerId, path]) => loadDirectiveFile(path, layerId));
-	assertUniqueDirectiveIds([...allBuiltins, ...local?.additions ?? []]);
+	assertUniqueDirectiveIds([
+		...allBuiltins,
+		...local?.additions ?? [],
+		...personal?.additions ?? []
+	]);
 	validateLocalReferences(local, allBuiltins);
+	validatePersonalReferences(personal, [...allBuiltins, ...local?.additions ?? []]);
 	const suppressedDirectiveIds = selectedBuiltins.filter((directive) => local?.suppresses.some((item) => item.id === directive.id)).filter((directive) => directiveMatchesTask(directive, task)).map((directive) => directive.id).sort();
-	const directives = applyLocalPlaybook([...selectedBuiltins, ...local?.additions ?? []], local).filter((directive) => directiveMatchesTask(directive, task)).sort(compareDirectives);
+	const teamDirectives = applyLocalPlaybook([...selectedBuiltins, ...local?.additions ?? []], local);
+	const personalDirectives = applyLocalPlaybook(personal?.additions ?? [], null);
+	const directives = applyPersonalPlaybook([...teamDirectives, ...personalDirectives], personal).filter((directive) => directiveMatchesTask(directive, task)).sort(compareDirectives);
 	const loadedRccl = await loadRccl(input.rcclPath);
 	if (!loadedRccl) return {
 		selectedLayers,
+		playbookSources: {
+			team: local ? "present" : "absent",
+			personal: personal ? "present" : "absent"
+		},
 		directives,
 		rccl: null,
 		relevantObservations: [],
@@ -7573,14 +7640,20 @@ async function loadGovernanceSources(input, task) {
 		});
 		return verified;
 	});
+	const rccl = {
+		...loadedRccl,
+		observations
+	};
+	const relevantObservations = observations.filter((observation) => observation.lifecycle.status !== "superseded").filter((observation) => observationMatchesTask(observation, task)).sort((left, right) => left.id.localeCompare(right.id));
 	return {
 		selectedLayers,
-		directives,
-		rccl: {
-			...loadedRccl,
-			observations
+		playbookSources: {
+			team: local ? "present" : "absent",
+			personal: personal ? "present" : "absent"
 		},
-		relevantObservations: observations.filter((observation) => observation.lifecycle.status !== "superseded").filter((observation) => observationMatchesTask(observation, task)).sort((left, right) => left.id.localeCompare(right.id)),
+		directives,
+		rccl,
+		relevantObservations,
 		observationVerification,
 		suppressedDirectiveIds
 	};
@@ -7604,6 +7677,7 @@ function applyLocalPlaybook(directives, local) {
 		const override = overrideById.get(directive.id);
 		const augment = augmentById.get(directive.id);
 		const teamAuthored = directive.source.kind === "local-addition" || Boolean(override) || Boolean(augment);
+		const sourceAuthority = directive.source.kind === "local-addition" ? "team" : directive.source.kind === "personal-addition" ? "personal" : "builtin";
 		return [{
 			...directive,
 			effectivePrescription: override?.prescription ?? directive.prescription,
@@ -7611,11 +7685,27 @@ function applyLocalPlaybook(directives, local) {
 			effectiveRationale: override?.rationale ?? directive.rationale,
 			effectiveExceptions: override?.exceptions ?? directive.exceptions ?? [],
 			effectiveExamples: augment ? [...directive.examples, ...augment.examples] : directive.examples,
-			executionExample: augment?.examples[0] ?? (directive.source.kind === "local-addition" ? directive.examples[0] : void 0),
+			executionExample: augment?.examples[0] ?? (directive.source.kind === "local-addition" || directive.source.kind === "personal-addition" ? directive.examples[0] : void 0),
+			executionExampleAuthority: augment ? "team" : directive.source.kind === "local-addition" ? "team" : directive.source.kind === "personal-addition" ? "personal" : void 0,
 			overrideApplied: Boolean(override),
 			augmentApplied: Boolean(augment),
-			authority: teamAuthored ? "team" : "builtin"
+			personalAugmentApplied: false,
+			authority: teamAuthored ? "team" : sourceAuthority
 		}];
+	});
+}
+function applyPersonalPlaybook(directives, personal) {
+	const augmentById = new Map(personal?.augments.map((item) => [item.id, item]) ?? []);
+	return directives.map((directive) => {
+		const augment = augmentById.get(directive.id);
+		if (!augment) return directive;
+		return {
+			...directive,
+			effectiveExamples: [...directive.effectiveExamples, ...augment.examples],
+			executionExample: directive.executionExample ?? augment.examples[0],
+			executionExampleAuthority: directive.executionExampleAuthority ?? "personal",
+			personalAugmentApplied: true
+		};
 	});
 }
 function directiveMatchesTask(directive, task) {
@@ -7708,6 +7798,10 @@ function buildEffectiveGuidance(directives, observations, executionModes, relati
 			rationale: "Explicit task constraint supplied by the user or host.",
 			relevance: "Explicit task constraints apply directly to this change.",
 			source: { ...item.source },
+			contributors: [{
+				kind: "task",
+				id: "task-context"
+			}],
 			examples: []
 		});
 	}
@@ -7720,6 +7814,10 @@ function buildEffectiveGuidance(directives, observations, executionModes, relati
 			rationale: "Explicit behavior to avoid for this task.",
 			relevance: "Explicit task exclusions apply directly to this change.",
 			source: { ...item.source },
+			contributors: [{
+				kind: "task",
+				id: "task-context"
+			}],
 			examples: []
 		});
 	}
@@ -7781,14 +7879,23 @@ function taskAvoidGuidance(pattern) {
 	};
 }
 function directiveGuidanceItem(directive, mode, task) {
+	const source = directiveGuidanceSource(directive);
+	const exampleSource = directive.executionExampleAuthority === "team" ? {
+		kind: "local-playbook",
+		id: "team-overlay"
+	} : directive.executionExampleAuthority === "personal" ? {
+		kind: "personal-playbook",
+		id: "personal-overlay"
+	} : null;
 	return {
 		id: directive.id,
 		instruction: directive.description,
 		exceptions: directive.effectiveExceptions,
-		source: directiveGuidanceSource(directive),
+		source,
 		executionMode: mode,
 		verification: verificationForDirective(directive, task),
-		...directive.executionExample ? { example: directive.executionExample } : {}
+		...directive.executionExample ? { example: directive.executionExample } : {},
+		...exampleSource && exampleSource.kind !== source.kind ? { exampleSource } : {}
 	};
 }
 function directiveAvoidItem(directive) {
@@ -7814,8 +7921,16 @@ function observationGuidanceItem(observation) {
 	};
 }
 function directiveGuidanceSource(directive) {
+	if (directive.authority === "team") return {
+		kind: "local-playbook",
+		id: "team-overlay"
+	};
+	if (directive.authority === "personal") return {
+		kind: "personal-playbook",
+		id: "personal-overlay"
+	};
 	return {
-		kind: directive.authority === "team" ? "local-playbook" : "builtin-playbook",
+		kind: "builtin-playbook",
 		id: directive.source.layerId
 	};
 }
@@ -7828,10 +7943,37 @@ function directiveGuidanceDetail(directive, section, relevance) {
 		relevance,
 		source: {
 			...source,
-			logicalPath: directive.authority === "team" ? "team-playbook" : directive.source.layerId
+			logicalPath: directive.authority === "team" ? "team-playbook" : directive.authority === "personal" ? "personal-playbook" : directive.source.layerId
 		},
+		contributors: directiveContributors(directive),
 		examples: directive.effectiveExamples
 	};
+}
+function directiveContributors(directive) {
+	const contributors = [directive.source.kind === "local-addition" ? {
+		kind: "local-playbook",
+		id: "team-overlay",
+		logicalPath: "team-playbook"
+	} : directive.source.kind === "personal-addition" ? {
+		kind: "personal-playbook",
+		id: "personal-overlay",
+		logicalPath: "personal-playbook"
+	} : {
+		kind: "builtin-playbook",
+		id: directive.source.layerId,
+		logicalPath: directive.source.layerId
+	}];
+	if ((directive.overrideApplied || directive.augmentApplied) && !contributors.some((item) => item.kind === "local-playbook")) contributors.push({
+		kind: "local-playbook",
+		id: "team-overlay",
+		logicalPath: "team-playbook"
+	});
+	if (directive.personalAugmentApplied && !contributors.some((item) => item.kind === "personal-playbook")) contributors.push({
+		kind: "personal-playbook",
+		id: "personal-overlay",
+		logicalPath: "personal-playbook"
+	});
+	return contributors;
 }
 function observationGuidanceDetail(observation, item) {
 	return {
@@ -7844,6 +7986,11 @@ function observationGuidanceDetail(observation, item) {
 			logicalPath: observation.scope,
 			evidenceRefs: observationEvidenceRefs(observation)
 		},
+		contributors: [{
+			kind: "rccl",
+			id: observation.id,
+			logicalPath: observation.scope
+		}],
 		examples: []
 	};
 }
@@ -7880,6 +8027,11 @@ function buildTensions(relations, directives, observations) {
 				logicalPath: observation.scope,
 				evidenceRefs: relation.evidenceRefs
 			},
+			contributors: [...directiveContributors(directive), {
+				kind: "rccl",
+				id: observation.id,
+				logicalPath: observation.scope
+			}],
 			examples: []
 		});
 	}
@@ -7936,14 +8088,15 @@ function compareDirectives(left, right) {
 }
 function directiveDeliveryGroup(directive) {
 	if (directive.authority === "team") return 0;
-	if (directive.source.layerId.startsWith("builtin/task-types/")) return 1;
+	if (directive.authority === "personal") return 1;
+	if (directive.source.layerId.startsWith("builtin/task-types/")) return 2;
 	if ([
 		"builtin/languages/",
 		"builtin/frameworks/",
 		"builtin/domains/"
-	].some((prefix) => directive.source.layerId.startsWith(prefix))) return 2;
-	if (directive.source.layerId === "builtin/core") return 3;
-	return 4;
+	].some((prefix) => directive.source.layerId.startsWith(prefix))) return 3;
+	if (directive.source.layerId === "builtin/core") return 4;
+	return 5;
 }
 function requiredInterpretationFields(task) {
 	const result = [];
@@ -7980,7 +8133,10 @@ function directiveFingerprintInput(directive) {
 		rcclImmune: Boolean(directive.rccl_immune),
 		traits: directive.traits ?? {},
 		overrideApplied: directive.overrideApplied,
-		augmentApplied: directive.augmentApplied
+		augmentApplied: directive.augmentApplied,
+		personalAugmentApplied: directive.personalAugmentApplied,
+		authority: directive.authority,
+		executionExampleAuthority: directive.executionExampleAuthority ?? null
 	};
 }
 function observationFingerprintInput(observation) {

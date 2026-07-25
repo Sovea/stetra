@@ -39,7 +39,7 @@ export interface Directive {
   rccl_immune?: boolean;
   traits?: DirectiveTraits;
   source: {
-    kind: 'builtin' | 'local-addition';
+    kind: 'builtin' | 'local-addition' | 'personal-addition';
     layerId: string;
     filePath: string;
   };
@@ -73,5 +73,14 @@ export interface LocalPlaybook {
   overrides: LocalOverride[];
   augments: LocalAugment[];
   suppresses: LocalSuppress[];
+  additions: Directive[];
+}
+
+export interface PersonalPlaybook {
+  version: string;
+  meta: {
+    name?: string;
+  };
+  augments: LocalAugment[];
   additions: Directive[];
 }

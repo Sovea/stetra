@@ -83,6 +83,18 @@ test('standard compile reports overflow, then applies an explicit optional-guida
       ...output.guidance.tensions.map((item) => item.id),
     ]),
   );
+
+  const reordered = await compileChange({
+    ...input,
+    deliverySelection: {
+      considerIds: [...selectedConsiderIds].reverse(),
+      rationale: 'These optional items directly address the defect, its TypeScript boundary, and the repository API boundary.',
+    },
+  });
+  assert.equal(reordered.status, 'compiled');
+  if (reordered.status !== 'compiled') return;
+  assert.equal(reordered.decisionId, output.decisionId);
+  assert.deepEqual(reordered.trace.delivery.selection, output.trace.delivery.selection);
 });
 
 test('a larger total byte ceiling delivers every eligible item without per-section caps', async () => {
@@ -190,6 +202,236 @@ test('directive delivery order follows explicit authority groups, not weight sco
       .every((item) => item.source.kind === 'local-playbook'));
   } finally {
     rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('personal overlay adds optional taste and examples without weakening team policy', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'resonant-runtime-personal-'));
+  const teamPath = join(directory, 'team.yaml');
+  const personalPath = join(directory, 'personal.yaml');
+  try {
+    writeFileSync(teamPath, [
+      'version: "1.0"',
+      'meta:',
+      '  name: team-baseline',
+      '  extends: [builtin/core]',
+      'overrides: []',
+      'augments: []',
+      'suppresses: []',
+      'additions:',
+      '  - id: local-runtime-public-boundary-01',
+      '    type: architecture',
+      '    layer: local',
+      '    scope: { path: "runtime/src/**" }',
+      '    prescription: must',
+      '    weight: critical',
+      '    description: Keep the Runtime public boundary narrow.',
+      '    rationale: The team supports exactly two Runtime operations.',
+      '    exceptions: []',
+      '    examples:',
+      '      - good: { code: "compileChange(); evaluateChange();" }',
+      '        note: The shared boundary remains narrow.',
+      '',
+    ].join('\n'), 'utf8');
+    writeFileSync(personalPath, [
+      'version: "1.0"',
+      'meta:',
+      '  name: personal-taste',
+      'augments:',
+      '  - id: core-clarity-and-legibility-01',
+      '    examples:',
+      '      - good: { code: "const result = explain(value);" }',
+      '        note: Prefer an explicit intermediate value when it clarifies intent.',
+      'additions:',
+      '  - id: personal-prefer-early-returns-01',
+      '    type: preference',
+      '    layer: personal',
+      '    scope: { path: "runtime/src/**" }',
+      '    prescription: should',
+      '    description: Prefer early returns when they make failure paths obvious.',
+      '    rationale: Flat control flow is easier for me to review.',
+      '    exceptions: []',
+      '    examples:',
+      '      - good: { code: "if (!value) return null;" }',
+      '        note: Exit an invalid path before the main behavior.',
+      '',
+    ].join('\n'), 'utf8');
+
+    const output = await compileChange({
+      projectRoot,
+      builtinRoot,
+      localAugmentPath: teamPath,
+      personalOverlayPath: personalPath,
+      guidanceByteLimit: 100_000,
+      task: {
+        description: 'Refactor Runtime control flow',
+        changeType: 'refactor',
+        targets: ['runtime/src/index.ts'],
+        risk: 'low',
+        scope: 'local',
+      },
+    });
+    assert.equal(output.status, 'compiled');
+    if (output.status !== 'compiled') return;
+    assert.deepEqual(output.trace.playbookSources, {
+      team: 'present',
+      personal: 'present',
+    });
+    assert.equal(
+      output.guidance.required.find((item) => item.id === 'local-runtime-public-boundary-01')?.executionMode,
+      'enforce',
+    );
+    const personal = output.guidance.consider.find((item) => item.id === 'personal-prefer-early-returns-01');
+    assert.equal(personal?.source.kind, 'personal-playbook');
+    assert.match(personal?.example?.note ?? '', /invalid path/);
+    const augmented = output.guidance.consider.find((item) => item.id === 'core-clarity-and-legibility-01');
+    assert.equal(augmented?.source.kind, 'builtin-playbook');
+    assert.equal(augmented?.exampleSource?.kind, 'personal-playbook');
+    assert.match(augmented?.example?.note ?? '', /intermediate value/);
+    assert.deepEqual(
+      output.trace.guidanceDetails
+        .find((item) => item.id === 'core-clarity-and-legibility-01')
+        ?.contributors.map((item) => item.kind),
+      ['builtin-playbook', 'personal-playbook'],
+    );
+    const personalIndex = output.guidance.consider.findIndex((item) => item.id === 'personal-prefer-early-returns-01');
+    const builtinIndex = output.guidance.consider.findIndex((item) => item.id === 'core-abstraction-follows-real-pressure-01');
+    assert.ok(personalIndex >= 0 && builtinIndex > personalIndex);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('personal overlay cannot override, suppress, score-rank, or create hard policy', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'resonant-runtime-invalid-personal-'));
+  const personalPath = join(directory, 'personal.yaml');
+  const input = {
+    projectRoot,
+    builtinRoot,
+    personalOverlayPath: personalPath,
+    task: {
+      description: 'Clarify the README',
+      changeType: 'docs' as const,
+      targets: ['README.md'],
+      risk: 'low' as const,
+      scope: 'local' as const,
+    },
+  };
+  try {
+    writeFileSync(personalPath, [
+      'version: "1.0"',
+      'meta: { name: invalid-override }',
+      'overrides: []',
+      'augments: []',
+      'additions: []',
+      '',
+    ].join('\n'), 'utf8');
+    await assert.rejects(() => compileChange(input), /unsupported field.*overrides/);
+
+    writeFileSync(personalPath, personalDirectiveYaml({
+      prescription: 'must',
+    }), 'utf8');
+    await assert.rejects(() => compileChange(input), /prescription must be should/);
+
+    writeFileSync(personalPath, personalDirectiveYaml({
+      weight: 'critical',
+    }), 'utf8');
+    await assert.rejects(() => compileChange(input), /weight is not accepted/);
+
+    writeFileSync(personalPath, personalDirectiveYaml({
+      type: 'anti-pattern',
+    }), 'utf8');
+    await assert.rejects(() => compileChange(input), /type must be preference, convention, or architecture/);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('a personal augment cannot revive a directive suppressed by the team', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'resonant-runtime-personal-suppressed-'));
+  const teamPath = join(directory, 'team.yaml');
+  const personalPath = join(directory, 'personal.yaml');
+  try {
+    writeFileSync(teamPath, [
+      'version: "1.0"',
+      'meta:',
+      '  name: team-suppression',
+      '  extends: [builtin/core]',
+      'overrides: []',
+      'augments: []',
+      'suppresses:',
+      '  - id: core-clarity-and-legibility-01',
+      '    reason: Generated output owns this representation.',
+      'additions: []',
+      '',
+    ].join('\n'), 'utf8');
+    writeFileSync(personalPath, [
+      'version: "1.0"',
+      'meta: { name: cannot-revive }',
+      'augments:',
+      '  - id: core-clarity-and-legibility-01',
+      '    examples:',
+      '      - good: { code: "makeItClear();" }',
+      '        note: Personal clarity example.',
+      'additions: []',
+      '',
+    ].join('\n'), 'utf8');
+    const output = await compileChange({
+      projectRoot,
+      builtinRoot,
+      localAugmentPath: teamPath,
+      personalOverlayPath: personalPath,
+      guidanceByteLimit: 100_000,
+      task: {
+        description: 'Clarify generated documentation',
+        changeType: 'docs',
+        targets: ['README.md'],
+        risk: 'low',
+        scope: 'local',
+      },
+    });
+    assert.equal(output.status, 'compiled');
+    if (output.status !== 'compiled') return;
+    assert.ok(output.trace.suppressedDirectiveIds.includes('core-clarity-and-legibility-01'));
+    assert.ok(!output.trace.activatedDirectiveIds.includes('core-clarity-and-legibility-01'));
+    assert.ok(!output.trace.deliveredGuidanceIds.includes('core-clarity-and-legibility-01'));
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('personal overlay identity depends on content, not its absolute installation path', async () => {
+  const firstDirectory = mkdtempSync(join(tmpdir(), 'resonant-personal-path-a-'));
+  const secondDirectory = mkdtempSync(join(tmpdir(), 'resonant-personal-path-b-'));
+  const firstPath = join(firstDirectory, 'personal.yaml');
+  const secondPath = join(secondDirectory, 'personal.yaml');
+  const content = personalDirectiveYaml({});
+  try {
+    writeFileSync(firstPath, content, 'utf8');
+    writeFileSync(secondPath, content, 'utf8');
+    const input = {
+      projectRoot,
+      builtinRoot,
+      guidanceByteLimit: 100_000,
+      task: {
+        description: 'Clarify the README',
+        changeType: 'docs' as const,
+        targets: ['README.md'],
+        risk: 'low' as const,
+        scope: 'local' as const,
+      },
+    };
+    const first = await compileChange({ ...input, personalOverlayPath: firstPath });
+    const second = await compileChange({ ...input, personalOverlayPath: secondPath });
+    assert.equal(first.status, 'compiled');
+    assert.equal(second.status, 'compiled');
+    if (first.status !== 'compiled' || second.status !== 'compiled') return;
+    assert.equal(first.decisionId, second.decisionId);
+    assert.deepEqual(first.fingerprints, second.fingerprints);
+    assert.deepEqual(first.trace.guidanceDetails, second.trace.guidanceDetails);
+  } finally {
+    rmSync(firstDirectory, { recursive: true, force: true });
+    rmSync(secondDirectory, { recursive: true, force: true });
   }
 });
 
@@ -663,6 +905,7 @@ function minimalDecision(mode: 'standard' | 'strict'): ChangeDecisionPacket {
     verificationPlan: { commands: [{ id: 'typecheck', reason: 'Run typecheck.' }], semanticChecks: [] },
     trace: {
       selectedLayers: ['builtin/core'],
+      playbookSources: { team: 'absent', personal: 'absent' },
       activatedDirectiveIds: ['required-1'],
       deliveredGuidanceIds: ['required-1'],
       suppressedDirectiveIds: [],
@@ -675,6 +918,7 @@ function minimalDecision(mode: 'standard' | 'strict'): ChangeDecisionPacket {
         rationale: 'Callers should depend on a stable boundary.',
         relevance: 'The entrypoint is being changed.',
         source: { kind: 'builtin-playbook', id: 'test', logicalPath: 'test' },
+        contributors: [{ kind: 'builtin-playbook', id: 'test', logicalPath: 'test' }],
         examples: [],
       }],
       delivery: {
@@ -719,4 +963,30 @@ function compileRuntimeRefactor(relationProposals: Parameters<typeof compileChan
       rationale: 'These optional items cover verifiability, the public TypeScript contract, and the observed Runtime boundary.',
     },
   });
+}
+
+function personalDirectiveYaml(options: {
+  prescription?: string;
+  type?: string;
+  weight?: string;
+}): string {
+  return [
+    'version: "1.0"',
+    'meta: { name: personal-test }',
+    'augments: []',
+    'additions:',
+    '  - id: personal-readable-docs-01',
+    `    type: ${options.type ?? 'preference'}`,
+    '    layer: personal',
+    '    scope: { path: "README.md" }',
+    `    prescription: ${options.prescription ?? 'should'}`,
+    ...(options.weight ? [`    weight: ${options.weight}`] : []),
+    '    description: Prefer short paragraphs in user-facing documentation.',
+    '    rationale: Short paragraphs are easier for me to scan.',
+    '    exceptions: []',
+    '    examples:',
+    '      - good: { code: "One idea per paragraph." }',
+    '        note: Keep each paragraph focused.',
+    '',
+  ].join('\n');
 }

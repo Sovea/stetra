@@ -1,7 +1,17 @@
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { join, relative } from 'node:path';
 import { parseYaml } from '../utils/yaml.ts';
-import type { Directive, DirectiveExample, DirectiveScope, DirectiveTraits, DirectiveType, LocalPlaybook, Prescription, Weight } from '../types.ts';
+import type {
+  Directive,
+  DirectiveExample,
+  DirectiveScope,
+  DirectiveTraits,
+  DirectiveType,
+  LocalPlaybook,
+  PersonalPlaybook,
+  Prescription,
+  Weight,
+} from '../types.ts';
 
 /**
  * Discovers built-in layer ids by scanning the plugin playbook directory.
@@ -99,11 +109,63 @@ export function loadLocalPlaybook(filePath?: string): LocalPlaybook | null {
   };
 }
 
+/**
+ * Loads a user-scoped overlay. Its schema deliberately excludes team-policy
+ * operations: a personal overlay may add optional taste or examples, but may
+ * not override, suppress, or create hard policy.
+ */
+export function loadPersonalPlaybook(filePath?: string): PersonalPlaybook | null {
+  if (!filePath || !existsSync(filePath)) return null;
+  const parsed = assertRecord(parseYaml(readFileSync(filePath, 'utf-8')), filePath);
+  assertAllowedFields(parsed, ['version', 'meta', 'augments', 'additions'], filePath);
+  if (parsed.version !== 1 && parsed.version !== '1.0') {
+    throw new Error(`UNSUPPORTED_SCHEMA_VERSION: ${filePath} does not match the current personal Playbook schema.`);
+  }
+  const meta = assertRecord(parsed.meta ?? {}, `${filePath}.meta`);
+  assertAllowedFields(meta, ['name'], `${filePath}.meta`);
+  if (meta.name !== undefined && (typeof meta.name !== 'string' || !meta.name.trim())) {
+    throw new Error(`Invalid personal Playbook at ${filePath}.meta: name must be a non-empty string.`);
+  }
+  const additions = arrayField(parsed.additions, 'additions', filePath)
+    .map((value, index) => {
+      const location = `${filePath}.additions[${index}]`;
+      const item = assertRecord(value, location);
+      if ('weight' in item) {
+        throw new Error(`Invalid personal directive at ${location}: weight is not accepted because personal additions are optional and are not score-ranked.`);
+      }
+      const directive = normalizeDirective(item, 'personal', filePath, 'personal-addition');
+      if (!directive.id.startsWith('personal-')) {
+        throw new Error(`Invalid personal directive "${directive.id}": id must start with personal-.`);
+      }
+      if (directive.prescription !== 'should') {
+        throw new Error(`Invalid personal directive "${directive.id}": prescription must be should.`);
+      }
+      if (!['preference', 'convention', 'architecture'].includes(directive.type)) {
+        throw new Error(`Invalid personal directive "${directive.id}": type must be preference, convention, or architecture.`);
+      }
+      if (directive.rccl_immune) {
+        throw new Error(`Invalid personal directive "${directive.id}": personal guidance cannot be RCCL-immune.`);
+      }
+      return directive;
+    });
+  return {
+    version: '1.0',
+    meta: {
+      name: typeof meta.name === 'string' && meta.name.trim()
+        ? meta.name.trim()
+        : undefined,
+    },
+    augments: arrayField(parsed.augments, 'augments', filePath)
+      .map((item, index) => normalizeAugment(item, `${filePath}.augments[${index}]`)),
+    additions,
+  };
+}
+
 function normalizeDirective(
   input: Record<string, unknown>,
   layerId: string,
   filePath: string,
-  kind: 'builtin' | 'local-addition',
+  kind: 'builtin' | 'local-addition' | 'personal-addition',
 ): Directive {
   rejectConditionalBranching(input, filePath);
   const id = nonEmptyString(input.id, 'id', filePath);
@@ -181,6 +243,19 @@ export function validateLocalReferences(local: LocalPlaybook | null, builtins: D
   }
 }
 
+export function validatePersonalReferences(
+  personal: PersonalPlaybook | null,
+  teamAvailable: Directive[],
+): void {
+  if (!personal) return;
+  const byId = new Map(teamAvailable.map((directive) => [directive.id, directive]));
+  for (const augment of personal.augments) {
+    if (!byId.has(augment.id)) {
+      throw new Error(`Personal playbook augments unknown team/built-in directive "${augment.id}".`);
+    }
+  }
+}
+
 function normalizeOverride(value: unknown, location: string) {
   const item = assertRecord(value, location);
   if ('id' in item && !('supersedes' in item)) throw new Error(`Invalid local override at ${location}: use explicit supersedes instead of id.`);
@@ -251,11 +326,15 @@ function normalizeTraits(input: unknown): DirectiveTraits | undefined {
 function validateDeclaredLayer(
   declared: string,
   sourceLayerId: string,
-  kind: 'builtin' | 'local-addition',
+  kind: 'builtin' | 'local-addition' | 'personal-addition',
   location: string,
 ): void {
   if (kind === 'local-addition') {
     if (!declared.startsWith('local')) throw new Error(`Invalid layer at ${location}: local additions must use a local layer.`);
+    return;
+  }
+  if (kind === 'personal-addition') {
+    if (!declared.startsWith('personal')) throw new Error(`Invalid layer at ${location}: personal additions must use a personal layer.`);
     return;
   }
   const expected = sourceLayerId === 'builtin/core' ? 'core' : sourceLayerId.split('/')[1];
@@ -266,4 +345,15 @@ function validateDeclaredLayer(
 
 function booleanTrait(input: unknown): boolean | undefined {
   return typeof input === 'boolean' ? input : undefined;
+}
+
+function assertAllowedFields(
+  value: Record<string, unknown>,
+  allowed: string[],
+  location: string,
+): void {
+  const unknown = Object.keys(value).filter((key) => !allowed.includes(key));
+  if (unknown.length) {
+    throw new Error(`Invalid personal Playbook at ${location}: unsupported field(s) ${unknown.join(', ')}.`);
+  }
 }

@@ -122,11 +122,15 @@ function normalizeSelection(
   if (typeof selection.rationale !== 'string' || !selection.rationale.trim()) {
     throw new Error('compileChange deliverySelection.rationale must be non-empty.');
   }
-  const considerIds = [...new Set(selection.considerIds.map((id) => id.trim()))];
+  const requestedIds = [...new Set(selection.considerIds.map((id) => id.trim()))];
   const active = new Set(guidance.consider.map((item) => item.id));
-  const unknown = considerIds.filter((id) => !active.has(id));
+  const unknown = requestedIds.filter((id) => !active.has(id));
   if (unknown.length) {
     throw new Error(`compileChange deliverySelection references inactive consider guidance: ${unknown.join(', ')}.`);
   }
+  const requested = new Set(requestedIds);
+  const considerIds = guidance.consider
+    .map((item) => item.id)
+    .filter((id) => requested.has(id));
   return { considerIds, rationale: selection.rationale.trim() };
 }

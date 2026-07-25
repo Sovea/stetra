@@ -5,8 +5,10 @@ import {
   discoverBuiltinLayers,
   loadDirectiveFile,
   loadLocalPlaybook,
+  loadPersonalPlaybook,
   resolveExtendedLayers,
   validateLocalReferences,
+  validatePersonalReferences,
 } from '../load/load-playbook.ts';
 import { loadRccl } from '../load/load-rccl.ts';
 import { normalizeTaskContext, taskNeedsInterpretation } from '../task/normalize.ts';
@@ -16,6 +18,7 @@ import type {
   DirectiveExample,
   ExecutionMode,
   LocalPlaybook,
+  PersonalPlaybook,
 } from '../types.ts';
 import { stableHash } from '../utils/hash.ts';
 import { pathMatchesScope, scopeOverlapsPath } from '../utils/paths.ts';
@@ -48,9 +51,11 @@ interface EffectiveDirective extends Directive {
   effectiveExceptions: string[];
   effectiveExamples: DirectiveExample[];
   executionExample?: DirectiveExample;
+  executionExampleAuthority?: 'team' | 'personal';
   overrideApplied: boolean;
   augmentApplied: boolean;
-  authority: 'team' | 'builtin';
+  personalAugmentApplied: boolean;
+  authority: 'team' | 'personal' | 'builtin';
 }
 
 interface RelationDecision {
@@ -193,6 +198,7 @@ export async function compileChange(input: CompileChangeInput): Promise<CompileC
     verificationPlan,
     trace: {
       selectedLayers: loaded.selectedLayers,
+      playbookSources: loaded.playbookSources,
       activatedDirectiveIds: loaded.directives.map((directive) => directive.id),
       deliveredGuidanceIds,
       suppressedDirectiveIds: loaded.suppressedDirectiveIds,
@@ -216,6 +222,10 @@ export async function compileChange(input: CompileChangeInput): Promise<CompileC
 
 async function loadGovernanceSources(input: CompileChangeInput, task: NormalizedTaskContext): Promise<{
   selectedLayers: string[];
+  playbookSources: {
+    team: 'present' | 'absent';
+    personal: 'present' | 'absent';
+  };
   directives: EffectiveDirective[];
   rccl: RcclDocument | null;
   relevantObservations: RcclObservation[];
@@ -224,6 +234,7 @@ async function loadGovernanceSources(input: CompileChangeInput, task: Normalized
 }> {
   const builtinLayers = discoverBuiltinLayers(input.builtinRoot);
   const local = loadLocalPlaybook(input.localAugmentPath);
+  const personal = loadPersonalPlaybook(input.personalOverlayPath);
   const configuredLayers = local?.meta.extends.length
     ? resolveExtendedLayers(local.meta.extends, builtinLayers)
     : ['builtin/core'];
@@ -234,14 +245,27 @@ async function loadGovernanceSources(input: CompileChangeInput, task: Normalized
     return path ? loadDirectiveFile(path, layerId) : [];
   });
   const allBuiltins = [...builtinLayers.entries()].flatMap(([layerId, path]) => loadDirectiveFile(path, layerId));
-  assertUniqueDirectiveIds([...allBuiltins, ...(local?.additions ?? [])]);
+  assertUniqueDirectiveIds([
+    ...allBuiltins,
+    ...(local?.additions ?? []),
+    ...(personal?.additions ?? []),
+  ]);
   validateLocalReferences(local, allBuiltins);
+  validatePersonalReferences(personal, [...allBuiltins, ...(local?.additions ?? [])]);
   const suppressedDirectiveIds = selectedBuiltins
     .filter((directive) => local?.suppresses.some((item) => item.id === directive.id))
     .filter((directive) => directiveMatchesTask(directive, task))
     .map((directive) => directive.id)
     .sort();
-  const directives = applyLocalPlaybook([...selectedBuiltins, ...(local?.additions ?? [])], local)
+  const teamDirectives = applyTeamPlaybook(
+    [...selectedBuiltins, ...(local?.additions ?? [])],
+    local,
+  );
+  const personalDirectives = (personal?.additions ?? []).map(personalDirective);
+  const directives = applyPersonalPlaybook(
+    [...teamDirectives, ...personalDirectives],
+    personal,
+  )
     .filter((directive) => directiveMatchesTask(directive, task))
     .sort(compareDirectives);
 
@@ -249,6 +273,10 @@ async function loadGovernanceSources(input: CompileChangeInput, task: Normalized
   if (!loadedRccl) {
     return {
       selectedLayers,
+      playbookSources: {
+        team: local ? 'present' : 'absent',
+        personal: personal ? 'present' : 'absent',
+      },
       directives,
       rccl: null,
       relevantObservations: [],
@@ -281,6 +309,10 @@ async function loadGovernanceSources(input: CompileChangeInput, task: Normalized
     .sort((left, right) => left.id.localeCompare(right.id));
   return {
     selectedLayers,
+    playbookSources: {
+      team: local ? 'present' : 'absent',
+      personal: personal ? 'present' : 'absent',
+    },
     directives,
     rccl,
     relevantObservations,
@@ -302,7 +334,7 @@ function inferTaskLayers(task: NormalizedTaskContext, layers: Map<string, string
   return result.sort();
 }
 
-function applyLocalPlaybook(directives: Directive[], local: LocalPlaybook | null): EffectiveDirective[] {
+function applyTeamPlaybook(directives: Directive[], local: LocalPlaybook | null): EffectiveDirective[] {
   const overrideById = new Map(local?.overrides.map((item) => [item.supersedes, item]) ?? []);
   const augmentById = new Map(local?.augments.map((item) => [item.id, item]) ?? []);
   const suppressed = new Set(local?.suppresses.map((item) => item.id) ?? []);
@@ -322,10 +354,51 @@ function applyLocalPlaybook(directives: Directive[], local: LocalPlaybook | null
       effectiveExamples: augment ? [...directive.examples, ...augment.examples] : directive.examples,
       executionExample: augment?.examples[0]
         ?? (directive.source.kind === 'local-addition' ? directive.examples[0] : undefined),
+      executionExampleAuthority: augment
+        ? 'team'
+        : directive.source.kind === 'local-addition'
+          ? 'team'
+          : undefined,
       overrideApplied: Boolean(override),
       augmentApplied: Boolean(augment),
+      personalAugmentApplied: false,
       authority: teamAuthored ? 'team' : 'builtin',
     }];
+  });
+}
+
+function personalDirective(directive: Directive): EffectiveDirective {
+  return {
+    ...directive,
+    effectivePrescription: directive.prescription,
+    effectiveWeight: directive.weight,
+    effectiveRationale: directive.rationale,
+    effectiveExceptions: directive.exceptions ?? [],
+    effectiveExamples: directive.examples,
+    executionExample: directive.examples[0],
+    executionExampleAuthority: 'personal',
+    overrideApplied: false,
+    augmentApplied: false,
+    personalAugmentApplied: false,
+    authority: 'personal',
+  };
+}
+
+function applyPersonalPlaybook(
+  directives: EffectiveDirective[],
+  personal: PersonalPlaybook | null,
+): EffectiveDirective[] {
+  const augmentById = new Map(personal?.augments.map((item) => [item.id, item]) ?? []);
+  return directives.map((directive) => {
+    const augment = augmentById.get(directive.id);
+    if (!augment) return directive;
+    return {
+      ...directive,
+      effectiveExamples: [...directive.effectiveExamples, ...augment.examples],
+      executionExample: directive.executionExample ?? augment.examples[0],
+      executionExampleAuthority: directive.executionExampleAuthority ?? 'personal',
+      personalAugmentApplied: true,
+    };
   });
 }
 
@@ -457,6 +530,7 @@ function buildEffectiveGuidance(
       rationale: 'Explicit task constraint supplied by the user or host.',
       relevance: 'Explicit task constraints apply directly to this change.',
       source: { ...item.source },
+      contributors: [{ kind: 'task', id: 'task-context' }],
       examples: [],
     });
   }
@@ -469,6 +543,7 @@ function buildEffectiveGuidance(
       rationale: 'Explicit behavior to avoid for this task.',
       relevance: 'Explicit task exclusions apply directly to this change.',
       source: { ...item.source },
+      contributors: [{ kind: 'task', id: 'task-context' }],
       examples: [],
     });
   }
@@ -543,14 +618,21 @@ function directiveGuidanceItem(
   mode: ExecutionMode,
   task: NormalizedTaskContext,
 ): GuidanceItem {
+  const source = directiveGuidanceSource(directive);
+  const exampleSource = directive.executionExampleAuthority === 'team'
+    ? { kind: 'local-playbook' as const, id: 'team-overlay' }
+    : directive.executionExampleAuthority === 'personal'
+      ? { kind: 'personal-playbook' as const, id: 'personal-overlay' }
+      : null;
   return {
     id: directive.id,
     instruction: directive.description,
     exceptions: directive.effectiveExceptions,
-    source: directiveGuidanceSource(directive),
+    source,
     executionMode: mode,
     verification: verificationForDirective(directive, task),
     ...(directive.executionExample ? { example: directive.executionExample } : {}),
+    ...(exampleSource && exampleSource.kind !== source.kind ? { exampleSource } : {}),
   };
 }
 
@@ -576,8 +658,14 @@ function observationGuidanceItem(observation: RcclObservation): GuidanceItem {
 }
 
 function directiveGuidanceSource(directive: EffectiveDirective): GuidanceItem['source'] {
+  if (directive.authority === 'team') {
+    return { kind: 'local-playbook', id: 'team-overlay' };
+  }
+  if (directive.authority === 'personal') {
+    return { kind: 'personal-playbook', id: 'personal-overlay' };
+  }
   return {
-    kind: directive.authority === 'team' ? 'local-playbook' : 'builtin-playbook',
+    kind: 'builtin-playbook',
     id: directive.source.layerId,
   };
 }
@@ -597,10 +685,41 @@ function directiveGuidanceDetail(
       ...source,
       logicalPath: directive.authority === 'team'
         ? 'team-playbook'
-        : directive.source.layerId,
+        : directive.authority === 'personal'
+          ? 'personal-playbook'
+          : directive.source.layerId,
     },
+    contributors: directiveContributors(directive),
     examples: directive.effectiveExamples,
   };
+}
+
+function directiveContributors(
+  directive: EffectiveDirective,
+): DecisionTrace['guidanceDetails'][number]['contributors'] {
+  const base = directive.source.kind === 'local-addition'
+    ? { kind: 'local-playbook' as const, id: 'team-overlay', logicalPath: 'team-playbook' }
+    : directive.source.kind === 'personal-addition'
+      ? { kind: 'personal-playbook' as const, id: 'personal-overlay', logicalPath: 'personal-playbook' }
+      : { kind: 'builtin-playbook' as const, id: directive.source.layerId, logicalPath: directive.source.layerId };
+  const contributors = [base];
+  if ((directive.overrideApplied || directive.augmentApplied)
+    && !contributors.some((item) => item.kind === 'local-playbook')) {
+    contributors.push({
+      kind: 'local-playbook',
+      id: 'team-overlay',
+      logicalPath: 'team-playbook',
+    });
+  }
+  if (directive.personalAugmentApplied
+    && !contributors.some((item) => item.kind === 'personal-playbook')) {
+    contributors.push({
+      kind: 'personal-playbook',
+      id: 'personal-overlay',
+      logicalPath: 'personal-playbook',
+    });
+  }
+  return contributors;
 }
 
 function observationGuidanceDetail(
@@ -617,6 +736,11 @@ function observationGuidanceDetail(
       logicalPath: observation.scope,
       evidenceRefs: observationEvidenceRefs(observation),
     },
+    contributors: [{
+      kind: 'rccl',
+      id: observation.id,
+      logicalPath: observation.scope,
+    }],
     examples: [],
   };
 }
@@ -659,6 +783,10 @@ function buildTensions(
         logicalPath: observation.scope,
         evidenceRefs: relation.evidenceRefs,
       },
+      contributors: [
+        ...directiveContributors(directive),
+        { kind: 'rccl', id: observation.id, logicalPath: observation.scope },
+      ],
       examples: [],
     });
   }
@@ -730,14 +858,15 @@ function compareDirectives(left: EffectiveDirective, right: EffectiveDirective):
 
 function directiveDeliveryGroup(directive: EffectiveDirective): number {
   if (directive.authority === 'team') return 0;
-  if (directive.source.layerId.startsWith('builtin/task-types/')) return 1;
+  if (directive.authority === 'personal') return 1;
+  if (directive.source.layerId.startsWith('builtin/task-types/')) return 2;
   if ([
     'builtin/languages/',
     'builtin/frameworks/',
     'builtin/domains/',
-  ].some((prefix) => directive.source.layerId.startsWith(prefix))) return 2;
-  if (directive.source.layerId === 'builtin/core') return 3;
-  return 4;
+  ].some((prefix) => directive.source.layerId.startsWith(prefix))) return 3;
+  if (directive.source.layerId === 'builtin/core') return 4;
+  return 5;
 }
 
 function requiredInterpretationFields(task: NormalizedTaskContext): Array<'changeType' | 'targets' | 'uncertainties'> {
@@ -779,6 +908,9 @@ function directiveFingerprintInput(directive: EffectiveDirective): unknown {
     traits: directive.traits ?? {},
     overrideApplied: directive.overrideApplied,
     augmentApplied: directive.augmentApplied,
+    personalAugmentApplied: directive.personalAugmentApplied,
+    authority: directive.authority,
+    executionExampleAuthority: directive.executionExampleAuthority ?? null,
   };
 }
 
