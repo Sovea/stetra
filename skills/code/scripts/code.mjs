@@ -25,7 +25,7 @@ function parseCli(argv) {
     assertAllowedFlags(flags, [
       'task', 'plugin-root', 'mode', 'change-type', 'target', 'tech', 'risk', 'scope',
       'constraint', 'uncertainty', 'avoid', 'relation-file', 'selection-file',
-      'guidance-byte-limit', 'personal-overlay',
+      'guidance-byte-limit', 'personal-overlay', 'check-config',
     ]);
     const projectRoot = positionals[0];
     if (!projectRoot) throw new Error(`${command} requires <project-root>.`);
@@ -50,6 +50,7 @@ function parseCli(argv) {
         selectionFile: single(flags, 'selection-file'),
         guidanceByteLimit: single(flags, 'guidance-byte-limit'),
         personalOverlayPath: single(flags, 'personal-overlay'),
+        checkConfigPath: single(flags, 'check-config'),
       },
     };
   }
@@ -80,7 +81,7 @@ function parseCli(argv) {
 
   if (command === 'status' || command === 'doctor') {
     const { positionals, flags } = parseFlags(rest);
-    assertAllowedFlags(flags, ['plugin-root', 'personal-overlay']);
+    assertAllowedFlags(flags, ['plugin-root', 'personal-overlay', 'check-config']);
     const projectRoot = positionals[0];
     if (!projectRoot) throw new Error(`${command} requires <project-root>.`);
     return {
@@ -89,6 +90,7 @@ function parseCli(argv) {
         projectRoot,
         pluginRoot: single(flags, 'plugin-root'),
         personalOverlayPath: single(flags, 'personal-overlay'),
+        checkConfigPath: single(flags, 'check-config'),
       },
     };
   }

@@ -1,5 +1,11 @@
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import {
+  mkdtempSync,
+  mkdirSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
@@ -15,8 +21,31 @@ const pluginRoot = resolve(import.meta.dirname, '../../..');
 
 try {
   mkdirSync(join(root, 'src'), { recursive: true });
+  mkdirSync(join(root, '.resonant-code', 'context'), { recursive: true });
   writeFileSync(join(root, 'package.json'), '{"type":"module"}\n', 'utf8');
   writeFileSync(join(root, 'src', 'example.ts'), 'export const value = 1;\n', 'utf8');
+  writeFileSync(join(root, 'src', 'preexisting.ts'), 'export const preexisting = 1;\n', 'utf8');
+  writeFileSync(join(root, '.gitignore'), [
+    '.resonant-code/context/',
+    '.resonant-code/feedback/',
+    '',
+  ].join('\n'), 'utf8');
+  const checkConfigPath = join(root, '.resonant-code', 'checks.json');
+  writeFileSync(checkConfigPath, JSON.stringify({
+    version: '1.0',
+    checks: [
+      {
+        id: 'typecheck',
+        command: [process.execPath, '-e', 'process.exit(0)'],
+        timeoutMs: 10_000,
+      },
+      {
+        id: 'test',
+        command: [process.execPath, '-e', 'process.exit(0)'],
+        timeoutMs: 10_000,
+      },
+    ],
+  }, null, 2), 'utf8');
   const personalOverlayPath = join(root, 'personal-overlay.yaml');
   writeFileSync(personalOverlayPath, [
     'version: "1.0"',
@@ -36,6 +65,14 @@ try {
     '        note: Handle the invalid path first.',
     '',
   ].join('\n'), 'utf8');
+  git(['init', '-q']);
+  git(['config', 'user.email', 'workflow@example.invalid']);
+  git(['config', 'user.name', 'Workflow Test']);
+  git(['add', '.']);
+  git(['commit', '-qm', 'initial']);
+
+  writeFileSync(join(root, 'src', 'preexisting.ts'), 'export const preexisting = 2;\n', 'utf8');
+  writeFileSync(join(root, 'src', 'preexisting-untracked.ts'), 'export const prior = true;\n', 'utf8');
 
   const taskOptions = {
     projectRoot: root,
@@ -47,13 +84,14 @@ try {
     risk: 'low',
     scope: 'local',
     personalOverlayPath,
+    checkConfigPath,
   };
   const overflow = await autoCodeTask(taskOptions);
   assert.equal(overflow.status, 'guidance-overflow');
   assert.ok(overflow.selectableConsider.length > 3);
   assert.ok(!('sessionPath' in overflow));
 
-  const selectionPath = join(root, 'guidance-selection.json');
+  const selectionPath = join(root, '.resonant-code', 'context', 'guidance-selection.json');
   writeFileSync(selectionPath, JSON.stringify({
     considerIds: [
       'bugfix-add-supporting-validation-01',
@@ -80,34 +118,46 @@ try {
     ],
   );
   assert.ok(prepared.sessionPath);
+  assert.ok(prepared.baseline.entryCount >= 6);
+  assert.ok(prepared.checkPlan.every((item) => item.status === 'configured'));
   assert.ok(!('postCompileContracts' in prepared));
   assert.ok(!('agentLoop' in prepared));
 
-  const evaluationPath = join(root, 'evaluation.json');
-  const checks = prepared.verificationPlan.commands.map((command) => ({
-    id: command.id,
-    status: 'passed',
-    outputRef: `check:${command.id}`,
-  }));
-  const evidence = [
-    ...prepared.guidance.required.map(guidanceEvidence),
-    ...prepared.guidance.consider.map(guidanceEvidence),
+  writeFileSync(join(root, 'src', 'example.ts'), 'export const value = 2;\n', 'utf8');
+  const evaluationPath = join(root, '.resonant-code', 'context', 'evaluation.json');
+  const attestations = [
+    ...prepared.guidance.required.map(guidanceAttestation),
+    ...prepared.guidance.consider.map(guidanceAttestation),
     ...prepared.guidance.avoid.map((item) => ({
       guidanceId: item.id,
       verdict: 'satisfied',
       evidenceRefs: [{ kind: 'diff', ref: 'diff:example', file: 'src/example.ts' }],
+      explanation: `Inspected the machine-collected diff for prohibited pattern ${item.id}.`,
+      attestedBy: 'workflow-test-host',
     })),
     ...prepared.guidance.tensions.map((item) => ({
       guidanceId: item.id,
       verdict: 'satisfied',
       evidenceRefs: [{ kind: 'semantic', ref: `semantic:${item.id}`, description: item.resolution }],
+      explanation: `Applied the compiled tension resolution for ${item.id}.`,
+      attestedBy: 'workflow-test-host',
     })),
   ];
   writeFileSync(evaluationPath, JSON.stringify({
-    changes: { files: [{ path: 'src/example.ts', status: 'modified' }] },
-    checks,
-    evidence,
+    attestations,
+    exceptions: [],
   }, null, 2), 'utf8');
+
+  const forgedPath = join(root, '.resonant-code', 'context', 'forged-evaluation.json');
+  writeFileSync(forgedPath, JSON.stringify({
+    changes: { files: [] },
+    checks: [],
+    attestations: [],
+  }), 'utf8');
+  await assert.rejects(() => completeCodeTask({
+    sessionPath: prepared.sessionPath,
+    evaluationFile: forgedPath,
+  }), /collects change\/check facts/);
 
   const completed = await completeCodeTask({
     sessionPath: prepared.sessionPath,
@@ -115,6 +165,16 @@ try {
   });
   assert.equal(completed.status, 'accepted');
   assert.equal(completed.operation, 'modify');
+  assert.deepEqual(
+    completed.changes.files.map((file) => [file.path, file.status]),
+    [['src/example.ts', 'modified']],
+  );
+  assert.ok(completed.checks.every((check) =>
+    check.status === 'passed'
+    && check.provenance.source === 'resonant-code-workflow'
+    && check.outputDigest));
+  assert.equal(completed.assurance.machineFacts.changedFileCount, 1);
+  assert.equal(completed.assurance.hostAttestationCount, attestations.length);
   assert.equal(completed.summary.requiredViolated, 0);
   assert.ok(completed.feedback.recorded > 0);
 
@@ -132,13 +192,19 @@ try {
   assert.equal(strict.status, 'needs-interpretation');
   assert.deepEqual(strict.requiredFields, ['changeType', 'targets']);
 
-  const status = await getCodeStatus({ projectRoot: root, pluginRoot, personalOverlayPath });
+  const status = await getCodeStatus({
+    projectRoot: root,
+    pluginRoot,
+    personalOverlayPath,
+    checkConfigPath,
+  });
   assert.equal(status.status, 'ok');
   assert.equal(status.plugin.status, 'ok');
   assert.equal(status.readiness.status, 'needs-attention');
   assert.ok(status.readiness.nextActions.some((item) => item.code === 'local-augment-absent'));
   assert.ok(status.readiness.nextActions.some((item) => item.code === 'rccl-absent'));
   assert.equal(status.sources.personalOverlay, 'present');
+  assert.equal(status.sources.checks, 'present');
   assert.equal(status.sources.feedback, 'present');
 
   const incompletePluginRoot = join(root, 'incomplete-plugin');
@@ -150,7 +216,7 @@ try {
   rmSync(root, { recursive: true, force: true });
 }
 
-function guidanceEvidence(item) {
+function guidanceAttestation(item) {
   const refs = [{ kind: 'diff', ref: 'diff:example', file: 'src/example.ts' }];
   if (item.verification.some((requirement) => requirement.kind === 'semantic')) {
     refs.push({ kind: 'semantic', ref: `semantic:${item.id}`, description: `Verified ${item.id} against the implementation.` });
@@ -159,5 +225,11 @@ function guidanceEvidence(item) {
     guidanceId: item.id,
     verdict: 'satisfied',
     evidenceRefs: refs,
+    explanation: `Inspected ${item.id} against the machine-collected change and configured checks.`,
+    attestedBy: 'workflow-test-host',
   };
+}
+
+function git(args) {
+  execFileSync('git', ['-C', root, ...args], { stdio: 'ignore' });
 }

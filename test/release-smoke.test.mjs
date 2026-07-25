@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import { cpSync, mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -133,16 +134,30 @@ observations:
   assert.equal(decision.trace.playbookSources.personal, 'present');
   assert.ok(decision.trace.deliveredGuidanceIds.length > 0);
 
+  const changes = machineChangeSet([
+    { path: 'example.ts', status: 'modified' },
+  ]);
   const checks = decision.verificationPlan.commands.map((command) => ({
     id: command.id,
     status: 'passed',
-    outputRef: `check:${command.id}`,
+    command: ['release-smoke-check', command.id],
+    exitCode: 0,
+    outputDigest: stableHash([command.id, 'passed']),
+    outputRefs: {
+      stdout: `.resonant-code/context/${command.id}.stdout.log`,
+      stderr: `.resonant-code/context/${command.id}.stderr.log`,
+    },
+    definitionFingerprint: stableHash([command.id, 'definition']),
+    provenance: {
+      source: 'resonant-code-workflow',
+      collectionId: changes.provenance.collectionId,
+    },
   }));
   const evaluationInput = {
     decision,
-    changes: { files: [{ path: 'example.ts', status: 'modified' }] },
+    changes,
     checks,
-    evidence: evidenceForDecision(decision),
+    attestations: attestationsForDecision(decision),
     feedbackPath: join(project, '.resonant-code', 'feedback', 'verified-events.jsonl'),
   };
   const evaluation = runtime.evaluateChange(evaluationInput);
@@ -155,28 +170,78 @@ observations:
   rmSync(temporary, { recursive: true, force: true });
 }
 
-function evidenceForDecision(decision) {
+function attestationsForDecision(decision) {
   const items = [
     ...decision.guidance.required.map((item) => ({ ...item, section: 'required' })),
     ...decision.guidance.consider.map((item) => ({ ...item, section: 'consider' })),
     ...decision.guidance.avoid.map((item) => ({ ...item, section: 'avoid' })),
   ];
-  const evidence = items.map((item) => {
+  const attestations = items.map((item) => {
     const refs = [{ kind: 'diff', ref: 'diff:example.ts', file: 'example.ts' }];
     for (const requirement of item.verification) {
       if (requirement.kind === 'semantic') {
         refs.push({ kind: 'semantic', ref: `semantic:${item.id}`, description: `Inspected ${item.id} at the exported module boundary.` });
       }
-      if (requirement.kind === 'static') refs.push({ kind: 'static', ref: `static:${item.id}` });
     }
-    return { guidanceId: item.id, verdict: 'satisfied', evidenceRefs: refs };
+    return {
+      guidanceId: item.id,
+      verdict: 'satisfied',
+      evidenceRefs: refs,
+      explanation: `Inspected ${item.id} against the isolated machine-collected change.`,
+      attestedBy: 'release-smoke-host',
+    };
   });
   for (const tension of decision.guidance.tensions) {
-    evidence.push({
+    attestations.push({
       guidanceId: tension.id,
       verdict: 'satisfied',
       evidenceRefs: [{ kind: 'semantic', ref: `semantic:${tension.id}`, description: tension.resolution }],
+      explanation: `Applied the compiled resolution for ${tension.id}.`,
+      attestedBy: 'release-smoke-host',
     });
   }
-  return evidence;
+  return attestations;
+}
+
+function machineChangeSet(inputs) {
+  const files = inputs.map((input) => ({
+    ...input,
+    before: {
+      kind: 'file',
+      contentHash: stableHash([input.path, 'before']),
+      mode: '100644',
+    },
+    after: {
+      kind: 'file',
+      contentHash: stableHash([input.path, 'after']),
+      mode: '100644',
+    },
+  })).sort((left, right) => left.path.localeCompare(right.path));
+  const baselineFingerprint = stableHash(['release-baseline']);
+  const currentFingerprint = stableHash(['release-current']);
+  const changeFingerprint = stableHash([files]);
+  const collectionId = stableHash([
+    baselineFingerprint,
+    currentFingerprint,
+    changeFingerprint,
+  ]);
+  return {
+    files,
+    baselineFingerprint,
+    currentFingerprint,
+    changeFingerprint,
+    baselineHead: null,
+    currentHead: null,
+    provenance: {
+      source: 'resonant-code-workflow',
+      collectionId,
+    },
+  };
+}
+
+function stableHash(parts) {
+  return createHash('sha256')
+    .update(JSON.stringify(parts))
+    .digest('hex')
+    .slice(0, 16);
 }

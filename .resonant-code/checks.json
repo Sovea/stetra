@@ -1,0 +1,15 @@
+{
+  "version": "1.0",
+  "checks": [
+    {
+      "id": "typecheck",
+      "command": ["corepack", "pnpm", "typecheck"],
+      "timeoutMs": 120000
+    },
+    {
+      "id": "test",
+      "command": ["corepack", "pnpm", "test"],
+      "timeoutMs": 180000
+    }
+  ]
+}

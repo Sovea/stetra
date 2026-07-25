@@ -9,8 +9,15 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { homedir } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
+import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
+
+import { loadCheckPlan, runCheckPlan } from './checks.mjs';
+import {
+  captureGitWorktree,
+  compareGitWorktrees,
+  summarizeWorktreeSnapshot,
+} from './worktree.mjs';
 
 const SESSION_SCHEMA_VERSION = '1.0';
 const DEFAULT_PLUGIN_ROOT = resolve(import.meta.dirname, '../../..');
@@ -64,41 +71,92 @@ export async function prepareCodeTask(options) {
     };
   }
 
+  const checkPlan = loadCheckPlan(paths.checkConfigPath, output.verificationPlan);
+  const worktreeBaseline = captureGitWorktree(paths.projectRoot);
   const sessionPath = writeSession(paths.projectRoot, {
     schemaVersion: SESSION_SCHEMA_VERSION,
     createdAt: new Date().toISOString(),
     projectRoot: paths.projectRoot,
     pluginRoot: paths.pluginRoot,
     decision: output,
+    worktreeBaseline,
+    checkPlan,
     evaluation: null,
   });
-  return compactDecision(output, sessionPath);
+  return compactDecision(
+    output,
+    sessionPath,
+    checkPlan,
+    summarizeWorktreeSnapshot(worktreeBaseline),
+  );
 }
 
 export async function completeCodeTask(options) {
   const sessionPath = requiredPath(options.sessionPath, 'complete requires --session <path>.');
   const session = readSession(sessionPath);
+  summarizeWorktreeSnapshot(session.worktreeBaseline);
   const runtime = await loadRuntime(session.pluginRoot ?? DEFAULT_PLUGIN_ROOT);
   const artifact = options.evaluationFile
     ? readJsonFile(options.evaluationFile, 'evaluation input')
     : {
-        changes: { files: detectChangedFiles(session.projectRoot) },
-        checks: [],
-        evidence: [],
+        attestations: [],
         exceptions: [],
       };
   if (!artifact || typeof artifact !== 'object' || Array.isArray(artifact)) {
     throw new Error('Evaluation input must be a JSON object.');
   }
+  const unsupportedFields = Object.keys(artifact)
+    .filter((field) => !['attestations', 'exceptions'].includes(field));
+  if (unsupportedFields.length) {
+    throw new Error(
+      `Evaluation input field(s) ${unsupportedFields.join(', ')} are not accepted; complete collects change/check facts and accepts only attestations and exceptions.`,
+    );
+  }
+  if (artifact.attestations !== undefined && !Array.isArray(artifact.attestations)) {
+    throw new Error('Evaluation input attestations must be an array.');
+  }
+  if (artifact.exceptions !== undefined && !Array.isArray(artifact.exceptions)) {
+    throw new Error('Evaluation input exceptions must be an array.');
+  }
+  const outputDirectory = join(
+    session.projectRoot,
+    '.resonant-code',
+    'context',
+    'runtime-sessions',
+    'check-output',
+    session.decision.decisionId,
+  );
+  const collectedChecks = await runCheckPlan({
+    projectRoot: session.projectRoot,
+    plan: session.checkPlan,
+    outputDirectory,
+  });
+  const currentWorktree = captureGitWorktree(session.projectRoot);
+  const changes = compareGitWorktrees(session.worktreeBaseline, currentWorktree);
+  const checks = collectedChecks.map((check) => ({
+    ...check,
+    provenance: {
+      source: 'resonant-code-workflow',
+      collectionId: changes.provenance.collectionId,
+    },
+  }));
   const evaluation = runtime.evaluateChange({
     decision: session.decision,
-    changes: normalizeChanges(artifact.changes, session.projectRoot),
-    checks: Array.isArray(artifact.checks) ? artifact.checks : [],
-    evidence: Array.isArray(artifact.evidence) ? artifact.evidence : [],
+    changes,
+    checks,
+    attestations: Array.isArray(artifact.attestations) ? artifact.attestations : [],
     exceptions: Array.isArray(artifact.exceptions) ? artifact.exceptions : [],
     feedbackPath: join(session.projectRoot, '.resonant-code', 'feedback', 'verified-events.jsonl'),
   });
-  const nextSession = { ...session, evaluation, completedAt: new Date().toISOString() };
+  const nextSession = {
+    ...session,
+    completionFacts: {
+      currentWorktree,
+      checks,
+    },
+    evaluation,
+    completedAt: new Date().toISOString(),
+  };
   writeJsonAtomic(sessionPath, nextSession);
   return {
     status: evaluation.status,
@@ -106,7 +164,9 @@ export async function completeCodeTask(options) {
     decisionId: evaluation.decisionId,
     evaluationId: evaluation.evaluationId,
     operation: evaluation.operation,
+    changes: evaluation.changes,
     summary: evaluation.summary,
+    assurance: evaluation.assurance,
     results: evaluation.results,
     checks: evaluation.checks,
     feedback: evaluation.feedback ?? { recorded: 0, path: null },
@@ -136,6 +196,7 @@ export async function getCodeStatus(options) {
   const missingPluginFiles = requiredPluginFiles.filter((path) => !existsSync(path));
   const localAugment = existsSync(paths.localAugmentPath) ? 'present' : 'absent';
   const personalOverlay = existsSync(paths.personalOverlayPath) ? 'present' : 'absent';
+  const checks = checkConfigStatus(paths.checkConfigPath);
   const rccl = sourceFileStatus(paths.rcclPath, 'observations');
   const feedbackPath = join(paths.projectRoot, '.resonant-code', 'feedback', 'verified-events.jsonl');
   const nextActions = [];
@@ -146,6 +207,17 @@ export async function getCodeStatus(options) {
     nextActions.push({ code: 'rccl-absent', message: 'Calibrate decision-relevant repository observations when local reality should affect changes.' });
   } else if (rccl !== 'present') {
     nextActions.push({ code: 'rccl-invalid', message: 'RCCL exists but cannot be parsed as a current observation document.' });
+  }
+  if (checks === 'absent') {
+    nextActions.push({
+      code: 'checks-absent',
+      message: 'Add explicit command mappings in .resonant-code/checks.json before trusted completion.',
+    });
+  } else if (checks !== 'present') {
+    nextActions.push({
+      code: 'checks-invalid',
+      message: 'The configured check file is not valid for the current schema.',
+    });
   }
   if (missingPluginFiles.length) {
     nextActions.unshift({ code: 'plugin-incomplete', message: 'Build Runtime and RCCL before using the code workflow.' });
@@ -161,6 +233,7 @@ export async function getCodeStatus(options) {
       localAugment,
       personalOverlay,
       rccl,
+      checks,
       feedback: existsSync(feedbackPath) ? 'present' : 'absent',
     },
     plugin: {
@@ -173,6 +246,7 @@ export async function getCodeStatus(options) {
       localAugmentPath: paths.localAugmentPath,
       personalOverlayPath: paths.personalOverlayPath,
       rcclPath: paths.rcclPath,
+      checkConfigPath: paths.checkConfigPath,
       feedbackPath,
     },
   };
@@ -199,7 +273,7 @@ function buildTaskInput(options) {
   };
 }
 
-function compactDecision(decision, sessionPath) {
+function compactDecision(decision, sessionPath, checkPlan, baseline) {
   return {
     status: decision.status,
     schemaVersion: decision.schemaVersion,
@@ -208,9 +282,13 @@ function compactDecision(decision, sessionPath) {
     task: decision.task,
     guidance: decision.guidance,
     verificationPlan: decision.verificationPlan,
+    checkPlan,
+    baseline,
     diagnostics: decision.trace.diagnostics,
     sessionPath,
-    nextStep: 'Implement using required/consider/avoid/tensions, run the verification plan, then complete with evidence from the diff and checks.',
+    nextStep: checkPlan.some((item) => item.status === 'missing')
+      ? 'Configure every missing check and rerun prepare before implementation; complete will collect the baseline-to-current diff and run only configured commands.'
+      : 'Implement using required/consider/avoid/tensions, then complete with host attestations; complete will collect the baseline-to-current diff and run the configured commands.',
   };
 }
 
@@ -227,6 +305,10 @@ function resolvePaths(options) {
         ?? join(homedir(), '.resonant-code', 'playbook', 'personal-overlay.yaml'),
     ),
     rcclPath: join(projectRoot, '.resonant-code', 'rccl.yaml'),
+    checkConfigPath: resolve(
+      options.checkConfigPath
+        ?? join(projectRoot, '.resonant-code', 'checks.json'),
+    ),
   };
 }
 
@@ -255,24 +337,6 @@ function readDeliverySelection(filePath) {
   return value;
 }
 
-function normalizeChanges(value, projectRoot) {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) {
-    return { files: detectChangedFiles(projectRoot) };
-  }
-  return {
-    files: Array.isArray(value.files) ? value.files : detectChangedFiles(projectRoot),
-    ...(typeof value.patch === 'string' ? { patch: value.patch } : {}),
-  };
-}
-
-function detectChangedFiles(projectRoot) {
-  const gitPath = join(projectRoot, '.git');
-  if (!existsSync(gitPath)) return [];
-  // Keep workflow IO deterministic and bounded. Git execution is deliberately
-  // left to the host; completion accepts an explicit evaluation file.
-  return [];
-}
-
 function writeSession(projectRoot, session) {
   const directory = join(projectRoot, '.resonant-code', 'context', 'runtime-sessions', 'code');
   mkdirSync(directory, { recursive: true });
@@ -292,6 +356,30 @@ function readSession(sessionPath) {
   if (!session.decision || session.decision.schemaVersion !== SESSION_SCHEMA_VERSION) {
     throw new Error(`UNSUPPORTED_SCHEMA_VERSION: session decision must use ${SESSION_SCHEMA_VERSION}; re-run prepare.`);
   }
+  if (typeof session.decision.decisionId !== 'string'
+    || !/^[a-f0-9]{16}$/.test(session.decision.decisionId)) {
+    throw new Error('Runtime session decisionId is invalid; re-run prepare.');
+  }
+  if (!session.worktreeBaseline || !Array.isArray(session.checkPlan)) {
+    throw new Error('Runtime session predates trusted machine-fact collection; re-run prepare.');
+  }
+  if (typeof session.projectRoot !== 'string' || !session.projectRoot.trim()) {
+    throw new Error('Runtime session projectRoot is invalid; re-run prepare.');
+  }
+  const expectedDirectory = resolve(
+    session.projectRoot,
+    '.resonant-code',
+    'context',
+    'runtime-sessions',
+    'code',
+  );
+  const sessionRelativePath = relative(expectedDirectory, resolve(sessionPath));
+  if (!sessionRelativePath
+    || isAbsolute(sessionRelativePath)
+    || sessionRelativePath === '..'
+    || sessionRelativePath.startsWith(`..${process.platform === 'win32' ? '\\' : '/'}`)) {
+    throw new Error('Runtime session must remain in the project runtime-session directory.');
+  }
   return session;
 }
 
@@ -310,6 +398,16 @@ function sourceFileStatus(path, expectedArrayKey) {
     const schemaPattern = SESSION_SCHEMA_VERSION.replace('.', '\\.');
     const currentVersion = new RegExp(`^version:\\s*["']?${schemaPattern}["']?\\s*$`, 'm').test(text);
     return currentVersion && new RegExp(`^${expectedArrayKey}:`, 'm').test(text) ? 'present' : 'invalid';
+  } catch {
+    return 'invalid';
+  }
+}
+
+function checkConfigStatus(path) {
+  if (!existsSync(path)) return 'absent';
+  try {
+    loadCheckPlan(path, { commands: [] });
+    return 'present';
   } catch {
     return 'invalid';
   }
