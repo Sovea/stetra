@@ -82,7 +82,7 @@ interface InterpretationRequest {
   reasons: string[];
   requiredFields: Array<'changeType' | 'targets' | 'uncertainties'>;
 }
-type VerificationKind = 'static' | 'command' | 'diff' | 'semantic';
+type VerificationKind = 'command' | 'diff' | 'semantic';
 interface VerificationRequirement {
   kind: VerificationKind;
   description?: string;
@@ -249,22 +249,46 @@ declare function compileChange(input: CompileChangeInput): Promise<CompileChange
 //#region src/evaluation/types.d.ts
 declare const EVALUATION_SCHEMA_VERSION: "1.0";
 type ChangedFileStatus = 'added' | 'modified' | 'deleted' | 'renamed';
+interface MachineFactProvenance {
+  source: 'resonant-code-workflow';
+  collectionId: string;
+}
+interface FileFact {
+  kind: 'file' | 'symlink';
+  contentHash: string;
+  mode: string;
+}
 interface ChangedFile {
   path: string;
   status: ChangedFileStatus;
   previousPath?: string;
+  before?: FileFact;
+  after?: FileFact;
 }
 interface ChangeSet {
   files: ChangedFile[];
-  patch?: string;
+  baselineFingerprint: string;
+  currentFingerprint: string;
+  changeFingerprint: string;
+  baselineHead: string | null;
+  currentHead: string | null;
+  provenance: MachineFactProvenance;
 }
 interface CheckResult {
   id: string;
   status: 'passed' | 'failed' | 'skipped';
-  command?: string;
-  outputRef?: string;
+  command: string[];
+  exitCode: number | null;
+  outputDigest: string;
+  outputRefs?: {
+    stdout: string;
+    stderr: string;
+  };
+  definitionFingerprint?: string;
+  reason?: string;
+  provenance: MachineFactProvenance;
 }
-type EvaluationEvidenceKind = 'diff' | 'file' | 'check' | 'semantic' | 'static';
+type EvaluationEvidenceKind = 'diff' | 'file' | 'check' | 'semantic';
 interface EvaluationEvidenceRef {
   kind: EvaluationEvidenceKind;
   ref: string;
@@ -272,11 +296,12 @@ interface EvaluationEvidenceRef {
   checkId?: string;
   description?: string;
 }
-interface GuidanceEvidence {
+interface GuidanceAttestation {
   guidanceId: string;
   verdict: 'satisfied' | 'violated' | 'partial' | 'unverified';
   evidenceRefs: EvaluationEvidenceRef[];
-  explanation?: string;
+  explanation: string;
+  attestedBy: string;
 }
 interface ChangeException {
   guidanceId: string;
@@ -288,7 +313,7 @@ interface EvaluateChangeInput {
   decision: ChangeDecisionPacket;
   changes: ChangeSet;
   checks?: CheckResult[];
-  evidence?: GuidanceEvidence[];
+  attestations?: GuidanceAttestation[];
   exceptions?: ChangeException[];
   feedbackPath?: string;
 }
@@ -303,6 +328,10 @@ interface GuidanceEvaluation {
     ref: EvaluationEvidenceRef;
     reason: string;
   }>;
+  attestation?: {
+    attestedBy: string;
+    explanation: string;
+  };
   exception?: ChangeException;
 }
 interface ChangeEvaluation {
@@ -311,8 +340,17 @@ interface ChangeEvaluation {
   decisionId: string;
   status: 'accepted' | 'warning' | 'exception-required' | 'rejected';
   operation: 'none' | 'create' | 'modify' | 'delete' | 'mixed';
+  changes: ChangeSet;
   results: GuidanceEvaluation[];
   checks: CheckResult[];
+  assurance: {
+    machineFacts: {
+      changeSet: true;
+      changedFileCount: number;
+      collectedCheckCount: number;
+    };
+    hostAttestationCount: number;
+  };
   summary: {
     requiredSatisfied: number;
     requiredViolated: number;
@@ -328,4 +366,4 @@ interface ChangeEvaluation {
 //#region src/evaluation/evaluate-change.d.ts
 declare function evaluateChange(input: EvaluateChangeInput): ChangeEvaluation;
 //#endregion
-export { type ChangeDecisionPacket, type ChangeEvaluation, type ChangeException, type ChangeSet, type ChangedFile, type CheckResult, type CompileChangeInput, type CompileChangeOutput, type DecisionDiagnostic, type DecisionTension, type EffectiveGuidance, type EvaluateChangeInput, type EvaluationEvidenceRef, type GuidanceDeliverySelection, type GuidanceDetail, type GuidanceEvaluation, type GuidanceEvidence, type GuidanceItem, type GuidanceMode, type GuidanceOverflow, type InterpretationRequest, type NormalizedTaskContext, type RelationProposal, type ScopeLevel, type TaskContextInput, type RiskLevel as TaskRiskLevel, type VerificationPlan, type VerificationRequirement, compileChange, evaluateChange };
+export { type ChangeDecisionPacket, type ChangeEvaluation, type ChangeException, type ChangeSet, type ChangedFile, type CheckResult, type CompileChangeInput, type CompileChangeOutput, type DecisionDiagnostic, type DecisionTension, type EffectiveGuidance, type EvaluateChangeInput, type EvaluationEvidenceRef, type FileFact, type GuidanceAttestation, type GuidanceDeliverySelection, type GuidanceDetail, type GuidanceEvaluation, type GuidanceItem, type GuidanceMode, type GuidanceOverflow, type InterpretationRequest, type MachineFactProvenance, type NormalizedTaskContext, type RelationProposal, type ScopeLevel, type TaskContextInput, type RiskLevel as TaskRiskLevel, type VerificationPlan, type VerificationRequirement, compileChange, evaluateChange };

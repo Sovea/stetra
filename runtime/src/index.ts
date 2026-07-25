@@ -26,8 +26,10 @@ export type {
   CheckResult,
   EvaluateChangeInput,
   EvaluationEvidenceRef,
-  GuidanceEvidence,
+  FileFact,
+  GuidanceAttestation,
   GuidanceEvaluation,
+  MachineFactProvenance,
 } from './evaluation/types.ts';
 export type {
   GuidanceMode,

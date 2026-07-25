@@ -8,9 +8,12 @@ import {
   compileChange,
   evaluateChange,
   type ChangeDecisionPacket,
+  type ChangeSet,
+  type CheckResult,
 } from '../src/index.ts';
 import { serializedBytes } from '../src/decision/budget.ts';
 import { normalizeTaskContext } from '../src/task/normalize.ts';
+import { stableHash } from '../src/utils/hash.ts';
 
 const projectRoot = resolve(import.meta.dirname, '../..');
 const builtinRoot = resolve(projectRoot, 'playbook');
@@ -745,62 +748,119 @@ test('strict ambiguous tasks request only the missing interpretation fields', as
 
 test('postflight evaluation rejects a failed required command', () => {
   const decision = minimalDecision('standard');
+  const changes = machineChangeSet([
+    { path: 'runtime/src/index.ts', status: 'modified' },
+  ]);
   const evaluation = evaluateChange({
     decision,
-    changes: { files: [{ path: 'runtime/src/index.ts', status: 'modified' }] },
-    checks: [{ id: 'typecheck', status: 'failed', outputRef: 'check:typecheck' }],
-    evidence: [{
+    changes,
+    checks: [machineCheck(changes, 'typecheck', 'failed')],
+    attestations: [{
       guidanceId: 'required-1',
       verdict: 'satisfied',
       evidenceRefs: [{ kind: 'diff', ref: 'diff:index', file: 'runtime/src/index.ts' }],
+      explanation: 'The entrypoint diff preserves the narrow public surface.',
+      attestedBy: 'test-host',
     }],
   });
   assert.equal(evaluation.status, 'rejected');
   assert.equal(evaluation.operation, 'modify');
   assert.equal(evaluation.results[0].verdict, 'violated');
+  assert.equal(evaluation.assurance.machineFacts.changedFileCount, 1);
 });
 
-test('postflight evaluation accepts evidence only for delivered guidance', () => {
+test('a missing configured command cannot produce an accepted result', () => {
   const decision = minimalDecision('standard');
+  const changes = machineChangeSet([
+    { path: 'runtime/src/index.ts', status: 'modified' },
+  ]);
   const evaluation = evaluateChange({
     decision,
-    changes: { files: [{ path: 'runtime/src/index.ts', status: 'modified' }] },
-    checks: [{ id: 'typecheck', status: 'passed', outputRef: 'check:typecheck' }],
-    evidence: [{
+    changes,
+    checks: [{
+      id: 'typecheck',
+      status: 'skipped',
+      command: [],
+      exitCode: null,
+      outputDigest: stableHash(['typecheck', 'not-configured']),
+      reason: 'No explicit command is configured for verification check "typecheck".',
+      provenance: {
+        source: 'resonant-code-workflow',
+        collectionId: changes.provenance.collectionId,
+      },
+    }],
+    attestations: [{
+      guidanceId: 'required-1',
+      verdict: 'satisfied',
+      evidenceRefs: [{ kind: 'diff', ref: 'diff:index', file: 'runtime/src/index.ts' }],
+      explanation: 'The entrypoint diff looks correct, but the command fact is unavailable.',
+      attestedBy: 'test-host',
+    }],
+  });
+  assert.equal(evaluation.status, 'warning');
+  assert.equal(evaluation.results[0].verdict, 'partial');
+  assert.match(evaluation.results[0].reasons[0], /command:typecheck/);
+});
+
+test('postflight evaluation combines machine facts with attestations only for delivered guidance', () => {
+  const decision = minimalDecision('standard');
+  const changes = machineChangeSet([
+    { path: 'runtime/src/index.ts', status: 'modified' },
+  ]);
+  const evaluation = evaluateChange({
+    decision,
+    changes,
+    checks: [machineCheck(changes, 'typecheck', 'passed')],
+    attestations: [{
       guidanceId: 'required-1',
       verdict: 'satisfied',
       evidenceRefs: [
         { kind: 'diff', ref: 'diff:index', file: 'runtime/src/index.ts' },
         { kind: 'check', ref: 'check:typecheck', checkId: 'typecheck' },
       ],
+      explanation: 'The changed entrypoint still exports only the intended Runtime operations.',
+      attestedBy: 'test-host',
     }],
   });
   assert.equal(evaluation.status, 'accepted');
   assert.equal(evaluation.results[0].verdict, 'satisfied');
   assert.equal(evaluation.summary.requiredSatisfied, 1);
+  assert.equal(evaluation.assurance.hostAttestationCount, 1);
+  assert.deepEqual(evaluation.changes.files, changes.files);
 
   assert.throws(() => evaluateChange({
     decision,
-    changes: { files: [] },
-    evidence: [{ guidanceId: 'not-delivered', verdict: 'satisfied', evidenceRefs: [] }],
+    changes: machineChangeSet([]),
+    attestations: [{
+      guidanceId: 'not-delivered',
+      verdict: 'satisfied',
+      evidenceRefs: [],
+      explanation: 'This ID was not part of the decision.',
+      attestedBy: 'test-host',
+    }],
   }), /was not delivered/);
 });
 
-test('evidence-backed feedback is idempotent and unverified guidance is not recorded', () => {
+test('fact-backed attestation feedback is idempotent and unverified guidance is not recorded', () => {
   const directory = mkdtempSync(join(tmpdir(), 'resonant-feedback-'));
   const feedbackPath = join(directory, 'verified-events.jsonl');
   try {
+    const changes = machineChangeSet([
+      { path: 'runtime/src/index.ts', status: 'modified' },
+    ]);
     const input = {
       decision: minimalDecision('standard'),
-      changes: { files: [{ path: 'runtime/src/index.ts', status: 'modified' as const }] },
-      checks: [{ id: 'typecheck', status: 'passed' as const, outputRef: 'check:typecheck' }],
-      evidence: [{
+      changes,
+      checks: [machineCheck(changes, 'typecheck', 'passed')],
+      attestations: [{
         guidanceId: 'required-1',
         verdict: 'satisfied' as const,
         evidenceRefs: [
           { kind: 'diff' as const, ref: 'diff:index', file: 'runtime/src/index.ts' },
           { kind: 'check' as const, ref: 'check:typecheck', checkId: 'typecheck' },
         ],
+        explanation: 'The machine-collected diff and check support the narrow boundary.',
+        attestedBy: 'test-host',
       }],
       feedbackPath,
     };
@@ -811,7 +871,7 @@ test('evidence-backed feedback is idempotent and unverified guidance is not reco
     const unverifiedPath = join(directory, 'unverified.jsonl');
     const unverified = evaluateChange({
       decision: minimalDecision('standard'),
-      changes: { files: [] },
+      changes: machineChangeSet([]),
       feedbackPath: unverifiedPath,
     });
     assert.equal(unverified.feedback?.recorded, 0);
@@ -823,7 +883,9 @@ test('evidence-backed feedback is idempotent and unverified guidance is not reco
 test('strict mode requires an exception for unverified required guidance', () => {
   const evaluation = evaluateChange({
     decision: minimalDecision('strict'),
-    changes: { files: [{ path: 'runtime/src/index.ts', status: 'modified' }] },
+    changes: machineChangeSet([
+      { path: 'runtime/src/index.ts', status: 'modified' },
+    ]),
   });
   assert.equal(evaluation.status, 'exception-required');
   assert.equal(evaluation.results[0].verdict, 'unverified');
@@ -864,13 +926,27 @@ test('public boundaries reject malformed host artifacts without type errors', as
 
   assert.throws(() => evaluateChange({
     decision: minimalDecision('standard'),
-    changes: { files: [] },
-    evidence: [{
+    changes: machineChangeSet([]),
+    attestations: [{
       guidanceId: 'required-1',
       verdict: 'satisfied',
       evidenceRefs: {} as never,
+      explanation: 'Malformed evidence reference collection.',
+      attestedBy: 'test-host',
     }],
-  }), /evidenceRefs must be an array/);
+  }), /attestation evidenceRefs must be an array/);
+
+  assert.throws(() => evaluateChange({
+    decision: minimalDecision('standard'),
+    changes: { files: [] } as never,
+  }), /workflow machine provenance/);
+
+  const inconsistent = machineChangeSet([]);
+  inconsistent.changeFingerprint = 'host-declared-clean';
+  assert.throws(() => evaluateChange({
+    decision: minimalDecision('standard'),
+    changes: inconsistent,
+  }), /changeFingerprint does not match/);
 });
 
 function minimalDecision(mode: 'standard' | 'strict'): ChangeDecisionPacket {
@@ -963,6 +1039,73 @@ function compileRuntimeRefactor(relationProposals: Parameters<typeof compileChan
       rationale: 'These optional items cover verifiability, the public TypeScript contract, and the observed Runtime boundary.',
     },
   });
+}
+
+function machineChangeSet(
+  inputs: Array<{
+    path: string;
+    status: 'added' | 'modified' | 'deleted' | 'renamed';
+    previousPath?: string;
+  }>,
+): ChangeSet {
+  const files = inputs.map((input) => {
+    const before = {
+      kind: 'file' as const,
+      contentHash: stableHash([input.previousPath ?? input.path, 'before']),
+      mode: '100644',
+    };
+    const after = {
+      kind: 'file' as const,
+      contentHash: stableHash([input.path, 'after']),
+      mode: '100644',
+    };
+    if (input.status === 'added') return { ...input, after };
+    if (input.status === 'deleted') return { ...input, before };
+    return { ...input, before, after };
+  }).sort((left, right) => left.path.localeCompare(right.path));
+  const baselineFingerprint = stableHash(['test-baseline', files.map((item) => item.before)]);
+  const currentFingerprint = stableHash(['test-current', files.map((item) => item.after)]);
+  const changeFingerprint = stableHash([files]);
+  const collectionId = stableHash([
+    baselineFingerprint,
+    currentFingerprint,
+    changeFingerprint,
+  ]);
+  return {
+    files,
+    baselineFingerprint,
+    currentFingerprint,
+    changeFingerprint,
+    baselineHead: 'baseline-head',
+    currentHead: 'current-head',
+    provenance: {
+      source: 'resonant-code-workflow',
+      collectionId,
+    },
+  };
+}
+
+function machineCheck(
+  changes: ChangeSet,
+  id: string,
+  status: 'passed' | 'failed',
+): CheckResult {
+  return {
+    id,
+    status,
+    command: ['test-check', id],
+    exitCode: status === 'passed' ? 0 : 1,
+    outputDigest: stableHash([id, status]),
+    outputRefs: {
+      stdout: `check-output/${id}.stdout.log`,
+      stderr: `check-output/${id}.stderr.log`,
+    },
+    definitionFingerprint: stableHash([id, 'definition']),
+    provenance: {
+      source: 'resonant-code-workflow',
+      collectionId: changes.provenance.collectionId,
+    },
+  };
 }
 
 function personalDirectiveYaml(options: {

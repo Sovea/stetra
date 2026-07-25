@@ -6,13 +6,14 @@ import {
   EVALUATION_SCHEMA_VERSION,
   type ChangeEvaluation,
   type ChangeException,
+  type ChangeSet,
   type CheckResult,
   type ChangedFile,
   type EvaluateChangeInput,
   type EvaluationEvidenceRef,
   type EvaluationVerdict,
+  type GuidanceAttestation,
   type GuidanceEvaluation,
-  type GuidanceEvidence,
 } from './types.ts';
 
 export function evaluateChange(input: EvaluateChangeInput): ChangeEvaluation {
@@ -21,14 +22,23 @@ export function evaluateChange(input: EvaluateChangeInput): ChangeEvaluation {
     throw new Error(`UNSUPPORTED_SCHEMA_VERSION: evaluateChange requires decision schema ${DECISION_SCHEMA_VERSION}.`);
   }
 
-  const changes = normalizeChangedFiles(input.changes.files);
+  const changes = normalizeChangeSet(input.changes);
   const checks = uniqueChecks(input.checks ?? []);
+  const requestedCheckIds = new Set(input.decision.verificationPlan.commands.map((item) => item.id));
+  for (const check of checks) {
+    if (!requestedCheckIds.has(check.id)) {
+      throw new Error(`evaluateChange received unrequested check "${check.id}".`);
+    }
+    if (check.provenance.collectionId !== changes.provenance.collectionId) {
+      throw new Error(`evaluateChange check "${check.id}" was not collected with the supplied change set.`);
+    }
+  }
   const checkById = new Map(checks.map((check) => [check.id, check]));
-  const evidenceById = uniqueEvidence(input.evidence ?? []);
+  const attestationById = uniqueAttestations(input.attestations ?? []);
   const exceptionById = uniqueExceptions(input.exceptions ?? []);
   const deliveredIds = new Set(input.decision.trace.deliveredGuidanceIds);
 
-  for (const guidanceId of [...evidenceById.keys(), ...exceptionById.keys()]) {
+  for (const guidanceId of [...attestationById.keys(), ...exceptionById.keys()]) {
     if (!deliveredIds.has(guidanceId)) {
       throw new Error(`Evaluation references guidance "${guidanceId}" that was not delivered by decision ${input.decision.decisionId}.`);
     }
@@ -40,9 +50,9 @@ export function evaluateChange(input: EvaluateChangeInput): ChangeEvaluation {
       guidanceId: item.id,
       section: 'required',
       requirements: item.verification,
-      evidence: evidenceById.get(item.id),
+      attestation: attestationById.get(item.id),
       exception: exceptionById.get(item.id),
-      changes,
+      changes: changes.files,
       checkById,
     }));
   }
@@ -51,9 +61,9 @@ export function evaluateChange(input: EvaluateChangeInput): ChangeEvaluation {
       guidanceId: item.id,
       section: 'consider',
       requirements: item.verification,
-      evidence: evidenceById.get(item.id),
+      attestation: attestationById.get(item.id),
       exception: exceptionById.get(item.id),
-      changes,
+      changes: changes.files,
       checkById,
     }));
   }
@@ -62,9 +72,9 @@ export function evaluateChange(input: EvaluateChangeInput): ChangeEvaluation {
       guidanceId: item.id,
       section: 'avoid',
       requirements: item.verification,
-      evidence: evidenceById.get(item.id),
+      attestation: attestationById.get(item.id),
       exception: exceptionById.get(item.id),
-      changes,
+      changes: changes.files,
       checkById,
       invertSatisfiedMeaning: true,
     }));
@@ -74,9 +84,9 @@ export function evaluateChange(input: EvaluateChangeInput): ChangeEvaluation {
       guidanceId: item.id,
       section: 'tension',
       requirements: [{ kind: 'semantic', description: item.resolution }],
-      evidence: evidenceById.get(item.id),
+      attestation: attestationById.get(item.id),
       exception: exceptionById.get(item.id),
-      changes,
+      changes: changes.files,
       checkById,
     }));
   }
@@ -88,7 +98,7 @@ export function evaluateChange(input: EvaluateChangeInput): ChangeEvaluation {
     requiredUnverified: results.filter((result) => result.section === 'required' && (result.verdict === 'unverified' || result.verdict === 'partial')).length,
     warningCount: countWarnings(results),
   };
-  const operation = inferOperation(changes);
+  const operation = inferOperation(changes.files);
   const evaluation: ChangeEvaluation = {
     schemaVersion: EVALUATION_SCHEMA_VERSION,
     evaluationId: stableHash([
@@ -101,8 +111,17 @@ export function evaluateChange(input: EvaluateChangeInput): ChangeEvaluation {
     decisionId: input.decision.decisionId,
     status,
     operation,
+    changes,
     results,
     checks,
+    assurance: {
+      machineFacts: {
+        changeSet: true,
+        changedFileCount: changes.files.length,
+        collectedCheckCount: checks.length,
+      },
+      hostAttestationCount: attestationById.size,
+    },
     summary,
   };
   if (input.feedbackPath) {
@@ -138,25 +157,82 @@ function assertEvaluateShape(input: EvaluateChangeInput): void {
     throw new Error('evaluateChange decision.trace.deliveredGuidanceIds must be an array.');
   }
   if (!input.changes || !Array.isArray(input.changes.files)) throw new Error('evaluateChange changes.files must be an array.');
+  assertMachineProvenance(input.changes.provenance, 'change set');
+  for (const field of ['baselineFingerprint', 'currentFingerprint', 'changeFingerprint'] as const) {
+    if (typeof input.changes[field] !== 'string' || !input.changes[field].trim()) {
+      throw new Error(`evaluateChange changes.${field} must be non-empty.`);
+    }
+  }
+  for (const field of ['baselineHead', 'currentHead'] as const) {
+    if (input.changes[field] !== null && typeof input.changes[field] !== 'string') {
+      throw new Error(`evaluateChange changes.${field} must be a string or null.`);
+    }
+  }
   for (const file of input.changes.files) {
     if (!file || typeof file.path !== 'string' || !['added', 'modified', 'deleted', 'renamed'].includes(file.status)) {
       throw new Error('evaluateChange changed files require path and a valid status.');
     }
+    assertChangedFileShape(file);
   }
   if (input.checks !== undefined && !Array.isArray(input.checks)) throw new Error('evaluateChange checks must be an array.');
   for (const check of input.checks ?? []) {
     if (!check || typeof check.id !== 'string' || !['passed', 'failed', 'skipped'].includes(check.status)) {
       throw new Error('evaluateChange checks require id and a valid status.');
     }
-  }
-  if (input.evidence !== undefined && !Array.isArray(input.evidence)) throw new Error('evaluateChange evidence must be an array.');
-  for (const evidence of input.evidence ?? []) {
-    if (!evidence || typeof evidence.guidanceId !== 'string' || !['satisfied', 'violated', 'partial', 'unverified'].includes(evidence.verdict)) {
-      throw new Error('evaluateChange guidance evidence requires guidanceId and a valid verdict.');
+    if (!Array.isArray(check.command) || check.command.some((part) => typeof part !== 'string' || !part)) {
+      throw new Error('evaluateChange checks require a command string array.');
     }
-    if (!Array.isArray(evidence.evidenceRefs)) throw new Error('evaluateChange guidance evidenceRefs must be an array.');
-    for (const ref of evidence.evidenceRefs) {
-      if (!ref || typeof ref.ref !== 'string' || !['diff', 'file', 'check', 'semantic', 'static'].includes(ref.kind)) {
+    if (check.exitCode !== null && !Number.isInteger(check.exitCode)) {
+      throw new Error('evaluateChange check exitCode must be an integer or null.');
+    }
+    if (typeof check.outputDigest !== 'string' || !check.outputDigest.trim()) {
+      throw new Error('evaluateChange checks require outputDigest.');
+    }
+    if (check.outputRefs !== undefined) {
+      if (!isRecord(check.outputRefs)
+        || typeof check.outputRefs.stdout !== 'string'
+        || typeof check.outputRefs.stderr !== 'string') {
+        throw new Error('evaluateChange check outputRefs require stdout and stderr paths.');
+      }
+      assertSafeRelativePath(normalizePath(check.outputRefs.stdout), 'check stdout outputRef');
+      assertSafeRelativePath(normalizePath(check.outputRefs.stderr), 'check stderr outputRef');
+    }
+    if (check.status === 'skipped' && (typeof check.reason !== 'string' || !check.reason.trim())) {
+      throw new Error('evaluateChange skipped checks require a reason.');
+    }
+    if (check.status !== 'skipped') {
+      if (!check.command.length
+        || typeof check.definitionFingerprint !== 'string'
+        || !check.definitionFingerprint.trim()) {
+        throw new Error('evaluateChange executed checks require command and definitionFingerprint.');
+      }
+      if (check.status === 'passed' && check.exitCode !== 0) {
+        throw new Error('evaluateChange passed checks require exitCode 0.');
+      }
+      if (check.status === 'failed' && check.exitCode === 0) {
+        throw new Error('evaluateChange failed checks cannot have exitCode 0.');
+      }
+    }
+    assertMachineProvenance(check.provenance, `check ${check.id}`);
+  }
+  if (input.attestations !== undefined && !Array.isArray(input.attestations)) {
+    throw new Error('evaluateChange attestations must be an array.');
+  }
+  for (const attestation of input.attestations ?? []) {
+    if (!attestation || typeof attestation.guidanceId !== 'string' || !['satisfied', 'violated', 'partial', 'unverified'].includes(attestation.verdict)) {
+      throw new Error('evaluateChange guidance attestations require guidanceId and a valid verdict.');
+    }
+    if (typeof attestation.attestedBy !== 'string' || !attestation.attestedBy.trim()) {
+      throw new Error('evaluateChange guidance attestations require attestedBy.');
+    }
+    if (typeof attestation.explanation !== 'string' || !attestation.explanation.trim()) {
+      throw new Error('evaluateChange guidance attestations require a concrete explanation.');
+    }
+    if (!Array.isArray(attestation.evidenceRefs)) {
+      throw new Error('evaluateChange guidance attestation evidenceRefs must be an array.');
+    }
+    for (const ref of attestation.evidenceRefs) {
+      if (!ref || typeof ref.ref !== 'string' || !['diff', 'file', 'check', 'semantic'].includes(ref.kind)) {
         throw new Error('evaluateChange evidence refs require ref and a valid kind.');
       }
     }
@@ -180,7 +256,7 @@ interface EvaluateItemInput {
   guidanceId: string;
   section: GuidanceEvaluation['section'];
   requirements: VerificationRequirement[];
-  evidence?: GuidanceEvidence;
+  attestation?: GuidanceAttestation;
   exception?: ChangeException;
   changes: ChangedFile[];
   checkById: Map<string, CheckResult>;
@@ -191,7 +267,7 @@ function evaluateGuidanceItem(input: EvaluateItemInput): GuidanceEvaluation {
   const acceptedEvidence: EvaluationEvidenceRef[] = [];
   const rejectedEvidence: GuidanceEvaluation['rejectedEvidence'] = [];
   const reasons: string[] = [];
-  const evidence = input.evidence;
+  const attestation = input.attestation;
   const failedRequiredChecks = input.requirements
     .filter((requirement) => requirement.kind === 'command' && requirement.commandId)
     .flatMap((requirement) => {
@@ -199,7 +275,7 @@ function evaluateGuidanceItem(input: EvaluateItemInput): GuidanceEvaluation {
       return check?.status === 'failed' ? [requirement.commandId!] : [];
     });
 
-  for (const ref of evidence?.evidenceRefs ?? []) {
+  for (const ref of attestation?.evidenceRefs ?? []) {
     const reason = invalidEvidenceReason(ref, input.changes, input.checkById);
     if (reason) rejectedEvidence.push({ ref, reason });
     else acceptedEvidence.push(ref);
@@ -212,27 +288,27 @@ function evaluateGuidanceItem(input: EvaluateItemInput): GuidanceEvaluation {
       if (!acceptedEvidence.some((ref) => ref.kind === 'check' && ref.checkId === checkId)) {
         acceptedEvidence.push({
           kind: 'check',
-          ref: check.outputRef ?? `check:${checkId}`,
+          ref: check.outputRefs?.stderr ?? check.outputRefs?.stdout ?? `check:${checkId}`,
           checkId,
-          description: 'Runtime accepted the supplied failed required check as violation evidence.',
+          description: 'Runtime accepted the machine-collected failed required check as violation evidence.',
         });
       }
     }
     verdict = 'violated';
     reasons.push(`Required check(s) failed: ${failedRequiredChecks.join(', ')}.`);
-  } else if (evidence?.verdict === 'violated') {
+  } else if (attestation?.verdict === 'violated') {
     verdict = acceptedEvidence.length ? 'violated' : 'unverified';
     reasons.push(acceptedEvidence.length ? 'Evidence reports a concrete violation.' : 'Violation verdict lacked valid evidence.');
-  } else if (evidence?.verdict === 'partial') {
+  } else if (attestation?.verdict === 'partial') {
     verdict = acceptedEvidence.length ? 'partial' : 'unverified';
     reasons.push(acceptedEvidence.length ? 'Evidence only partially covers the guidance.' : 'Partial verdict lacked valid evidence.');
-  } else if (evidence?.verdict === 'satisfied') {
+  } else if (attestation?.verdict === 'satisfied') {
     const uncovered = uncoveredRequirements(input.requirements, acceptedEvidence, input.checkById);
     if (uncovered.length) {
       verdict = 'partial';
       reasons.push(`Missing evidence for: ${uncovered.join(', ')}.`);
     } else {
-      verdict = input.invertSatisfiedMeaning ? 'satisfied' : 'satisfied';
+      verdict = 'satisfied';
       reasons.push(input.invertSatisfiedMeaning
         ? 'Evidence confirms the prohibited pattern is absent.'
         : 'All declared verification requirements have valid evidence.');
@@ -257,6 +333,14 @@ function evaluateGuidanceItem(input: EvaluateItemInput): GuidanceEvaluation {
     reasons,
     acceptedEvidence,
     rejectedEvidence,
+    ...(attestation
+      ? {
+          attestation: {
+            attestedBy: attestation.attestedBy.trim(),
+            explanation: attestation.explanation.trim(),
+          },
+        }
+      : {}),
     ...(input.exception ? { exception: input.exception } : {}),
   };
 }
@@ -300,7 +384,6 @@ function uncoveredRequirements(
     }
     if (requirement.kind === 'diff' && !kinds.has('diff') && !kinds.has('file')) result.push('diff');
     if (requirement.kind === 'semantic' && !kinds.has('semantic')) result.push('semantic');
-    if (requirement.kind === 'static' && !kinds.has('static')) result.push('static');
   }
   return [...new Set(result)];
 }
@@ -332,17 +415,44 @@ function countWarnings(results: GuidanceEvaluation[]): number {
   return results.filter((result) => result.verdict === 'violated' || result.verdict === 'partial' || result.verdict === 'unverified').length;
 }
 
+function normalizeChangeSet(changes: ChangeSet): ChangeSet {
+  const files = normalizeChangedFiles(changes.files);
+  const expectedChangeFingerprint = stableHash([files]);
+  if (changes.changeFingerprint !== expectedChangeFingerprint) {
+    throw new Error('evaluateChange changeFingerprint does not match the normalized changed-file facts.');
+  }
+  const expectedCollectionId = stableHash([
+    changes.baselineFingerprint,
+    changes.currentFingerprint,
+    changes.changeFingerprint,
+  ]);
+  if (changes.provenance.collectionId !== expectedCollectionId) {
+    throw new Error('evaluateChange change-set collectionId does not match its machine facts.');
+  }
+  return {
+    ...changes,
+    files,
+    provenance: {
+      source: 'resonant-code-workflow',
+      collectionId: expectedCollectionId,
+    },
+  };
+}
+
 function normalizeChangedFiles(files: ChangedFile[]): ChangedFile[] {
   const result: ChangedFile[] = [];
   const seen = new Set<string>();
   for (const file of files) {
     const path = normalizePath(file.path);
-    if (!path || seen.has(path)) continue;
+    assertSafeRelativePath(path, 'changed file');
+    if (seen.has(path)) throw new Error(`Duplicate changed file path: ${path}.`);
     seen.add(path);
+    const previousPath = file.previousPath ? normalizePath(file.previousPath) : undefined;
+    if (previousPath) assertSafeRelativePath(previousPath, 'changed file previousPath');
     result.push({
       ...file,
       path,
-      ...(file.previousPath ? { previousPath: normalizePath(file.previousPath) } : {}),
+      ...(previousPath ? { previousPath } : {}),
     });
   }
   return result.sort((left, right) => left.path.localeCompare(right.path));
@@ -369,10 +479,14 @@ function uniqueChecks(checks: NonNullable<EvaluateChangeInput['checks']>): NonNu
   return [...result.values()].sort((left, right) => left.id.localeCompare(right.id));
 }
 
-function uniqueEvidence(evidence: GuidanceEvidence[]): Map<string, GuidanceEvidence> {
-  const result = new Map<string, GuidanceEvidence>();
-  for (const item of evidence) {
-    if (result.has(item.guidanceId)) throw new Error(`Duplicate guidance evidence id: ${item.guidanceId}.`);
+function uniqueAttestations(
+  attestations: GuidanceAttestation[],
+): Map<string, GuidanceAttestation> {
+  const result = new Map<string, GuidanceAttestation>();
+  for (const item of attestations) {
+    if (result.has(item.guidanceId)) {
+      throw new Error(`Duplicate guidance attestation id: ${item.guidanceId}.`);
+    }
     result.set(item.guidanceId, item);
   }
   return result;
@@ -385,4 +499,56 @@ function uniqueExceptions(exceptions: ChangeException[]): Map<string, ChangeExce
     result.set(item.guidanceId, { ...item, status: item.status ?? 'requested' });
   }
   return result;
+}
+
+function assertMachineProvenance(value: unknown, label: string): void {
+  if (!isRecord(value)
+    || value.source !== 'resonant-code-workflow'
+    || typeof value.collectionId !== 'string'
+    || !value.collectionId.trim()) {
+    throw new Error(`evaluateChange ${label} requires resonant-code workflow machine provenance.`);
+  }
+}
+
+function assertChangedFileShape(file: ChangedFile): void {
+  assertSafeRelativePath(normalizePath(file.path), 'changed file');
+  if (file.status === 'renamed') {
+    if (typeof file.previousPath !== 'string' || !file.previousPath.trim()) {
+      throw new Error('evaluateChange renamed files require previousPath.');
+    }
+    assertSafeRelativePath(normalizePath(file.previousPath), 'changed file previousPath');
+  } else if (file.previousPath !== undefined) {
+    throw new Error('evaluateChange previousPath is valid only for renamed files.');
+  }
+  if (file.status === 'added') {
+    if (file.before !== undefined || !file.after) {
+      throw new Error('evaluateChange added files require only an after fact.');
+    }
+  } else if (file.status === 'deleted') {
+    if (!file.before || file.after !== undefined) {
+      throw new Error('evaluateChange deleted files require only a before fact.');
+    }
+  } else if (!file.before || !file.after) {
+    throw new Error(`evaluateChange ${file.status} files require before and after facts.`);
+  }
+  for (const fact of [file.before, file.after]) {
+    if (!fact) continue;
+    if (!['file', 'symlink'].includes(fact.kind)
+      || typeof fact.contentHash !== 'string'
+      || !fact.contentHash.trim()
+      || typeof fact.mode !== 'string'
+      || !fact.mode.trim()) {
+      throw new Error('evaluateChange file facts require kind, contentHash, and mode.');
+    }
+  }
+}
+
+function assertSafeRelativePath(value: string, label: string): void {
+  if (!value
+    || value.startsWith('/')
+    || /^[A-Za-z]:\//.test(value)
+    || value.split('/').some((segment) => segment === '..' || segment === '')
+    || value.includes('\0')) {
+    throw new Error(`evaluateChange ${label} must be a safe repository-relative path.`);
+  }
 }

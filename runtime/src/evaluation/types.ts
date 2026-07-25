@@ -4,25 +4,51 @@ export const EVALUATION_SCHEMA_VERSION = '1.0' as const;
 
 export type ChangedFileStatus = 'added' | 'modified' | 'deleted' | 'renamed';
 
+export interface MachineFactProvenance {
+  source: 'resonant-code-workflow';
+  collectionId: string;
+}
+
+export interface FileFact {
+  kind: 'file' | 'symlink';
+  contentHash: string;
+  mode: string;
+}
+
 export interface ChangedFile {
   path: string;
   status: ChangedFileStatus;
   previousPath?: string;
+  before?: FileFact;
+  after?: FileFact;
 }
 
 export interface ChangeSet {
   files: ChangedFile[];
-  patch?: string;
+  baselineFingerprint: string;
+  currentFingerprint: string;
+  changeFingerprint: string;
+  baselineHead: string | null;
+  currentHead: string | null;
+  provenance: MachineFactProvenance;
 }
 
 export interface CheckResult {
   id: string;
   status: 'passed' | 'failed' | 'skipped';
-  command?: string;
-  outputRef?: string;
+  command: string[];
+  exitCode: number | null;
+  outputDigest: string;
+  outputRefs?: {
+    stdout: string;
+    stderr: string;
+  };
+  definitionFingerprint?: string;
+  reason?: string;
+  provenance: MachineFactProvenance;
 }
 
-export type EvaluationEvidenceKind = 'diff' | 'file' | 'check' | 'semantic' | 'static';
+export type EvaluationEvidenceKind = 'diff' | 'file' | 'check' | 'semantic';
 
 export interface EvaluationEvidenceRef {
   kind: EvaluationEvidenceKind;
@@ -32,11 +58,12 @@ export interface EvaluationEvidenceRef {
   description?: string;
 }
 
-export interface GuidanceEvidence {
+export interface GuidanceAttestation {
   guidanceId: string;
   verdict: 'satisfied' | 'violated' | 'partial' | 'unverified';
   evidenceRefs: EvaluationEvidenceRef[];
-  explanation?: string;
+  explanation: string;
+  attestedBy: string;
 }
 
 export interface ChangeException {
@@ -50,7 +77,7 @@ export interface EvaluateChangeInput {
   decision: ChangeDecisionPacket;
   changes: ChangeSet;
   checks?: CheckResult[];
-  evidence?: GuidanceEvidence[];
+  attestations?: GuidanceAttestation[];
   exceptions?: ChangeException[];
   feedbackPath?: string;
 }
@@ -64,6 +91,10 @@ export interface GuidanceEvaluation {
   reasons: string[];
   acceptedEvidence: EvaluationEvidenceRef[];
   rejectedEvidence: Array<{ ref: EvaluationEvidenceRef; reason: string }>;
+  attestation?: {
+    attestedBy: string;
+    explanation: string;
+  };
   exception?: ChangeException;
 }
 
@@ -73,8 +104,17 @@ export interface ChangeEvaluation {
   decisionId: string;
   status: 'accepted' | 'warning' | 'exception-required' | 'rejected';
   operation: 'none' | 'create' | 'modify' | 'delete' | 'mixed';
+  changes: ChangeSet;
   results: GuidanceEvaluation[];
   checks: CheckResult[];
+  assurance: {
+    machineFacts: {
+      changeSet: true;
+      changedFileCount: number;
+      collectedCheckCount: number;
+    };
+    hostAttestationCount: number;
+  };
   summary: {
     requiredSatisfied: number;
     requiredViolated: number;

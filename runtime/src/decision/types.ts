@@ -40,7 +40,7 @@ export interface InterpretationRequest {
   requiredFields: Array<'changeType' | 'targets' | 'uncertainties'>;
 }
 
-export type VerificationKind = 'static' | 'command' | 'diff' | 'semantic';
+export type VerificationKind = 'command' | 'diff' | 'semantic';
 
 export interface VerificationRequirement {
   kind: VerificationKind;
