@@ -22,6 +22,13 @@ export interface CompileChangeInput {
   task: TaskContextInput;
   mode?: GuidanceMode;
   relationProposals?: RelationProposal[];
+  guidanceByteLimit?: number;
+  deliverySelection?: GuidanceDeliverySelection;
+}
+
+export interface GuidanceDeliverySelection {
+  considerIds: string[];
+  rationale: string;
 }
 
 export interface InterpretationRequest {
@@ -36,33 +43,28 @@ export type VerificationKind = 'static' | 'command' | 'diff' | 'semantic';
 
 export interface VerificationRequirement {
   kind: VerificationKind;
-  description: string;
+  description?: string;
   commandId?: string;
 }
 
 export interface GuidanceSource {
   kind: 'builtin-playbook' | 'local-playbook' | 'rccl' | 'task';
   id: string;
-  path?: string;
-  evidenceRefs?: string[];
 }
 
 export interface GuidanceItem {
   id: string;
   instruction: string;
-  rationale: string;
   exceptions: string[];
   source: GuidanceSource;
-  relevance: string;
   executionMode: ExecutionMode;
   verification: VerificationRequirement[];
-  examples: DirectiveExample[];
+  example?: DirectiveExample;
 }
 
 export interface AvoidGuidanceItem {
   id: string;
   pattern: string;
-  rationale: string;
   exceptions: string[];
   source: GuidanceSource;
   verification: VerificationRequirement[];
@@ -74,8 +76,6 @@ export interface DecisionTension {
   observationId: string;
   conflict: string;
   resolution: string;
-  evidenceRefs: string[];
-  proposedBy: 'host-agent' | 'runtime-structural' | 'feedback' | 'multi-source';
 }
 
 export interface EffectiveGuidance {
@@ -92,13 +92,27 @@ export interface VerificationPlan {
 
 export interface DecisionDiagnostic {
   code:
-    | 'GUIDANCE_BUDGET_TRIMMED'
+    | 'GUIDANCE_SELECTION_APPLIED'
     | 'RELATION_PROPOSAL_REJECTED'
     | 'RELATION_PROPOSAL_DOWNGRADED'
     | 'RCCL_NOT_LOADED'
     | 'RCCL_NO_DECISION_IMPACT';
   message: string;
   ids?: string[];
+}
+
+export interface GuidanceDetail {
+  id: string;
+  section: 'required' | 'consider' | 'avoid' | 'tension';
+  rationale: string;
+  relevance: string;
+  source: {
+    kind: GuidanceSource['kind'];
+    id: string;
+    logicalPath?: string;
+    evidenceRefs?: string[];
+  };
+  examples: DirectiveExample[];
 }
 
 export interface DecisionTrace {
@@ -127,10 +141,17 @@ export interface DecisionTrace {
     confidence: number | null;
     proposedBy: string;
   }>;
+  guidanceDetails: GuidanceDetail[];
+  delivery: {
+    byteLimit: number;
+    deliveredBytes: number;
+    mandatoryBytes: number;
+    selection: GuidanceDeliverySelection | null;
+  };
   omissions: Array<{
     id: string;
     section: 'required' | 'consider' | 'avoid' | 'tensions';
-    reason: 'section-limit' | 'character-limit' | 'suppressed';
+    reason: 'host-selection' | 'suppressed';
   }>;
   diagnostics: DecisionDiagnostic[];
 }
@@ -149,7 +170,34 @@ export interface ChangeDecisionPacket {
     directives: string;
     observations: string;
     relations: string;
+    delivery: string;
   };
 }
 
-export type CompileChangeOutput = ChangeDecisionPacket | InterpretationRequest;
+export interface GuidanceOverflow {
+  schemaVersion: typeof DECISION_SCHEMA_VERSION;
+  status: 'guidance-overflow';
+  mode: GuidanceMode;
+  task: NormalizedTaskContext;
+  byteLimit: number;
+  totalBytes: number;
+  mandatoryBytes: number;
+  mandatoryGuidanceIds: string[];
+  mandatoryGuidance: {
+    required: GuidanceItem[];
+    avoid: AvoidGuidanceItem[];
+    tensions: DecisionTension[];
+  };
+  selectableConsider: Array<{
+    id: string;
+    instruction: string;
+    bytes: number;
+    source: GuidanceSource;
+  }>;
+  candidateDetails: GuidanceDetail[];
+  diagnostics: DecisionDiagnostic[];
+  selection: GuidanceDeliverySelection | null;
+  reasons: string[];
+}
+
+export type CompileChangeOutput = ChangeDecisionPacket | InterpretationRequest | GuidanceOverflow;

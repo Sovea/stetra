@@ -12,7 +12,6 @@
     "runtime/src/feedback/**/*.ts",
     "runtime/src/load/**/*.ts",
     "runtime/src/task/**/*.ts",
-    "runtime/src/select/**/*.ts",
     "runtime/src/utils/**/*.ts",
     "rccl/src/evidence.ts",
     "rccl/src/lifecycle.ts",

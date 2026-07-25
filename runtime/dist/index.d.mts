@@ -67,6 +67,12 @@ interface CompileChangeInput {
   task: TaskContextInput;
   mode?: GuidanceMode;
   relationProposals?: RelationProposal[];
+  guidanceByteLimit?: number;
+  deliverySelection?: GuidanceDeliverySelection;
+}
+interface GuidanceDeliverySelection {
+  considerIds: string[];
+  rationale: string;
 }
 interface InterpretationRequest {
   schemaVersion: typeof DECISION_SCHEMA_VERSION;
@@ -78,30 +84,25 @@ interface InterpretationRequest {
 type VerificationKind = 'static' | 'command' | 'diff' | 'semantic';
 interface VerificationRequirement {
   kind: VerificationKind;
-  description: string;
+  description?: string;
   commandId?: string;
 }
 interface GuidanceSource {
   kind: 'builtin-playbook' | 'local-playbook' | 'rccl' | 'task';
   id: string;
-  path?: string;
-  evidenceRefs?: string[];
 }
 interface GuidanceItem {
   id: string;
   instruction: string;
-  rationale: string;
   exceptions: string[];
   source: GuidanceSource;
-  relevance: string;
   executionMode: ExecutionMode;
   verification: VerificationRequirement[];
-  examples: DirectiveExample[];
+  example?: DirectiveExample;
 }
 interface AvoidGuidanceItem {
   id: string;
   pattern: string;
-  rationale: string;
   exceptions: string[];
   source: GuidanceSource;
   verification: VerificationRequirement[];
@@ -112,8 +113,6 @@ interface DecisionTension {
   observationId: string;
   conflict: string;
   resolution: string;
-  evidenceRefs: string[];
-  proposedBy: 'host-agent' | 'runtime-structural' | 'feedback' | 'multi-source';
 }
 interface EffectiveGuidance {
   required: GuidanceItem[];
@@ -132,9 +131,22 @@ interface VerificationPlan {
   }>;
 }
 interface DecisionDiagnostic {
-  code: 'GUIDANCE_BUDGET_TRIMMED' | 'RELATION_PROPOSAL_REJECTED' | 'RELATION_PROPOSAL_DOWNGRADED' | 'RCCL_NOT_LOADED' | 'RCCL_NO_DECISION_IMPACT';
+  code: 'GUIDANCE_SELECTION_APPLIED' | 'RELATION_PROPOSAL_REJECTED' | 'RELATION_PROPOSAL_DOWNGRADED' | 'RCCL_NOT_LOADED' | 'RCCL_NO_DECISION_IMPACT';
   message: string;
   ids?: string[];
+}
+interface GuidanceDetail {
+  id: string;
+  section: 'required' | 'consider' | 'avoid' | 'tension';
+  rationale: string;
+  relevance: string;
+  source: {
+    kind: GuidanceSource['kind'];
+    id: string;
+    logicalPath?: string;
+    evidenceRefs?: string[];
+  };
+  examples: DirectiveExample[];
 }
 interface DecisionTrace {
   selectedLayers: string[];
@@ -162,10 +174,17 @@ interface DecisionTrace {
     confidence: number | null;
     proposedBy: string;
   }>;
+  guidanceDetails: GuidanceDetail[];
+  delivery: {
+    byteLimit: number;
+    deliveredBytes: number;
+    mandatoryBytes: number;
+    selection: GuidanceDeliverySelection | null;
+  };
   omissions: Array<{
     id: string;
     section: 'required' | 'consider' | 'avoid' | 'tensions';
-    reason: 'section-limit' | 'character-limit' | 'suppressed';
+    reason: 'host-selection' | 'suppressed';
   }>;
   diagnostics: DecisionDiagnostic[];
 }
@@ -183,9 +202,35 @@ interface ChangeDecisionPacket {
     directives: string;
     observations: string;
     relations: string;
+    delivery: string;
   };
 }
-type CompileChangeOutput = ChangeDecisionPacket | InterpretationRequest;
+interface GuidanceOverflow {
+  schemaVersion: typeof DECISION_SCHEMA_VERSION;
+  status: 'guidance-overflow';
+  mode: GuidanceMode;
+  task: NormalizedTaskContext;
+  byteLimit: number;
+  totalBytes: number;
+  mandatoryBytes: number;
+  mandatoryGuidanceIds: string[];
+  mandatoryGuidance: {
+    required: GuidanceItem[];
+    avoid: AvoidGuidanceItem[];
+    tensions: DecisionTension[];
+  };
+  selectableConsider: Array<{
+    id: string;
+    instruction: string;
+    bytes: number;
+    source: GuidanceSource;
+  }>;
+  candidateDetails: GuidanceDetail[];
+  diagnostics: DecisionDiagnostic[];
+  selection: GuidanceDeliverySelection | null;
+  reasons: string[];
+}
+type CompileChangeOutput = ChangeDecisionPacket | InterpretationRequest | GuidanceOverflow;
 //#endregion
 //#region src/decision/compile-change.d.ts
 declare function compileChange(input: CompileChangeInput): Promise<CompileChangeOutput>;
@@ -272,4 +317,4 @@ interface ChangeEvaluation {
 //#region src/evaluation/evaluate-change.d.ts
 declare function evaluateChange(input: EvaluateChangeInput): ChangeEvaluation;
 //#endregion
-export { type ChangeDecisionPacket, type ChangeEvaluation, type ChangeException, type ChangeSet, type ChangedFile, type CheckResult, type CompileChangeInput, type CompileChangeOutput, type DecisionDiagnostic, type DecisionTension, type EffectiveGuidance, type EvaluateChangeInput, type EvaluationEvidenceRef, type GuidanceEvaluation, type GuidanceEvidence, type GuidanceItem, type GuidanceMode, type InterpretationRequest, type NormalizedTaskContext, type RelationProposal, type ScopeLevel, type TaskContextInput, type RiskLevel as TaskRiskLevel, type VerificationPlan, type VerificationRequirement, compileChange, evaluateChange };
+export { type ChangeDecisionPacket, type ChangeEvaluation, type ChangeException, type ChangeSet, type ChangedFile, type CheckResult, type CompileChangeInput, type CompileChangeOutput, type DecisionDiagnostic, type DecisionTension, type EffectiveGuidance, type EvaluateChangeInput, type EvaluationEvidenceRef, type GuidanceDeliverySelection, type GuidanceDetail, type GuidanceEvaluation, type GuidanceEvidence, type GuidanceItem, type GuidanceMode, type GuidanceOverflow, type InterpretationRequest, type NormalizedTaskContext, type RelationProposal, type ScopeLevel, type TaskContextInput, type RiskLevel as TaskRiskLevel, type VerificationPlan, type VerificationRequirement, compileChange, evaluateChange };

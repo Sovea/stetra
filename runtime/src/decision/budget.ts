@@ -1,75 +1,132 @@
 import type {
   DecisionTrace,
   EffectiveGuidance,
+  GuidanceDeliverySelection,
+  GuidanceOverflow,
 } from './types.ts';
 
-export const GUIDANCE_BUDGET = {
-  required: 3,
-  consider: 3,
-  avoid: 2,
-  tensions: 2,
-  examplesPerItem: 1,
-  serializedCharacters: 6_000,
-} as const;
+export const DEFAULT_GUIDANCE_BYTE_LIMIT = 6_000;
 
-export function applyGuidanceBudget(input: EffectiveGuidance): {
-  guidance: EffectiveGuidance;
-  omissions: DecisionTrace['omissions'];
-} {
-  const omissions: DecisionTrace['omissions'] = [];
+export type GuidanceDeliveryResult =
+  | {
+      status: 'ready';
+      guidance: EffectiveGuidance;
+      omissions: DecisionTrace['omissions'];
+      deliveredBytes: number;
+      mandatoryBytes: number;
+      selection: GuidanceDeliverySelection | null;
+    }
+  | {
+      status: 'overflow';
+      overflow: Omit<
+        GuidanceOverflow,
+        'schemaVersion' | 'mode' | 'task' | 'status' | 'candidateDetails' | 'diagnostics'
+      >;
+    };
+
+export function applyGuidanceDelivery(
+  input: EffectiveGuidance,
+  byteLimit = DEFAULT_GUIDANCE_BYTE_LIMIT,
+  selection?: GuidanceDeliverySelection,
+): GuidanceDeliveryResult {
+  assertByteLimit(byteLimit);
+  const normalizedSelection = normalizeSelection(selection, input);
+  const selectedIds = normalizedSelection
+    ? new Set(normalizedSelection.considerIds)
+    : null;
+  const consider = selectedIds
+    ? input.consider.filter((item) => selectedIds.has(item.id))
+    : input.consider;
   const guidance: EffectiveGuidance = {
-    required: limitItems(input.required, 'required', GUIDANCE_BUDGET.required, omissions)
-      .map((item) => ({ ...item, examples: item.examples.slice(0, GUIDANCE_BUDGET.examplesPerItem) })),
-    consider: limitItems(input.consider, 'consider', GUIDANCE_BUDGET.consider, omissions)
-      .map((item) => ({ ...item, examples: item.examples.slice(0, GUIDANCE_BUDGET.examplesPerItem) })),
-    avoid: limitItems(input.avoid, 'avoid', GUIDANCE_BUDGET.avoid, omissions),
-    tensions: limitItems(input.tensions, 'tensions', GUIDANCE_BUDGET.tensions, omissions),
+    required: input.required,
+    consider,
+    avoid: input.avoid,
+    tensions: input.tensions,
   };
+  const omissions: DecisionTrace['omissions'] = selectedIds
+    ? input.consider
+      .filter((item) => !selectedIds.has(item.id))
+      .map((item) => ({ id: item.id, section: 'consider', reason: 'host-selection' as const }))
+    : [];
+  const mandatory: EffectiveGuidance = {
+    required: input.required,
+    consider: [],
+    avoid: input.avoid,
+    tensions: input.tensions,
+  };
+  const deliveredBytes = serializedBytes(guidance);
+  const mandatoryBytes = serializedBytes(mandatory);
+  if (deliveredBytes <= byteLimit) {
+    return {
+      status: 'ready',
+      guidance,
+      omissions,
+      deliveredBytes,
+      mandatoryBytes,
+      selection: normalizedSelection,
+    };
+  }
 
-  trimToCharacterLimit(guidance, omissions);
-  return { guidance, omissions };
+  return {
+    status: 'overflow',
+    overflow: {
+      byteLimit,
+      totalBytes: deliveredBytes,
+      mandatoryBytes,
+      mandatoryGuidanceIds: [
+        ...input.required.map((item) => item.id),
+        ...input.avoid.map((item) => item.id),
+        ...input.tensions.map((item) => item.id),
+      ],
+      mandatoryGuidance: {
+        required: input.required,
+        avoid: input.avoid,
+        tensions: input.tensions,
+      },
+      selectableConsider: input.consider.map((item) => ({
+        id: item.id,
+        instruction: item.instruction,
+        bytes: serializedBytes(item),
+        source: item.source,
+      })),
+      selection: normalizedSelection,
+      reasons: mandatoryBytes > byteLimit
+        ? ['Mandatory required, avoid, and tension guidance exceeds the configured byte limit; policy or task scope must be resolved explicitly.']
+        : ['Optional consider guidance exceeds the configured byte limit; submit an explicit delivery selection with a rationale.'],
+    },
+  };
 }
 
-function limitItems<T extends { id: string }>(
-  items: T[],
-  section: DecisionTrace['omissions'][number]['section'],
-  limit: number,
-  omissions: DecisionTrace['omissions'],
-): T[] {
-  for (const item of items.slice(limit)) omissions.push({ id: item.id, section, reason: 'section-limit' });
-  return items.slice(0, limit);
+export function serializedBytes(value: unknown): number {
+  return Buffer.byteLength(JSON.stringify(value), 'utf8');
 }
 
-function trimToCharacterLimit(
+function assertByteLimit(value: number): void {
+  if (!Number.isInteger(value) || value <= 0) {
+    throw new Error('compileChange guidanceByteLimit must be a positive integer number of UTF-8 bytes.');
+  }
+}
+
+function normalizeSelection(
+  selection: GuidanceDeliverySelection | undefined,
   guidance: EffectiveGuidance,
-  omissions: DecisionTrace['omissions'],
-): void {
-  const exampleCandidates = [...guidance.consider, ...guidance.required].reverse();
-  for (const item of exampleCandidates) {
-    if (JSON.stringify(guidance).length <= GUIDANCE_BUDGET.serializedCharacters) break;
-    item.examples = [];
+): GuidanceDeliverySelection | null {
+  if (selection === undefined) return null;
+  if (!selection || typeof selection !== 'object' || Array.isArray(selection)) {
+    throw new Error('compileChange deliverySelection must be an object.');
   }
-  while (JSON.stringify(guidance).length > GUIDANCE_BUDGET.serializedCharacters) {
-    if (guidance.consider.length) {
-      const item = guidance.consider.pop()!;
-      omissions.push({ id: item.id, section: 'consider', reason: 'character-limit' });
-      continue;
-    }
-    if (guidance.tensions.length) {
-      const item = guidance.tensions.pop()!;
-      omissions.push({ id: item.id, section: 'tensions', reason: 'character-limit' });
-      continue;
-    }
-    if (guidance.required.length) {
-      const item = guidance.required.pop()!;
-      omissions.push({ id: item.id, section: 'required', reason: 'character-limit' });
-      continue;
-    }
-    if (guidance.avoid.length) {
-      const item = guidance.avoid.pop()!;
-      omissions.push({ id: item.id, section: 'avoid', reason: 'character-limit' });
-      continue;
-    }
-    break;
+  if (!Array.isArray(selection.considerIds)
+    || selection.considerIds.some((id) => typeof id !== 'string' || !id.trim())) {
+    throw new Error('compileChange deliverySelection.considerIds must be a string array.');
   }
+  if (typeof selection.rationale !== 'string' || !selection.rationale.trim()) {
+    throw new Error('compileChange deliverySelection.rationale must be non-empty.');
+  }
+  const considerIds = [...new Set(selection.considerIds.map((id) => id.trim()))];
+  const active = new Set(guidance.consider.map((item) => item.id));
+  const unknown = considerIds.filter((id) => !active.has(id));
+  if (unknown.length) {
+    throw new Error(`compileChange deliverySelection references inactive consider guidance: ${unknown.join(', ')}.`);
+  }
+  return { considerIds, rationale: selection.rationale.trim() };
 }

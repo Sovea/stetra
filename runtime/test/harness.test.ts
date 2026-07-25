@@ -9,6 +9,7 @@ import {
   evaluateChange,
   type ChangeDecisionPacket,
 } from '../src/index.ts';
+import { serializedBytes } from '../src/decision/budget.ts';
 import { normalizeTaskContext } from '../src/task/normalize.ts';
 
 const projectRoot = resolve(import.meta.dirname, '../..');
@@ -27,8 +28,8 @@ test('canonical task context treats bugfix as change type and infers mechanical 
   assert.equal('operation' in task, false);
 });
 
-test('standard compile activates task layer and emits bounded behavioral guidance', async () => {
-  const output = await compileChange({
+test('standard compile reports overflow, then applies an explicit optional-guidance selection', async () => {
+  const input = {
     projectRoot,
     builtinRoot,
     localAugmentPath: resolve(projectRoot, '.resonant-code/playbook/local-augment.yaml'),
@@ -40,19 +41,39 @@ test('standard compile activates task layer and emits bounded behavioral guidanc
       risk: 'low',
       scope: 'local',
     },
+  } as const;
+  const overflow = await compileChange(input);
+  assert.equal(overflow.status, 'guidance-overflow');
+  if (overflow.status !== 'guidance-overflow') return;
+  assert.ok(overflow.totalBytes > overflow.byteLimit);
+  assert.ok(overflow.mandatoryBytes <= overflow.byteLimit);
+  assert.ok(overflow.mandatoryGuidanceIds.includes('local-runtime-compile-evaluate-boundary-01'));
+  assert.ok(overflow.selectableConsider.length > 3);
+
+  const selectedConsiderIds = [
+    'bugfix-add-supporting-validation-01',
+    'ts-honest-and-precise-types-01',
+    'rccl:obs-runtime-public-harness-boundary',
+  ];
+  const output = await compileChange({
+    ...input,
+    deliverySelection: {
+      considerIds: selectedConsiderIds,
+      rationale: 'These optional items directly address the defect, its TypeScript boundary, and the repository API boundary.',
+    },
   });
-  assert.notEqual(output.status, 'needs-interpretation');
-  if (output.status === 'needs-interpretation') return;
   assert.equal(output.status, 'compiled');
+  if (output.status !== 'compiled') return;
   assert.ok(output.trace.selectedLayers.includes('builtin/task-types/bugfix'));
   assert.ok(output.guidance.required.some((item) => item.id === 'local-runtime-compile-evaluate-boundary-01'));
-  assert.ok(output.guidance.required.length <= 3);
-  assert.ok(output.guidance.consider.length <= 3);
-  assert.ok(output.guidance.avoid.length <= 2);
-  assert.ok(output.guidance.tensions.length <= 2);
+  assert.deepEqual(output.guidance.consider.map((item) => item.id), selectedConsiderIds);
   assert.ok(output.guidance.required.every((item) => item.executionMode === 'enforce' || item.executionMode === 'deviation-noted'));
   assert.ok(output.guidance.consider.every((item) => item.executionMode === 'ambient'));
-  assert.ok(JSON.stringify(output.guidance).length <= 6_000);
+  assert.ok(serializedBytes(output.guidance) <= 6_000);
+  assert.equal(output.trace.delivery.deliveredBytes, serializedBytes(output.guidance));
+  assert.equal(output.trace.delivery.selection?.rationale, 'These optional items directly address the defect, its TypeScript boundary, and the repository API boundary.');
+  assert.ok(output.trace.omissions.every((item) => item.reason === 'host-selection'));
+  assert.ok(output.trace.guidanceDetails.length > output.trace.deliveredGuidanceIds.length);
   assert.deepEqual(
     new Set(output.trace.deliveredGuidanceIds),
     new Set([
@@ -64,12 +85,120 @@ test('standard compile activates task layer and emits bounded behavioral guidanc
   );
 });
 
+test('a larger total byte ceiling delivers every eligible item without per-section caps', async () => {
+  const output = await compileChange({
+    projectRoot,
+    builtinRoot,
+    localAugmentPath: resolve(projectRoot, '.resonant-code/playbook/local-augment.yaml'),
+    rcclPath: resolve(projectRoot, '.resonant-code/rccl.yaml'),
+    guidanceByteLimit: 100_000,
+    task: {
+      description: 'Fix a cache inspection bug',
+      changeType: 'bugfix',
+      targets: ['runtime/src/decision/compile-change.ts'],
+      risk: 'low',
+      scope: 'local',
+    },
+  });
+  assert.equal(output.status, 'compiled');
+  if (output.status !== 'compiled') return;
+  assert.ok(output.guidance.consider.length > 3);
+  assert.deepEqual(output.trace.omissions, []);
+  assert.equal(output.trace.delivery.deliveredBytes, serializedBytes(output.guidance));
+});
+
+test('mandatory guidance cannot be selected away when the byte ceiling is too small', async () => {
+  const output = await compileChange({
+    projectRoot,
+    builtinRoot,
+    localAugmentPath: resolve(projectRoot, '.resonant-code/playbook/local-augment.yaml'),
+    guidanceByteLimit: 1,
+    deliverySelection: {
+      considerIds: [],
+      rationale: 'Exclude every optional item to isolate the mandatory packet.',
+    },
+    task: {
+      description: 'Refactor the Runtime public boundary',
+      changeType: 'refactor',
+      targets: ['runtime/src/index.ts'],
+      risk: 'medium',
+      scope: 'module',
+    },
+  });
+  assert.equal(output.status, 'guidance-overflow');
+  if (output.status !== 'guidance-overflow') return;
+  assert.ok(output.mandatoryBytes > output.byteLimit);
+  assert.ok(output.mandatoryGuidanceIds.includes('refactor-preserve-intended-behavior-01'));
+  assert.match(output.reasons[0], /Mandatory/);
+});
+
+test('guidance size uses UTF-8 bytes rather than JavaScript character count', () => {
+  const value = { instruction: '保持接口清晰' };
+  assert.equal(serializedBytes(value), Buffer.byteLength(JSON.stringify(value), 'utf8'));
+  assert.ok(serializedBytes(value) > JSON.stringify(value).length);
+});
+
+test('directive delivery order follows explicit authority groups, not weight scores', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'resonant-runtime-order-'));
+  const localPath = join(directory, 'local-augment.yaml');
+  try {
+    writeFileSync(localPath, [
+      'version: "1.0"',
+      'meta:',
+      '  name: explicit-authority-order',
+      '  extends: [builtin/core]',
+      'overrides:',
+      '  - supersedes: core-abstraction-follows-real-pressure-01',
+      '    weight: low',
+      '  - supersedes: core-clarity-and-legibility-01',
+      '    weight: critical',
+      'augments: []',
+      'suppresses: []',
+      'additions: []',
+      '',
+    ].join('\n'), 'utf8');
+    const output = await compileChange({
+      projectRoot,
+      builtinRoot,
+      localAugmentPath: localPath,
+      guidanceByteLimit: 100_000,
+      task: {
+        description: 'Clarify the README',
+        changeType: 'docs',
+        targets: ['README.md'],
+        risk: 'low',
+        scope: 'local',
+      },
+    });
+    assert.equal(output.status, 'compiled');
+    if (output.status !== 'compiled') return;
+    assert.deepEqual(
+      output.guidance.consider
+        .filter((item) => [
+          'core-abstraction-follows-real-pressure-01',
+          'core-clarity-and-legibility-01',
+        ].includes(item.id))
+        .map((item) => item.id),
+      [
+        'core-abstraction-follows-real-pressure-01',
+        'core-clarity-and-legibility-01',
+      ],
+    );
+    assert.ok(output.guidance.consider
+      .filter((item) => item.id.startsWith('core-'))
+      .slice(0, 2)
+      .every((item) => item.source.kind === 'local-playbook'));
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
 test('decision identity is stable across evidence re-verification timestamps', async () => {
   const first = await compileRuntimeRefactor();
   const second = await compileRuntimeRefactor();
-  assert.notEqual(first.status, 'needs-interpretation');
-  assert.notEqual(second.status, 'needs-interpretation');
-  if (first.status === 'needs-interpretation' || second.status === 'needs-interpretation') return;
+  assert.equal(first.status, 'compiled');
+  assert.equal(second.status, 'compiled');
+  if (first.status !== 'compiled' || second.status !== 'compiled') return;
   assert.equal(first.decisionId, second.decisionId);
   assert.deepEqual(first.fingerprints, second.fingerprints);
   assert.deepEqual(first.guidance, second.guidance);
@@ -155,6 +284,10 @@ test('an unreviewed RCCL anti-pattern remains ambient and cannot become a hard a
       projectRoot,
       builtinRoot,
       rcclPath,
+      deliverySelection: {
+        considerIds: ['rccl:obs-generated-antipattern'],
+        rationale: 'The test must inspect the generated RCCL item while excluding unrelated optional guidance.',
+      },
       task: {
         description: 'Refactor the Runtime public boundary',
         changeType: 'refactor',
@@ -163,8 +296,8 @@ test('an unreviewed RCCL anti-pattern remains ambient and cannot become a hard a
         scope: 'module',
       },
     });
-    assert.notEqual(output.status, 'needs-interpretation');
-    if (output.status === 'needs-interpretation') return;
+    assert.equal(output.status, 'compiled');
+    if (output.status !== 'compiled') return;
     assert.ok(output.guidance.consider.some((item) => item.id === 'rccl:obs-generated-antipattern'));
     assert.ok(!output.guidance.avoid.some((item) => item.id === 'rccl:obs-generated-antipattern'));
   } finally {
@@ -174,8 +307,8 @@ test('an unreviewed RCCL anti-pattern remains ambient and cannot become a hard a
 
 test('current RCCL context is ambient until an evidence-backed semantic relation changes execution', async () => {
   const base = await compileRuntimeRefactor();
-  assert.notEqual(base.status, 'needs-interpretation');
-  if (base.status === 'needs-interpretation') return;
+  assert.equal(base.status, 'compiled');
+  if (base.status !== 'compiled') return;
   assert.deepEqual(base.trace.relevantObservationIds, ['obs-runtime-public-harness-boundary']);
   assert.ok(base.guidance.consider.some((item) => item.id === 'rccl:obs-runtime-public-harness-boundary'));
   assert.equal(base.guidance.tensions.length, 0);
@@ -189,8 +322,8 @@ test('current RCCL context is ambient until an evidence-backed semantic relation
     evidenceRefs: ['runtime/src/index.ts:1-17'],
     confidence: 0.9,
   }]);
-  assert.notEqual(related.status, 'needs-interpretation');
-  if (related.status === 'needs-interpretation') return;
+  assert.equal(related.status, 'compiled');
+  if (related.status !== 'compiled') return;
   const directive = related.guidance.required.find((item) => item.id === 'local-runtime-compile-evaluate-boundary-01');
   assert.equal(directive?.executionMode, 'deviation-noted');
   assert.equal(related.guidance.tensions.length, 1);
@@ -206,8 +339,9 @@ test('invalid and irrelevant relation proposals cannot affect execution', async 
     evidenceRefs: ['README.md:1-1'],
     confidence: 0.9,
   }]);
+  assert.notEqual(invalid.status, 'guidance-overflow');
   assert.notEqual(invalid.status, 'needs-interpretation');
-  if (invalid.status === 'needs-interpretation') return;
+  if (invalid.status === 'guidance-overflow' || invalid.status === 'needs-interpretation') return;
   assert.equal(invalid.status, 'needs-attention');
   assert.equal(invalid.guidance.tensions.length, 0);
   assert.ok(invalid.trace.diagnostics.some((item) => item.code === 'RELATION_PROPOSAL_REJECTED'));
@@ -220,8 +354,9 @@ test('invalid and irrelevant relation proposals cannot affect execution', async 
     evidenceRefs: ['runtime/src/index.ts:1-17'],
     confidence: 0.9,
   }]);
+  assert.notEqual(immune.status, 'guidance-overflow');
   assert.notEqual(immune.status, 'needs-interpretation');
-  if (immune.status === 'needs-interpretation') return;
+  if (immune.status === 'guidance-overflow' || immune.status === 'needs-interpretation') return;
   assert.equal(immune.status, 'needs-attention');
   assert.ok(immune.trace.diagnostics.some((item) => item.message.includes('RCCL-immune')));
 
@@ -277,6 +412,10 @@ test('evidence drift downgrades a valid semantic relation to ambient context', a
       builtinRoot,
       localAugmentPath: resolve(projectRoot, '.resonant-code/playbook/local-augment.yaml'),
       rcclPath,
+      deliverySelection: {
+        considerIds: ['rccl:obs-stale-runtime-boundary'],
+        rationale: 'Deliver the stale observation so the test can verify that it remains ambient.',
+      },
       task: {
         description: 'Refactor the Runtime public boundary',
         changeType: 'refactor',
@@ -293,8 +432,8 @@ test('evidence drift downgrades a valid semantic relation to ambient context', a
         confidence: 0.9,
       }],
     });
-    assert.notEqual(output.status, 'needs-interpretation');
-    if (output.status === 'needs-interpretation') return;
+    assert.equal(output.status, 'compiled');
+    if (output.status !== 'compiled') return;
     assert.equal(output.trace.observationEvidence[0].status, 'stale');
     assert.equal(output.trace.relationDecisions[0].status, 'downgraded');
     assert.equal(output.guidance.tensions.length, 0);
@@ -320,6 +459,10 @@ test('current evidence does not turn an unreviewed low-confidence observation in
       builtinRoot,
       localAugmentPath: resolve(projectRoot, '.resonant-code/playbook/local-augment.yaml'),
       rcclPath,
+      deliverySelection: {
+        considerIds: ['rccl:obs-runtime-public-harness-boundary'],
+        rationale: 'Deliver the unreviewed observation so its assurance gates remain inspectable.',
+      },
       task: {
         description: 'Refactor the Runtime public boundary',
         changeType: 'refactor',
@@ -336,8 +479,8 @@ test('current evidence does not turn an unreviewed low-confidence observation in
         confidence: 0.9,
       }],
     });
-    assert.notEqual(output.status, 'needs-interpretation');
-    if (output.status === 'needs-interpretation') return;
+    assert.equal(output.status, 'compiled');
+    if (output.status !== 'compiled') return;
     assert.equal(output.trace.observationEvidence[0].status, 'current');
     assert.equal(output.trace.relationDecisions[0].status, 'downgraded');
     assert.equal(output.guidance.tensions.length, 0);
@@ -452,6 +595,31 @@ test('public boundaries reject malformed host artifacts without type errors', as
     relationProposals: 'not-an-array' as never,
   }), /relationProposals must be an array/);
 
+  await assert.rejects(() => compileChange({
+    projectRoot,
+    builtinRoot,
+    task: {
+      description: 'Fix one bug',
+      changeType: 'bugfix',
+      targets: ['runtime/src/index.ts'],
+    },
+    deliverySelection: {
+      considerIds: ['not-active'],
+      rationale: 'Exercise delivery selection validation.',
+    },
+  }), /inactive consider guidance/);
+
+  await assert.rejects(() => compileChange({
+    projectRoot,
+    builtinRoot,
+    guidanceByteLimit: 0,
+    task: {
+      description: 'Fix one bug',
+      changeType: 'bugfix',
+      targets: ['runtime/src/index.ts'],
+    },
+  }), /positive integer/);
+
   assert.throws(() => evaluateChange({
     decision: minimalDecision('standard'),
     changes: { files: [] },
@@ -480,16 +648,13 @@ function minimalDecision(mode: 'standard' | 'strict'): ChangeDecisionPacket {
       required: [{
         id: 'required-1',
         instruction: 'Keep the public entrypoint narrow.',
-        rationale: 'Callers should depend on a stable boundary.',
         exceptions: [],
         source: { kind: 'builtin-playbook', id: 'test' },
-        relevance: 'The entrypoint is being changed.',
         executionMode: 'enforce',
         verification: [
           { kind: 'diff', description: 'Inspect the entrypoint diff.' },
           { kind: 'command', commandId: 'typecheck', description: 'Run typecheck.' },
         ],
-        examples: [],
       }],
       consider: [],
       avoid: [],
@@ -504,10 +669,30 @@ function minimalDecision(mode: 'standard' | 'strict'): ChangeDecisionPacket {
       relevantObservationIds: [],
       observationEvidence: [],
       relationDecisions: [],
+      guidanceDetails: [{
+        id: 'required-1',
+        section: 'required',
+        rationale: 'Callers should depend on a stable boundary.',
+        relevance: 'The entrypoint is being changed.',
+        source: { kind: 'builtin-playbook', id: 'test', logicalPath: 'test' },
+        examples: [],
+      }],
+      delivery: {
+        byteLimit: 6_000,
+        deliveredBytes: 1,
+        mandatoryBytes: 1,
+        selection: null,
+      },
       omissions: [],
       diagnostics: [],
     },
-    fingerprints: { task: 'task', directives: 'directives', observations: 'observations', relations: 'relations' },
+    fingerprints: {
+      task: 'task',
+      directives: 'directives',
+      observations: 'observations',
+      relations: 'relations',
+      delivery: 'delivery',
+    },
   };
 }
 
@@ -525,5 +710,13 @@ function compileRuntimeRefactor(relationProposals: Parameters<typeof compileChan
       scope: 'module',
     },
     relationProposals,
+    deliverySelection: {
+      considerIds: [
+        'refactor-keep-verifiable-01',
+        'ts-explicit-public-interfaces-01',
+        'rccl:obs-runtime-public-harness-boundary',
+      ],
+      rationale: 'These optional items cover verifiability, the public TypeScript contract, and the observed Runtime boundary.',
+    },
   });
 }

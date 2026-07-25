@@ -9,7 +9,6 @@ import {
   validateLocalReferences,
 } from '../load/load-playbook.ts';
 import { loadRccl } from '../load/load-rccl.ts';
-import { getDirectiveLayerRank } from '../select/activation-plan.ts';
 import { normalizeTaskContext, taskNeedsInterpretation } from '../task/normalize.ts';
 import type { NormalizedTaskContext } from '../task/types.ts';
 import type {
@@ -20,7 +19,10 @@ import type {
 } from '../types.ts';
 import { stableHash } from '../utils/hash.ts';
 import { pathMatchesScope, scopeOverlapsPath } from '../utils/paths.ts';
-import { applyGuidanceBudget } from './budget.ts';
+import {
+  applyGuidanceDelivery,
+  DEFAULT_GUIDANCE_BYTE_LIMIT,
+} from './budget.ts';
 import {
   DECISION_SCHEMA_VERSION,
   type AvoidGuidanceItem,
@@ -29,6 +31,7 @@ import {
   type CompileChangeOutput,
   type DecisionDiagnostic,
   type DecisionTension,
+  type DecisionTrace,
   type EffectiveGuidance,
   type GuidanceItem,
   type RelationProposal,
@@ -37,7 +40,6 @@ import {
 } from './types.ts';
 
 const RELATION_MIN_CONFIDENCE = 0.72;
-const WEIGHT_RANK = { low: 0, normal: 1, high: 2, critical: 3 } as const;
 
 interface EffectiveDirective extends Directive {
   effectivePrescription: Directive['prescription'];
@@ -45,8 +47,10 @@ interface EffectiveDirective extends Directive {
   effectiveRationale: string;
   effectiveExceptions: string[];
   effectiveExamples: DirectiveExample[];
+  executionExample?: DirectiveExample;
   overrideApplied: boolean;
   augmentApplied: boolean;
+  authority: 'team' | 'builtin';
 }
 
 interface RelationDecision {
@@ -56,7 +60,7 @@ interface RelationDecision {
   status: 'accepted' | 'rejected' | 'downgraded';
   impact: 'execution-mode' | 'review-focus' | 'ambient-context' | 'no-effect';
   reason: string;
-  proposedBy: 'host-agent' | 'runtime-structural';
+  proposedBy: 'host-agent';
   evidenceRefs: string[];
   rationale: string;
   confidence: number | null;
@@ -110,24 +114,40 @@ export async function compileChange(input: CompileChangeInput): Promise<CompileC
   }
 
   const executionModes = resolveExecutionModes(loaded.directives, relationDecisions);
-  const rawGuidance = buildEffectiveGuidance(
+  const builtGuidance = buildEffectiveGuidance(
     loaded.directives,
     loaded.relevantObservations,
     executionModes,
     relationDecisions,
     task,
   );
-  const budgeted = applyGuidanceBudget(rawGuidance);
-  if (budgeted.omissions.length) {
+  const guidanceByteLimit = input.guidanceByteLimit ?? DEFAULT_GUIDANCE_BYTE_LIMIT;
+  const delivery = applyGuidanceDelivery(
+    builtGuidance.guidance,
+    guidanceByteLimit,
+    input.deliverySelection,
+  );
+  if (delivery.status === 'overflow') {
+    return {
+      schemaVersion: DECISION_SCHEMA_VERSION,
+      status: 'guidance-overflow',
+      mode,
+      task,
+      ...delivery.overflow,
+      candidateDetails: builtGuidance.details.filter((item) => item.section === 'consider'),
+      diagnostics,
+    };
+  }
+  if (delivery.selection) {
     diagnostics.push({
-      code: 'GUIDANCE_BUDGET_TRIMMED',
-      message: `Guidance budget omitted ${budgeted.omissions.length} lower-priority item(s).`,
-      ids: budgeted.omissions.map((item) => item.id),
+      code: 'GUIDANCE_SELECTION_APPLIED',
+      message: `Explicit delivery selection included ${delivery.guidance.consider.length} of ${builtGuidance.guidance.consider.length} optional consider item(s).`,
+      ids: delivery.guidance.consider.map((item) => item.id),
     });
   }
 
-  const deliveredGuidanceIds = guidanceIds(budgeted.guidance);
-  const verificationPlan = buildVerificationPlan(budgeted.guidance);
+  const deliveredGuidanceIds = guidanceIds(delivery.guidance);
+  const verificationPlan = buildVerificationPlan(delivery.guidance);
   const relationTrace = relationDecisions.map((relation) => ({
     directiveId: relation.directiveId,
     observationId: relation.observationId,
@@ -148,6 +168,11 @@ export async function compileChange(input: CompileChangeInput): Promise<CompileC
       relationDecisions.map(relationFingerprintInput),
       relationProposals.map(relationProposalFingerprintInput),
     ]),
+    delivery: stableHash([
+      guidanceByteLimit,
+      delivery.selection,
+      delivery.guidance,
+    ]),
   };
   const decisionId = stableHash([
     DECISION_SCHEMA_VERSION,
@@ -164,7 +189,7 @@ export async function compileChange(input: CompileChangeInput): Promise<CompileC
     status: rejectedProposal ? 'needs-attention' : 'compiled',
     mode,
     task,
-    guidance: budgeted.guidance,
+    guidance: delivery.guidance,
     verificationPlan,
     trace: {
       selectedLayers: loaded.selectedLayers,
@@ -174,7 +199,14 @@ export async function compileChange(input: CompileChangeInput): Promise<CompileC
       relevantObservationIds: loaded.relevantObservations.map((observation) => observation.id),
       observationEvidence: loaded.observationVerification,
       relationDecisions: relationTrace,
-      omissions: budgeted.omissions,
+      guidanceDetails: builtGuidance.details,
+      delivery: {
+        byteLimit: guidanceByteLimit,
+        deliveredBytes: delivery.deliveredBytes,
+        mandatoryBytes: delivery.mandatoryBytes,
+        selection: delivery.selection,
+      },
+      omissions: delivery.omissions,
       diagnostics,
     },
     fingerprints,
@@ -278,6 +310,9 @@ function applyLocalPlaybook(directives: Directive[], local: LocalPlaybook | null
     if (suppressed.has(directive.id)) return [];
     const override = overrideById.get(directive.id);
     const augment = augmentById.get(directive.id);
+    const teamAuthored = directive.source.kind === 'local-addition'
+      || Boolean(override)
+      || Boolean(augment);
     return [{
       ...directive,
       effectivePrescription: override?.prescription ?? directive.prescription,
@@ -285,8 +320,11 @@ function applyLocalPlaybook(directives: Directive[], local: LocalPlaybook | null
       effectiveRationale: override?.rationale ?? directive.rationale,
       effectiveExceptions: override?.exceptions ?? directive.exceptions ?? [],
       effectiveExamples: augment ? [...directive.examples, ...augment.examples] : directive.examples,
+      executionExample: augment?.examples[0]
+        ?? (directive.source.kind === 'local-addition' ? directive.examples[0] : undefined),
       overrideApplied: Boolean(override),
       augmentApplied: Boolean(augment),
+      authority: teamAuthored ? 'team' : 'builtin',
     }];
   });
 }
@@ -375,25 +413,6 @@ function buildRelationDecisions(
     });
   }
 
-  for (const directive of directives) {
-    for (const observation of observations) {
-      const key = `${directive.id}::${observation.id}`;
-      if (proposalPairs.has(key) || !semanticKeysOverlap(directive.id, observation.id)) continue;
-      if (observationDisposition(observation) === 'demote-to-ambient') continue;
-      decisions.push({
-        directiveId: directive.id,
-        observationId: observation.id,
-        relation: 'ambient-only',
-        status: 'accepted',
-        impact: 'ambient-context',
-        reason: 'Deterministic semantic-key overlap shortlisted this verified observation as context; it cannot change execution without a host proposal.',
-        proposedBy: 'runtime-structural',
-        evidenceRefs: observationEvidenceRefs(observation),
-        rationale: 'Structural ID overlap recalled this observation as ambient context.',
-        confidence: null,
-      });
-    }
-  }
   return decisions.sort((left, right) => left.directiveId.localeCompare(right.directiveId) || left.observationId.localeCompare(right.observationId));
 }
 
@@ -420,33 +439,77 @@ function buildEffectiveGuidance(
   executionModes: Map<string, ExecutionMode>,
   relations: RelationDecision[],
   task: NormalizedTaskContext,
-): EffectiveGuidance {
-  const required: GuidanceItem[] = task.constraints.map(taskConstraintGuidance);
+): {
+  guidance: EffectiveGuidance;
+  details: DecisionTrace['guidanceDetails'];
+} {
+  const required: GuidanceItem[] = [];
   const consider: GuidanceItem[] = [];
-  const avoid: AvoidGuidanceItem[] = task.avoid.map(taskAvoidGuidance);
+  const avoid: AvoidGuidanceItem[] = [];
+  const details: DecisionTrace['guidanceDetails'] = [];
+
+  for (const constraint of task.constraints) {
+    const item = taskConstraintGuidance(constraint);
+    required.push(item);
+    details.push({
+      id: item.id,
+      section: 'required',
+      rationale: 'Explicit task constraint supplied by the user or host.',
+      relevance: 'Explicit task constraints apply directly to this change.',
+      source: { ...item.source },
+      examples: [],
+    });
+  }
+  for (const pattern of task.avoid) {
+    const item = taskAvoidGuidance(pattern);
+    avoid.push(item);
+    details.push({
+      id: item.id,
+      section: 'avoid',
+      rationale: 'Explicit behavior to avoid for this task.',
+      relevance: 'Explicit task exclusions apply directly to this change.',
+      source: { ...item.source },
+      examples: [],
+    });
+  }
+
+  for (const directive of directives) {
+    const mode = executionModes.get(directive.id) ?? 'ambient';
+    const relevance = directiveRelevance(directive, mode, relations);
+    if (directive.type === 'anti-pattern') {
+      const item = directiveAvoidItem(directive);
+      avoid.push(item);
+      details.push(directiveGuidanceDetail(directive, 'avoid', relevance));
+      continue;
+    }
+    const section = mode === 'enforce' || mode === 'deviation-noted'
+      ? 'required'
+      : 'consider';
+    const item = directiveGuidanceItem(directive, mode, task);
+    if (section === 'required') required.push(item);
+    else consider.push(item);
+    details.push(directiveGuidanceDetail(directive, section, relevance));
+  }
 
   // RCCL is observational. Even an evidence-current anti-pattern remains
   // ambient until a Playbook directive and accepted host relation make a
   // prescriptive consequence explicit.
   for (const observation of observations) {
-    consider.push(observationGuidanceItem(observation));
+    const item = observationGuidanceItem(observation);
+    consider.push(item);
+    details.push(observationGuidanceDetail(observation, item));
   }
-  for (const directive of directives) {
-    const mode = executionModes.get(directive.id) ?? 'ambient';
-    if (directive.type === 'anti-pattern') {
-      avoid.push(directiveAvoidItem(directive));
-      continue;
-    }
-    if (mode === 'suppress') continue;
-    const item = directiveGuidanceItem(directive, mode, directiveRelevance(directive, mode, relations), task);
-    if (mode === 'enforce' || mode === 'deviation-noted') required.push(item);
-    else consider.push(item);
-  }
+
+  const tensionResult = buildTensions(relations, directives, observations);
+  details.push(...tensionResult.details);
   return {
-    required: uniqueById(required),
-    consider: uniqueById(consider),
-    avoid: uniqueById(avoid),
-    tensions: buildTensions(relations, directives, observations),
+    guidance: {
+      required: uniqueById(required),
+      consider: uniqueById(consider),
+      avoid: uniqueById(avoid),
+      tensions: tensionResult.tensions,
+    },
+    details: uniqueById(details),
   };
 }
 
@@ -455,16 +518,13 @@ function taskConstraintGuidance(constraint: string): GuidanceItem {
   return {
     id,
     instruction: constraint,
-    rationale: 'Explicit task constraint supplied by the user or host.',
     exceptions: [],
     source: { kind: 'task', id: 'task-context' },
-    relevance: 'Explicit constraints have precedence for this task.',
     executionMode: 'enforce',
     verification: [
-      { kind: 'diff', description: `Inspect the final diff for compliance with ${id}.` },
-      { kind: 'semantic', description: `Explain how the implementation satisfies the explicit constraint: ${constraint}` },
+      { kind: 'diff' },
+      { kind: 'semantic' },
     ],
-    examples: [],
   };
 }
 
@@ -472,33 +532,25 @@ function taskAvoidGuidance(pattern: string): AvoidGuidanceItem {
   return {
     id: `task-avoid:${stableHash([pattern])}`,
     pattern,
-    rationale: 'Explicit behavior to avoid for this task.',
     exceptions: [],
     source: { kind: 'task', id: 'task-context' },
-    verification: [{ kind: 'diff', description: 'Inspect the final diff for the explicitly avoided behavior.' }],
+    verification: [{ kind: 'diff' }],
   };
 }
 
 function directiveGuidanceItem(
   directive: EffectiveDirective,
   mode: ExecutionMode,
-  relevance: string,
   task: NormalizedTaskContext,
 ): GuidanceItem {
   return {
     id: directive.id,
     instruction: directive.description,
-    rationale: directive.effectiveRationale,
     exceptions: directive.effectiveExceptions,
-    source: {
-      kind: directive.source.kind === 'local-addition' ? 'local-playbook' : 'builtin-playbook',
-      id: directive.source.layerId,
-      path: directive.source.filePath,
-    },
-    relevance,
+    source: directiveGuidanceSource(directive),
     executionMode: mode,
     verification: verificationForDirective(directive, task),
-    examples: directive.effectiveExamples,
+    ...(directive.executionExample ? { example: directive.executionExample } : {}),
   };
 }
 
@@ -506,33 +558,65 @@ function directiveAvoidItem(directive: EffectiveDirective): AvoidGuidanceItem {
   return {
     id: directive.id,
     pattern: directive.description,
-    rationale: directive.effectiveRationale,
     exceptions: directive.effectiveExceptions,
-    source: {
-      kind: directive.source.kind === 'local-addition' ? 'local-playbook' : 'builtin-playbook',
-      id: directive.source.layerId,
-      path: directive.source.filePath,
-    },
-    verification: [{ kind: 'diff', description: `Inspect the change for the prohibited pattern described by ${directive.id}.` }],
+    source: directiveGuidanceSource(directive),
+    verification: [{ kind: 'diff' }],
   };
 }
 
 function observationGuidanceItem(observation: RcclObservation): GuidanceItem {
-  const current = observation.evidenceVerification.status === 'current';
   return {
     id: `rccl:${observation.id}`,
     instruction: observation.statement,
-    rationale: `${observation.decisionImpact} Affects: ${observation.affects.join(', ')}. Evidence status is ${observation.evidenceVerification.status}; semantic confidence is ${observation.semanticConfidence}; review status is ${observation.reviewStatus}.`,
     exceptions: [],
-    source: { kind: 'rccl', id: observation.id, evidenceRefs: observationEvidenceRefs(observation) },
-    relevance: 'The observation scope or evidence overlaps the current task.',
+    source: { kind: 'rccl', id: observation.id },
     executionMode: 'ambient',
-    verification: [{
-      kind: 'diff',
-      description: current
-        ? 'Check whether the change crosses or depends on this evidence-current repository boundary.'
-        : 'Treat this as ambient only; do not use it to justify execution changes until evidence is refreshed.',
-    }],
+    verification: [{ kind: 'diff' }],
+  };
+}
+
+function directiveGuidanceSource(directive: EffectiveDirective): GuidanceItem['source'] {
+  return {
+    kind: directive.authority === 'team' ? 'local-playbook' : 'builtin-playbook',
+    id: directive.source.layerId,
+  };
+}
+
+function directiveGuidanceDetail(
+  directive: EffectiveDirective,
+  section: 'required' | 'consider' | 'avoid',
+  relevance: string,
+): DecisionTrace['guidanceDetails'][number] {
+  const source = directiveGuidanceSource(directive);
+  return {
+    id: directive.id,
+    section,
+    rationale: directive.effectiveRationale,
+    relevance,
+    source: {
+      ...source,
+      logicalPath: directive.authority === 'team'
+        ? 'team-playbook'
+        : directive.source.layerId,
+    },
+    examples: directive.effectiveExamples,
+  };
+}
+
+function observationGuidanceDetail(
+  observation: RcclObservation,
+  item: GuidanceItem,
+): DecisionTrace['guidanceDetails'][number] {
+  return {
+    id: item.id,
+    section: 'consider',
+    rationale: `${observation.decisionImpact} Affects: ${observation.affects.join(', ')}. Evidence status is ${observation.evidenceVerification.status}; semantic confidence is ${observation.semanticConfidence}; review status is ${observation.reviewStatus}.`,
+    relevance: 'The observation scope or evidence overlaps the current task.',
+    source: {
+      ...item.source,
+      logicalPath: observation.scope,
+      evidenceRefs: observationEvidenceRefs(observation),
+    },
     examples: [],
   };
 }
@@ -541,15 +625,20 @@ function buildTensions(
   relations: RelationDecision[],
   directives: EffectiveDirective[],
   observations: RcclObservation[],
-): DecisionTension[] {
+): {
+  tensions: DecisionTension[];
+  details: DecisionTrace['guidanceDetails'];
+} {
   const directiveById = new Map(directives.map((directive) => [directive.id, directive]));
   const observationById = new Map(observations.map((observation) => [observation.id, observation]));
-  return relations.flatMap((relation) => {
-    if (relation.status !== 'accepted' || relation.relation !== 'tension') return [];
+  const tensions: DecisionTension[] = [];
+  const details: DecisionTrace['guidanceDetails'] = [];
+  for (const relation of relations) {
+    if (relation.status !== 'accepted' || relation.relation !== 'tension') continue;
     const directive = directiveById.get(relation.directiveId);
     const observation = observationById.get(relation.observationId);
-    if (!directive || !observation) return [];
-    return [{
+    if (!directive || !observation) continue;
+    const tension: DecisionTension = {
       id: `tension:${stableHash([relation.directiveId, relation.observationId, relation.proposalKind])}`,
       directiveId: directive.id,
       observationId: observation.id,
@@ -557,24 +646,42 @@ function buildTensions(
       resolution: relation.proposalKind === 'limits'
         ? 'Apply the directive within the observed boundary and preserve the existing interface where the boundary still applies.'
         : 'Follow the directive for new work while preserving compatibility at the observed boundary; record an exception if the boundary must be crossed.',
-      evidenceRefs: relation.evidenceRefs,
-      proposedBy: relation.proposedBy,
-    }];
-  });
+    };
+    tensions.push(tension);
+    details.push({
+      id: tension.id,
+      section: 'tension',
+      rationale: relation.rationale,
+      relevance: relation.reason,
+      source: {
+        kind: 'rccl',
+        id: observation.id,
+        logicalPath: observation.scope,
+        evidenceRefs: relation.evidenceRefs,
+      },
+      examples: [],
+    });
+  }
+  return {
+    tensions: uniqueById(tensions),
+    details: uniqueById(details),
+  };
 }
 
 function verificationForDirective(directive: EffectiveDirective, task: NormalizedTaskContext): VerificationRequirement[] {
-  const result: VerificationRequirement[] = [{ kind: 'diff', description: `Inspect the final diff for evidence that ${directive.id} was applied.` }];
+  const result: VerificationRequirement[] = [{ kind: 'diff' }];
   if (directive.type === 'architecture' || directive.traits?.compatibility_sensitive || directive.traits?.migration_sensitive) {
-    result.push({ kind: 'semantic', description: `Explain how the implementation satisfies ${directive.id} at affected boundaries.` });
+    result.push({ kind: 'semantic' });
   }
-  if (task.techStack.includes('typescript') || task.techStack.includes('javascript')) result.push({ kind: 'command', commandId: 'typecheck', description: 'Run the project typecheck command.' });
+  if (task.techStack.includes('typescript') || task.techStack.includes('javascript')) {
+    result.push({ kind: 'command', commandId: 'typecheck' });
+  }
   if ((directive.traits?.safety_critical || task.changeType === 'bugfix' || task.changeType === 'feature' || task.changeType === 'migration' || task.risk === 'high')
     && !result.some((item) => item.kind === 'command' && item.commandId === 'test')) {
-    result.push({ kind: 'command', commandId: 'test', description: 'Run the relevant automated tests.' });
+    result.push({ kind: 'command', commandId: 'test' });
   }
   if (directive.traits?.broad_scope && (task.scope === 'cross-module' || task.scope === 'repository') && !result.some((item) => item.kind === 'semantic')) {
-    result.push({ kind: 'semantic', description: `Explain how ${directive.id} remains valid across the declared ${task.scope} change scope.` });
+    result.push({ kind: 'semantic' });
   }
   return result;
 }
@@ -584,8 +691,18 @@ function buildVerificationPlan(guidance: EffectiveGuidance): VerificationPlan {
   const semanticChecks: VerificationPlan['semanticChecks'] = [];
   for (const item of [...guidance.required, ...guidance.consider]) {
     for (const requirement of item.verification) {
-      if (requirement.kind === 'command' && requirement.commandId) commands.set(requirement.commandId, requirement.description);
-      if (requirement.kind === 'semantic') semanticChecks.push({ guidanceId: item.id, description: requirement.description });
+      if (requirement.kind === 'command' && requirement.commandId) {
+        commands.set(
+          requirement.commandId,
+          requirement.description ?? `Run ${requirement.commandId} for delivered guidance.`,
+        );
+      }
+      if (requirement.kind === 'semantic') {
+        semanticChecks.push({
+          guidanceId: item.id,
+          description: requirement.description ?? `Explain how the implementation satisfies ${item.id}.`,
+        });
+      }
     }
   }
   return { commands: [...commands.entries()].map(([id, reason]) => ({ id, reason })), semanticChecks };
@@ -605,24 +722,22 @@ function proposalEvidenceMatchesObservation(evidenceRefs: string[], observation:
   return evidenceRefs.every((ref) => known.has(ref));
 }
 
-function semanticKeysOverlap(left: string, right: string): boolean {
-  const leftTokens = tokens(left);
-  const rightTokens = tokens(right);
-  return [...leftTokens].some((token) => rightTokens.has(token));
-}
-
-function tokens(value: string): Set<string> {
-  return new Set(value.toLowerCase().split(/[^a-z0-9]+/).filter((token) => token.length >= 4));
-}
-
 function compareDirectives(left: EffectiveDirective, right: EffectiveDirective): number {
-  if (left.effectivePrescription !== right.effectivePrescription) return left.effectivePrescription === 'must' ? -1 : 1;
-  const layer = getDirectiveLayerRank(right.source.layerId) - getDirectiveLayerRank(left.source.layerId);
-  if (layer) return layer;
-  const weight = WEIGHT_RANK[right.effectiveWeight] - WEIGHT_RANK[left.effectiveWeight];
-  if (weight) return weight;
-  if (left.overrideApplied !== right.overrideApplied) return left.overrideApplied ? -1 : 1;
+  const authority = directiveDeliveryGroup(left) - directiveDeliveryGroup(right);
+  if (authority) return authority;
   return left.id.localeCompare(right.id);
+}
+
+function directiveDeliveryGroup(directive: EffectiveDirective): number {
+  if (directive.authority === 'team') return 0;
+  if (directive.source.layerId.startsWith('builtin/task-types/')) return 1;
+  if ([
+    'builtin/languages/',
+    'builtin/frameworks/',
+    'builtin/domains/',
+  ].some((prefix) => directive.source.layerId.startsWith(prefix))) return 2;
+  if (directive.source.layerId === 'builtin/core') return 3;
+  return 4;
 }
 
 function requiredInterpretationFields(task: NormalizedTaskContext): Array<'changeType' | 'targets' | 'uncertainties'> {
