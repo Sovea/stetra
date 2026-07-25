@@ -25,13 +25,15 @@ Personal overlay ──────┼─> compileChange ─> compact guidance �
 RCCL (observational) ──┤          │                                  │
 Task context ──────────┘          └─> Decision Trace                 │
                                                                        v
-verified feedback <──────── evaluateChange <──── diff + checks + evidence
+verified feedback <──────── evaluateChange <──── machine facts + attestations
 ```
 
 The two public Runtime operations are:
 
 - `compileChange` — normalize the task, activate Playbook directives, recheck relevant RCCL evidence, adjudicate optional semantic relations, and emit bounded guidance.
-- `evaluateChange` — evaluate the actual changed files, checks, evidence, and approved exceptions against only the delivered guidance IDs.
+- `evaluateChange` — combine workflow-collected file/check facts with explicit
+  host semantic attestations and approved exceptions for delivered guidance
+  IDs only.
 
 Ordinary tasks use a compact preflight decision and one postflight evaluation.
 If optional guidance exceeds the byte ceiling, preflight first returns an
@@ -107,7 +109,7 @@ node skills/code/scripts/code.mjs prepare . \
 # If prepare reports guidance-overflow, choose relevant optional IDs in a
 # selection JSON and rerun with --selection-file <path>.
 
-# Implement the change and run the returned verification plan.
+# Implement the change. Complete will run the prepared check mappings.
 
 node skills/code/scripts/code.mjs complete \
   --session <session-path> \
@@ -129,6 +131,7 @@ node skills/calibrate-repo-context/scripts/calibrate-repo-context.mjs commit . \
 Durable, reviewable project data:
 
 - `.resonant-code/playbook/local-augment.yaml` — project prescription
+- `.resonant-code/checks.json` — explicit logical-check-to-command mappings
 - `.resonant-code/rccl.yaml` — evidence-current repository observations
 - `.resonant-code/feedback/verified-events.jsonl` — bounded evidence-backed outcomes
 
@@ -150,6 +153,9 @@ Generated task sessions live under `.resonant-code/context/` and should normally
 - Scope overlap may make an RCCL observation task-relevant and ambient; only an
   explicit accepted host relation may connect it to a directive.
 - Skills perform lifecycle orchestration and filesystem IO; they do not reconstruct Playbook, RCCL, budgeting, or evaluation policy.
+- Successful `prepare` captures the dirty-worktree baseline. `complete` computes
+  exact baseline-to-current file facts and runs only explicit non-shell check
+  mappings; attestation JSON cannot supply its own changes or check results.
 - Feedback records only evidence-backed satisfied, violated, and approved-exception outcomes. Unverified output does not improve a score.
 - Decision Trace is a compact explanation surface, not an event-log dump.
 

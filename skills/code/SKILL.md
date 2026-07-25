@@ -28,6 +28,7 @@ node <skill-directory>/scripts/code.mjs prepare <project-root> \
   [--scope <local|module|cross-module|repository>] \
   [--mode <standard|strict>] \
   [--personal-overlay <path>] \
+  [--check-config <path>] \
   [--selection-file <path>] \
   [--guidance-byte-limit <positive-integer>]
 ```
@@ -65,6 +66,31 @@ one configurable UTF-8 byte ceiling (6,000 by default); it has no fixed
 required/consider/avoid item counts. A larger ceiling must be an explicit host
 choice via `--guidance-byte-limit`.
 
+Trusted completion requires a Git worktree whose root is the supplied project
+root. On successful `prepare`, the workflow snapshots every tracked and
+non-ignored untracked file as path, mode, kind, and content hash. Existing dirty
+and untracked files become part of the baseline; they are not later
+misattributed to the coding task.
+
+Map logical verification IDs to explicit non-shell commands in
+`.resonant-code/checks.json` (or pass `--check-config <path>`):
+
+```json
+{
+  "version": "1.0",
+  "checks": [
+    {
+      "id": "typecheck",
+      "command": ["corepack", "pnpm", "typecheck"],
+      "timeoutMs": 120000
+    }
+  ]
+}
+```
+
+Runtime and the skill do not guess package scripts. If `checkPlan` reports a
+missing ID, configure it and rerun `prepare` before implementation.
+
 If semantic judgment is needed for a candidate Playbook/RCCL relationship, write a small JSON relation file:
 
 ```json
@@ -97,31 +123,24 @@ Only these delivered items are evaluated after implementation. Optional items
 excluded by an explicit selection remain visible in the Decision Trace and are
 not silently evaluated.
 
-Run the commands listed in `verificationPlan.commands`. A command ID is logical; select the repository's canonical command for that check.
+The workflow runs the prepared command mappings during `complete`, records exit
+codes and output digests, and writes stdout/stderr under ignored
+`.resonant-code/context/`. Do not substitute host-declared pass/fail results.
 
 ## Complete
 
-After implementation write an evaluation JSON file:
+After implementation write an attestation JSON file. It contains semantic host
+judgments and approved exceptions only; `changes`, `checks`, and legacy
+`evidence` fields are rejected:
 
 ```json
 {
-  "changes": {
-    "files": [
-      { "path": "src/example.ts", "status": "modified" }
-    ]
-  },
-  "checks": [
-    {
-      "id": "typecheck",
-      "status": "passed",
-      "command": "pnpm typecheck",
-      "outputRef": "terminal:typecheck"
-    }
-  ],
-  "evidence": [
+  "attestations": [
     {
       "guidanceId": "directive-id",
       "verdict": "satisfied",
+      "attestedBy": "coding-agent",
+      "explanation": "The implementation preserves the existing public shape and changes only the requested branch.",
       "evidenceRefs": [
         {
           "kind": "diff",
@@ -143,9 +162,18 @@ node <skill-directory>/scripts/code.mjs complete \
   --evaluation-file <path>
 ```
 
-Evidence kinds are `diff`, `file`, `check`, `semantic`, and `static`. Diff/file evidence must name a file in the supplied change set. Check evidence must reference a supplied passing check. Semantic evidence requires a concrete description.
+Evidence kinds are `diff`, `file`, `check`, and `semantic`. Diff/file refs must
+name a workflow-collected changed file. Check refs must name a
+workflow-collected passing check. Semantic refs require a concrete description.
+Every attestation requires `attestedBy` and an explanation.
 
-If no evaluation file is provided, completion records an unverified result. Standard mode reports warnings; strict mode requires an exception for unverified required guidance.
+During `complete`, the workflow runs the prepared checks, snapshots the current
+worktree, and computes exact baseline-to-current add/modify/delete operations.
+An exact unique-content move is reported as a rename; ambiguous same-content
+moves remain explicit add/delete facts. If no attestation file is provided,
+completion still records machine facts but reports semantic guidance as
+unverified. Standard mode reports warnings; strict mode requires an exception
+for unverified required guidance.
 
 Hard violations reject the change. Approved exceptions require a non-empty reason, `status: "approved"`, and `approvedBy`.
 

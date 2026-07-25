@@ -11,5 +11,8 @@
 - Layers a user-scoped personal preference/example overlay beneath the
   repository-committed team Playbook, with structural guards against weakening
   shared policy.
+- Captures an exact Git worktree baseline at prepare, derives actual task
+  add/modify/delete/unique-rename facts at complete, runs explicit check
+  commands, and separates those machine facts from host semantic attestations.
 - Records idempotent, evidence-backed feedback events instead of optimistic adherence rates.
 - Keeps task understanding and semantic relations as bounded host inputs rather than mandatory multi-stage artifacts.

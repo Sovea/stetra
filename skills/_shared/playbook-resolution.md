@@ -70,6 +70,10 @@ requirements.
 
 ## Complete
 
-After implementation call `evaluateChange` with the actual changed files, check results, evidence for delivered IDs, and any approved exceptions. Do not infer satisfaction from the preflight decision.
+After implementation, the code workflow collects baseline-to-current Git file
+facts and executes the explicit check mappings captured by `prepare`. Call
+`evaluateChange` with those machine facts plus host attestations for delivered
+IDs and any approved exceptions. Do not accept host-declared changed files or
+passing checks, and do not infer satisfaction from the preflight decision.
 
 If Runtime is unavailable, report that the harness could not run and proceed using explicit user/repository instructions. Do not parse the Playbook manually as a substitute.

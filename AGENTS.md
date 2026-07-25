@@ -90,9 +90,17 @@ Only a task-relevant observation with current fully matched evidence, high seman
 
 ### Evaluation and feedback boundary
 
-`evaluateChange` evaluates the real changed-file set, supplied check results, evidence, and approved exceptions. It infers file operation after implementation; preflight does not guess it.
+`evaluateChange` evaluates workflow-collected changed-file/check facts, host
+attestations, and approved exceptions. It infers file operation after
+implementation; preflight does not guess it.
 
-Evidence must be structurally tied to the change:
+The normal workflow owns machine facts. `prepare` snapshots the Git worktree,
+including pre-existing dirty and non-ignored untracked files. `complete` runs
+the exact check definitions captured at prepare and compares the current
+worktree to that baseline. Host artifacts may supply semantic attestations and
+exceptions only; they may not supply changed files or check outcomes.
+
+Attestation evidence must be structurally tied to collected facts:
 
 - diff/file evidence names a supplied changed file
 - check evidence names a supplied passing check
@@ -109,8 +117,9 @@ Skills may parse CLI flags, orchestrate prepare/complete steps, read and write a
 The normal code lifecycle is:
 
 1. `prepare` → compile compact task guidance
-2. host implements and runs the verification plan
-3. `complete` → evaluate actual change evidence and write bounded feedback
+2. host implements the change
+3. `complete` → collect actual change/check facts, evaluate attestations, and
+   write bounded feedback
 
 ## Data separation
 
