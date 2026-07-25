@@ -360,6 +360,9 @@ interface ChangeEvaluation {
   feedback?: {
     recorded: number;
     path: string;
+    aggregatePath: string;
+    aggregateCount: number;
+    eventsFingerprint: string | null;
   };
 }
 //#endregion

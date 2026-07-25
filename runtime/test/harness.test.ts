@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import test from 'node:test';
@@ -835,7 +835,7 @@ test('postflight evaluation combines machine facts with attestations only for de
   }), /was not delivered/);
 });
 
-test('fact-backed attestation feedback is idempotent and unverified guidance is not recorded', () => {
+test('feedback is idempotent and maintains bounded fact-only aggregates by guidance ID', () => {
   const directory = mkdtempSync(join(tmpdir(), 'resonant-feedback-'));
   const feedbackPath = join(directory, 'verified-events.jsonl');
   try {
@@ -858,9 +858,58 @@ test('fact-backed attestation feedback is idempotent and unverified guidance is 
       }],
       feedbackPath,
     };
-    assert.equal(evaluateChange(input).feedback?.recorded, 1);
+    const first = evaluateChange(input).feedback;
+    assert.equal(first?.recorded, 1);
+    assert.equal(first?.aggregateCount, 1);
     assert.equal(evaluateChange(input).feedback?.recorded, 0);
     assert.equal(readFileSync(feedbackPath, 'utf8').trim().split('\n').length, 1);
+
+    const violated = evaluateChange({
+      ...input,
+      attestations: [{
+        guidanceId: 'required-1',
+        verdict: 'violated',
+        evidenceRefs: [
+          { kind: 'diff', ref: 'diff:index', file: 'runtime/src/index.ts' },
+        ],
+        explanation: 'The diff expands the boundary beyond the delivered requirement.',
+        attestedBy: 'test-host',
+      }],
+    });
+    assert.equal(violated.status, 'rejected');
+    assert.equal(violated.feedback?.recorded, 1);
+
+    const excepted = evaluateChange({
+      decision: minimalDecision('standard'),
+      changes,
+      checks: [machineCheck(changes, 'typecheck', 'passed')],
+      exceptions: [{
+        guidanceId: 'required-1',
+        reason: 'The approved migration temporarily requires the expanded boundary.',
+        status: 'approved',
+        approvedBy: 'test-reviewer',
+      }],
+      feedbackPath,
+    });
+    assert.equal(excepted.status, 'accepted');
+    assert.equal(excepted.feedback?.recorded, 1);
+
+    const aggregate = JSON.parse(readFileSync(first!.aggregatePath, 'utf8'));
+    assert.deepEqual(aggregate.aggregates, [{
+      guidanceId: 'required-1',
+      sections: ['required'],
+      satisfied: 1,
+      violated: 1,
+      excepted: 1,
+      total: 3,
+      evidenceKinds: ['check', 'diff'],
+      firstRecordedAt: aggregate.aggregates[0].firstRecordedAt,
+      lastRecordedAt: aggregate.aggregates[0].lastRecordedAt,
+      aggregateFingerprint: aggregate.aggregates[0].aggregateFingerprint,
+    }]);
+    assert.equal(aggregate.source.eventCount, 3);
+    assert.equal(aggregate.source.eventsFingerprint, excepted.feedback?.eventsFingerprint);
+    assert.equal('explanation' in aggregate.aggregates[0], false);
 
     const unverifiedPath = join(directory, 'unverified.jsonl');
     const unverified = evaluateChange({
@@ -869,6 +918,14 @@ test('fact-backed attestation feedback is idempotent and unverified guidance is 
       feedbackPath: unverifiedPath,
     });
     assert.equal(unverified.feedback?.recorded, 0);
+    assert.equal(existsSync(unverifiedPath), false);
+
+    const corruptPath = join(directory, 'corrupt.jsonl');
+    writeFileSync(corruptPath, '{}\n', 'utf8');
+    assert.throws(() => evaluateChange({
+      ...input,
+      feedbackPath: corruptPath,
+    }), /Invalid or unsupported feedback event/);
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }

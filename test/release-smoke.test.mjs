@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { cpSync, mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -171,6 +171,12 @@ additions:
   assert.equal(evaluation.status, 'accepted');
   assert.equal(evaluation.operation, 'modify');
   assert.ok(evaluation.feedback.recorded > 0);
+  assert.ok(evaluation.feedback.aggregateCount > 0);
+  const feedbackAggregate = JSON.parse(readFileSync(evaluation.feedback.aggregatePath, 'utf8'));
+  assert.equal(feedbackAggregate.source.eventCount, evaluation.feedback.recorded);
+  assert.ok(feedbackAggregate.aggregates.every((aggregate) =>
+    !Object.hasOwn(aggregate, 'explanation')
+    && aggregate.total === aggregate.satisfied + aggregate.violated + aggregate.excepted));
   assert.equal(runtime.evaluateChange(evaluationInput).feedback.recorded, 0);
 } finally {
   rmSync(temporary, { recursive: true, force: true });
