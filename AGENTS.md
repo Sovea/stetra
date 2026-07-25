@@ -114,7 +114,12 @@ Attestation evidence must be structurally tied to collected facts:
 
 Strict mode requires an exception for unverified required guidance or unresolved tensions. Hard required/avoid violations reject the evaluation.
 
-Feedback is Runtime-owned and bounded. Record only evidence-backed satisfied, violated, and approved-exception outcomes. Never count unverified output as followed. Do not persist raw host prose as policy truth.
+Feedback is Runtime-owned and bounded. Record only evidence-backed satisfied,
+violated, and approved-exception outcomes. Maintain fact-only aggregates by
+guidance ID; never count unverified output as followed or persist raw host
+explanations in aggregates. No count or rate may automatically mutate policy.
+An inspectable change proposal requires explicit approval bound to the current
+aggregate fingerprint and remains unapplied until a separate policy edit.
 
 ### Skill boundary
 

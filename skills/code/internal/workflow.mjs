@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import {
   existsSync,
   mkdirSync,
@@ -186,6 +187,135 @@ export function explainCodeSession(options) {
   };
 }
 
+export function inspectCodeFeedback(options) {
+  const projectRoot = resolve(requiredString(options.projectRoot, 'project root'));
+  const feedbackDirectory = join(projectRoot, '.resonant-code', 'feedback');
+  const aggregatePath = join(feedbackDirectory, 'aggregates.json');
+  if (!existsSync(aggregatePath)) {
+    return {
+      status: 'absent',
+      schemaVersion: SESSION_SCHEMA_VERSION,
+      aggregatePath,
+      aggregates: [],
+      missingGuidanceIds: unique(options.guidanceIds ?? []),
+    };
+  }
+  const document = readFeedbackAggregate(aggregatePath);
+  const requested = unique(options.guidanceIds ?? []);
+  const byId = new Map(document.aggregates.map((aggregate) => [aggregate.guidanceId, aggregate]));
+  return {
+    status: 'ok',
+    schemaVersion: SESSION_SCHEMA_VERSION,
+    aggregatePath,
+    source: document.source,
+    aggregates: requested.length
+      ? requested.flatMap((id) => byId.has(id) ? [byId.get(id)] : [])
+      : document.aggregates,
+    missingGuidanceIds: requested.filter((id) => !byId.has(id)),
+  };
+}
+
+export function createApprovedFeedbackProposal(options) {
+  const projectRoot = resolve(requiredString(options.projectRoot, 'project root'));
+  const inputPath = requiredPath(options.inputFile, 'propose-feedback-change requires --input <approved-proposal.json>.');
+  const candidate = readJsonFile(inputPath, 'approved feedback proposal');
+  validateFeedbackProposalCandidate(candidate);
+
+  const feedbackDirectory = join(projectRoot, '.resonant-code', 'feedback');
+  const aggregatePath = join(feedbackDirectory, 'aggregates.json');
+  if (!existsSync(aggregatePath)) {
+    throw new Error('Feedback aggregates are absent; complete evidence-backed tasks before proposing a policy change.');
+  }
+  const aggregates = readFeedbackAggregate(aggregatePath);
+  const sourceAggregate = aggregates.aggregates
+    .find((aggregate) => aggregate.guidanceId === candidate.guidanceId);
+  if (!sourceAggregate) {
+    throw new Error(`Feedback has no aggregate for guidance ${candidate.guidanceId}.`);
+  }
+  if (candidate.aggregateFingerprint !== sourceAggregate.aggregateFingerprint) {
+    throw new Error(`Feedback aggregate for ${candidate.guidanceId} changed; inspect it again before approving a proposal.`);
+  }
+
+  const semanticProposal = {
+    schemaVersion: SESSION_SCHEMA_VERSION,
+    guidanceId: candidate.guidanceId,
+    aggregateFingerprint: candidate.aggregateFingerprint,
+    target: candidate.target,
+    change: {
+      kind: candidate.change.kind,
+      summary: candidate.change.summary.trim(),
+      proposedContent: candidate.change.proposedContent,
+    },
+    rationale: candidate.rationale.trim(),
+    approval: {
+      status: 'approved',
+      approvedBy: candidate.approval.approvedBy.trim(),
+      reason: candidate.approval.reason.trim(),
+    },
+  };
+  const proposalId = hashJson([
+    'feedback-change-proposal',
+    semanticProposal,
+    sourceAggregate,
+  ]);
+  const directory = join(feedbackDirectory, 'change-proposals');
+  const proposalPath = join(directory, `${proposalId}.json`);
+  if (existsSync(proposalPath)) {
+    const existing = readJsonFile(proposalPath, 'existing feedback proposal');
+    const existingSemantic = existing && typeof existing === 'object' && !Array.isArray(existing)
+      ? {
+          schemaVersion: existing.schemaVersion,
+          guidanceId: existing.guidanceId,
+          aggregateFingerprint: existing.aggregateFingerprint,
+          target: existing.target,
+          change: existing.change,
+          rationale: existing.rationale,
+          approval: existing.approval && typeof existing.approval === 'object'
+            ? {
+                status: existing.approval.status,
+                approvedBy: existing.approval.approvedBy,
+                reason: existing.approval.reason,
+              }
+            : null,
+        }
+      : null;
+    if (existing?.proposalId !== proposalId
+      || JSON.stringify(existingSemantic) !== JSON.stringify(semanticProposal)
+      || JSON.stringify(existing.sourceAggregate) !== JSON.stringify(sourceAggregate)
+      || existing.applyStatus !== 'not-applied') {
+      throw new Error(`Existing feedback proposal at ${proposalPath} does not match its content-derived identity.`);
+    }
+    return {
+      status: 'approved-proposal',
+      schemaVersion: SESSION_SCHEMA_VERSION,
+      proposalId,
+      proposalPath,
+      written: false,
+      applyStatus: 'not-applied',
+    };
+  }
+  const approvedAt = new Date().toISOString();
+  writeJsonAtomic(proposalPath, {
+    ...semanticProposal,
+    proposalId,
+    createdAt: approvedAt,
+    approval: {
+      ...semanticProposal.approval,
+      approvedAt,
+    },
+    sourceAggregate,
+    applyStatus: 'not-applied',
+  });
+  return {
+    status: 'approved-proposal',
+    schemaVersion: SESSION_SCHEMA_VERSION,
+    proposalId,
+    proposalPath,
+    written: true,
+    applyStatus: 'not-applied',
+  };
+}
+
 export async function getCodeStatus(options) {
   const paths = resolvePaths(options);
   const requiredPluginFiles = [
@@ -199,6 +329,8 @@ export async function getCodeStatus(options) {
   const checks = checkConfigStatus(paths.checkConfigPath);
   const rccl = sourceFileStatus(paths.rcclPath, 'observations');
   const feedbackPath = join(paths.projectRoot, '.resonant-code', 'feedback', 'verified-events.jsonl');
+  const feedbackAggregatePath = join(paths.projectRoot, '.resonant-code', 'feedback', 'aggregates.json');
+  const feedback = feedbackStatus(feedbackPath, feedbackAggregatePath);
   const nextActions = [];
   if (localAugment === 'absent') {
     nextActions.push({ code: 'local-augment-absent', message: 'Run init or add project-specific prescriptive guidance.' });
@@ -219,6 +351,12 @@ export async function getCodeStatus(options) {
       message: 'The configured check file is not valid for the current schema.',
     });
   }
+  if (feedback === 'invalid') {
+    nextActions.push({
+      code: 'feedback-invalid',
+      message: 'Verified feedback events and Runtime-owned aggregates are inconsistent; inspect the files before recording more outcomes.',
+    });
+  }
   if (missingPluginFiles.length) {
     nextActions.unshift({ code: 'plugin-incomplete', message: 'Build Runtime and RCCL before using the code workflow.' });
   }
@@ -234,7 +372,7 @@ export async function getCodeStatus(options) {
       personalOverlay,
       rccl,
       checks,
-      feedback: existsSync(feedbackPath) ? 'present' : 'absent',
+      feedback,
     },
     plugin: {
       status: missingPluginFiles.length ? 'incomplete' : 'ok',
@@ -248,8 +386,65 @@ export async function getCodeStatus(options) {
       rcclPath: paths.rcclPath,
       checkConfigPath: paths.checkConfigPath,
       feedbackPath,
+      feedbackAggregatePath,
     },
   };
+}
+
+function readFeedbackAggregate(path) {
+  const value = readJsonFile(path, 'feedback aggregate');
+  if (!value || typeof value !== 'object' || Array.isArray(value)
+    || value.schemaVersion !== SESSION_SCHEMA_VERSION
+    || !value.source || typeof value.source !== 'object' || Array.isArray(value.source)
+    || typeof value.source.eventsFile !== 'string'
+    || !Number.isInteger(value.source.eventCount) || value.source.eventCount < 0
+    || typeof value.source.eventsFingerprint !== 'string'
+    || !/^[a-f0-9]{16}$/.test(value.source.eventsFingerprint)
+    || !Array.isArray(value.aggregates)) {
+    throw new Error(`Feedback aggregate at ${path} is invalid or uses an unsupported schema.`);
+  }
+  const ids = new Set();
+  for (const aggregate of value.aggregates) {
+    if (!aggregate || typeof aggregate !== 'object' || Array.isArray(aggregate)
+      || typeof aggregate.guidanceId !== 'string' || !aggregate.guidanceId.trim()
+      || ids.has(aggregate.guidanceId)
+      || !Array.isArray(aggregate.sections)
+      || !aggregate.sections.every((section) => ['required', 'consider', 'avoid', 'tension'].includes(section))
+      || !Array.isArray(aggregate.evidenceKinds)
+      || !aggregate.evidenceKinds.every((kind) => ['diff', 'file', 'check', 'semantic'].includes(kind))
+      || !['satisfied', 'violated', 'excepted', 'total'].every((field) =>
+        Number.isInteger(aggregate[field]) && aggregate[field] >= 0)
+      || aggregate.total !== aggregate.satisfied + aggregate.violated + aggregate.excepted
+      || typeof aggregate.aggregateFingerprint !== 'string'
+      || !/^[a-f0-9]{16}$/.test(aggregate.aggregateFingerprint)) {
+      throw new Error(`Feedback aggregate at ${path} contains an invalid guidance entry.`);
+    }
+    ids.add(aggregate.guidanceId);
+  }
+  return value;
+}
+
+function validateFeedbackProposalCandidate(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)
+    || value.schemaVersion !== SESSION_SCHEMA_VERSION
+    || typeof value.guidanceId !== 'string' || !value.guidanceId.trim()
+    || typeof value.aggregateFingerprint !== 'string'
+    || !/^[a-f0-9]{16}$/.test(value.aggregateFingerprint)
+    || !['team-playbook', 'personal-overlay'].includes(value.target)
+    || !value.change || typeof value.change !== 'object' || Array.isArray(value.change)
+    || !['add', 'revise', 'retire', 'add-exception'].includes(value.change.kind)
+    || typeof value.change.summary !== 'string' || !value.change.summary.trim()
+    || !value.change.proposedContent || typeof value.change.proposedContent !== 'object'
+    || Array.isArray(value.change.proposedContent)
+    || typeof value.rationale !== 'string' || !value.rationale.trim()
+    || !value.approval || typeof value.approval !== 'object' || Array.isArray(value.approval)
+    || value.approval.status !== 'approved'
+    || typeof value.approval.approvedBy !== 'string' || !value.approval.approvedBy.trim()
+    || typeof value.approval.reason !== 'string' || !value.approval.reason.trim()) {
+    throw new Error(
+      'Approved feedback proposal must include current guidanceId/aggregateFingerprint, target, change, rationale, and approval { status: "approved", approvedBy, reason }.',
+    );
+  }
 }
 
 function buildTaskInput(options) {
@@ -413,6 +608,19 @@ function checkConfigStatus(path) {
   }
 }
 
+function feedbackStatus(eventsPath, aggregatePath) {
+  const events = existsSync(eventsPath);
+  const aggregate = existsSync(aggregatePath);
+  if (!events && !aggregate) return 'absent';
+  if (!events || !aggregate) return 'invalid';
+  try {
+    readFeedbackAggregate(aggregatePath);
+    return 'present';
+  } catch {
+    return 'invalid';
+  }
+}
+
 function writeJsonAtomic(path, value) {
   mkdirSync(dirname(path), { recursive: true });
   const temporary = `${path}.tmp-${process.pid}`;
@@ -445,6 +653,10 @@ function normalizePositiveInteger(value, label) {
 
 function unique(values) {
   return [...new Set(values.map((value) => String(value).trim()).filter(Boolean))];
+}
+
+function hashJson(value) {
+  return createHash('sha256').update(JSON.stringify(value)).digest('hex').slice(0, 16);
 }
 
 function requiredString(value, label) {

@@ -177,13 +177,40 @@ for unverified required guidance.
 
 Hard violations reject the change. Approved exceptions require a non-empty reason, `status: "approved"`, and `approvedBy`.
 
-Only evidence-backed satisfied, violated, and excepted results enter bounded feedback. Unverified results do not update quality rates.
+Only evidence-backed satisfied/violated results and explicitly approved
+exceptions enter feedback. Runtime writes a fact-only aggregate by guidance ID;
+it stores counts, evidence kinds, timestamps, and fingerprints, but not host
+explanations. Unverified and partial results do not update aggregates.
 
 ## Inspect
 
 ```sh
 node <skill-directory>/scripts/code.mjs explain --session <session-path>
+node <skill-directory>/scripts/code.mjs feedback <project-root> \
+  [--guidance-id <directive-id>]
 node <skill-directory>/scripts/code.mjs doctor <project-root>
 ```
 
-`explain` returns the full decision and evaluation. Default `prepare` output remains compact. `doctor` reports Runtime/RCCL build readiness and whether local Playbook, RCCL, and verified feedback sources exist.
+`feedback` presents Runtime-owned aggregate facts without recommending a policy
+change or applying a threshold. `explain` returns the full decision and
+evaluation. Default `prepare` output remains compact. `doctor` reports
+Runtime/RCCL build readiness and whether local Playbook, RCCL, checks, and
+verified feedback sources are internally consistent.
+
+## Approved Feedback Proposal
+
+Feedback never changes policy automatically. After the user inspects a current
+aggregate and explicitly approves a candidate, copy
+`templates/feedback-change-proposal.template.json`, fill its current
+`guidanceId` and `aggregateFingerprint`, and run:
+
+```sh
+node <skill-directory>/scripts/code.mjs propose-feedback-change <project-root> \
+  --input <approved-proposal.json>
+```
+
+The input names `team-playbook` or `personal-overlay`, one of `add`, `revise`,
+`retire`, or `add-exception`, candidate content, rationale, and approval
+provenance. The workflow rejects stale aggregate fingerprints. It writes an
+idempotent artifact under `.resonant-code/feedback/change-proposals/` with
+`applyStatus: "not-applied"`; it does not edit either Playbook source.

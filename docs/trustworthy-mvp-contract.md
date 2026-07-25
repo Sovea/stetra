@@ -119,9 +119,14 @@ facts are absent or merely host-declared.
 
 Feedback records only evidence-backed satisfied, violated, and approved
 exception outcomes. Runtime maintains bounded aggregates by guidance ID.
+Aggregates contain counts, evidence kinds, timestamps, and content
+fingerprints, not host explanations. They report facts and never apply a
+promotion, retirement, or exception threshold.
 
 Feedback never mutates team or personal policy automatically. It can support an
-inspectable change proposal, which is written only after explicit user approval.
+inspectable change proposal, which is written only after explicit user approval
+bound to the current aggregate fingerprint. A written proposal remains marked
+unapplied; changing a Playbook source is a separate review and edit.
 
 ## Release evidence
 

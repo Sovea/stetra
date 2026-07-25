@@ -1,8 +1,10 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import {
+  existsSync,
   mkdtempSync,
   mkdirSync,
+  readFileSync,
   rmSync,
   writeFileSync,
 } from 'node:fs';
@@ -12,8 +14,10 @@ import { join, resolve } from 'node:path';
 import {
   autoCodeTask,
   completeCodeTask,
+  createApprovedFeedbackProposal,
   explainCodeSession,
   getCodeStatus,
+  inspectCodeFeedback,
 } from '../internal/workflow.mjs';
 
 const root = mkdtempSync(join(tmpdir(), 'resonant-code-workflow-'));
@@ -177,6 +181,85 @@ try {
   assert.equal(completed.assurance.hostAttestationCount, attestations.length);
   assert.equal(completed.summary.requiredViolated, 0);
   assert.ok(completed.feedback.recorded > 0);
+  assert.ok(existsSync(completed.feedback.aggregatePath));
+
+  const feedback = inspectCodeFeedback({ projectRoot: root });
+  assert.equal(feedback.status, 'ok');
+  assert.equal(feedback.source.eventCount, completed.feedback.recorded);
+  assert.ok(feedback.aggregates.length > 0);
+  assert.ok(feedback.aggregates.every((aggregate) =>
+    aggregate.total === aggregate.satisfied + aggregate.violated + aggregate.excepted));
+  const sourceAggregate = feedback.aggregates[0];
+  const filteredFeedback = inspectCodeFeedback({
+    projectRoot: root,
+    guidanceIds: [sourceAggregate.guidanceId, 'missing-guidance'],
+  });
+  assert.deepEqual(filteredFeedback.aggregates.map((item) => item.guidanceId), [sourceAggregate.guidanceId]);
+  assert.deepEqual(filteredFeedback.missingGuidanceIds, ['missing-guidance']);
+  const cliFeedback = JSON.parse(execFileSync(process.execPath, [
+    join(pluginRoot, 'skills', 'code', 'scripts', 'code.mjs'),
+    'feedback',
+    root,
+    '--guidance-id',
+    sourceAggregate.guidanceId,
+  ], { encoding: 'utf8' }));
+  assert.deepEqual(cliFeedback.aggregates.map((item) => item.guidanceId), [sourceAggregate.guidanceId]);
+
+  const feedbackProposalPath = join(root, '.resonant-code', 'context', 'approved-feedback-proposal.json');
+  const proposalCandidate = {
+    schemaVersion: '1.0',
+    guidanceId: sourceAggregate.guidanceId,
+    aggregateFingerprint: sourceAggregate.aggregateFingerprint,
+    target: 'team-playbook',
+    change: {
+      kind: 'revise',
+      summary: 'Clarify the directive verification language for this repository.',
+      proposedContent: {
+        id: sourceAggregate.guidanceId,
+        note: 'Candidate content remains a proposal and is not applied automatically.',
+      },
+    },
+    rationale: 'The evidence-backed outcomes warrant a human-reviewed policy edit proposal.',
+    approval: {
+      status: 'approved',
+      approvedBy: 'workflow-test-reviewer',
+      reason: 'Approved for proposal creation only; policy application remains separate.',
+    },
+  };
+  writeFileSync(feedbackProposalPath, JSON.stringify({
+    ...proposalCandidate,
+    approval: { ...proposalCandidate.approval, status: 'requested' },
+  }), 'utf8');
+  assert.throws(() => createApprovedFeedbackProposal({
+    projectRoot: root,
+    inputFile: feedbackProposalPath,
+  }), /Approved feedback proposal must include/);
+  writeFileSync(feedbackProposalPath, JSON.stringify(proposalCandidate), 'utf8');
+  const proposal = createApprovedFeedbackProposal({
+    projectRoot: root,
+    inputFile: feedbackProposalPath,
+  });
+  assert.equal(proposal.status, 'approved-proposal');
+  assert.equal(proposal.applyStatus, 'not-applied');
+  assert.equal(proposal.written, true);
+  assert.equal(existsSync(join(root, '.resonant-code', 'playbook', 'local-augment.yaml')), false);
+  const persistedProposal = JSON.parse(readFileSync(proposal.proposalPath, 'utf8'));
+  assert.equal(persistedProposal.approval.approvedBy, 'workflow-test-reviewer');
+  assert.deepEqual(persistedProposal.sourceAggregate, sourceAggregate);
+  assert.equal(persistedProposal.applyStatus, 'not-applied');
+  assert.equal(createApprovedFeedbackProposal({
+    projectRoot: root,
+    inputFile: feedbackProposalPath,
+  }).written, false);
+
+  writeFileSync(feedbackProposalPath, JSON.stringify({
+    ...proposalCandidate,
+    aggregateFingerprint: '0'.repeat(16),
+  }), 'utf8');
+  assert.throws(() => createApprovedFeedbackProposal({
+    projectRoot: root,
+    inputFile: feedbackProposalPath,
+  }), /changed; inspect it again/);
 
   const explained = explainCodeSession({ sessionPath: prepared.sessionPath });
   assert.equal(explained.status, 'ok');

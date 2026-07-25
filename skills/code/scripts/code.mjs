@@ -3,22 +3,26 @@ import { fileURLToPath } from 'node:url';
 import {
   autoCodeTask,
   completeCodeTask,
+  createApprovedFeedbackProposal,
   explainCodeSession,
   getCodeStatus,
+  inspectCodeFeedback,
   prepareCodeTask,
 } from '../internal/workflow.mjs';
 
 export {
   autoCodeTask,
   completeCodeTask,
+  createApprovedFeedbackProposal,
   explainCodeSession,
   getCodeStatus,
+  inspectCodeFeedback,
   prepareCodeTask,
 } from '../internal/workflow.mjs';
 
 function parseCli(argv) {
   const [command, ...rest] = argv;
-  if (!command) throw new Error('Expected a command: prepare, auto, complete, explain, status, or doctor.');
+  if (!command) throw new Error('Expected a command: prepare, auto, complete, explain, feedback, propose-feedback-change, status, or doctor.');
 
   if (command === 'prepare' || command === 'auto') {
     const { positionals, flags } = parseFlags(rest);
@@ -77,6 +81,30 @@ function parseCli(argv) {
     const sessionPath = single(flags, 'session');
     if (!sessionPath) throw new Error('explain requires --session <path>.');
     return { command, options: { sessionPath } };
+  }
+
+  if (command === 'feedback') {
+    const { positionals, flags } = parseFlags(rest);
+    assertAllowedFlags(flags, ['guidance-id']);
+    const projectRoot = positionals[0];
+    if (!projectRoot) throw new Error('feedback requires <project-root>.');
+    return {
+      command,
+      options: {
+        projectRoot,
+        guidanceIds: multiple(flags, 'guidance-id'),
+      },
+    };
+  }
+
+  if (command === 'propose-feedback-change') {
+    const { positionals, flags } = parseFlags(rest);
+    assertAllowedFlags(flags, ['input']);
+    const projectRoot = positionals[0];
+    if (!projectRoot) throw new Error('propose-feedback-change requires <project-root>.');
+    const inputFile = single(flags, 'input');
+    if (!inputFile) throw new Error('propose-feedback-change requires --input <approved-proposal.json>.');
+    return { command, options: { projectRoot, inputFile } };
   }
 
   if (command === 'status' || command === 'doctor') {
@@ -145,6 +173,8 @@ async function main() {
   else if (parsed.command === 'auto') result = await autoCodeTask(parsed.options);
   else if (parsed.command === 'complete') result = await completeCodeTask(parsed.options);
   else if (parsed.command === 'explain') result = explainCodeSession(parsed.options);
+  else if (parsed.command === 'feedback') result = inspectCodeFeedback(parsed.options);
+  else if (parsed.command === 'propose-feedback-change') result = createApprovedFeedbackProposal(parsed.options);
   else result = await getCodeStatus(parsed.options);
   process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
 }

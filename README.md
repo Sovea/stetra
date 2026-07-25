@@ -140,6 +140,10 @@ Durable, reviewable project data:
 - `.resonant-code/checks.json` — explicit logical-check-to-command mappings
 - `.resonant-code/rccl.yaml` — evidence-current repository observations
 - `.resonant-code/feedback/verified-events.jsonl` — bounded evidence-backed outcomes
+- `.resonant-code/feedback/aggregates.json` — Runtime-owned fact-only counts by
+  guidance ID
+- `.resonant-code/feedback/change-proposals/` — explicitly approved,
+  inspectable policy proposals that remain unapplied
 
 Optional user-scoped data:
 
@@ -162,7 +166,9 @@ Generated task sessions live under `.resonant-code/context/` and should normally
 - Successful `prepare` captures the dirty-worktree baseline. `complete` computes
   exact baseline-to-current file facts and runs only explicit non-shell check
   mappings; attestation JSON cannot supply its own changes or check results.
-- Feedback records only evidence-backed satisfied, violated, and approved-exception outcomes. Unverified output does not improve a score.
+- Feedback records only evidence-backed satisfied, violated, and
+  approved-exception outcomes. Runtime aggregates facts by guidance ID without
+  raw explanations; no threshold changes policy automatically.
 - Decision Trace is a compact explanation surface, not an event-log dump.
 
 ## Development
