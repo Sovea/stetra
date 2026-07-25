@@ -18,7 +18,7 @@ try {
   writeFileSync(join(root, 'package.json'), '{"type":"module"}\n', 'utf8');
   writeFileSync(join(root, 'src', 'example.ts'), 'export const value = 1;\n', 'utf8');
 
-  const prepared = await autoCodeTask({
+  const taskOptions = {
     projectRoot: root,
     pluginRoot,
     taskDescription: 'Fix one implementation detail',
@@ -27,14 +27,33 @@ try {
     targets: ['src/example.ts'],
     risk: 'low',
     scope: 'local',
+  };
+  const overflow = await autoCodeTask(taskOptions);
+  assert.equal(overflow.status, 'guidance-overflow');
+  assert.ok(overflow.selectableConsider.length > 3);
+  assert.ok(!('sessionPath' in overflow));
+
+  const selectionPath = join(root, 'guidance-selection.json');
+  writeFileSync(selectionPath, JSON.stringify({
+    considerIds: [
+      'bugfix-add-supporting-validation-01',
+      'ts-honest-and-precise-types-01',
+    ],
+    rationale: 'The defect requires a regression test and precise TypeScript boundary handling.',
+  }, null, 2), 'utf8');
+  const prepared = await autoCodeTask({
+    ...taskOptions,
+    selectionFile: selectionPath,
   });
 
   assert.ok(prepared.status === 'compiled' || prepared.status === 'needs-attention');
   assert.equal(prepared.schemaVersion, '1.0');
   assert.equal(prepared.guidanceMode, 'standard');
   assert.equal(prepared.task.changeType, 'bugfix');
-  assert.ok(prepared.guidance.required.length <= 3);
-  assert.ok(prepared.guidance.consider.length <= 3);
+  assert.deepEqual(
+    prepared.guidance.consider.map((item) => item.id),
+    ['bugfix-add-supporting-validation-01', 'ts-honest-and-precise-types-01'],
+  );
   assert.ok(prepared.sessionPath);
   assert.ok(!('postCompileContracts' in prepared));
   assert.ok(!('agentLoop' in prepared));

@@ -49,7 +49,7 @@ observations:
 
   const runtime = await import(pathToFileURL(join(plugin, 'runtime', 'dist', 'index.mjs')).href);
   assert.deepEqual(Object.keys(runtime).sort(), ['compileChange', 'evaluateChange']);
-  const decision = await runtime.compileChange({
+  const compileInput = {
     builtinRoot: join(plugin, 'playbook'),
     rcclPath: join(project, '.resonant-code', 'rccl.yaml'),
     projectRoot: project,
@@ -69,17 +69,37 @@ observations:
       evidenceRefs: ['example.ts:1-1'],
       confidence: 0.9,
     }],
+  };
+  const overflow = await runtime.compileChange(compileInput);
+  assert.equal(overflow.status, 'guidance-overflow');
+  assert.ok(overflow.selectableConsider.length > 3);
+  assert.ok(overflow.candidateDetails.some((item) => item.id === 'rccl:obs-export-boundary'));
+
+  const decision = await runtime.compileChange({
+    ...compileInput,
+    deliverySelection: {
+      considerIds: [
+        'feature-start-from-requested-behavior-01',
+        'ts-explicit-public-interfaces-01',
+        'rccl:obs-export-boundary',
+      ],
+      rationale: 'The selected optional guidance covers requested behavior, the public TypeScript API, and the observed export boundary.',
+    },
   });
-  assert.notEqual(decision.status, 'needs-interpretation');
-  if (decision.status === 'needs-interpretation') throw new Error('Unexpected interpretation request.');
   assert.equal(decision.schemaVersion, '1.0');
   assert.equal(decision.status, 'compiled');
   assert.equal(decision.task.changeType, 'feature');
   assert.ok(decision.trace.selectedLayers.includes('builtin/task-types/feature'));
   assert.deepEqual(decision.trace.relevantObservationIds, ['obs-export-boundary']);
   assert.ok(decision.trace.relationDecisions.some((item) => item.status === 'accepted' && item.relation === 'reinforce'));
-  assert.ok(decision.guidance.required.length <= 3);
-  assert.ok(decision.guidance.consider.length <= 3);
+  assert.deepEqual(
+    decision.guidance.consider.map((item) => item.id),
+    [
+      'feature-start-from-requested-behavior-01',
+      'ts-explicit-public-interfaces-01',
+      'rccl:obs-export-boundary',
+    ],
+  );
   assert.ok(decision.trace.deliveredGuidanceIds.length > 0);
 
   const checks = decision.verificationPlan.commands.map((command) => ({

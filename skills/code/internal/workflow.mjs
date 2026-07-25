@@ -24,6 +24,13 @@ export async function prepareCodeTask(options) {
   const relationProposals = options.relationFile
     ? readRelationProposals(options.relationFile)
     : [];
+  const deliverySelection = options.selectionFile
+    ? readDeliverySelection(options.selectionFile)
+    : options.deliverySelection;
+  const guidanceByteLimit = normalizePositiveInteger(
+    options.guidanceByteLimit,
+    'guidance byte limit',
+  );
   const output = await runtime.compileChange({
     projectRoot: paths.projectRoot,
     builtinRoot: paths.builtinRoot,
@@ -32,6 +39,8 @@ export async function prepareCodeTask(options) {
     mode: normalizeEnum(options.guidanceMode, ['standard', 'strict'], 'mode') ?? 'standard',
     task: buildTaskInput(options),
     ...(relationProposals.length ? { relationProposals } : {}),
+    ...(guidanceByteLimit ? { guidanceByteLimit } : {}),
+    ...(deliverySelection ? { deliverySelection } : {}),
   });
 
   if (output.status === 'needs-interpretation') {
@@ -42,6 +51,14 @@ export async function prepareCodeTask(options) {
       reasons: output.reasons,
       requiredFields: output.requiredFields,
       nextStep: 'Provide the missing task fields and run prepare again. No task-model artifact is required.',
+    };
+  }
+  if (output.status === 'guidance-overflow') {
+    return {
+      ...output,
+      nextStep: output.mandatoryBytes > output.byteLimit
+        ? 'Resolve the mandatory policy/task scope or rerun prepare with an explicitly chosen larger byte ceiling.'
+        : 'Choose task-relevant IDs from selectableConsider, write { "considerIds": [...], "rationale": "..." }, and rerun prepare with --selection-file.',
     };
   }
 
@@ -221,6 +238,14 @@ function readRelationProposals(filePath) {
   return proposals;
 }
 
+function readDeliverySelection(filePath) {
+  const value = readJsonFile(filePath, 'guidance delivery selection');
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error('Guidance selection file must contain { "considerIds": [], "rationale": "..." }.');
+  }
+  return value;
+}
+
 function normalizeChanges(value, projectRoot) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
     return { files: detectChangedFiles(projectRoot) };
@@ -300,6 +325,15 @@ function normalizeEnum(value, allowed, label) {
   if (value === undefined || value === null || value === '') return undefined;
   if (!allowed.includes(value)) throw new Error(`Invalid ${label}: expected one of ${allowed.join(', ')}.`);
   return value;
+}
+
+function normalizePositiveInteger(value, label) {
+  if (value === undefined || value === null || value === '') return undefined;
+  const number = typeof value === 'number' ? value : Number(value);
+  if (!Number.isInteger(number) || number <= 0) {
+    throw new Error(`Invalid ${label}: expected a positive integer.`);
+  }
+  return number;
 }
 
 function unique(values) {

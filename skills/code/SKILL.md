@@ -26,7 +26,9 @@ node <skill-directory>/scripts/code.mjs prepare <project-root> \
   [--target <path>] \
   [--risk <low|medium|high>] \
   [--scope <local|module|cross-module|repository>] \
-  [--mode <standard|strict>]
+  [--mode <standard|strict>] \
+  [--selection-file <path>] \
+  [--guidance-byte-limit <positive-integer>]
 ```
 
 `auto` is an alias for `prepare`.
@@ -36,6 +38,24 @@ Optional task flags are deliberately narrow: `--tech`, `--constraint`, `--avoid`
 Standard mode compiles directly for ordinary tasks. Strict mode requests missing interpretation only when change type, targets, or declared uncertainties prevent a trustworthy decision. It does not require a task-model file by default.
 
 If Runtime returns `needs-interpretation`, provide the listed task fields and rerun `prepare`.
+
+If Runtime returns `guidance-overflow`, do not start implementation and do not
+invent an item ranking. Required guidance, prohibitions, and unresolved tensions
+cannot be removed. If optional guidance caused the overflow, inspect
+`selectableConsider` and `candidateDetails`, choose the task-relevant optional
+IDs with host semantic judgment, and write:
+
+```json
+{
+  "considerIds": ["bugfix-add-supporting-validation-01"],
+  "rationale": "This defect needs a regression test that captures the corrected behavior."
+}
+```
+
+Then rerun `prepare` with `--selection-file <path>`. The execution packet uses
+one configurable UTF-8 byte ceiling (6,000 by default); it has no fixed
+required/consider/avoid item counts. A larger ceiling must be an explicit host
+choice via `--guidance-byte-limit`.
 
 If semantic judgment is needed for a candidate Playbook/RCCL relationship, write a small JSON relation file:
 
@@ -65,7 +85,9 @@ Use the compiled sections according to their actual behavior:
 3. `guidance.avoid` — prohibited patterns.
 4. `guidance.consider` — relevant advice and repository observations that are not hard requirements.
 
-Only these delivered items are evaluated after implementation. Items omitted by the budget remain visible in the Decision Trace but are not silently evaluated.
+Only these delivered items are evaluated after implementation. Optional items
+excluded by an explicit selection remain visible in the Decision Trace and are
+not silently evaluated.
 
 Run the commands listed in `verificationPlan.commands`. A command ID is logical; select the repository's canonical command for that check.
 

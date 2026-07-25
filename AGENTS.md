@@ -45,7 +45,8 @@ Do not expose task helpers, parsers, merge functions, feedback helpers, or skill
 `compileChange` accepts a canonical task context and optional bounded directive/observation relation proposals. It owns:
 
 - deterministic task normalization and strict-mode interpretation gates
-- Playbook loading, validation, local override, scope selection, and ranking
+- Playbook loading, validation, local override, scope selection, and explicit
+  authority ordering
 - task-relevant RCCL evidence re-verification
 - semantic relation validation and execution-mode adjudication
 - compact EGO budgets and Decision Trace
@@ -53,14 +54,13 @@ Do not expose task helpers, parsers, merge functions, feedback helpers, or skill
 
 Standard tasks compile directly. Do not reintroduce mandatory task-model, semantic-graph, capability-profile, cache, or evolution-proposal round trips.
 
-Guidance budgets are hard product behavior:
+Guidance budgeting is hard product behavior:
 
-- required: 3
-- consider: 3
-- avoid: 2
-- tensions: 2
-- examples: 1 per item
-- serialized guidance: 6 KB, trimming examples before guidance items
+- no per-section item limits
+- one configurable UTF-8 byte ceiling, 6 KB by default
+- required, avoid, and unresolved-tension guidance is never silently omitted
+- optional omissions require an explicit host selection and rationale
+- overflow returns an actionable result instead of truncating guidance
 
 Only delivered guidance IDs may be evaluated later.
 
@@ -77,7 +77,7 @@ RCCL stores observations only when omitting one could cause a different and wors
 
 Evidence verification checks safe repository-relative paths, file existence, line ranges, and snippet similarity. It proves evidence currency, not semantic truth or representativeness.
 
-Only a task-relevant observation with current fully matched evidence, high semantic confidence, reviewed status, and an accepted host semantic relation may change directive execution. Partial, stale, broken, low-confidence, or unreviewed observations are ambient at most. Deterministic token overlap is recall only and may never create a conflict or enforcement decision.
+Only a task-relevant observation with current fully matched evidence, high semantic confidence, reviewed status, and an accepted host semantic relation may change directive execution. Partial, stale, broken, low-confidence, or unreviewed observations are ambient at most. Token overlap may not create a relation, conflict, enforcement, or delivery decision.
 
 ### Evaluation and feedback boundary
 
@@ -138,7 +138,8 @@ Tests must cover the behavior that justifies the harness:
 
 - task and scope activation
 - local directive precedence
-- guidance budgets and delivered-ID boundaries
+- byte-ceiling overflow, explicit delivery selection, and delivered-ID
+  boundaries
 - current versus stale RCCL evidence
 - accepted, rejected, and downgraded semantic relations
 - strict interpretation and exception gates

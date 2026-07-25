@@ -24,7 +24,8 @@ function parseCli(argv) {
     const { positionals, flags } = parseFlags(rest);
     assertAllowedFlags(flags, [
       'task', 'plugin-root', 'mode', 'change-type', 'target', 'tech', 'risk', 'scope',
-      'constraint', 'uncertainty', 'avoid', 'relation-file',
+      'constraint', 'uncertainty', 'avoid', 'relation-file', 'selection-file',
+      'guidance-byte-limit',
     ]);
     const projectRoot = positionals[0];
     if (!projectRoot) throw new Error(`${command} requires <project-root>.`);
@@ -46,6 +47,8 @@ function parseCli(argv) {
         uncertainties: multiple(flags, 'uncertainty'),
         avoid: multiple(flags, 'avoid'),
         relationFile: single(flags, 'relation-file'),
+        selectionFile: single(flags, 'selection-file'),
+        guidanceByteLimit: single(flags, 'guidance-byte-limit'),
       },
     };
   }

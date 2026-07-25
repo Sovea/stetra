@@ -32,7 +32,13 @@ The two public Runtime operations are:
 - `compileChange` — normalize the task, activate Playbook directives, recheck relevant RCCL evidence, adjudicate optional semantic relations, and emit bounded guidance.
 - `evaluateChange` — evaluate the actual changed files, checks, evidence, and approved exceptions against only the delivered guidance IDs.
 
-Ordinary tasks require one preflight call and one postflight call. They do not require task-model, semantic-graph, adherence, capability-profile, cache, or evolution-proposal artifacts. Strict mode asks for interpretation only when missing task fields or declared uncertainty would make compilation untrustworthy.
+Ordinary tasks use a compact preflight decision and one postflight evaluation.
+If optional guidance exceeds the byte ceiling, preflight first returns an
+inspectable selection request and compiles only after the host supplies explicit
+task-relevant IDs. Tasks do not require task-model, semantic-graph, adherence,
+capability-profile, cache, or evolution-proposal artifacts. Strict mode asks for
+interpretation only when missing task fields or declared uncertainty would make
+compilation untrustworthy.
 
 ## Inputs and authority
 
@@ -48,16 +54,18 @@ Playbook and RCCL remain separate. A source excerpt can prove that cited evidenc
 
 ## Output budgets
 
-Preflight guidance is deliberately small:
+Preflight guidance has one configurable UTF-8 byte ceiling: 6,000 bytes by
+default. It has no per-section item counts.
 
-- up to 3 required items
-- up to 3 considerations
-- up to 2 avoid items
-- up to 2 repository tensions
-- up to 1 example per item
-- no more than 6 KB of guidance JSON; examples are trimmed before guidance items
+Runtime never silently removes required guidance, prohibitions, or unresolved
+tensions. When optional considerations exceed the ceiling, compilation returns
+`guidance-overflow` with every selectable ID, its compact instruction, byte
+cost, and full decision detail. The host must submit a bounded selection with a
+semantic rationale; Runtime records the selection in the Decision Trace and
+Decision ID. If mandatory guidance alone exceeds the ceiling, the task/policy
+scope or ceiling must be resolved explicitly.
 
-Lower-priority activated items can appear as trace omissions, but postflight never evaluates guidance that the task did not receive.
+Postflight evaluates only guidance that the compiled task actually received.
 
 ## Installation
 
@@ -94,6 +102,9 @@ node skills/code/scripts/code.mjs prepare . \
   --change-type bugfix \
   --target runtime/src/load/load-playbook.ts
 
+# If prepare reports guidance-overflow, choose relevant optional IDs in a
+# selection JSON and rerun with --selection-file <path>.
+
 # Implement the change and run the returned verification plan.
 
 node skills/code/scripts/code.mjs complete \
@@ -126,7 +137,8 @@ Generated task sessions live under `.resonant-code/context/` and should normally
 - Runtime exposes only `compileChange` and `evaluateChange` as public value APIs.
 - RCCL stores only observations with an explicit decision impact and non-empty evidence.
 - Only current, fully matched RCCL evidence with high semantic confidence, reviewed status, and an accepted semantic relation may change directive execution.
-- Structural token matching may recall ambient context; it may not create an execution-changing semantic claim.
+- Scope overlap may make an RCCL observation task-relevant and ambient; only an
+  explicit accepted host relation may connect it to a directive.
 - Skills perform lifecycle orchestration and filesystem IO; they do not reconstruct Playbook, RCCL, budgeting, or evaluation policy.
 - Feedback records only evidence-backed satisfied, violated, and approved-exception outcomes. Unverified output does not improve a score.
 - Decision Trace is a compact explanation surface, not an event-log dump.
