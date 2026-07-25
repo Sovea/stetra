@@ -18,9 +18,6 @@
     "rccl/src/parse.ts",
     "rccl/src/types.ts",
     "rccl/src/verify.ts",
-    "rccl/src/calibration-types.ts",
-    "rccl/src/indexing/**/*.ts",
-    "rccl/src/slicing/**/*.ts",
     "rccl/src/utils/**/*.ts"
   ]
 }

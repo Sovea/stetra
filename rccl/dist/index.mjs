@@ -1,384 +1,95 @@
-import { i as toYaml, n as parseCalibrationProposal, r as parseRcclDocument, t as verifyEvidence } from "./evidence.mjs";
+import { a as refreshObservationEvidence, c as safeRelativeEvidencePath, i as materializeVerifiedObservation, n as parseCalibrationProposal, o as toYaml, r as parseRcclDocument, s as readEvidenceWindow, t as parseCalibrationContract } from "./parse.mjs";
 import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, statSync, writeFileSync } from "node:fs";
-import { basename, dirname, extname, join, relative, resolve } from "node:path";
-import ignore from "ignore";
-//#region src/indexing/build-repo-index.ts
-const MAX_FILES = 2e4;
-const MAX_FILE_BYTES = 1024 * 1024;
-const MAX_TOTAL_BYTES = 64 * 1024 * 1024;
-const SOURCE_EXTENSIONS = new Map([
-	[".ts", "typescript"],
-	[".tsx", "typescript"],
-	[".js", "javascript"],
-	[".jsx", "javascript"],
-	[".mjs", "javascript"],
-	[".cjs", "javascript"],
-	[".py", "python"],
-	[".go", "go"],
-	[".rs", "rust"],
-	[".java", "java"],
-	[".kt", "kotlin"],
-	[".swift", "swift"],
-	[".vue", "vue"],
-	[".svelte", "svelte"],
-	[".astro", "astro"],
-	[".json", "config"],
-	[".yaml", "config"],
-	[".yml", "config"],
-	[".toml", "config"],
-	[".ini", "config"],
-	[".md", "documentation"],
-	[".mdx", "documentation"],
-	[".sql", "schema"],
-	[".graphql", "schema"],
-	[".proto", "schema"],
-	[".tf", "infra"]
-]);
-const SPECIAL_FILES = new Set([
-	"Dockerfile",
-	"Makefile",
-	"README",
-	"LICENSE",
-	"SECURITY",
-	"CONTRIBUTING",
-	"package-lock.json",
-	"pnpm-lock.yaml",
-	"yarn.lock",
-	"Cargo.lock",
-	"go.mod",
-	"go.sum"
-]);
-const IGNORE_DIRS = new Set([
-	"node_modules",
-	".git",
-	"dist",
-	"build",
-	"out",
-	".next",
-	".nuxt",
-	"coverage",
-	"__pycache__",
-	"vendor",
-	"target"
-]);
-function buildRepoIndex(projectRoot, scopeGlob = "auto") {
-	const candidates = discoverFiles(projectRoot);
-	const scoped = (scopeGlob === "auto" ? candidates : candidates.filter((file) => matchScope(file, scopeGlob))).sort();
-	const report = {
-		discovered_files: scoped.length,
-		indexed_files: 0,
-		read_bytes: 0,
-		skipped_oversize: 0,
-		skipped_unsupported: 0,
-		truncated: []
-	};
-	const files = [];
-	for (const file of scoped) {
-		if (files.length >= MAX_FILES) {
-			report.truncated.push("file-count-limit");
-			break;
-		}
-		if (!isSupported(file)) {
-			report.skipped_unsupported += 1;
-			continue;
-		}
-		const full = join(projectRoot, file);
-		let size = 0;
-		try {
-			size = statSync(full).size;
-		} catch {
-			continue;
-		}
-		if (size > MAX_FILE_BYTES) {
-			report.skipped_oversize += 1;
-			continue;
-		}
-		if (report.read_bytes + size > MAX_TOTAL_BYTES) {
-			report.truncated.push("total-read-limit");
-			break;
-		}
-		const indexed = indexFile(projectRoot, file);
-		report.read_bytes += size;
-		if (indexed) files.push(indexed);
-	}
-	report.indexed_files = files.length;
-	report.truncated = [...new Set(report.truncated)];
-	return {
-		files,
-		report
-	};
-}
-function discoverFiles(projectRoot) {
-	if (existsSync(join(projectRoot, ".git"))) try {
-		return execFileSync("git", [
-			"ls-files",
-			"--cached",
-			"--others",
-			"--exclude-standard",
-			"-z"
-		], {
-			cwd: projectRoot,
-			encoding: "utf8",
-			maxBuffer: 64 * 1024 * 1024
-		}).split("\0").filter(Boolean).map(normalize).filter(inScopeGeneratedPolicy);
-	} catch {}
-	const matcher = ignore();
-	const ignorePath = join(projectRoot, ".gitignore");
-	if (existsSync(ignorePath)) matcher.add(readFileSync(ignorePath, "utf8"));
-	return walkDir(projectRoot, projectRoot, matcher);
-}
-function walkDir(dir, projectRoot, matcher) {
-	const results = [];
-	let entries;
-	try {
-		entries = readdirSync(dir, { withFileTypes: true });
-	} catch {
-		return results;
-	}
-	for (const entry of entries) {
-		if (IGNORE_DIRS.has(entry.name)) continue;
-		const full = join(dir, entry.name);
-		const rel = normalize(relative(projectRoot, full));
-		if (matcher.ignores(rel) || !inScopeGeneratedPolicy(rel)) continue;
-		if (entry.isDirectory()) results.push(...walkDir(full, projectRoot, matcher));
-		else if (entry.isFile()) results.push(rel);
-	}
-	return results;
-}
-function inScopeGeneratedPolicy(file) {
-	const segments = normalize(file).split("/");
-	return !file.startsWith(".resonant-code/context/") && !file.startsWith(".git/") && !segments.some((segment) => IGNORE_DIRS.has(segment));
-}
-function isSupported(file) {
-	const name = basename(file);
-	return SOURCE_EXTENSIONS.has(extname(name).toLowerCase()) || SPECIAL_FILES.has(name) || /(^|\/)(README|ADR)[^/]*$/i.test(file) || /(^|\/)\.github\/workflows\//.test(file);
-}
-function matchScope(file, scopeGlob) {
-	if (scopeGlob === "**" || scopeGlob === "**/*") return true;
-	if (scopeGlob.endsWith("/**")) return file.startsWith(scopeGlob.slice(0, -3));
-	if (scopeGlob.includes("*")) {
-		const escaped = scopeGlob.replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*\*/g, ".*").replace(/\*/g, "[^/]*");
-		return new RegExp(`^${escaped}$`).test(file);
-	}
-	return file === scopeGlob || file.startsWith(`${scopeGlob}/`);
-}
-function indexFile(projectRoot, file) {
-	try {
-		const content = readFileSync(join(projectRoot, file), "utf-8").replace(/\r\n/g, "\n");
-		const lines = content.split("\n");
-		const language = SOURCE_EXTENSIONS.get(extname(file).toLowerCase()) ?? inferSpecialRole(file);
-		const imports = content.match(/\b(import|require|from)\b/g)?.length ?? 0;
-		const exports = content.match(/\b(export|module\.exports|pub\s+|func\s+[A-Z]|class\s+)\b/g)?.length ?? 0;
-		const symbols = content.match(/\b(function|class|interface|type|const|let|var|def|fn|struct|enum|trait)\b/g)?.length ?? 0;
-		return {
-			path: file,
-			language,
-			lines: lines.length,
-			is_test: /(^|\/)(__tests__\/|test\/|tests\/)|\.(test|spec)\./.test(file),
-			is_generated: /(^|\/)(generated|gen)(\/|\.)/.test(file),
-			package_root: file.split("/")[0] || ".",
-			imports_count: imports,
-			exports_count: exports,
-			symbol_density: lines.length === 0 ? 0 : Number((symbols / lines.length).toFixed(3)),
-			role_hints: inferRoleHints(file)
-		};
-	} catch {
-		return null;
-	}
-}
-function inferSpecialRole(file) {
-	if (/readme|adr|\.mdx?$/i.test(file)) return "documentation";
-	if (/docker|\.tf$|infra|deploy/i.test(file)) return "infra";
-	return "config";
-}
-function inferRoleHints(file) {
-	return [
-		.../(^|\/)(test|tests|__tests__)(\/|$)|\.(test|spec)\./.test(file) ? ["test"] : [],
-		.../(^|\/)(config|\.github)(\/|$)|\.(json|ya?ml|toml|ini)$/.test(file) ? ["config"] : [],
-		.../readme|adr|\.mdx?$/i.test(file) ? ["documentation"] : [],
-		.../schema|migration|\.sql$|\.proto$|\.graphql$/.test(file) ? ["schema-or-migration"] : [],
-		.../docker|infra|deploy|\.tf$/.test(file) ? ["infra"] : []
-	];
-}
-function normalize(value) {
-	return value.replace(/\\/g, "/");
-}
-//#endregion
-//#region src/slicing/extract-windows.ts
-const DEFAULT_SAMPLING_POLICY = {
-	max_slices: 8,
-	max_files_per_slice: 4,
-	max_windows_per_file: 3,
-	target_coverage: {
-		roots: true,
-		modules: true,
-		boundaries: true,
-		migrations: true,
-		style_clusters: true
-	}
-};
-function extractWindowsForFiles(projectRoot, files, policy = DEFAULT_SAMPLING_POLICY) {
-	const windows = [];
-	for (const file of files.slice(0, policy.max_files_per_slice)) {
-		const content = readSafe(projectRoot, file.path);
-		if (!content) continue;
-		const lines = content.split("\n");
-		const definitions = findDefinitionLines(lines);
-		const descriptors = [];
-		descriptors.push({
-			purpose: "header",
-			start: 1,
-			end: Math.min(lines.length, 24)
-		});
-		if (definitions.length > 0) descriptors.push(windowAround(definitions[0], lines.length, "structure"));
-		if (definitions.length > 1) descriptors.push(windowAround(definitions[Math.floor(definitions.length / 2)], lines.length, "implementation"));
-		else descriptors.push(windowAround(Math.max(1, Math.floor(lines.length * .6)), lines.length, "implementation"));
-		const unique = /* @__PURE__ */ new Map();
-		for (const descriptor of descriptors.slice(0, policy.max_windows_per_file)) {
-			const start = Math.max(1, descriptor.start);
-			const end = Math.min(lines.length, descriptor.end);
-			const key = `${descriptor.purpose}:${start}:${end}`;
-			unique.set(key, {
-				file: file.path,
-				start_line: start,
-				end_line: end,
-				purpose: descriptor.purpose,
-				snippet: lines.slice(start - 1, end).join("\n").trim()
-			});
-		}
-		windows.push(...[...unique.values()].filter((window) => window.snippet.length > 0));
-	}
-	return windows;
-}
-function windowAround(line, totalLines, purpose) {
-	const radius = purpose === "implementation" ? 16 : 12;
-	return {
-		purpose,
-		start: Math.max(1, line - radius),
-		end: Math.min(totalLines, line + radius)
-	};
-}
-function findDefinitionLines(lines) {
-	const result = [];
-	for (let index = 0; index < lines.length; index += 1) if (/\b(function|class|interface|type|const|let|var|def|fn|struct|enum|trait)\b/.test(lines[index])) result.push(index + 1);
-	return result;
-}
-function readSafe(projectRoot, file) {
-	try {
-		return readFileSync(join(projectRoot, file), "utf-8").replace(/\r\n/g, "\n");
-	} catch {
-		return null;
-	}
-}
-//#endregion
-//#region src/verify.ts
-function materializeVerifiedObservation(proposal, projectRoot, gitRef, prior, now = /* @__PURE__ */ new Date()) {
-	const checkedAt = now.toISOString();
-	const verifiedCount = proposal.evidence.map((evidence) => verifyEvidence(evidence, projectRoot)).filter((result) => result.status === "match").length;
-	const status = verifiedCount === proposal.evidence.length ? "current" : verifiedCount > 0 ? "partial" : prior?.evidenceVerification.status === "current" || prior?.evidenceVerification.status === "partial" ? "stale" : "broken";
-	const lifecycleStatus = status === "stale" || status === "broken" ? "stale" : "active";
-	return {
-		...proposal,
-		reviewStatus: proposal.reviewStatus ?? "generated",
-		evidenceVerification: {
-			status,
-			verifiedCount,
-			totalCount: proposal.evidence.length,
-			checkedAt
-		},
-		lifecycle: {
-			status: prior?.lifecycle.status === "superseded" ? "superseded" : lifecycleStatus,
-			contentFingerprint: observationFingerprint(proposal),
-			firstSeenGitRef: prior?.lifecycle.firstSeenGitRef ?? gitRef,
-			lastSeenGitRef: gitRef,
-			lastVerifiedAt: checkedAt,
-			...prior?.lifecycle.supersededBy ? { supersededBy: prior.lifecycle.supersededBy } : {}
-		}
-	};
-}
-function refreshObservationEvidence(observation, projectRoot, gitRef, now = /* @__PURE__ */ new Date()) {
-	return materializeVerifiedObservation(observation, projectRoot, gitRef, observation, now);
-}
-function observationFingerprint(observation) {
-	return createHash("sha256").update(JSON.stringify({
-		id: observation.id,
-		category: observation.category,
-		scope: observation.scope,
-		statement: observation.statement,
-		affects: observation.affects,
-		decisionImpact: observation.decisionImpact,
-		evidence: observation.evidence
-	})).digest("hex").slice(0, 16);
-}
-//#endregion
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
 //#region src/lifecycle.ts
-const DEFAULT_MAX_FILES = 8;
-const MAX_ALLOWED_FILES = 20;
+const MAX_EVIDENCE_WINDOWS = 20;
+const MAX_LINES_PER_WINDOW = 200;
+const MAX_TOTAL_EVIDENCE_BYTES = 128 * 1024;
 function prepareCalibration(input) {
 	const projectRoot = resolve(input.projectRoot);
-	const maxFiles = Math.min(MAX_ALLOWED_FILES, Math.max(1, input.maxFiles ?? DEFAULT_MAX_FILES));
-	const indexed = buildRepoIndex(projectRoot, input.scope ?? "auto");
-	const requestedPaths = uniquePaths(input.paths ?? []);
-	const selectedFiles = (requestedPaths.length ? indexed.files.filter((file) => requestedPaths.some((path) => overlaps(path, file.path))) : rankFiles(indexed.files)).slice(0, maxFiles);
-	const windows = extractWindowsForFiles(projectRoot, selectedFiles, {
-		max_slices: 1,
-		max_files_per_slice: maxFiles,
-		max_windows_per_file: 2,
-		target_coverage: {
-			roots: false,
-			modules: true,
-			boundaries: true,
-			migrations: true,
-			style_clusters: false
+	const selected = normalizeSelections(input.evidenceSelections);
+	if (selected.diagnostics.length) return {
+		status: "rejected",
+		diagnostics: selected.diagnostics
+	};
+	const diagnostics = [];
+	const windows = [];
+	let totalBytes = 0;
+	for (const [index, selection] of selected.selections.entries()) {
+		const read = readEvidenceWindow(selection, projectRoot);
+		if (read.status !== "match") {
+			diagnostics.push({
+				path: `evidenceSelections[${index}]`,
+				code: `EVIDENCE_${read.status.toUpperCase().replace(/-/g, "_")}`,
+				message: `${selection.file}:${selection.lineRange[0]}-${selection.lineRange[1]} could not be read as an in-project source window.`
+			});
+			continue;
 		}
-	}).map((window) => ({
-		file: window.file,
-		lineRange: [window.start_line, window.end_line],
-		purpose: window.purpose,
-		snippet: window.snippet
-	}));
-	const selectedPaths = selectedFiles.map((file) => file.path);
-	const contextFingerprint = hash([
-		"1.0",
-		selectedPaths,
-		windows.map((window) => [
-			window.file,
-			window.lineRange,
-			window.snippet
-		])
-	]);
+		if (!read.snippet.trim() || read.snippet.includes("\0")) {
+			diagnostics.push({
+				path: `evidenceSelections[${index}]`,
+				code: "UNSUPPORTED_EVIDENCE_CONTENT",
+				message: "Evidence windows must contain non-empty text without NUL bytes."
+			});
+			continue;
+		}
+		totalBytes += Buffer.byteLength(read.snippet, "utf8");
+		windows.push({
+			...selection,
+			windowId: windowId(selection, read.snippet),
+			snippet: read.snippet
+		});
+	}
+	if (totalBytes > MAX_TOTAL_EVIDENCE_BYTES) diagnostics.push({
+		path: "evidenceSelections",
+		code: "EVIDENCE_BYTES_EXCEEDED",
+		message: `Selected evidence is ${totalBytes} bytes; the operational limit is ${MAX_TOTAL_EVIDENCE_BYTES} bytes.`
+	});
+	if (diagnostics.length) return {
+		status: "rejected",
+		diagnostics
+	};
+	const prompt = buildPrompt(windows);
+	const schema = proposalSchema();
+	const contextFingerprint = contractFingerprint(windows, prompt, schema);
 	return {
 		status: "ready",
 		contract: {
 			schemaVersion: "1.0",
 			requestId: `rccl-calibration:${contextFingerprint}`,
 			contextFingerprint,
-			selectedPaths,
-			prompt: buildPrompt(selectedPaths),
-			proposalSchema: proposalSchema()
+			evidenceWindows: windows,
+			prompt,
+			proposalSchema: schema
 		},
 		context: {
-			files: selectedFiles.length,
+			files: new Set(windows.map((window) => window.file)).size,
 			windows
-		}
+		},
+		diagnostics: []
 	};
 }
 function commitCalibration(input) {
 	const projectRoot = resolve(input.projectRoot);
+	const parsedContract = parseCalibrationContract(input.contract);
+	if (!parsedContract.valid || !parsedContract.data) return rejected(parsedContract.diagnostics, proposalCount(input.proposal));
+	const contractDiagnostics = verifyContract(parsedContract.data, projectRoot);
+	if (contractDiagnostics.length) return rejected(contractDiagnostics, proposalCount(input.proposal));
 	const parsed = parseCalibrationProposal(input.proposal);
-	const proposedCount = parsed.data?.observations.length ?? 0;
+	const proposedCount = parsed.data?.observations.length ?? proposalCount(input.proposal);
 	if (!parsed.valid || !parsed.data) return rejected(parsed.diagnostics, proposedCount);
-	const issued = prepareCalibration(input);
-	const identityDiagnostics = validateIdentity(parsed.data, issued.contract);
+	const identityDiagnostics = validateIdentity(parsed.data, parsedContract.data);
 	if (identityDiagnostics.length) return rejected(identityDiagnostics, proposedCount);
+	const resolved = resolveProposalEvidence(parsed.data.observations, parsedContract.data);
+	if (resolved.diagnostics.length) return rejected(resolved.diagnostics, proposedCount);
 	const rcclPath = resolve(input.rcclPath ?? join(projectRoot, ".resonant-code", "rccl.yaml"));
 	const existing = loadExistingDocument(rcclPath);
 	if (existing.diagnostics.length) return rejected(existing.diagnostics, proposedCount);
 	const gitRef = currentGitRef(projectRoot);
 	const existingById = new Map(existing.document?.observations.map((observation) => [observation.id, observation]) ?? []);
-	const verified = parsed.data.observations.map((proposal) => materializeVerifiedObservation(proposal, projectRoot, gitRef, existingById.get(proposal.id)));
+	const verified = resolved.observations.map((content) => materializeVerifiedObservation(content, projectRoot, gitRef, existingById.get(content.id)));
 	const verifiedById = new Map(verified.map((observation) => [observation.id, observation]));
 	const observations = parsed.data.replace ? verified : [...(existing.document?.observations ?? []).filter((observation) => !verifiedById.has(observation.id)), ...verified].sort((left, right) => left.id.localeCompare(right.id));
 	const document = {
@@ -394,6 +105,96 @@ function commitCalibration(input) {
 		document,
 		diagnostics: verificationDiagnostics(verified),
 		summary: summarize(proposedCount, verified, 0)
+	};
+}
+function approveContext(input) {
+	const projectRoot = resolve(input.projectRoot);
+	const rcclPath = resolve(input.rcclPath ?? join(projectRoot, ".resonant-code", "rccl.yaml"));
+	const approvedBy = input.approvedBy?.trim();
+	const observationIds = [...new Set(input.observationIds ?? [])].sort();
+	const inputDiagnostics = [];
+	if (!approvedBy) inputDiagnostics.push({
+		path: "approvedBy",
+		code: "MISSING_APPROVER",
+		message: "approvedBy is required."
+	});
+	if (observationIds.length === 0) inputDiagnostics.push({
+		path: "observationIds",
+		code: "MISSING_OBSERVATION_IDS",
+		message: "At least one observation ID is required."
+	});
+	if (!existsSync(rcclPath)) inputDiagnostics.push({
+		path: "rcclPath",
+		code: "RCCL_NOT_FOUND",
+		message: `RCCL document does not exist at ${rcclPath}.`
+	});
+	if (inputDiagnostics.length) return approvalRejected(inputDiagnostics);
+	const parsed = parseRcclDocument(readFileSync(rcclPath, "utf8"));
+	if (!parsed.valid || !parsed.data) return approvalRejected(parsed.diagnostics);
+	const byId = new Map(parsed.data.observations.map((observation) => [observation.id, observation]));
+	const diagnostics = [];
+	for (const id of observationIds) {
+		const observation = byId.get(id);
+		if (!observation) diagnostics.push({
+			path: `observationIds.${id}`,
+			code: "OBSERVATION_NOT_FOUND",
+			message: `Observation ${id} does not exist.`
+		});
+		else if (observation.lifecycle.status === "superseded") diagnostics.push({
+			path: `observations.${id}.lifecycle`,
+			code: "OBSERVATION_SUPERSEDED",
+			message: `Observation ${id} is superseded and cannot be approved.`
+		});
+	}
+	if (diagnostics.length) return approvalRejected(diagnostics);
+	const unchangedObservationIds = observationIds.filter((id) => byId.get(id)?.reviewStatus === "reviewed");
+	const pendingIds = observationIds.filter((id) => byId.get(id)?.reviewStatus !== "reviewed");
+	if (pendingIds.length === 0) return {
+		status: "approved",
+		document: parsed.data,
+		diagnostics: [],
+		approvedObservationIds: [],
+		unchangedObservationIds
+	};
+	const now = /* @__PURE__ */ new Date();
+	const gitRef = currentGitRef(projectRoot);
+	const refreshedById = new Map(pendingIds.map((id) => {
+		return [id, refreshObservationEvidence(byId.get(id), projectRoot, gitRef, now)];
+	}));
+	for (const [id, observation] of refreshedById) if (observation.evidenceVerification.status !== "current" || observation.lifecycle.status !== "active") diagnostics.push({
+		path: `observations.${id}.evidence`,
+		code: "APPROVAL_REQUIRES_CURRENT_EVIDENCE",
+		message: `Observation ${id} must have fully current evidence before approval.`
+	});
+	if (diagnostics.length) return approvalRejected(diagnostics);
+	const approvedAt = now.toISOString();
+	const observations = parsed.data.observations.map((observation) => {
+		const refreshed = refreshedById.get(observation.id);
+		if (!refreshed) return observation;
+		return {
+			...refreshed,
+			reviewStatus: "reviewed",
+			approval: {
+				approvedBy,
+				approvedAt,
+				contentFingerprint: refreshed.lifecycle.contentFingerprint
+			}
+		};
+	});
+	const document = {
+		...parsed.data,
+		generatedAt: approvedAt,
+		gitRef,
+		observations
+	};
+	writeYamlAtomic(rcclPath, document);
+	return {
+		status: "approved",
+		written: rcclPath,
+		document,
+		diagnostics: [],
+		approvedObservationIds: pendingIds,
+		unchangedObservationIds
 	};
 }
 function validateContext(input) {
@@ -427,19 +228,150 @@ function validateContext(input) {
 		changedObservationIds
 	};
 }
+function normalizeSelections(input) {
+	if (!Array.isArray(input) || input.length === 0) return {
+		selections: [],
+		diagnostics: [{
+			path: "evidenceSelections",
+			code: "MISSING_EVIDENCE_SELECTIONS",
+			message: "Select at least one exact repository evidence window; RCCL does not choose files or ranges."
+		}]
+	};
+	if (input.length > MAX_EVIDENCE_WINDOWS) return {
+		selections: [],
+		diagnostics: [{
+			path: "evidenceSelections",
+			code: "TOO_MANY_EVIDENCE_WINDOWS",
+			message: `Select at most ${MAX_EVIDENCE_WINDOWS} evidence windows per calibration request.`
+		}]
+	};
+	const diagnostics = [];
+	const selections = [];
+	const keys = /* @__PURE__ */ new Set();
+	for (const [index, raw] of input.entries()) {
+		if (!raw || typeof raw !== "object") {
+			diagnostics.push({
+				path: `evidenceSelections[${index}]`,
+				code: "MALFORMED_EVIDENCE_SELECTION",
+				message: "Evidence selection must contain file and lineRange."
+			});
+			continue;
+		}
+		const file = typeof raw.file === "string" ? raw.file.trim().replace(/\\/g, "/").replace(/^\.\//, "") : "";
+		const lineRange = raw.lineRange;
+		if (!safeRelativeEvidencePath(file)) diagnostics.push({
+			path: `evidenceSelections[${index}].file`,
+			code: "INVALID_EVIDENCE_PATH",
+			message: "Evidence file must be a safe repository-relative path."
+		});
+		if (!Array.isArray(lineRange) || lineRange.length !== 2 || !lineRange.every(Number.isInteger) || lineRange[0] < 1 || lineRange[1] < lineRange[0]) {
+			diagnostics.push({
+				path: `evidenceSelections[${index}].lineRange`,
+				code: "INVALID_LINE_RANGE",
+				message: "lineRange must be positive [start, end] with end >= start."
+			});
+			continue;
+		}
+		if (lineRange[1] - lineRange[0] + 1 > MAX_LINES_PER_WINDOW) diagnostics.push({
+			path: `evidenceSelections[${index}].lineRange`,
+			code: "EVIDENCE_WINDOW_TOO_LARGE",
+			message: `One evidence window may contain at most ${MAX_LINES_PER_WINDOW} lines.`
+		});
+		const key = `${file}:${lineRange[0]}-${lineRange[1]}`;
+		if (keys.has(key)) diagnostics.push({
+			path: `evidenceSelections[${index}]`,
+			code: "DUPLICATE_EVIDENCE_SELECTION",
+			message: `Duplicate evidence selection ${key}.`
+		});
+		keys.add(key);
+		selections.push({
+			file,
+			lineRange: [lineRange[0], lineRange[1]]
+		});
+	}
+	selections.sort((left, right) => left.file.localeCompare(right.file) || left.lineRange[0] - right.lineRange[0] || left.lineRange[1] - right.lineRange[1]);
+	return {
+		selections,
+		diagnostics
+	};
+}
+function verifyContract(contract, projectRoot) {
+	const diagnostics = [];
+	for (const [index, window] of contract.evidenceWindows.entries()) {
+		const expectedWindowId = windowId(window, window.snippet);
+		if (window.windowId !== expectedWindowId) diagnostics.push({
+			path: `contract.evidenceWindows[${index}].windowId`,
+			code: "WINDOW_ID_MISMATCH",
+			message: "Evidence window content does not match its identifier."
+		});
+		const current = readEvidenceWindow(window, projectRoot);
+		if (current.status !== "match" || current.snippet !== window.snippet) diagnostics.push({
+			path: `contract.evidenceWindows[${index}]`,
+			code: "CONTEXT_WINDOW_STALE",
+			message: `${window.file}:${window.lineRange[0]}-${window.lineRange[1]} changed after prepare; issue a new contract.`
+		});
+	}
+	const expectedFingerprint = contractFingerprint(contract.evidenceWindows, contract.prompt, contract.proposalSchema);
+	if (contract.contextFingerprint !== expectedFingerprint) diagnostics.push({
+		path: "contract.contextFingerprint",
+		code: "CONTRACT_FINGERPRINT_MISMATCH",
+		message: "Contract fields do not match contextFingerprint."
+	});
+	if (contract.requestId !== `rccl-calibration:${expectedFingerprint}`) diagnostics.push({
+		path: "contract.requestId",
+		code: "CONTRACT_REQUEST_ID_MISMATCH",
+		message: "Contract requestId does not match its content."
+	});
+	return diagnostics;
+}
 function validateIdentity(proposal, contract) {
 	const diagnostics = [];
 	if (proposal.requestId !== contract.requestId) diagnostics.push({
 		path: "requestId",
 		code: "REQUEST_ID_MISMATCH",
-		message: "Proposal does not match the currently issued calibration request."
+		message: "Proposal does not match the supplied calibration request."
 	});
 	if (proposal.contextFingerprint !== contract.contextFingerprint) diagnostics.push({
 		path: "contextFingerprint",
 		code: "CONTEXT_FINGERPRINT_MISMATCH",
-		message: "Repository context changed; rerun prepare."
+		message: "Proposal does not match the supplied repository context."
 	});
 	return diagnostics;
+}
+function resolveProposalEvidence(proposals, contract) {
+	const byId = new Map(contract.evidenceWindows.map((window) => [window.windowId, window]));
+	const diagnostics = [];
+	return {
+		observations: proposals.map((proposal, observationIndex) => {
+			const evidence = proposal.evidence.flatMap((reference, evidenceIndex) => {
+				const window = byId.get(reference.windowId);
+				if (!window) {
+					diagnostics.push({
+						path: `observations[${observationIndex}].evidence[${evidenceIndex}].windowId`,
+						code: "EVIDENCE_WINDOW_NOT_IN_CONTRACT",
+						message: `Evidence window ${reference.windowId} was not supplied by prepare.`
+					});
+					return [];
+				}
+				return [{
+					file: window.file,
+					lineRange: window.lineRange,
+					snippet: window.snippet
+				}];
+			});
+			return {
+				id: proposal.id,
+				category: proposal.category,
+				scope: proposal.scope,
+				statement: proposal.statement,
+				affects: proposal.affects,
+				decisionImpact: proposal.decisionImpact,
+				semanticConfidence: proposal.semanticConfidence,
+				evidence
+			};
+		}),
+		diagnostics
+	};
 }
 function loadExistingDocument(rcclPath) {
 	if (!existsSync(rcclPath)) return { diagnostics: [] };
@@ -486,18 +418,17 @@ function rejected(diagnostics, proposed) {
 		}
 	};
 }
-function rankFiles(files) {
-	return [...files].sort((left, right) => fileScore(right) - fileScore(left) || left.path.localeCompare(right.path));
+function approvalRejected(diagnostics) {
+	return {
+		status: "rejected",
+		diagnostics,
+		approvedObservationIds: [],
+		unchangedObservationIds: []
+	};
 }
-function fileScore(file) {
-	return file.exports_count * 3 + file.imports_count + (file.role_hints.includes("schema-or-migration") ? 20 : 0) + (/index\.|runtime|public|api|boundary/.test(file.path) ? 10 : 0) - (file.role_hints.includes("test") ? 5 : 0) - (file.role_hints.includes("documentation") ? 5 : 0);
-}
-function overlaps(requested, file) {
-	const path = requested.replace(/\\/g, "/").replace(/^\.\//, "").replace(/\/$/, "");
-	return file === path || file.startsWith(`${path}/`) || path.startsWith(`${file}/`);
-}
-function uniquePaths(paths) {
-	return [...new Set(paths.map((path) => path.replace(/\\/g, "/").replace(/^\.\//, "").trim()).filter(Boolean))];
+function proposalCount(proposal) {
+	if (typeof proposal === "string") return 0;
+	return Array.isArray(proposal?.observations) ? proposal.observations.length : 0;
 }
 function currentGitRef(projectRoot) {
 	try {
@@ -520,16 +451,39 @@ function writeYamlAtomic(path, value) {
 	writeFileSync(temporary, toYaml(value), "utf8");
 	renameSync(temporary, path);
 }
-function hash(value) {
-	return createHash("sha256").update(JSON.stringify(value)).digest("hex").slice(0, 16);
+function sha256(value) {
+	return createHash("sha256").update(JSON.stringify(value)).digest("hex");
 }
-function buildPrompt(paths) {
+function windowId(selection, snippet) {
+	return `window:${sha256([
+		selection.file,
+		selection.lineRange,
+		snippet
+	])}`;
+}
+function contractFingerprint(windows, prompt, schema) {
+	return sha256([
+		"1.0",
+		windows.map((window) => [
+			window.windowId,
+			window.file,
+			window.lineRange,
+			window.snippet
+		]),
+		prompt,
+		schema
+	]);
+}
+function buildPrompt(windows) {
 	return [
 		"Propose only repository observations that can change a code implementation or review decision.",
 		"Do not summarize metadata, schemas, exports, versions, or facts that a tool can read on demand unless they establish a compatibility or architecture boundary.",
-		"For every observation, explain the decision impact and cite exact evidence from the supplied windows.",
+		"For every observation, explain the decision impact and cite one or more supplied windowId values.",
+		"The supplied windows are host-selected evidence, not proof that any semantic claim is true or representative.",
+		"Do not set review status; proposals are generated and require a separate approval action.",
 		"Prefer zero observations over weak observations.",
-		`Selected paths: ${paths.join(", ") || "(none)"}`
+		"Evidence windows:",
+		...windows.map((window) => `- ${window.windowId} ${window.file}:${window.lineRange[0]}-${window.lineRange[1]}`)
 	].join("\n");
 }
 function proposalSchema() {
@@ -546,12 +500,9 @@ function proposalSchema() {
 		"    affects: [\"compatibility\"]",
 		"    decisionImpact: \"how omitting this fact could worsen a code decision\"",
 		"    semanticConfidence: \"low|medium|high\"",
-		"    reviewStatus: \"generated|reviewed\"",
 		"    evidence:",
-		"      - file: \"relative/path\"",
-		"        lineRange: [1, 10]",
-		"        snippet: \"exact source excerpt\""
+		"      - windowId: \"window:<from-contract>\""
 	].join("\n");
 }
 //#endregion
-export { commitCalibration, parseCalibrationProposal, parseRcclDocument, prepareCalibration, validateContext };
+export { approveContext, commitCalibration, parseCalibrationContract, parseCalibrationProposal, parseRcclDocument, prepareCalibration, validateContext };

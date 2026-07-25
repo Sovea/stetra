@@ -1,21 +1,21 @@
 import { createHash } from 'node:crypto';
 import { verifyEvidence } from './evidence.ts';
 import type {
-  RcclObservationProposal,
+  RcclObservationContent,
   RcclObservation,
 } from './types.ts';
 
 export function materializeVerifiedObservation(
-  proposal: RcclObservationProposal,
+  content: RcclObservationContent,
   projectRoot: string,
   gitRef: string | null,
   prior?: RcclObservation,
   now = new Date(),
 ): RcclObservation {
   const checkedAt = now.toISOString();
-  const results = proposal.evidence.map((evidence) => verifyEvidence(evidence, projectRoot));
+  const results = content.evidence.map((evidence) => verifyEvidence(evidence, projectRoot));
   const verifiedCount = results.filter((result) => result.status === 'match').length;
-  const status = verifiedCount === proposal.evidence.length
+  const status = verifiedCount === content.evidence.length
     ? 'current'
     : verifiedCount > 0
       ? 'partial'
@@ -23,18 +23,25 @@ export function materializeVerifiedObservation(
         ? 'stale'
         : 'broken';
   const lifecycleStatus = status === 'stale' || status === 'broken' ? 'stale' : 'active';
+  const contentFingerprint = observationFingerprint(content);
+  const approval = prior?.reviewStatus === 'reviewed'
+    && prior.approval?.contentFingerprint === contentFingerprint
+    && prior.lifecycle.contentFingerprint === contentFingerprint
+    ? prior.approval
+    : undefined;
   return {
-    ...proposal,
-    reviewStatus: proposal.reviewStatus ?? 'generated',
+    ...content,
+    reviewStatus: approval ? 'reviewed' : 'generated',
+    ...(approval ? { approval } : {}),
     evidenceVerification: {
       status,
       verifiedCount,
-      totalCount: proposal.evidence.length,
+      totalCount: content.evidence.length,
       checkedAt,
     },
     lifecycle: {
       status: prior?.lifecycle.status === 'superseded' ? 'superseded' : lifecycleStatus,
-      contentFingerprint: observationFingerprint(proposal),
+      contentFingerprint,
       firstSeenGitRef: prior?.lifecycle.firstSeenGitRef ?? gitRef,
       lastSeenGitRef: gitRef,
       lastVerifiedAt: checkedAt,
@@ -49,10 +56,10 @@ export function refreshObservationEvidence(
   gitRef: string | null,
   now = new Date(),
 ): RcclObservation {
-  return materializeVerifiedObservation(observation, projectRoot, gitRef, observation, now);
+  return materializeVerifiedObservation(observationContent(observation), projectRoot, gitRef, observation, now);
 }
 
-export function observationFingerprint(observation: RcclObservationProposal): string {
+export function observationFingerprint(observation: RcclObservationContent): string {
   return createHash('sha256').update(JSON.stringify({
     id: observation.id,
     category: observation.category,
@@ -60,6 +67,20 @@ export function observationFingerprint(observation: RcclObservationProposal): st
     statement: observation.statement,
     affects: observation.affects,
     decisionImpact: observation.decisionImpact,
+    semanticConfidence: observation.semanticConfidence,
     evidence: observation.evidence,
-  })).digest('hex').slice(0, 16);
+  })).digest('hex');
+}
+
+export function observationContent(observation: RcclObservation): RcclObservationContent {
+  return {
+    id: observation.id,
+    category: observation.category,
+    scope: observation.scope,
+    statement: observation.statement,
+    affects: observation.affects,
+    decisionImpact: observation.decisionImpact,
+    semanticConfidence: observation.semanticConfidence,
+    evidence: observation.evidence,
+  };
 }

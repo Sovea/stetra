@@ -29,10 +29,24 @@ export type ReviewStatus = 'generated' | 'reviewed';
 export type EvidenceStatus = 'current' | 'partial' | 'stale' | 'broken';
 export type LifecycleStatus = 'active' | 'stale' | 'superseded';
 
+export interface CalibrationEvidenceSelection {
+  file: string;
+  lineRange: [number, number];
+}
+
+export interface CalibrationEvidenceWindow extends CalibrationEvidenceSelection {
+  windowId: string;
+  snippet: string;
+}
+
 export interface RcclEvidence {
   file: string;
   lineRange: [number, number];
   snippet: string;
+}
+
+export interface RcclEvidenceProposal {
+  windowId: string;
 }
 
 export interface EvidenceVerification {
@@ -51,7 +65,13 @@ export interface ObservationLifecycle {
   supersededBy?: string;
 }
 
-export interface RcclObservation {
+export interface ObservationApproval {
+  approvedBy: string;
+  approvedAt: string;
+  contentFingerprint: string;
+}
+
+export interface RcclObservationContent {
   id: string;
   category: RcclCategory;
   scope: string;
@@ -59,8 +79,12 @@ export interface RcclObservation {
   affects: DecisionDimension[];
   decisionImpact: string;
   semanticConfidence: SemanticConfidence;
-  reviewStatus: ReviewStatus;
   evidence: RcclEvidence[];
+}
+
+export interface RcclObservation extends RcclObservationContent {
+  reviewStatus: ReviewStatus;
+  approval?: ObservationApproval;
   evidenceVerification: EvidenceVerification;
   lifecycle: ObservationLifecycle;
 }
@@ -80,15 +104,14 @@ export interface RcclObservationProposal {
   affects: DecisionDimension[];
   decisionImpact: string;
   semanticConfidence: SemanticConfidence;
-  reviewStatus?: ReviewStatus;
-  evidence: RcclEvidence[];
+  evidence: RcclEvidenceProposal[];
 }
 
 export interface CalibrationContract {
   schemaVersion: typeof RCCL_SCHEMA_VERSION;
   requestId: string;
   contextFingerprint: string;
-  selectedPaths: string[];
+  evidenceWindows: CalibrationEvidenceWindow[];
   prompt: string;
   proposalSchema: string;
 }
@@ -103,26 +126,29 @@ export interface CalibrationProposal {
 
 export interface PrepareCalibrationInput {
   projectRoot: string;
-  paths?: string[];
-  scope?: string;
-  maxFiles?: number;
+  evidenceSelections: CalibrationEvidenceSelection[];
 }
 
-export interface PrepareCalibrationOutput {
+export interface PrepareCalibrationReady {
   status: 'ready';
   contract: CalibrationContract;
   context: {
     files: number;
-    windows: Array<{
-      file: string;
-      lineRange: [number, number];
-      purpose: string;
-      snippet: string;
-    }>;
+    windows: CalibrationEvidenceWindow[];
   };
+  diagnostics: [];
 }
 
-export interface CommitCalibrationInput extends PrepareCalibrationInput {
+export interface PrepareCalibrationRejected {
+  status: 'rejected';
+  diagnostics: CalibrationDiagnostic[];
+}
+
+export type PrepareCalibrationOutput = PrepareCalibrationReady | PrepareCalibrationRejected;
+
+export interface CommitCalibrationInput {
+  projectRoot: string;
+  contract: CalibrationContract;
   proposal: CalibrationProposal | string;
   rcclPath?: string;
 }
@@ -160,4 +186,20 @@ export interface ValidateContextOutput {
   document?: RcclDocument;
   diagnostics: CalibrationDiagnostic[];
   changedObservationIds: string[];
+}
+
+export interface ApproveContextInput {
+  projectRoot: string;
+  observationIds: string[];
+  approvedBy: string;
+  rcclPath?: string;
+}
+
+export interface ApproveContextOutput {
+  status: 'approved' | 'rejected';
+  written?: string;
+  document?: RcclDocument;
+  diagnostics: CalibrationDiagnostic[];
+  approvedObservationIds: string[];
+  unchangedObservationIds: string[];
 }

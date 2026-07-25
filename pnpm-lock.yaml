@@ -17,9 +17,6 @@ importers:
 
   rccl:
     dependencies:
-      ignore:
-        specifier: ^7.0.5
-        version: 7.0.6
       yaml:
         specifier: ^2.9.0
         version: 2.9.0
@@ -519,10 +516,6 @@ packages:
 
   html-escaper@2.0.2:
     resolution: {integrity: sha512-H2iMtd0I4Mt5eYiapRdIDjp+XzelXQ0tFE4JS7YFwFevXXMmOp9myNrUvCg0D6ws8iqkRPBfKHgbwig1SmlLfg==}
-
-  ignore@7.0.6:
-    resolution: {integrity: sha512-BAg6QkE8W+TuQLrrw0Ugr7HegXduRuuj8/ti2kSOc+jz1dmx8/WNcjr6XGnq5YpDWxFwwaavqD0+jIUOKelTsw==}
-    engines: {node: '>= 4'}
 
   import-without-cache@0.3.3:
     resolution: {integrity: sha512-bDxwDdF04gm550DfZHgffvlX+9kUlcz32UD0AeBTmVPFiWkrexF2XVmiuFFbDhiFuP8fQkrkvI2KdSNPYWAXkQ==}
@@ -1122,8 +1115,6 @@ snapshots:
   hookable@6.1.1: {}
 
   html-escaper@2.0.2: {}
-
-  ignore@7.0.6: {}
 
   import-without-cache@0.3.3: {}
 

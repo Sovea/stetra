@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -492,39 +493,20 @@ test('an unreviewed RCCL anti-pattern remains ambient and cannot become a hard a
   const directory = mkdtempSync(join(tmpdir(), 'resonant-runtime-ambient-antipattern-'));
   const rcclPath = join(directory, 'rccl.json');
   try {
-    writeFileSync(rcclPath, JSON.stringify({
-      version: '1.0',
-      generatedAt: '2026-07-25T00:00:00.000Z',
-      gitRef: null,
-      observations: [{
-        id: 'obs-generated-antipattern',
-        category: 'anti-pattern',
-        scope: 'runtime/src/**',
-        statement: 'The generated host claims this public boundary is an anti-pattern.',
-        affects: ['review-focus'],
-        decisionImpact: 'If true, a reviewer might choose a different public boundary.',
-        semanticConfidence: 'low',
-        reviewStatus: 'generated',
-        evidence: [{
-          file: 'runtime/src/index.ts',
-          lineRange: [1, 1],
-          snippet: '/** resonant-code Runtime public change-harness boundary. */',
-        }],
-        evidenceVerification: {
-          status: 'current',
-          verifiedCount: 1,
-          totalCount: 1,
-          checkedAt: '2026-07-25T00:00:00.000Z',
-        },
-        lifecycle: {
-          status: 'active',
-          contentFingerprint: 'generated-antipattern',
-          firstSeenGitRef: null,
-          lastSeenGitRef: null,
-          lastVerifiedAt: '2026-07-25T00:00:00.000Z',
-        },
+    writeRcclFixture(rcclPath, {
+      id: 'obs-generated-antipattern',
+      category: 'anti-pattern',
+      scope: 'runtime/src/**',
+      statement: 'The generated host claims this public boundary is an anti-pattern.',
+      affects: ['review-focus'],
+      decisionImpact: 'If true, a reviewer might choose a different public boundary.',
+      semanticConfidence: 'low',
+      evidence: [{
+        file: 'runtime/src/index.ts',
+        lineRange: [1, 1],
+        snippet: '/** resonant-code Runtime public change-harness boundary. */',
       }],
-    }), 'utf8');
+    });
     const output = await compileChange({
       projectRoot,
       builtinRoot,
@@ -550,7 +532,7 @@ test('an unreviewed RCCL anti-pattern remains ambient and cannot become a hard a
   }
 });
 
-test('current RCCL context is ambient until an evidence-backed semantic relation changes execution', async () => {
+test('current RCCL context changes execution only after independent approval and an accepted relation', async () => {
   const base = await compileRuntimeRefactor();
   assert.equal(base.status, 'compiled');
   if (base.status !== 'compiled') return;
@@ -569,10 +551,35 @@ test('current RCCL context is ambient until an evidence-backed semantic relation
   }]);
   assert.equal(related.status, 'compiled');
   if (related.status !== 'compiled') return;
-  const directive = related.guidance.required.find((item) => item.id === 'local-runtime-compile-evaluate-boundary-01');
-  assert.equal(directive?.executionMode, 'deviation-noted');
-  assert.equal(related.guidance.tensions.length, 1);
-  assert.ok(related.trace.relationDecisions.some((item) => item.status === 'accepted' && item.impact === 'execution-mode'));
+  assert.equal(
+    related.guidance.required.find((item) => item.id === 'local-runtime-compile-evaluate-boundary-01')?.executionMode,
+    'enforce',
+  );
+  assert.equal(related.guidance.tensions.length, 0);
+  assert.ok(related.trace.relationDecisions.some((item) => item.status === 'downgraded'));
+
+  const directory = mkdtempSync(join(tmpdir(), 'resonant-runtime-approved-'));
+  const rcclPath = join(directory, 'rccl.json');
+  try {
+    writeRcclFixture(rcclPath, runtimeBoundaryObservation(), { reviewed: true });
+    const approved = await compileRuntimeRefactor([{
+      directiveId: 'local-runtime-compile-evaluate-boundary-01',
+      observationId: 'obs-runtime-public-harness-boundary',
+      relation: 'limits',
+      rationale: 'The narrow public API limits how the local hard boundary can be extended.',
+      evidenceRefs: ['runtime/src/index.ts:1-17'],
+      confidence: 0.9,
+    }], rcclPath);
+    assert.equal(approved.status, 'compiled');
+    if (approved.status !== 'compiled') return;
+    const directive = approved.guidance.required.find((item) => item.id === 'local-runtime-compile-evaluate-boundary-01');
+    assert.equal(directive?.executionMode, 'deviation-noted');
+    assert.equal(approved.guidance.tensions.length, 1);
+    assert.ok(approved.trace.relationDecisions.some((item) =>
+      item.status === 'accepted' && item.impact === 'execution-mode'));
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
 });
 
 test('invalid and irrelevant relation proposals cannot affect execution', async () => {
@@ -628,30 +635,20 @@ test('evidence drift downgrades a valid semantic relation to ambient context', a
   const directory = mkdtempSync(join(tmpdir(), 'resonant-runtime-stale-'));
   const rcclPath = join(directory, 'rccl.json');
   try {
-    writeFileSync(rcclPath, JSON.stringify({
-      version: '1.0',
-      generatedAt: '2026-07-14T00:00:00.000Z',
-      gitRef: null,
-      observations: [{
-        id: 'obs-stale-runtime-boundary',
-        category: 'architecture',
-        scope: 'runtime/src/**',
-        statement: 'The Runtime has a narrow public boundary.',
-        affects: ['api-shape'],
-        decisionImpact: 'Adding unrelated public helpers would expand the supported API.',
-        semanticConfidence: 'high',
-        reviewStatus: 'reviewed',
-        evidence: [{ file: 'runtime/src/index.ts', lineRange: [1, 1], snippet: 'source that no longer exists' }],
-        evidenceVerification: { status: 'current', verifiedCount: 1, totalCount: 1, checkedAt: '2026-07-14T00:00:00.000Z' },
-        lifecycle: {
-          status: 'active',
-          contentFingerprint: 'stale-test',
-          firstSeenGitRef: null,
-          lastSeenGitRef: null,
-          lastVerifiedAt: '2026-07-14T00:00:00.000Z',
-        },
+    writeRcclFixture(rcclPath, {
+      id: 'obs-stale-runtime-boundary',
+      category: 'architecture',
+      scope: 'runtime/src/**',
+      statement: 'The Runtime has a narrow public boundary.',
+      affects: ['api-shape'],
+      decisionImpact: 'Adding unrelated public helpers would expand the supported API.',
+      semanticConfidence: 'high',
+      evidence: [{
+        file: 'runtime/src/index.ts',
+        lineRange: [1, 1],
+        snippet: 'source that no longer exists',
       }],
-    }), 'utf8');
+    }, { reviewed: true });
     const output = await compileChange({
       projectRoot,
       builtinRoot,
@@ -695,10 +692,7 @@ test('current evidence does not turn an unreviewed low-confidence observation in
   const directory = mkdtempSync(join(tmpdir(), 'resonant-runtime-unreviewed-'));
   const rcclPath = join(directory, 'rccl.yaml');
   try {
-    const unreviewed = readFileSync(resolve(projectRoot, '.resonant-code/rccl.yaml'), 'utf8')
-      .replace('semanticConfidence: high', 'semanticConfidence: low')
-      .replace('reviewStatus: reviewed', 'reviewStatus: generated');
-    writeFileSync(rcclPath, unreviewed, 'utf8');
+    writeRcclFixture(rcclPath, runtimeBoundaryObservation({ semanticConfidence: 'low' }));
     const output = await compileChange({
       projectRoot,
       builtinRoot,
@@ -1016,12 +1010,113 @@ function minimalDecision(mode: 'standard' | 'strict'): ChangeDecisionPacket {
   };
 }
 
-function compileRuntimeRefactor(relationProposals: Parameters<typeof compileChange>[0]['relationProposals'] = []) {
+type RcclFixtureContent = {
+  id: string;
+  category: 'architecture' | 'constraint' | 'compatibility' | 'legacy' | 'anti-pattern' | 'migration' | 'convention';
+  scope: string;
+  statement: string;
+  affects: Array<'compatibility' | 'api-shape' | 'architecture-boundary' | 'data-flow' | 'migration' | 'testing' | 'error-handling' | 'module-format' | 'review-focus'>;
+  decisionImpact: string;
+  semanticConfidence: 'low' | 'medium' | 'high';
+  evidence: Array<{ file: string; lineRange: [number, number]; snippet: string }>;
+};
+
+function runtimeBoundaryObservation(
+  overrides: Partial<RcclFixtureContent> = {},
+): RcclFixtureContent {
+  return {
+    id: 'obs-runtime-public-harness-boundary',
+    category: 'architecture',
+    scope: 'runtime/src/**',
+    statement: 'The Runtime public value API is limited to compileChange and evaluateChange.',
+    affects: ['api-shape', 'architecture-boundary'],
+    decisionImpact: 'Adding workflow-specific helpers would expand the supported Runtime API boundary.',
+    semanticConfidence: 'high',
+    evidence: [{
+      file: 'runtime/src/index.ts',
+      lineRange: [1, 17],
+      snippet: exactSourceWindow('runtime/src/index.ts', 1, 17),
+    }],
+    ...overrides,
+  };
+}
+
+function writeRcclFixture(
+  path: string,
+  content: RcclFixtureContent,
+  options: { reviewed?: boolean } = {},
+): void {
+  const normalized = {
+    ...content,
+    scope: content.scope.replace(/\\/g, '/'),
+    statement: content.statement.trim(),
+    affects: [...new Set(content.affects)].sort(),
+    decisionImpact: content.decisionImpact.trim(),
+    evidence: content.evidence.map((evidence) => ({
+      ...evidence,
+      file: evidence.file.replace(/\\/g, '/'),
+    })),
+  };
+  const contentFingerprint = createHash('sha256').update(JSON.stringify({
+    id: normalized.id,
+    category: normalized.category,
+    scope: normalized.scope,
+    statement: normalized.statement,
+    affects: normalized.affects,
+    decisionImpact: normalized.decisionImpact,
+    semanticConfidence: normalized.semanticConfidence,
+    evidence: normalized.evidence,
+  })).digest('hex');
+  const reviewed = options.reviewed === true;
+  const timestamp = '2026-07-25T00:00:00.000Z';
+  writeFileSync(path, JSON.stringify({
+    version: '1.0',
+    generatedAt: timestamp,
+    gitRef: null,
+    observations: [{
+      ...normalized,
+      reviewStatus: reviewed ? 'reviewed' : 'generated',
+      ...(reviewed ? {
+        approval: {
+          approvedBy: 'runtime-test-reviewer',
+          approvedAt: timestamp,
+          contentFingerprint,
+        },
+      } : {}),
+      evidenceVerification: {
+        status: 'current',
+        verifiedCount: normalized.evidence.length,
+        totalCount: normalized.evidence.length,
+        checkedAt: timestamp,
+      },
+      lifecycle: {
+        status: 'active',
+        contentFingerprint,
+        firstSeenGitRef: null,
+        lastSeenGitRef: null,
+        lastVerifiedAt: timestamp,
+      },
+    }],
+  }), 'utf8');
+}
+
+function exactSourceWindow(file: string, start: number, end: number): string {
+  return readFileSync(resolve(projectRoot, file), 'utf8')
+    .replace(/\r\n/g, '\n')
+    .split('\n')
+    .slice(start - 1, end)
+    .join('\n');
+}
+
+function compileRuntimeRefactor(
+  relationProposals: Parameters<typeof compileChange>[0]['relationProposals'] = [],
+  rcclPath = resolve(projectRoot, '.resonant-code/rccl.yaml'),
+) {
   return compileChange({
     projectRoot,
     builtinRoot,
     localAugmentPath: resolve(projectRoot, '.resonant-code/playbook/local-augment.yaml'),
-    rcclPath: resolve(projectRoot, '.resonant-code/rccl.yaml'),
+    rcclPath,
     task: {
       description: 'Refactor the Runtime public boundary',
       changeType: 'refactor',

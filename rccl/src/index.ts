@@ -1,9 +1,13 @@
 /** RCCL: bounded calibration and evidence-current repository context. */
-export { commitCalibration, prepareCalibration, validateContext } from './lifecycle.ts';
-export { parseCalibrationProposal, parseRcclDocument } from './parse.ts';
+export { approveContext, commitCalibration, prepareCalibration, validateContext } from './lifecycle.ts';
+export { parseCalibrationContract, parseCalibrationProposal, parseRcclDocument } from './parse.ts';
 export type {
+  ApproveContextInput,
+  ApproveContextOutput,
   CalibrationContract,
   CalibrationDiagnostic,
+  CalibrationEvidenceSelection,
+  CalibrationEvidenceWindow,
   CalibrationProposal,
   CommitCalibrationInput,
   CommitCalibrationOutput,
@@ -13,6 +17,8 @@ export type {
   PrepareCalibrationOutput,
   RcclDocument,
   RcclEvidence,
+  RcclEvidenceProposal,
+  RcclObservationContent,
   RcclObservationProposal,
   RcclObservation,
   ValidateContextInput,
