@@ -122,6 +122,9 @@ export interface DecisionTrace {
     status: 'accepted' | 'rejected' | 'downgraded';
     impact: string;
     reason: string;
+    rationale: string;
+    evidenceRefs: string[];
+    confidence: number | null;
     proposedBy: string;
   }>;
   omissions: Array<{

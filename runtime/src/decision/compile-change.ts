@@ -58,6 +58,8 @@ interface RelationDecision {
   reason: string;
   proposedBy: 'host-agent' | 'runtime-structural';
   evidenceRefs: string[];
+  rationale: string;
+  confidence: number | null;
   proposalKind?: RelationProposal['relation'];
 }
 
@@ -133,16 +135,23 @@ export async function compileChange(input: CompileChangeInput): Promise<CompileC
     status: relation.status,
     impact: relation.impact,
     reason: relation.reason,
+    rationale: relation.rationale,
+    evidenceRefs: relation.evidenceRefs,
+    confidence: relation.confidence,
     proposedBy: relation.proposedBy,
   }));
   const fingerprints = {
     task: stableHash([task]),
     directives: stableHash(loaded.directives.map(directiveFingerprintInput)),
     observations: stableHash(loaded.relevantObservations.map(observationFingerprintInput)),
-    relations: stableHash(relationTrace),
+    relations: stableHash([
+      relationDecisions.map(relationFingerprintInput),
+      relationProposals.map(relationProposalFingerprintInput),
+    ]),
   };
   const decisionId = stableHash([
     DECISION_SCHEMA_VERSION,
+    mode,
     task,
     deliveredGuidanceIds,
     fingerprints,
@@ -161,9 +170,7 @@ export async function compileChange(input: CompileChangeInput): Promise<CompileC
       selectedLayers: loaded.selectedLayers,
       activatedDirectiveIds: loaded.directives.map((directive) => directive.id),
       deliveredGuidanceIds,
-      suppressedDirectiveIds: loaded.directives
-        .filter((directive) => executionModes.get(directive.id) === 'suppress')
-        .map((directive) => directive.id),
+      suppressedDirectiveIds: loaded.suppressedDirectiveIds,
       relevantObservationIds: loaded.relevantObservations.map((observation) => observation.id),
       observationEvidence: loaded.observationVerification,
       relationDecisions: relationTrace,
@@ -181,6 +188,7 @@ async function loadGovernanceSources(input: CompileChangeInput, task: Normalized
   rccl: RcclDocument | null;
   relevantObservations: RcclObservation[];
   observationVerification: ObservationVerificationRecord[];
+  suppressedDirectiveIds: string[];
 }> {
   const builtinLayers = discoverBuiltinLayers(input.builtinRoot);
   const local = loadLocalPlaybook(input.localAugmentPath);
@@ -196,13 +204,25 @@ async function loadGovernanceSources(input: CompileChangeInput, task: Normalized
   const allBuiltins = [...builtinLayers.entries()].flatMap(([layerId, path]) => loadDirectiveFile(path, layerId));
   assertUniqueDirectiveIds([...allBuiltins, ...(local?.additions ?? [])]);
   validateLocalReferences(local, allBuiltins);
+  const suppressedDirectiveIds = selectedBuiltins
+    .filter((directive) => local?.suppresses.some((item) => item.id === directive.id))
+    .filter((directive) => directiveMatchesTask(directive, task))
+    .map((directive) => directive.id)
+    .sort();
   const directives = applyLocalPlaybook([...selectedBuiltins, ...(local?.additions ?? [])], local)
     .filter((directive) => directiveMatchesTask(directive, task))
     .sort(compareDirectives);
 
   const loadedRccl = await loadRccl(input.rcclPath);
   if (!loadedRccl) {
-    return { selectedLayers, directives, rccl: null, relevantObservations: [], observationVerification: [] };
+    return {
+      selectedLayers,
+      directives,
+      rccl: null,
+      relevantObservations: [],
+      observationVerification: [],
+      suppressedDirectiveIds,
+    };
   }
   const observationVerification: ObservationVerificationRecord[] = [];
   const observations = loadedRccl.observations.map((observation) => {
@@ -227,7 +247,14 @@ async function loadGovernanceSources(input: CompileChangeInput, task: Normalized
     .filter((observation) => observation.lifecycle.status !== 'superseded')
     .filter((observation) => observationMatchesTask(observation, task))
     .sort((left, right) => left.id.localeCompare(right.id));
-  return { selectedLayers, directives, rccl, relevantObservations, observationVerification };
+  return {
+    selectedLayers,
+    directives,
+    rccl,
+    relevantObservations,
+    observationVerification,
+    suppressedDirectiveIds,
+  };
 }
 
 function inferTaskLayers(task: NormalizedTaskContext, layers: Map<string, string>): string[] {
@@ -264,7 +291,7 @@ function applyLocalPlaybook(directives: Directive[], local: LocalPlaybook | null
   });
 }
 
-function directiveMatchesTask(directive: EffectiveDirective, task: NormalizedTaskContext): boolean {
+function directiveMatchesTask(directive: Directive, task: NormalizedTaskContext): boolean {
   const layer = directive.source.layerId;
   if (layer.startsWith('builtin/task-types/') && !layer.endsWith(`/${task.changeType}`)) return false;
   if (layer.startsWith('builtin/languages/') && !task.techStack.some((tech) => layer.endsWith(`/${tech}`))) return false;
@@ -342,6 +369,8 @@ function buildRelationDecisions(
         : `Host-proposed ${proposal.relation} relation accepted after ID, scope, proposal-confidence, evidence, semantic-confidence, and review gates.`,
       proposedBy: 'host-agent',
       evidenceRefs,
+      rationale: proposal.rationale.trim(),
+      confidence,
       proposalKind: proposal.relation,
     });
   }
@@ -360,6 +389,8 @@ function buildRelationDecisions(
         reason: 'Deterministic semantic-key overlap shortlisted this verified observation as context; it cannot change execution without a host proposal.',
         proposedBy: 'runtime-structural',
         evidenceRefs: observationEvidenceRefs(observation),
+        rationale: 'Structural ID overlap recalled this observation as ambient context.',
+        confidence: null,
       });
     }
   }
@@ -372,10 +403,6 @@ function resolveExecutionModes(
 ): Map<string, ExecutionMode> {
   const result = new Map<string, ExecutionMode>();
   for (const directive of directives) {
-    if (directive.type === 'anti-pattern') {
-      result.set(directive.id, 'suppress');
-      continue;
-    }
     const tension = relations.some((relation) =>
       relation.directiveId === directive.id
       && relation.status === 'accepted'
@@ -398,14 +425,11 @@ function buildEffectiveGuidance(
   const consider: GuidanceItem[] = [];
   const avoid: AvoidGuidanceItem[] = task.avoid.map(taskAvoidGuidance);
 
-  // Repository-specific context is scarcer and more task-specific than general
-  // `should` advice, so it receives the first ambient budget slots.
+  // RCCL is observational. Even an evidence-current anti-pattern remains
+  // ambient until a Playbook directive and accepted host relation make a
+  // prescriptive consequence explicit.
   for (const observation of observations) {
-    if (observation.category === 'anti-pattern' && observationDisposition(observation) === 'keep') {
-      avoid.push(observationAvoidItem(observation));
-    } else {
-      consider.push(observationGuidanceItem(observation));
-    }
+    consider.push(observationGuidanceItem(observation));
   }
   for (const directive of directives) {
     const mode = executionModes.get(directive.id) ?? 'ambient';
@@ -510,17 +534,6 @@ function observationGuidanceItem(observation: RcclObservation): GuidanceItem {
         : 'Treat this as ambient only; do not use it to justify execution changes until evidence is refreshed.',
     }],
     examples: [],
-  };
-}
-
-function observationAvoidItem(observation: RcclObservation): AvoidGuidanceItem {
-  return {
-    id: `rccl:${observation.id}`,
-    pattern: observation.statement,
-    rationale: `Evidence-current repository anti-pattern in ${observation.scope}.`,
-    exceptions: [],
-    source: { kind: 'rccl', id: observation.id, evidenceRefs: observationEvidenceRefs(observation) },
-    verification: [{ kind: 'diff', description: 'Inspect the change for recurrence of this repository anti-pattern.' }],
   };
 }
 
@@ -634,11 +647,70 @@ function observationEvidenceRefs(observation: RcclObservation): string[] {
 }
 
 function directiveFingerprintInput(directive: EffectiveDirective): unknown {
-  return [directive.id, directive.layer, directive.effectivePrescription, directive.effectiveWeight, directive.effectiveRationale, directive.scope.path, directive.source.filePath];
+  return {
+    id: directive.id,
+    type: directive.type,
+    declaredLayer: directive.layer,
+    sourceKind: directive.source.kind,
+    sourceLayerId: directive.source.layerId,
+    scope: directive.scope.path,
+    prescription: directive.effectivePrescription,
+    weight: directive.effectiveWeight,
+    instruction: directive.description,
+    rationale: directive.effectiveRationale,
+    exceptions: directive.effectiveExceptions,
+    examples: directive.effectiveExamples,
+    rcclImmune: Boolean(directive.rccl_immune),
+    traits: directive.traits ?? {},
+    overrideApplied: directive.overrideApplied,
+    augmentApplied: directive.augmentApplied,
+  };
 }
 
 function observationFingerprintInput(observation: RcclObservation): unknown {
-  return [observation.id, observation.statement, observation.scope, observation.evidenceVerification, observation.semanticConfidence, observation.reviewStatus, observation.lifecycle];
+  return {
+    id: observation.id,
+    category: observation.category,
+    scope: observation.scope,
+    statement: observation.statement,
+    affects: observation.affects,
+    decisionImpact: observation.decisionImpact,
+    semanticConfidence: observation.semanticConfidence,
+    reviewStatus: observation.reviewStatus,
+    evidence: observation.evidence,
+    evidenceStatus: observation.evidenceVerification.status,
+    verifiedCount: observation.evidenceVerification.verifiedCount,
+    totalCount: observation.evidenceVerification.totalCount,
+    lifecycleStatus: observation.lifecycle.status,
+    supersededBy: observation.lifecycle.supersededBy ?? null,
+  };
+}
+
+function relationFingerprintInput(relation: RelationDecision): unknown {
+  return {
+    directiveId: relation.directiveId,
+    observationId: relation.observationId,
+    relation: relation.relation,
+    proposalKind: relation.proposalKind ?? null,
+    status: relation.status,
+    impact: relation.impact,
+    reason: relation.reason,
+    rationale: relation.rationale,
+    evidenceRefs: relation.evidenceRefs,
+    confidence: relation.confidence,
+    proposedBy: relation.proposedBy,
+  };
+}
+
+function relationProposalFingerprintInput(proposal: RelationProposal): unknown {
+  return {
+    directiveId: proposal.directiveId,
+    observationId: proposal.observationId,
+    relation: proposal.relation,
+    rationale: typeof proposal.rationale === 'string' ? proposal.rationale.trim() : '',
+    evidenceRefs: Array.isArray(proposal.evidenceRefs) ? proposal.evidenceRefs.map(String) : [],
+    confidence: proposal.confidence ?? 0.85,
+  };
 }
 
 function observationDisposition(observation: RcclObservation): 'keep' | 'keep-with-reduced-confidence' | 'demote-to-ambient' {

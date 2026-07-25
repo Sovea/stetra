@@ -64,6 +64,114 @@ test('standard compile activates task layer and emits bounded behavioral guidanc
   );
 });
 
+test('decision identity is stable across evidence re-verification timestamps', async () => {
+  const first = await compileRuntimeRefactor();
+  const second = await compileRuntimeRefactor();
+  assert.notEqual(first.status, 'needs-interpretation');
+  assert.notEqual(second.status, 'needs-interpretation');
+  if (first.status === 'needs-interpretation' || second.status === 'needs-interpretation') return;
+  assert.equal(first.decisionId, second.decisionId);
+  assert.deepEqual(first.fingerprints, second.fingerprints);
+  assert.deepEqual(first.guidance, second.guidance);
+});
+
+test('local suppressions remain visible in Decision Trace', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'resonant-runtime-suppress-'));
+  const localPath = join(directory, 'local-augment.yaml');
+  try {
+    writeFileSync(localPath, [
+      'version: "1.0"',
+      'meta:',
+      '  name: trace-suppression',
+      '  extends: [builtin/core]',
+      'overrides: []',
+      'augments: []',
+      'suppresses:',
+      '  - id: core-clarity-and-legibility-01',
+      '    reason: The project uses a generated representation for this target.',
+      'additions: []',
+      '',
+    ].join('\n'), 'utf8');
+    const output = await compileChange({
+      projectRoot,
+      builtinRoot,
+      localAugmentPath: localPath,
+      task: {
+        description: 'Clarify one generated document',
+        changeType: 'docs',
+        targets: ['README.md'],
+        risk: 'low',
+        scope: 'local',
+      },
+    });
+    assert.notEqual(output.status, 'needs-interpretation');
+    if (output.status === 'needs-interpretation') return;
+    assert.ok(output.trace.suppressedDirectiveIds.includes('core-clarity-and-legibility-01'));
+    assert.ok(!output.trace.activatedDirectiveIds.includes('core-clarity-and-legibility-01'));
+    assert.ok(!output.trace.deliveredGuidanceIds.includes('core-clarity-and-legibility-01'));
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('an unreviewed RCCL anti-pattern remains ambient and cannot become a hard avoid item', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'resonant-runtime-ambient-antipattern-'));
+  const rcclPath = join(directory, 'rccl.json');
+  try {
+    writeFileSync(rcclPath, JSON.stringify({
+      version: '1.0',
+      generatedAt: '2026-07-25T00:00:00.000Z',
+      gitRef: null,
+      observations: [{
+        id: 'obs-generated-antipattern',
+        category: 'anti-pattern',
+        scope: 'runtime/src/**',
+        statement: 'The generated host claims this public boundary is an anti-pattern.',
+        affects: ['review-focus'],
+        decisionImpact: 'If true, a reviewer might choose a different public boundary.',
+        semanticConfidence: 'low',
+        reviewStatus: 'generated',
+        evidence: [{
+          file: 'runtime/src/index.ts',
+          lineRange: [1, 1],
+          snippet: '/** resonant-code Runtime public change-harness boundary. */',
+        }],
+        evidenceVerification: {
+          status: 'current',
+          verifiedCount: 1,
+          totalCount: 1,
+          checkedAt: '2026-07-25T00:00:00.000Z',
+        },
+        lifecycle: {
+          status: 'active',
+          contentFingerprint: 'generated-antipattern',
+          firstSeenGitRef: null,
+          lastSeenGitRef: null,
+          lastVerifiedAt: '2026-07-25T00:00:00.000Z',
+        },
+      }],
+    }), 'utf8');
+    const output = await compileChange({
+      projectRoot,
+      builtinRoot,
+      rcclPath,
+      task: {
+        description: 'Refactor the Runtime public boundary',
+        changeType: 'refactor',
+        targets: ['runtime/src/index.ts'],
+        risk: 'medium',
+        scope: 'module',
+      },
+    });
+    assert.notEqual(output.status, 'needs-interpretation');
+    if (output.status === 'needs-interpretation') return;
+    assert.ok(output.guidance.consider.some((item) => item.id === 'rccl:obs-generated-antipattern'));
+    assert.ok(!output.guidance.avoid.some((item) => item.id === 'rccl:obs-generated-antipattern'));
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
 test('current RCCL context is ambient until an evidence-backed semantic relation changes execution', async () => {
   const base = await compileRuntimeRefactor();
   assert.notEqual(base.status, 'needs-interpretation');

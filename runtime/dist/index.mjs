@@ -7497,18 +7497,22 @@ async function compileChange(input) {
 		status: relation.status,
 		impact: relation.impact,
 		reason: relation.reason,
+		rationale: relation.rationale,
+		evidenceRefs: relation.evidenceRefs,
+		confidence: relation.confidence,
 		proposedBy: relation.proposedBy
 	}));
 	const fingerprints = {
 		task: stableHash([task]),
 		directives: stableHash(loaded.directives.map(directiveFingerprintInput)),
 		observations: stableHash(loaded.relevantObservations.map(observationFingerprintInput)),
-		relations: stableHash(relationTrace)
+		relations: stableHash([relationDecisions.map(relationFingerprintInput), relationProposals.map(relationProposalFingerprintInput)])
 	};
 	return {
 		schemaVersion: "1.0",
 		decisionId: stableHash([
 			"1.0",
+			mode,
 			task,
 			deliveredGuidanceIds,
 			fingerprints
@@ -7522,7 +7526,7 @@ async function compileChange(input) {
 			selectedLayers: loaded.selectedLayers,
 			activatedDirectiveIds: loaded.directives.map((directive) => directive.id),
 			deliveredGuidanceIds,
-			suppressedDirectiveIds: loaded.directives.filter((directive) => executionModes.get(directive.id) === "suppress").map((directive) => directive.id),
+			suppressedDirectiveIds: loaded.suppressedDirectiveIds,
 			relevantObservationIds: loaded.relevantObservations.map((observation) => observation.id),
 			observationEvidence: loaded.observationVerification,
 			relationDecisions: relationTrace,
@@ -7545,6 +7549,7 @@ async function loadGovernanceSources(input, task) {
 	const allBuiltins = [...builtinLayers.entries()].flatMap(([layerId, path]) => loadDirectiveFile(path, layerId));
 	assertUniqueDirectiveIds([...allBuiltins, ...local?.additions ?? []]);
 	validateLocalReferences(local, allBuiltins);
+	const suppressedDirectiveIds = selectedBuiltins.filter((directive) => local?.suppresses.some((item) => item.id === directive.id)).filter((directive) => directiveMatchesTask(directive, task)).map((directive) => directive.id).sort();
 	const directives = applyLocalPlaybook([...selectedBuiltins, ...local?.additions ?? []], local).filter((directive) => directiveMatchesTask(directive, task)).sort(compareDirectives);
 	const loadedRccl = await loadRccl(input.rcclPath);
 	if (!loadedRccl) return {
@@ -7552,7 +7557,8 @@ async function loadGovernanceSources(input, task) {
 		directives,
 		rccl: null,
 		relevantObservations: [],
-		observationVerification: []
+		observationVerification: [],
+		suppressedDirectiveIds
 	};
 	const observationVerification = [];
 	const observations = loadedRccl.observations.map((observation) => {
@@ -7576,7 +7582,8 @@ async function loadGovernanceSources(input, task) {
 			observations
 		},
 		relevantObservations: observations.filter((observation) => observation.lifecycle.status !== "superseded").filter((observation) => observationMatchesTask(observation, task)).sort((left, right) => left.id.localeCompare(right.id)),
-		observationVerification
+		observationVerification,
+		suppressedDirectiveIds
 	};
 }
 function inferTaskLayers(task, layers) {
@@ -7672,6 +7679,8 @@ function buildRelationDecisions(directives, observations, proposals, diagnostics
 			reason: status === "downgraded" ? "Host relation was structurally valid but the RCCL evidence, semantic-confidence, or review gate did not qualify it to change execution." : `Host-proposed ${proposal.relation} relation accepted after ID, scope, proposal-confidence, evidence, semantic-confidence, and review gates.`,
 			proposedBy: "host-agent",
 			evidenceRefs,
+			rationale: proposal.rationale.trim(),
+			confidence,
 			proposalKind: proposal.relation
 		});
 	}
@@ -7687,29 +7696,24 @@ function buildRelationDecisions(directives, observations, proposals, diagnostics
 			impact: "ambient-context",
 			reason: "Deterministic semantic-key overlap shortlisted this verified observation as context; it cannot change execution without a host proposal.",
 			proposedBy: "runtime-structural",
-			evidenceRefs: observationEvidenceRefs(observation)
+			evidenceRefs: observationEvidenceRefs(observation),
+			rationale: "Structural ID overlap recalled this observation as ambient context.",
+			confidence: null
 		});
 	}
 	return decisions.sort((left, right) => left.directiveId.localeCompare(right.directiveId) || left.observationId.localeCompare(right.observationId));
 }
 function resolveExecutionModes(directives, relations) {
 	const result = /* @__PURE__ */ new Map();
-	for (const directive of directives) {
-		if (directive.type === "anti-pattern") {
-			result.set(directive.id, "suppress");
-			continue;
-		}
-		if (relations.some((relation) => relation.directiveId === directive.id && relation.status === "accepted" && relation.relation === "tension" && relation.impact === "execution-mode") && directive.effectivePrescription === "must") result.set(directive.id, "deviation-noted");
-		else result.set(directive.id, directive.effectivePrescription === "must" ? "enforce" : "ambient");
-	}
+	for (const directive of directives) if (relations.some((relation) => relation.directiveId === directive.id && relation.status === "accepted" && relation.relation === "tension" && relation.impact === "execution-mode") && directive.effectivePrescription === "must") result.set(directive.id, "deviation-noted");
+	else result.set(directive.id, directive.effectivePrescription === "must" ? "enforce" : "ambient");
 	return result;
 }
 function buildEffectiveGuidance(directives, observations, executionModes, relations, task) {
 	const required = task.constraints.map(taskConstraintGuidance);
 	const consider = [];
 	const avoid = task.avoid.map(taskAvoidGuidance);
-	for (const observation of observations) if (observation.category === "anti-pattern" && observationDisposition(observation) === "keep") avoid.push(observationAvoidItem(observation));
-	else consider.push(observationGuidanceItem(observation));
+	for (const observation of observations) consider.push(observationGuidanceItem(observation));
 	for (const directive of directives) {
 		const mode = executionModes.get(directive.id) ?? "ambient";
 		if (directive.type === "anti-pattern") {
@@ -7820,23 +7824,6 @@ function observationGuidanceItem(observation) {
 			description: current ? "Check whether the change crosses or depends on this evidence-current repository boundary." : "Treat this as ambient only; do not use it to justify execution changes until evidence is refreshed."
 		}],
 		examples: []
-	};
-}
-function observationAvoidItem(observation) {
-	return {
-		id: `rccl:${observation.id}`,
-		pattern: observation.statement,
-		rationale: `Evidence-current repository anti-pattern in ${observation.scope}.`,
-		exceptions: [],
-		source: {
-			kind: "rccl",
-			id: observation.id,
-			evidenceRefs: observationEvidenceRefs(observation)
-		},
-		verification: [{
-			kind: "diff",
-			description: "Inspect the change for recurrence of this repository anti-pattern."
-		}]
 	};
 }
 function buildTensions(relations, directives, observations) {
@@ -7950,26 +7937,67 @@ function observationEvidenceRefs(observation) {
 	return observation.evidence.map((evidence) => `${evidence.file}:${evidence.lineRange[0]}-${evidence.lineRange[1]}`);
 }
 function directiveFingerprintInput(directive) {
-	return [
-		directive.id,
-		directive.layer,
-		directive.effectivePrescription,
-		directive.effectiveWeight,
-		directive.effectiveRationale,
-		directive.scope.path,
-		directive.source.filePath
-	];
+	return {
+		id: directive.id,
+		type: directive.type,
+		declaredLayer: directive.layer,
+		sourceKind: directive.source.kind,
+		sourceLayerId: directive.source.layerId,
+		scope: directive.scope.path,
+		prescription: directive.effectivePrescription,
+		weight: directive.effectiveWeight,
+		instruction: directive.description,
+		rationale: directive.effectiveRationale,
+		exceptions: directive.effectiveExceptions,
+		examples: directive.effectiveExamples,
+		rcclImmune: Boolean(directive.rccl_immune),
+		traits: directive.traits ?? {},
+		overrideApplied: directive.overrideApplied,
+		augmentApplied: directive.augmentApplied
+	};
 }
 function observationFingerprintInput(observation) {
-	return [
-		observation.id,
-		observation.statement,
-		observation.scope,
-		observation.evidenceVerification,
-		observation.semanticConfidence,
-		observation.reviewStatus,
-		observation.lifecycle
-	];
+	return {
+		id: observation.id,
+		category: observation.category,
+		scope: observation.scope,
+		statement: observation.statement,
+		affects: observation.affects,
+		decisionImpact: observation.decisionImpact,
+		semanticConfidence: observation.semanticConfidence,
+		reviewStatus: observation.reviewStatus,
+		evidence: observation.evidence,
+		evidenceStatus: observation.evidenceVerification.status,
+		verifiedCount: observation.evidenceVerification.verifiedCount,
+		totalCount: observation.evidenceVerification.totalCount,
+		lifecycleStatus: observation.lifecycle.status,
+		supersededBy: observation.lifecycle.supersededBy ?? null
+	};
+}
+function relationFingerprintInput(relation) {
+	return {
+		directiveId: relation.directiveId,
+		observationId: relation.observationId,
+		relation: relation.relation,
+		proposalKind: relation.proposalKind ?? null,
+		status: relation.status,
+		impact: relation.impact,
+		reason: relation.reason,
+		rationale: relation.rationale,
+		evidenceRefs: relation.evidenceRefs,
+		confidence: relation.confidence,
+		proposedBy: relation.proposedBy
+	};
+}
+function relationProposalFingerprintInput(proposal) {
+	return {
+		directiveId: proposal.directiveId,
+		observationId: proposal.observationId,
+		relation: proposal.relation,
+		rationale: typeof proposal.rationale === "string" ? proposal.rationale.trim() : "",
+		evidenceRefs: Array.isArray(proposal.evidenceRefs) ? proposal.evidenceRefs.map(String) : [],
+		confidence: proposal.confidence ?? .85
+	};
 }
 function observationDisposition(observation) {
 	if (observation.evidenceVerification.status === "current") return "keep";
