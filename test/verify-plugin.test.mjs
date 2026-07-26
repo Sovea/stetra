@@ -15,3 +15,12 @@ for (const file of ['skills/init/SKILL.md', 'skills/code/SKILL.md', 'skills/cali
 for (const file of ['runtime/dist/index.mjs', 'runtime/dist/index.d.mts', 'rccl/dist/index.mjs', 'rccl/dist/index.d.mts']) {
   assert.ok(existsSync(resolve(root, file)), `Missing release file ${file}.`);
 }
+for (const file of [
+  'templates/checks.template.json',
+  'templates/personal-overlay.template.yaml',
+  'templates/feedback-change-proposal.template.json',
+  'evaluation/paired-agent/PROTOCOL.md',
+  'evaluation/paired-agent/ledger.json',
+]) {
+  assert.ok(existsSync(resolve(root, file)), `Missing MVP artifact ${file}.`);
+}

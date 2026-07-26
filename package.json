@@ -8,9 +8,10 @@
     "test": "corepack pnpm -r test && node skills/code/test/worktree.test.mjs && node skills/code/test/checks.test.mjs && node skills/code/test/workflow.test.mjs && node skills/calibrate-repo-context/test/workflow.test.mjs",
     "test:coverage": "c8 corepack pnpm test",
     "verify:dist": "node test/verify-dist.test.mjs",
+    "verify:evaluation": "node test/verify-evaluation.test.mjs",
     "verify:plugin": "node test/verify-plugin.test.mjs && node skills/code/scripts/code.mjs doctor .",
     "verify:smoke": "node test/release-smoke.test.mjs",
-    "verify": "corepack pnpm typecheck && corepack pnpm test:coverage && corepack pnpm build && corepack pnpm verify:dist && corepack pnpm verify:smoke && corepack pnpm verify:plugin"
+    "verify": "corepack pnpm typecheck && corepack pnpm test:coverage && corepack pnpm build && corepack pnpm verify:dist && corepack pnpm verify:smoke && corepack pnpm verify:evaluation && corepack pnpm verify:plugin"
   },
   "devDependencies": {
     "c8": "^11.0.0",

@@ -114,6 +114,10 @@ node skills/code/scripts/code.mjs prepare . \
 node skills/code/scripts/code.mjs complete \
   --session <session-path> \
   --evaluation-file <evaluation.json>
+
+# Inspect fact-only feedback; this never changes policy.
+node skills/code/scripts/code.mjs feedback . \
+  --guidance-id <directive-id>
 ```
 
 For RCCL, the host first selects exact decision-relevant source windows. Save
@@ -171,6 +175,16 @@ Generated task sessions live under `.resonant-code/context/` and should normally
   raw explanations; no threshold changes policy automatically.
 - Decision Trace is a compact explanation surface, not an event-log dump.
 
+## Effectiveness evidence
+
+The deterministic and lifecycle verification gates are implemented and run in
+CI. The separate product-effectiveness claim is currently
+**unverified**: no paired coding-agent trials have been recorded yet. The
+[paired evaluation protocol](evaluation/paired-agent/PROTOCOL.md) fixes the
+control/treatment boundary, blind review, correction-cost measures, and raw
+reporting rules; [the ledger](evaluation/paired-agent/ledger.json) prevents a
+measured-improvement claim while it remains `not-run`.
+
 ## Development
 
 Requires Node.js 22 and pnpm.
@@ -180,7 +194,9 @@ corepack pnpm install --frozen-lockfile
 corepack pnpm verify
 ```
 
-The verification gate runs type checks, unit and workflow tests, coverage, deterministic builds, an isolated release smoke test, and plugin readiness checks.
+The verification gate runs type checks, unit and workflow tests, coverage,
+deterministic builds, an isolated release smoke test, paired-evaluation ledger
+validation, and plugin readiness checks.
 
 ## License
 

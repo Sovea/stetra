@@ -1,0 +1,9 @@
+{
+  "schemaVersion": "1.0",
+  "protocolVersion": "1.0",
+  "status": "not-run",
+  "effectivenessClaim": "unverified",
+  "updatedAt": "2026-07-25T00:00:00.000Z",
+  "resultFiles": [],
+  "conclusion": "No paired coding-agent trials have been recorded. The technical MVP is not evidence that the harness reduces correction cost."
+}

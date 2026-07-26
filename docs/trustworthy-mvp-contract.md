@@ -47,6 +47,12 @@ eligibility. Runtime delivers every eligible obligation and prohibition.
 Optional semantic selection is a bounded host proposal containing active IDs
 and a rationale; Runtime validates it but does not invent it.
 
+Host relation proposals contain an explicit relation, rationale, and exact
+evidence references. Numeric self-confidence is not accepted: an arbitrary
+score neither proves the relation nor adds an independent assurance source.
+Task-field provenance records whether a value was explicit, host-provided,
+deterministic, or defaulted without decorative confidence decimals.
+
 ## Guidance budget
 
 There are no per-section item limits.
@@ -138,4 +144,9 @@ The release gate includes:
 - dirty-worktree and machine-fact completion tests;
 - feedback idempotency and aggregation tests;
 - isolated built-package smoke behavior;
-- a paired agent-evaluation protocol with recorded results.
+- a paired agent-evaluation protocol and machine-validated result ledger.
+
+The technical MVP may ship with the ledger explicitly marked `not-run` and the
+effectiveness claim marked `unverified`. Any claim that the harness measurably
+improves adoption, scope, or correction cost requires completed paired results;
+the release gate rejects such a claim when the ledger is incomplete.

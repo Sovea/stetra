@@ -1,0 +1,53 @@
+{
+  "schemaVersion": "1.0",
+  "protocolVersion": "1.0",
+  "pairId": "pair-kebab-case",
+  "taskId": "task-kebab-case",
+  "taskRecord": "tasks/task-kebab-case.json",
+  "status": "completed",
+  "conditions": {
+    "control": {
+      "initialPatchFingerprint": "sha256",
+      "finalPatchFingerprint": "sha256",
+      "initialChangedFiles": [],
+      "finalChangedFiles": [],
+      "outOfScopeFiles": [],
+      "checks": [],
+      "initialOutputDurationMs": 0,
+      "totalDurationMs": 0,
+      "harnessOverheadMs": 0,
+      "correctionRounds": [],
+      "infrastructureRetries": 0
+    },
+    "treatment": {
+      "initialPatchFingerprint": "sha256",
+      "finalPatchFingerprint": "sha256",
+      "initialChangedFiles": [],
+      "finalChangedFiles": [],
+      "outOfScopeFiles": [],
+      "checks": [],
+      "initialOutputDurationMs": 0,
+      "totalDurationMs": 0,
+      "harnessOverheadMs": 0,
+      "correctionRounds": [],
+      "infrastructureRetries": 0
+    }
+  },
+  "blindReview": {
+    "reviewerId": "reviewer-identity",
+    "mappingCommittedAt": "2026-07-25T00:00:00.000Z",
+    "preference": "tie",
+    "leftAdoption": "needs-correction",
+    "rightAdoption": "needs-correction",
+    "findings": []
+  },
+  "revealedMapping": {
+    "left": "control",
+    "right": "treatment",
+    "revealedAt": "2026-07-25T00:00:00.000Z"
+  },
+  "validity": {
+    "included": true,
+    "notes": []
+  }
+}

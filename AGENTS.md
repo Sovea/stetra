@@ -94,6 +94,11 @@ provenance; changing observation content invalidates approval.
 
 Only a task-relevant observation with current fully matched evidence, high semantic confidence, reviewed status, and an accepted host semantic relation may change directive execution. Partial, stale, broken, low-confidence, or unreviewed observations are ambient at most. Token overlap may not create a relation, conflict, enforcement, or delivery decision.
 
+Relation proposals use explicit IDs, relation kind, rationale, and exact
+evidence references. Do not accept numeric host self-confidence or use a
+numeric threshold to adjudicate semantic relations. Task provenance records
+source categories without decorative confidence scores.
+
 ### Evaluation and feedback boundary
 
 `evaluateChange` evaluates workflow-collected changed-file/check facts, host
@@ -120,6 +125,12 @@ guidance ID; never count unverified output as followed or persist raw host
 explanations in aggregates. No count or rate may automatically mutate policy.
 An inspectable change proposal requires explicit approval bound to the current
 aggregate fingerprint and remains unapplied until a separate policy edit.
+
+Do not infer product effectiveness from passing deterministic tests. A claim
+that the harness reduces correction cost or improves adoption requires
+completed paired-agent results under `evaluation/paired-agent/PROTOCOL.md`;
+the machine-validated ledger may explicitly leave that claim unverified for the
+technical MVP.
 
 ### Skill boundary
 
@@ -176,6 +187,7 @@ Tests must cover the behavior that justifies the harness:
 - evaluation against actual diff/check evidence
 - feedback idempotency
 - isolated built-package smoke behavior
+- paired-evaluation protocol and claim/ledger consistency
 
 When changing architecture, report complexity movement and observable behavior, not only passing tests.
 
