@@ -34,7 +34,6 @@ export interface TaskContextInput {
 export interface TaskFieldProvenance {
   field: 'changeType' | 'targets' | 'techStack' | 'risk' | 'scope';
   source: TaskFieldSource;
-  confidence: number;
 }
 
 export interface NormalizedTaskContext {

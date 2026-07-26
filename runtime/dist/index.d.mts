@@ -33,7 +33,6 @@ interface TaskContextInput {
 interface TaskFieldProvenance {
   field: 'changeType' | 'targets' | 'techStack' | 'risk' | 'scope';
   source: TaskFieldSource;
-  confidence: number;
 }
 interface NormalizedTaskContext {
   description: string;
@@ -57,7 +56,6 @@ interface RelationProposal {
   relation: RelationProposalKind;
   rationale: string;
   evidenceRefs: string[];
-  confidence?: number;
 }
 interface CompileChangeInput {
   projectRoot: string;
@@ -182,7 +180,6 @@ interface DecisionTrace {
     reason: string;
     rationale: string;
     evidenceRefs: string[];
-    confidence: number | null;
     proposedBy: string;
   }>;
   guidanceDetails: GuidanceDetail[];

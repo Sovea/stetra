@@ -11,7 +11,6 @@ export interface RelationProposal {
   relation: RelationProposalKind;
   rationale: string;
   evidenceRefs: string[];
-  confidence?: number;
 }
 
 export interface CompileChangeInput {
@@ -149,7 +148,6 @@ export interface DecisionTrace {
     reason: string;
     rationale: string;
     evidenceRefs: string[];
-    confidence: number | null;
     proposedBy: string;
   }>;
   guidanceDetails: GuidanceDetail[];

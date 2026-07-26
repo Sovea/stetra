@@ -13832,35 +13832,30 @@ function normalizeTaskContext(input) {
 	const changeType = explicitChangeType ?? inferredChangeType ?? "unknown";
 	provenance.push({
 		field: "changeType",
-		source: explicitChangeType ? explicitSource : inferredChangeType ? "deterministic" : "defaulted",
-		confidence: explicitChangeType ? 1 : inferredChangeType ? .72 : 0
+		source: explicitChangeType ? explicitSource : inferredChangeType ? "deterministic" : "defaulted"
 	});
 	provenance.push({
 		field: "targets",
-		source: targets.length ? explicitSource : "defaulted",
-		confidence: targets.length ? 1 : 0
+		source: targets.length ? explicitSource : "defaulted"
 	});
 	const explicitStack = uniqueStrings(input.techStack ?? []);
 	const inferredStack = inferTechStack(targets);
 	const techStack = uniqueStrings([...explicitStack, ...inferredStack]);
 	provenance.push({
 		field: "techStack",
-		source: explicitStack.length ? explicitSource : inferredStack.length ? "deterministic" : "defaulted",
-		confidence: explicitStack.length ? 1 : inferredStack.length ? .95 : 0
+		source: explicitStack.length ? explicitSource : inferredStack.length ? "deterministic" : "defaulted"
 	});
 	const explicitRisk = enumValue(input.risk, RISK_LEVELS);
 	const risk = explicitRisk ?? inferRisk(changeType, targets, description);
 	provenance.push({
 		field: "risk",
-		source: explicitRisk ? explicitSource : "deterministic",
-		confidence: explicitRisk ? 1 : .7
+		source: explicitRisk ? explicitSource : "deterministic"
 	});
 	const explicitScope = enumValue(input.scope, SCOPE_LEVELS);
 	const scope = explicitScope ?? inferScope(targets);
 	provenance.push({
 		field: "scope",
-		source: explicitScope ? explicitSource : targets.length ? "deterministic" : "defaulted",
-		confidence: explicitScope ? 1 : targets.length ? .85 : 0
+		source: explicitScope ? explicitSource : targets.length ? "deterministic" : "defaulted"
 	});
 	return {
 		description,
@@ -14013,7 +14008,6 @@ function normalizeSelection(selection, guidance) {
 }
 //#endregion
 //#region src/decision/compile-change.ts
-const RELATION_MIN_CONFIDENCE = .72;
 async function compileChange(input) {
 	if (!input || typeof input !== "object") throw new Error("compileChange input must be an object.");
 	if (typeof input.projectRoot !== "string" || !input.projectRoot.trim()) throw new Error("compileChange projectRoot must be non-empty.");
@@ -14072,7 +14066,6 @@ async function compileChange(input) {
 		reason: relation.reason,
 		rationale: relation.rationale,
 		evidenceRefs: relation.evidenceRefs,
-		confidence: relation.confidence,
 		proposedBy: relation.proposedBy
 	}));
 	const fingerprints = {
@@ -14276,7 +14269,6 @@ function buildRelationDecisions(directives, observations, proposals, diagnostics
 		const key = `${proposal.directiveId}::${proposal.observationId}`;
 		const directive = directiveById.get(proposal.directiveId);
 		const observation = observationById.get(proposal.observationId);
-		const confidence = proposal.confidence ?? .85;
 		const evidenceRefs = Array.isArray(proposal.evidenceRefs) && proposal.evidenceRefs.every((ref) => typeof ref === "string" && ref.trim()) ? proposal.evidenceRefs : [];
 		const errors = [];
 		if (proposalPairs.has(key)) errors.push("duplicate directive/observation pair");
@@ -14289,7 +14281,7 @@ function buildRelationDecisions(directives, observations, proposals, diagnostics
 			"limits"
 		].includes(proposal.relation)) errors.push("relation must be supports, conflicts, or limits");
 		if (!evidenceRefs.length) errors.push("evidenceRefs must be a non-empty string array");
-		if (!Number.isFinite(confidence) || confidence < RELATION_MIN_CONFIDENCE || confidence > 1) errors.push(`confidence must be between ${RELATION_MIN_CONFIDENCE} and 1`);
+		if ("confidence" in proposal) errors.push("numeric confidence is unsupported; provide a concrete rationale and exact evidence references");
 		if (observation && evidenceRefs.length && !proposalEvidenceMatchesObservation(evidenceRefs, observation)) errors.push("evidenceRefs do not cite the linked observation evidence");
 		if (directive?.rccl_immune && proposal.relation !== "supports") errors.push("directive is RCCL-immune and cannot be limited or conflicted by repository observation");
 		if (errors.length) {
@@ -14315,11 +14307,10 @@ function buildRelationDecisions(directives, observations, proposals, diagnostics
 			relation: status === "downgraded" ? "ambient-only" : proposal.relation === "supports" ? "reinforce" : "tension",
 			status,
 			impact: status === "downgraded" ? "ambient-context" : proposal.relation === "supports" ? "review-focus" : "execution-mode",
-			reason: status === "downgraded" ? "Host relation was structurally valid but the RCCL evidence, semantic-confidence, or review gate did not qualify it to change execution." : `Host-proposed ${proposal.relation} relation accepted after ID, scope, proposal-confidence, evidence, semantic-confidence, and review gates.`,
+			reason: status === "downgraded" ? "Host relation was structurally valid but the RCCL evidence, semantic-confidence, or review gate did not qualify it to change execution." : `Host-proposed ${proposal.relation} relation accepted after ID, scope, evidence, semantic-confidence, and review gates.`,
 			proposedBy: "host-agent",
 			evidenceRefs,
 			rationale: proposal.rationale.trim(),
-			confidence,
 			proposalKind: proposal.relation
 		});
 	}
@@ -14715,7 +14706,6 @@ function relationFingerprintInput(relation) {
 		reason: relation.reason,
 		rationale: relation.rationale,
 		evidenceRefs: relation.evidenceRefs,
-		confidence: relation.confidence,
 		proposedBy: relation.proposedBy
 	};
 }
@@ -14726,7 +14716,7 @@ function relationProposalFingerprintInput(proposal) {
 		relation: proposal.relation,
 		rationale: typeof proposal.rationale === "string" ? proposal.rationale.trim() : "",
 		evidenceRefs: Array.isArray(proposal.evidenceRefs) ? proposal.evidenceRefs.map(String) : [],
-		confidence: proposal.confidence ?? .85
+		hasUnsupportedConfidence: "confidence" in proposal
 	};
 }
 function observationDisposition(observation) {

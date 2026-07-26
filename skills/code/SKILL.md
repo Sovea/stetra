@@ -101,14 +101,17 @@ If semantic judgment is needed for a candidate Playbook/RCCL relationship, write
       "observationId": "observation-id",
       "relation": "conflicts",
       "rationale": "Why repository reality changes execution for this task.",
-      "evidenceRefs": ["src/example.ts:10-24"],
-      "confidence": 0.9
+      "evidenceRefs": ["src/example.ts:10-24"]
     }
   ]
 }
 ```
 
-Allowed relations are `supports`, `conflicts`, and `limits`. Resume with `--relation-file <path>`. Runtime validates active IDs, confidence, evidence presence, scope, lifecycle, and RCCL evidence status before the relation can affect execution.
+Allowed relations are `supports`, `conflicts`, and `limits`. Resume with
+`--relation-file <path>`. Runtime validates active IDs, a concrete rationale,
+exact evidence references, scope, lifecycle, and RCCL evidence/review status
+before the relation can affect execution. Numeric self-confidence is not
+accepted.
 
 ## Implement
 

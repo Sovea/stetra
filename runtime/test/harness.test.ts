@@ -30,6 +30,7 @@ test('canonical task context treats bugfix as change type and infers mechanical 
   assert.equal(task.risk, 'low');
   assert.deepEqual(task.techStack, ['typescript']);
   assert.equal('operation' in task, false);
+  assert.ok(task.provenance.every((item) => !('confidence' in item)));
 });
 
 test('standard compile reports overflow, then applies an explicit optional-guidance selection', async () => {
@@ -547,7 +548,6 @@ test('current RCCL context changes execution only after independent approval and
     relation: 'limits',
     rationale: 'The narrow public API limits how the local hard boundary can be extended.',
     evidenceRefs: ['runtime/src/index.ts:1-17'],
-    confidence: 0.9,
   }]);
   assert.equal(related.status, 'compiled');
   if (related.status !== 'compiled') return;
@@ -568,7 +568,6 @@ test('current RCCL context changes execution only after independent approval and
       relation: 'limits',
       rationale: 'The narrow public API limits how the local hard boundary can be extended.',
       evidenceRefs: ['runtime/src/index.ts:1-17'],
-      confidence: 0.9,
     }], rcclPath);
     assert.equal(approved.status, 'compiled');
     if (approved.status !== 'compiled') return;
@@ -583,13 +582,25 @@ test('current RCCL context changes execution only after independent approval and
 });
 
 test('invalid and irrelevant relation proposals cannot affect execution', async () => {
+  const scored = await compileRuntimeRefactor([{
+    directiveId: 'local-runtime-compile-evaluate-boundary-01',
+    observationId: 'obs-runtime-public-harness-boundary',
+    relation: 'limits',
+    rationale: 'A numeric self-rating must not substitute for semantic evidence.',
+    evidenceRefs: ['runtime/src/index.ts:1-17'],
+    confidence: 0.99,
+  } as never]);
+  assert.equal(scored.status, 'needs-attention');
+  if (scored.status === 'needs-attention') {
+    assert.ok(scored.trace.diagnostics.some((item) => item.message.includes('numeric confidence is unsupported')));
+  }
+
   const invalid = await compileRuntimeRefactor([{
     directiveId: 'local-runtime-compile-evaluate-boundary-01',
     observationId: 'obs-runtime-public-harness-boundary',
     relation: 'conflicts',
     rationale: 'Claimed conflict without cited observation evidence.',
     evidenceRefs: ['README.md:1-1'],
-    confidence: 0.9,
   }]);
   assert.notEqual(invalid.status, 'guidance-overflow');
   assert.notEqual(invalid.status, 'needs-interpretation');
@@ -604,7 +615,6 @@ test('invalid and irrelevant relation proposals cannot affect execution', async 
     relation: 'limits',
     rationale: 'A repository boundary must not soften behavior preservation.',
     evidenceRefs: ['runtime/src/index.ts:1-17'],
-    confidence: 0.9,
   }]);
   assert.notEqual(immune.status, 'guidance-overflow');
   assert.notEqual(immune.status, 'needs-interpretation');
@@ -671,7 +681,6 @@ test('evidence drift downgrades a valid semantic relation to ambient context', a
         relation: 'conflicts',
         rationale: 'This would matter if the cited evidence were still current.',
         evidenceRefs: ['runtime/src/index.ts:1-1'],
-        confidence: 0.9,
       }],
     });
     assert.equal(output.status, 'compiled');
@@ -715,7 +724,6 @@ test('current evidence does not turn an unreviewed low-confidence observation in
         relation: 'limits',
         rationale: 'The claim is plausible but has not met the semantic assurance gate.',
         evidenceRefs: ['runtime/src/index.ts:1-17'],
-        confidence: 0.9,
       }],
     });
     assert.equal(output.status, 'compiled');

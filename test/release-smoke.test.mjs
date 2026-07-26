@@ -96,7 +96,6 @@ additions:
       relation: 'supports',
       rationale: 'The existing export boundary is concrete evidence for repository fit.',
       evidenceRefs: ['example.ts:1-1'],
-      confidence: 0.9,
     }],
   };
   const overflow = await runtime.compileChange(compileInput);

@@ -42,8 +42,6 @@ import {
   type VerificationRequirement,
 } from './types.ts';
 
-const RELATION_MIN_CONFIDENCE = 0.72;
-
 interface EffectiveDirective extends Directive {
   effectivePrescription: Directive['prescription'];
   effectiveWeight: Directive['weight'];
@@ -68,7 +66,6 @@ interface RelationDecision {
   proposedBy: 'host-agent';
   evidenceRefs: string[];
   rationale: string;
-  confidence: number | null;
   proposalKind?: RelationProposal['relation'];
 }
 
@@ -162,7 +159,6 @@ export async function compileChange(input: CompileChangeInput): Promise<CompileC
     reason: relation.reason,
     rationale: relation.rationale,
     evidenceRefs: relation.evidenceRefs,
-    confidence: relation.confidence,
     proposedBy: relation.proposedBy,
   }));
   const fingerprints = {
@@ -433,7 +429,6 @@ function buildRelationDecisions(
     const key = `${proposal.directiveId}::${proposal.observationId}`;
     const directive = directiveById.get(proposal.directiveId);
     const observation = observationById.get(proposal.observationId);
-    const confidence = proposal.confidence ?? 0.85;
     const evidenceRefs = Array.isArray(proposal.evidenceRefs)
       && proposal.evidenceRefs.every((ref) => typeof ref === 'string' && ref.trim())
       ? proposal.evidenceRefs
@@ -445,7 +440,7 @@ function buildRelationDecisions(
     if (typeof proposal.rationale !== 'string' || !proposal.rationale.trim()) errors.push('rationale is empty');
     if (!['supports', 'conflicts', 'limits'].includes(proposal.relation)) errors.push('relation must be supports, conflicts, or limits');
     if (!evidenceRefs.length) errors.push('evidenceRefs must be a non-empty string array');
-    if (!Number.isFinite(confidence) || confidence < RELATION_MIN_CONFIDENCE || confidence > 1) errors.push(`confidence must be between ${RELATION_MIN_CONFIDENCE} and 1`);
+    if ('confidence' in proposal) errors.push('numeric confidence is unsupported; provide a concrete rationale and exact evidence references');
     if (observation && evidenceRefs.length && !proposalEvidenceMatchesObservation(evidenceRefs, observation)) errors.push('evidenceRefs do not cite the linked observation evidence');
     if (directive?.rccl_immune && proposal.relation !== 'supports') errors.push('directive is RCCL-immune and cannot be limited or conflicted by repository observation');
     if (errors.length) {
@@ -477,11 +472,10 @@ function buildRelationDecisions(
       impact: status === 'downgraded' ? 'ambient-context' : proposal.relation === 'supports' ? 'review-focus' : 'execution-mode',
       reason: status === 'downgraded'
         ? 'Host relation was structurally valid but the RCCL evidence, semantic-confidence, or review gate did not qualify it to change execution.'
-        : `Host-proposed ${proposal.relation} relation accepted after ID, scope, proposal-confidence, evidence, semantic-confidence, and review gates.`,
+        : `Host-proposed ${proposal.relation} relation accepted after ID, scope, evidence, semantic-confidence, and review gates.`,
       proposedBy: 'host-agent',
       evidenceRefs,
       rationale: proposal.rationale.trim(),
-      confidence,
       proposalKind: proposal.relation,
     });
   }
@@ -944,7 +938,6 @@ function relationFingerprintInput(relation: RelationDecision): unknown {
     reason: relation.reason,
     rationale: relation.rationale,
     evidenceRefs: relation.evidenceRefs,
-    confidence: relation.confidence,
     proposedBy: relation.proposedBy,
   };
 }
@@ -956,7 +949,7 @@ function relationProposalFingerprintInput(proposal: RelationProposal): unknown {
     relation: proposal.relation,
     rationale: typeof proposal.rationale === 'string' ? proposal.rationale.trim() : '',
     evidenceRefs: Array.isArray(proposal.evidenceRefs) ? proposal.evidenceRefs.map(String) : [],
-    confidence: proposal.confidence ?? 0.85,
+    hasUnsupportedConfidence: 'confidence' in proposal,
   };
 }
 

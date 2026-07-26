@@ -23,13 +23,11 @@ export function normalizeTaskContext(input: TaskContextInput): NormalizedTaskCon
   provenance.push({
     field: 'changeType',
     source: explicitChangeType ? explicitSource : inferredChangeType ? 'deterministic' : 'defaulted',
-    confidence: explicitChangeType ? 1 : inferredChangeType ? 0.72 : 0,
   });
 
   provenance.push({
     field: 'targets',
     source: targets.length ? explicitSource : 'defaulted',
-    confidence: targets.length ? 1 : 0,
   });
 
   const explicitStack = uniqueStrings(input.techStack ?? []);
@@ -38,7 +36,6 @@ export function normalizeTaskContext(input: TaskContextInput): NormalizedTaskCon
   provenance.push({
     field: 'techStack',
     source: explicitStack.length ? explicitSource : inferredStack.length ? 'deterministic' : 'defaulted',
-    confidence: explicitStack.length ? 1 : inferredStack.length ? 0.95 : 0,
   });
 
   const explicitRisk = enumValue(input.risk, RISK_LEVELS);
@@ -46,7 +43,6 @@ export function normalizeTaskContext(input: TaskContextInput): NormalizedTaskCon
   provenance.push({
     field: 'risk',
     source: explicitRisk ? explicitSource : 'deterministic',
-    confidence: explicitRisk ? 1 : 0.7,
   });
 
   const explicitScope = enumValue(input.scope, SCOPE_LEVELS);
@@ -54,7 +50,6 @@ export function normalizeTaskContext(input: TaskContextInput): NormalizedTaskCon
   provenance.push({
     field: 'scope',
     source: explicitScope ? explicitSource : targets.length ? 'deterministic' : 'defaulted',
-    confidence: explicitScope ? 1 : targets.length ? 0.85 : 0,
   });
 
   return {
