@@ -76,7 +76,8 @@ try {
   );
   assert.ok(!changes.files.some((file) => file.path.includes('preexisting')));
   assert.ok(!changes.files.some((file) => file.path.startsWith('.resonant-code/')));
-  assert.equal(changes.files.find((file) => file.path === 'src/keep.ts')?.after.mode, '100755');
+  const expectedMode = process.platform === 'win32' ? '100644' : '100755';
+  assert.equal(changes.files.find((file) => file.path === 'src/keep.ts')?.after.mode, expectedMode);
   assert.equal(changes.files.find((file) => file.path === 'src/current-link.ts')?.after.kind, 'symlink');
   assert.deepEqual(compareGitWorktrees(baseline, current), changes);
 

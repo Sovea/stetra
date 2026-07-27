@@ -16,8 +16,9 @@ const GIT_OUTPUT_LIMIT = 256 * 1024 * 1024;
 
 export function captureGitWorktree(projectRoot) {
   const root = realpathSync(resolve(projectRoot));
-  const gitRoot = realpathSync(runGitText(root, ['rev-parse', '--show-toplevel']));
-  if (gitRoot !== root) {
+  const gitPrefix = runGitText(root, ['rev-parse', '--show-prefix']);
+  if (gitPrefix !== '') {
+    const gitRoot = runGitText(root, ['rev-parse', '--show-toplevel']);
     throw new Error(
       `Trusted change collection requires project root to equal the Git worktree root. Expected ${gitRoot}, received ${root}.`,
     );
