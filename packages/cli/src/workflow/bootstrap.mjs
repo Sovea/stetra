@@ -302,9 +302,9 @@ function buildSuccessMessage(result) {
   lines.push(
     '',
     'Next steps:',
-    '  - Run resonant-code context prepare to calibrate decision-relevant RCCL observations.',
     '  - Review .resonant-code/playbook/local-augment.yaml and rename meta.name if needed.',
     '  - Commit .resonant-code/playbook/local-augment.yaml to share with your team.',
+    '  - Calibrate RCCL only when a durable repository observation could change a future implementation or review decision.',
   );
 
   return lines.join('\n');

@@ -19,6 +19,7 @@ Host agent (Codex / Claude / future host)
    |  task semantics, evidence windows, relations, code, attestations
    v
 Generated thin adapter
+   |  one router skill + task-specific references
    |  `resonant-code ... --json`
    v
 @sovea/resonant-code (CLI)
@@ -111,9 +112,33 @@ are not package exports.
 | RCCL lifecycle | `resonant-code context prepare/commit/approve/validate/refresh-stale` |
 | Bounded feedback | `resonant-code feedback inspect/propose` |
 
+The generated Host Adapter remains one logical skill. Its root `SKILL.md`
+contains only triggering, workflow routing, shared safety boundaries, and the
+human-escalation contract. Detailed procedures are loaded on demand:
+
+```text
+resonant-code/
+├── SKILL.md
+└── references/
+    ├── change.md
+    ├── setup.md
+    └── context.md
+```
+
+This progressive-disclosure boundary avoids loading setup or calibration
+protocols into every coding task. A workflow reference is generated only after
+its CLI behavior exists; the current release therefore does not advertise or
+generate a standalone review workflow.
+
 Human-readable output is the default. Commander owns command syntax and help;
 command-specific presenters use picocolors. Interactive prompts are enabled
 only for a real TTY and can be disabled with `--no-interactive`.
+
+Human output is a decision surface, not a lossy echo of JSON. Completion
+summarizes changed-file operations, check outcomes, guidance verdicts,
+exceptions, feedback, and unresolved review needs. Bootstrap and RCCL output
+show the persistent candidate evidence and content fingerprints needed for a
+meaningful review.
 
 Host adapters use `--json`. JSON mode never prompts, never emits ANSI, and
 writes only the machine-readable result to stdout. Actionable business states
@@ -134,6 +159,9 @@ checks; commands remain argv arrays and never opt into a shell.
 - generator/product version
 - installed Host Adapters
 - exact generated paths, artifact kinds, template revisions, and SHA-256 hashes
+
+Missing router references and outdated generated content count as installation
+drift even when the generator package version is unchanged.
 
 Initialization plans every write before changing the project. Missing files
 are created; unmodified generated files can be upgraded; owner-modified files
@@ -157,6 +185,20 @@ CLI asks which adapters to install. New non-interactive and `--json` runs use
 the documented default of both adapters; `--yes` accepts the same default
 explicitly.
 
+Readiness is consequence-based:
+
+- required issues cover Core/Adapter integrity, checks, and invalid configured
+  sources; `doctor --strict` fails on these
+- recommended items cover repository-specific Team Playbook guidance
+- optional items cover absent RCCL and other nonessential history
+
+The Host may resolve repository-discoverable task details, choose optional
+guidance, use reviewed RCCL, implement within scope, run checks, and attest
+evidence without interrupting the user. It must pause before changing
+persistent team authority or trusted commands, approving observations or
+exceptions, resolving user-intent ambiguities or policy tensions, expanding
+scope, or accepting unresolved failures and high-risk unverified outcomes.
+
 When optional guidance overflows the byte ceiling, an interactive human may
 select IDs and supply a rationale in-place. The CLI sends that exact bounded
 selection back through `compileChange`; it does not rank candidates or choose
@@ -167,6 +209,24 @@ Bootstrap enumerates available Core layers but does not scan, rank, cap, or
 guess repository evidence. The host inspects the repository using native
 tools and submits exact repository-relative evidence paths; the CLI validates
 path containment and existence without adjudicating their semantic meaning.
+
+RCCL approval additionally requires the caller to supply each reviewed
+observation's current content fingerprint. The CLI rejects missing, extra, or
+stale fingerprint bindings before Core records approval provenance.
+
+## Future workflow expansion
+
+New task families remain CLI modules and conditional references under the same
+logical Host skill while their triggers and collaboration contract overlap. A
+future review workflow should collect an explicit worktree, staged, or ref-range
+changeset and remain read-only by default. “Review and fix” must transition
+from review into a separately authorized change session; review must not
+silently acquire write authority.
+
+Split a workflow into a separate top-level skill only when forward tests show
+that independent triggering, permissions, or context cannot be routed
+reliably. Do not add task families merely to turn resonant-code into a general
+agent framework.
 
 ## Distribution boundary
 
@@ -192,7 +252,8 @@ Release verification:
 4. packs Core and CLI together
 5. verifies the packed CLI pins the exact Core version
 6. installs both archives in an isolated consumer
-7. runs init, bootstrap, RCCL prepare, change prepare/complete, and status
+7. runs init, bootstrap, RCCL prepare/commit/fingerprint-bound approval,
+   change prepare/complete, and status
 8. verifies sessions contain package identities and no source-checkout paths
 
 The CLI transition changes distribution and orchestration, not the product

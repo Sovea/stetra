@@ -80,6 +80,14 @@ test('CLI owns init, bootstrap, RCCL, and change prepare without installation pa
       '--json',
     ]);
     assert.equal((committedBootstrap.output as { status: string }).status, 'created');
+    const humanBootstrap = formatCliOutput({
+      ...committedBootstrap,
+      json: false,
+      color: false,
+    });
+    assert.match(humanBootstrap, /Selected layers/);
+    assert.match(humanBootstrap, /builtin\/languages\/typescript/);
+    assert.match(humanBootstrap, /package\.json/);
     const gitignore = readFileSync(join(root, '.gitignore'), 'utf8');
     assert.equal(gitignore.match(/# resonant-code:begin/g)?.length, 1);
     assert.equal(gitignore.match(/# resonant-code:end/g)?.length, 1);
@@ -94,6 +102,91 @@ test('CLI owns init, bootstrap, RCCL, and change prepare without installation pa
       '--json',
     ]);
     assert.equal((context.output as { status: string }).status, 'ready');
+    const contextContract = (context.output as {
+      contract: {
+        schemaVersion: string;
+        requestId: string;
+        contextFingerprint: string;
+        evidenceWindows: Array<{ windowId: string }>;
+      };
+    }).contract;
+    const contextProposal = join(root, 'context-proposal.json');
+    writeFileSync(contextProposal, JSON.stringify({
+      schemaVersion: contextContract.schemaVersion,
+      requestId: contextContract.requestId,
+      contextFingerprint: contextContract.contextFingerprint,
+      replace: false,
+      observations: [{
+        id: 'obs-example-export-boundary',
+        category: 'architecture',
+        scope: 'src/**',
+        statement: 'The example export is defined in src/example.ts.',
+        affects: ['api-shape'],
+        decisionImpact: 'Changing the export elsewhere would split the public shape.',
+        semanticConfidence: 'high',
+        evidence: [{
+          windowId: contextContract.evidenceWindows[0].windowId,
+        }],
+      }],
+    }), 'utf8');
+    const contextContractPath = writeJsonFixture(
+      root,
+      'context-contract.json',
+      context.output,
+    );
+    const committedContext = await runCli([
+      'context',
+      'commit',
+      root,
+      '--contract',
+      contextContractPath,
+      '--input',
+      contextProposal,
+      '--json',
+    ]);
+    const contextFingerprint = (committedContext.output as {
+      document: {
+        observations: Array<{
+          lifecycle: { contentFingerprint: string };
+        }>;
+      };
+    }).document.observations[0].lifecycle.contentFingerprint;
+    const humanContext = formatCliOutput({
+      ...committedContext,
+      json: false,
+      color: false,
+    });
+    assert.match(humanContext, /obs-example-export-boundary/);
+    assert.match(humanContext, /Changing the export elsewhere/);
+    assert.match(humanContext, new RegExp(contextFingerprint));
+    await assert.rejects(
+      () => runCli([
+        'context',
+        'approve',
+        root,
+        '--id',
+        'obs-example-export-boundary',
+        '--fingerprint',
+        `obs-example-export-boundary=${'0'.repeat(64)}`,
+        '--approved-by',
+        'reviewer',
+        '--json',
+      ]),
+      /changed after review/,
+    );
+    const approvedContext = await runCli([
+      'context',
+      'approve',
+      root,
+      '--id',
+      'obs-example-export-boundary',
+      '--fingerprint',
+      `obs-example-export-boundary=${contextFingerprint}`,
+      '--approved-by',
+      'reviewer',
+      '--json',
+    ]);
+    assert.equal((approvedContext.output as { status: string }).status, 'approved');
 
     git(root, ['init', '-q']);
     git(root, ['config', 'user.email', 'cli@example.invalid']);
@@ -143,6 +236,22 @@ test('CLI owns init, bootstrap, RCCL, and change prepare without installation pa
     const doctor = await runCli(['doctor', root, '--strict', '--json']);
     assert.equal((doctor.output as { status: string }).status, 'blocked');
     assert.equal(doctor.exitCode, 2);
+    const doctorReadiness = (doctor.output as {
+      readiness: {
+        required: Array<{ code: string }>;
+        recommended: Array<{ code: string }>;
+        optional: Array<{ code: string }>;
+      };
+    }).readiness;
+    assert.ok(doctorReadiness.required.some((action) => action.code === 'checks-absent'));
+    assert.equal(
+      doctorReadiness.recommended.some((action) => action.code === 'local-augment-absent'),
+      false,
+    );
+    assert.equal(
+      doctorReadiness.optional.some((action) => action.code === 'rccl-absent'),
+      false,
+    );
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -165,10 +274,50 @@ test('CLI rejects removed change aliases and validates RCCL through Core', async
     const status = await runCli(['status', root, '--json']);
     const output = status.output as {
       sources: { rccl: string };
-      readiness: { nextActions: Array<{ code: string }> };
+      readiness: { required: Array<{ code: string }> };
     };
     assert.equal(output.sources.rccl, 'invalid');
-    assert.ok(output.readiness.nextActions.some((action) => action.code === 'rccl-invalid'));
+    assert.ok(output.readiness.required.some((action) => action.code === 'rccl-invalid'));
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('strict doctor blocks only required readiness issues', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'resonant-cli-readiness-levels-'));
+  try {
+    await runCli(['init', root, '--adapter', 'codex', '--json']);
+    mkdirSync(join(root, '.resonant-code'), { recursive: true });
+    writeFileSync(join(root, '.resonant-code', 'checks.json'), JSON.stringify({
+      version: '1.0',
+      checks: [{
+        id: 'test',
+        command: [process.execPath, '-e', 'process.exit(0)'],
+        timeoutMs: 10_000,
+      }],
+    }), 'utf8');
+
+    const doctor = await runCli(['doctor', root, '--strict', '--json']);
+    const output = doctor.output as {
+      status: string;
+      readiness: {
+        status: string;
+        required: Array<{ code: string }>;
+        recommended: Array<{ code: string }>;
+        optional: Array<{ code: string }>;
+      };
+    };
+    assert.equal(doctor.exitCode, 0);
+    assert.equal(output.status, 'ok');
+    assert.equal(output.readiness.status, 'ready');
+    assert.deepEqual(output.readiness.required, []);
+    assert.ok(
+      output.readiness.recommended.some((action) =>
+        action.code === 'local-augment-absent'),
+    );
+    assert.ok(
+      output.readiness.optional.some((action) => action.code === 'rccl-absent'),
+    );
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -410,6 +559,58 @@ test('CLI returns business guidance overflow as a successful machine result', as
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test('human completion output presents facts, guidance, and review needs', () => {
+  const rendered = formatCliOutput({
+    command: 'change complete',
+    json: false,
+    color: false,
+    exitCode: 0,
+    output: {
+      status: 'warning',
+      evaluationId: 'evaluation-id',
+      changes: {
+        files: [
+          { path: 'src/a.ts', status: 'modified' },
+          { path: 'src/b.ts', status: 'added' },
+        ],
+      },
+      checks: [
+        { id: 'typecheck', status: 'passed' },
+        { id: 'test', status: 'failed', reason: 'Check exited with 1.' },
+      ],
+      results: [
+        {
+          guidanceId: 'required-1',
+          section: 'required',
+          verdict: 'satisfied',
+          reasons: ['Evidence covered the requirement.'],
+        },
+        {
+          guidanceId: 'consider-1',
+          section: 'consider',
+          verdict: 'unverified',
+          reasons: ['No evidence-backed verdict was provided.'],
+        },
+      ],
+      feedback: { recorded: 1 },
+      sessionPath: '/tmp/session.json',
+    },
+  });
+  assert.match(rendered, /Changed files: 2/);
+  assert.match(rendered, /Checks: 2/);
+  assert.match(rendered, /test: Check exited with 1/);
+  assert.match(rendered, /required: satisfied=1/);
+  assert.match(rendered, /consider-1 \(unverified\)/);
+  assert.match(rendered, /Feedback recorded: 1/);
+  assert.match(rendered, /Review unresolved evidence/);
+});
+
+function writeJsonFixture(root: string, name: string, value: unknown): string {
+  const path = join(root, name);
+  writeFileSync(path, `${JSON.stringify(value, null, 2)}\n`, 'utf8');
+  return path;
+}
 
 function git(root: string, args: string[]): void {
   execFileSync('git', ['-C', root, ...args], { stdio: 'ignore' });

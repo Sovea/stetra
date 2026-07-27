@@ -117,6 +117,72 @@ try {
     '--json',
   ], consumer);
   assert.equal(context.status, 'ready');
+  const contextContractPath = join(
+    project,
+    '.resonant-code',
+    'context',
+    'rccl-prepare.json',
+  );
+  mkdirSync(join(project, '.resonant-code', 'context'), { recursive: true });
+  writeFileSync(
+    contextContractPath,
+    `${JSON.stringify(context, null, 2)}\n`,
+    'utf8',
+  );
+  const contextProposalPath = join(
+    project,
+    '.resonant-code',
+    'context',
+    'rccl-proposal.json',
+  );
+  writeFileSync(contextProposalPath, `${JSON.stringify({
+    schemaVersion: context.contract.schemaVersion,
+    requestId: context.contract.requestId,
+    contextFingerprint: context.contract.contextFingerprint,
+    replace: false,
+    observations: [{
+      id: 'obs-packed-example-boundary',
+      category: 'architecture',
+      scope: 'src/**',
+      statement: 'The packed smoke export is defined in src/example.ts.',
+      affects: ['api-shape'],
+      decisionImpact: 'Defining the export elsewhere would split the tested public shape.',
+      semanticConfidence: 'high',
+      evidence: [{
+        windowId: context.contract.evidenceWindows[0].windowId,
+      }],
+    }],
+  }, null, 2)}\n`, 'utf8');
+  const committedContext = runJson(binary, [
+    'context',
+    'commit',
+    project,
+    '--contract',
+    contextContractPath,
+    '--input',
+    contextProposalPath,
+    '--json',
+  ], consumer);
+  assert.equal(committedContext.status, 'committed');
+  const observationFingerprint =
+    committedContext.document.observations[0].lifecycle.contentFingerprint;
+  const approvedContext = runJson(binary, [
+    'context',
+    'approve',
+    project,
+    '--id',
+    'obs-packed-example-boundary',
+    '--fingerprint',
+    `obs-packed-example-boundary=${observationFingerprint}`,
+    '--approved-by',
+    'release-smoke-reviewer',
+    '--json',
+  ], consumer);
+  assert.equal(approvedContext.status, 'approved');
+  assert.deepEqual(
+    approvedContext.approvedObservationIds,
+    ['obs-packed-example-boundary'],
+  );
 
   git(project, ['init', '-q']);
   git(project, ['config', 'user.email', 'release@example.invalid']);

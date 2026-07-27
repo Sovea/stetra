@@ -20,15 +20,31 @@ test('project init creates and safely upgrades only managed adapter artifacts', 
     });
     assert.equal(initialized.status, 'initialized');
     assert.deepEqual(initialized.adapters, ['codex']);
-    assert.equal(initialized.counts.create, 3);
+    assert.equal(initialized.counts.create, 6);
     assert.match(readFileSync(join(root, 'AGENTS.md'), 'utf8'), /# Owner instructions/);
     assert.match(readFileSync(join(root, 'AGENTS.md'), 'utf8'), /resonant-code:begin/);
+    const skillRoot = join(root, '.agents', 'skills', 'resonant-code');
+    const skill = readFileSync(join(skillRoot, 'SKILL.md'), 'utf8');
+    assert.match(skill, /read `references\/change\.md` completely/);
+    assert.doesNotMatch(skill, /^metadata:/m);
+    assert.match(
+      readFileSync(join(skillRoot, 'references', 'change.md'), 'utf8'),
+      /change complete/,
+    );
+    assert.match(
+      readFileSync(join(skillRoot, 'references', 'setup.md'), 'utf8'),
+      /Configure checks/,
+    );
+    assert.match(
+      readFileSync(join(skillRoot, 'references', 'context.md'), 'utf8'),
+      /--fingerprint/,
+    );
     assert.equal(inspectProjectInstallation(root).status, 'current');
 
     const unchanged = initializeProject({ projectRoot: root });
     assert.equal(unchanged.status, 'initialized');
     assert.deepEqual(unchanged.adapters, ['codex']);
-    assert.equal(unchanged.counts.unchanged, 3);
+    assert.equal(unchanged.counts.unchanged, 6);
 
     const skillPath = join(root, '.agents', 'skills', 'resonant-code', 'SKILL.md');
     writeFileSync(skillPath, `${readFileSync(skillPath, 'utf8')}owner edit\n`, 'utf8');
@@ -65,6 +81,38 @@ test('project init creates and safely upgrades only managed adapter artifacts', 
     assert.match(restoredAgentInstructions, /Use the `resonant-code` CLI/);
     assert.match(restoredAgentInstructions, /# Owner instructions/);
     assert.match(restoredAgentInstructions, /Owner tail/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('installation inspection reports a missing workflow reference as drift', () => {
+  const root = mkdtempSync(join(tmpdir(), 'resonant-cli-reference-drift-'));
+  try {
+    initializeProject({ projectRoot: root, adapters: ['codex'] });
+    rmSync(
+      join(root, '.agents', 'skills', 'resonant-code', 'references', 'context.md'),
+    );
+    const inspection = inspectProjectInstallation(root);
+    assert.equal(inspection.status, 'drifted');
+    assert.ok(
+      inspection.artifacts.some((artifact) =>
+        artifact.path.endsWith('/references/context.md')
+        && artifact.status === 'missing'),
+    );
+
+    initializeProject({ projectRoot: root });
+    assert.equal(inspectProjectInstallation(root).status, 'current');
+
+    const manifestPath = join(root, '.resonant-code', 'manifest.json');
+    const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
+    manifest.artifacts = manifest.artifacts.filter(
+      (artifact: { path: string }) => !artifact.path.includes('/references/'),
+    );
+    writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, 'utf8');
+    assert.equal(inspectProjectInstallation(root).status, 'drifted');
+    initializeProject({ projectRoot: root });
+    assert.equal(inspectProjectInstallation(root).status, 'current');
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

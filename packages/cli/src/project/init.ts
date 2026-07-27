@@ -19,8 +19,10 @@ import {
   PROTOCOL_VERSION,
 } from '../version.ts';
 import {
+  HOST_WORKFLOW_REFERENCES,
   renderHostPointerBlock,
   renderHostSkill,
+  renderHostWorkflowReference,
   type HostAdapter,
 } from '../adapters/templates.ts';
 import { inputError } from '../errors.ts';
@@ -62,7 +64,7 @@ export interface InitializeProjectOptions {
 }
 
 const MANIFEST_PATH = '.resonant-code/manifest.json';
-const TEMPLATE_REVISION = 1;
+const TEMPLATE_REVISION = 2;
 const DOC_MARKERS = {
   start: '<!-- resonant-code:begin -->',
   end: '<!-- resonant-code:end -->',
@@ -117,17 +119,18 @@ export function initializeProject(options: InitializeProjectOptions = {}) {
   }
 
   const counts = countActions(plan);
-  const nextActions: Array<{ code: string; message: string }> = [];
+  const required: Array<{ code: string; message: string }> = [];
+  const recommended: Array<{ code: string; message: string }> = [];
   if (!existsSync(join(projectRoot, '.resonant-code', 'playbook', 'local-augment.yaml'))) {
-    nextActions.push({
+    recommended.push({
       code: 'bootstrap-team-playbook',
-      message: 'Run `resonant-code bootstrap prepare . --json` when project-specific Playbook layers are needed.',
+      message: 'Ask the Host Agent to bootstrap a Team Playbook only when repository-specific guidance is needed.',
     });
   }
   if (!existsSync(join(projectRoot, '.resonant-code', 'checks.json'))) {
-    nextActions.push({
+    required.push({
       code: 'configure-checks',
-      message: 'Add explicit commands to .resonant-code/checks.json before trusted completion.',
+      message: 'Ask the Host Agent to inspect project-owned checks, show exact argv and timeouts for approval, then configure .resonant-code/checks.json.',
     });
   }
   return {
@@ -147,7 +150,11 @@ export function initializeProject(options: InitializeProjectOptions = {}) {
       action: item.action,
       ...(item.reason ? { reason: item.reason } : {}),
     })),
-    nextActions,
+    readiness: {
+      required,
+      recommended,
+      optional: [],
+    },
   };
 }
 
@@ -165,31 +172,52 @@ export function inspectProjectInstallation(projectRootInput = '.') {
     };
   }
 
-  const artifacts = manifest.artifacts.map((artifact) => {
-    const target = projectPath(projectRoot, artifact.path);
-    assertNoSymlinkTraversal(projectRoot, artifact.path);
-    if (!existsSync(target)) {
-      return { ...artifact, status: 'missing' as const };
+  const desiredArtifacts = buildDesiredArtifacts(manifest.adapters);
+  const priorByKey = new Map(
+    manifest.artifacts.map((artifact) => [artifactKey(artifact), artifact]),
+  );
+  const artifacts: Array<ManifestArtifact & {
+    status: 'current' | 'missing' | 'modified' | 'outdated' | 'unsupported';
+  }> = desiredArtifacts.map((desired) => {
+    const prior = priorByKey.get(artifactKey(desired));
+    if (!prior) {
+      return {
+        path: desired.path,
+        kind: desired.kind,
+        templateRevision: desired.templateRevision,
+        generatedHash: sha256(desired.content),
+        status: 'missing' as const,
+      };
     }
-    const desired = buildDesiredArtifacts(manifest.adapters)
-      .find((candidate) => artifactKey(candidate) === artifactKey(artifact));
-    if (!desired) {
-      return { ...artifact, status: 'unsupported' as const };
+    const target = projectPath(projectRoot, desired.path);
+    assertNoSymlinkTraversal(projectRoot, desired.path);
+    if (!existsSync(target)) {
+      return { ...prior, status: 'missing' as const };
     }
     const current = readFileSync(target, 'utf8');
-    const generatedContent = artifact.kind === 'file'
+    const generatedContent = desired.kind === 'file'
       ? current
-      : extractManagedBlock(current, desired.markers!, artifact.path, true);
+      : extractManagedBlock(current, desired.markers!, desired.path, true);
     if (generatedContent === null) {
-      return { ...artifact, status: 'missing' as const };
+      return { ...prior, status: 'missing' as const };
     }
+    const currentHash = sha256(generatedContent);
+    const desiredHash = sha256(desired.content);
     return {
-      ...artifact,
-      status: sha256(generatedContent) === artifact.generatedHash
+      ...prior,
+      status: currentHash === desiredHash
         ? 'current' as const
-        : 'modified' as const,
+        : currentHash === prior.generatedHash
+          ? 'outdated' as const
+          : 'modified' as const,
     };
   });
+  const desiredKeys = new Set(desiredArtifacts.map(artifactKey));
+  for (const artifact of manifest.artifacts) {
+    if (!desiredKeys.has(artifactKey(artifact))) {
+      artifacts.push({ ...artifact, status: 'unsupported' as const });
+    }
+  }
   const drifted = artifacts.some((artifact) => artifact.status !== 'current');
   const versionStatus = manifest.generatorVersion === PRODUCT_VERSION
     ? 'current'
@@ -221,40 +249,31 @@ function buildDesiredArtifacts(adapters: HostAdapter[]): DesiredArtifact[] {
     ].join('\n'),
   }];
 
-  if (adapters.includes('codex')) {
-    artifacts.push(
-      {
-        path: '.agents/skills/resonant-code/SKILL.md',
+  for (const adapter of adapters) {
+    const skillRoot = adapter === 'codex'
+      ? '.agents/skills/resonant-code'
+      : '.claude/skills/resonant-code';
+    artifacts.push({
+      path: `${skillRoot}/SKILL.md`,
+      kind: 'file',
+      templateRevision: TEMPLATE_REVISION,
+      content: renderHostSkill(adapter),
+    });
+    for (const workflow of HOST_WORKFLOW_REFERENCES) {
+      artifacts.push({
+        path: `${skillRoot}/references/${workflow}.md`,
         kind: 'file',
         templateRevision: TEMPLATE_REVISION,
-        content: renderHostSkill('codex'),
-      },
-      {
-        path: 'AGENTS.md',
-        kind: 'managed-block',
-        templateRevision: TEMPLATE_REVISION,
-        markers: DOC_MARKERS,
-        content: renderHostPointerBlock('codex', DOC_MARKERS),
-      },
-    );
-  }
-
-  if (adapters.includes('claude')) {
-    artifacts.push(
-      {
-        path: '.claude/skills/resonant-code/SKILL.md',
-        kind: 'file',
-        templateRevision: TEMPLATE_REVISION,
-        content: renderHostSkill('claude'),
-      },
-      {
-        path: 'CLAUDE.md',
-        kind: 'managed-block',
-        templateRevision: TEMPLATE_REVISION,
-        markers: DOC_MARKERS,
-        content: renderHostPointerBlock('claude', DOC_MARKERS),
-      },
-    );
+        content: renderHostWorkflowReference(adapter, workflow),
+      });
+    }
+    artifacts.push({
+      path: adapter === 'codex' ? 'AGENTS.md' : 'CLAUDE.md',
+      kind: 'managed-block',
+      templateRevision: TEMPLATE_REVISION,
+      markers: DOC_MARKERS,
+      content: renderHostPointerBlock(adapter, DOC_MARKERS),
+    });
   }
 
   return artifacts.sort((left, right) =>

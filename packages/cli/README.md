@@ -1,29 +1,36 @@
 # @sovea/resonant-code
 
-Publishable CLI-first control plane for the resonant-code change harness.
+CLI-first control plane for the resonant-code AI coding change harness.
 
 ```sh
-npx @sovea/resonant-code init .
-resonant-code status .
-resonant-code change prepare . --task "Fix the parser" --change-type bugfix --target src/parser.ts --json
+npm install --global @sovea/resonant-code
+cd /path/to/project
+resonant-code init .
+resonant-code doctor . --strict
 ```
 
-Interactive terminals receive adapter selection and, when optional guidance
-overflows the delivery budget, an explicit selection prompt. `--json` and
-`--no-interactive` never prompt. Machine callers should always use `--json`;
-its stdout is a single JSON document without ANSI formatting.
+`init` generates a thin Host Adapter for Codex, Claude Code, or both. Ask the
+configured Host Agent to inspect the repository and propose explicit trusted
+checks; it must show the exact command argv and timeouts before writing
+`.resonant-code/checks.json`.
 
-The CLI pins the exact matching `@sovea/resonant-code-core` version. Core owns
-Playbook, RCCL, compilation, evaluation, and bounded feedback decisions; CLI
-owns reproducible workflow IO, machine facts, and thin Host Adapter generation.
-Neither package calls an LLM. Host agents retain semantic task understanding,
-repository inspection, relation proposals, implementation, and attestations.
+After setup, use the Host Agent normally:
 
-The package exposes one binary, `resonant-code`. Bootstrap does not guess
-repository technology from filenames; the host supplies inspected evidence
-paths for any repository-specific Playbook layer.
+> Fix the parser boundary and add a regression test.
 
-Commander owns command syntax and help; Zod validates untrusted CLI artifacts;
-Execa collects Git and check-process facts; Inquirer and picocolors are confined
-to the human-facing adapter. None of these dependencies makes Playbook, RCCL,
-relation, delivery, or evaluation decisions.
+The generated adapter runs `change prepare` before implementation and
+`change complete` afterward. Human users do not need to manage session,
+selection, relation, or evaluation artifacts.
+
+Human-readable output is the default. Host Adapters use `--json`; JSON mode
+never prompts or emits ANSI. Required readiness issues block
+`doctor --strict`, while absent Team Playbook and RCCL sources remain
+recommended or optional.
+
+The package exposes one binary, `resonant-code`, and pins the exact matching
+`@sovea/resonant-code-core` version. Core owns Playbook, RCCL, compilation,
+evaluation, and bounded feedback decisions. CLI owns reproducible workflow IO,
+machine facts, presentation, and generated adapters. Neither package calls an
+LLM.
+
+Use `resonant-code --help` for the complete advanced command surface.

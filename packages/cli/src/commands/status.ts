@@ -37,7 +37,7 @@ function registerStatusCommand(
     .option('--personal-overlay <path>', 'personal should-level overlay')
     .option('--check-config <path>', 'explicit check command configuration');
   if (name === 'doctor') {
-    command.option('--strict', 'require every readiness recommendation');
+    command.option('--strict', 'fail when any required readiness condition is unresolved');
   }
   command.action(async (
     projectRootInput: string,
@@ -53,26 +53,28 @@ function registerStatusCommand(
       productVersion,
     });
     const installation = inspectProjectInstallation(projectRoot);
-    const nextActions = [...harness.readiness.nextActions];
+    const required = [...harness.readiness.required];
+    const recommended = [...harness.readiness.recommended];
+    const optional = [...harness.readiness.optional];
     if (installation.status === 'absent') {
-      nextActions.unshift({
+      required.unshift({
         code: 'cli-adapters-absent',
         message: 'Run `resonant-code init .` to install project-local host adapters.',
       });
     } else if (installation.status !== 'current') {
-      nextActions.unshift({
+      required.unshift({
         code: 'cli-installation-drifted',
         message: 'Run `resonant-code init .` to refresh adapter/version drift; use --force only for managed artifacts you intend to replace.',
       });
     }
     const readinessStatus = harness.status === 'blocked'
       ? 'blocked'
-      : nextActions.length
+      : required.length
         ? 'needs-attention'
         : 'ready';
     const strict = name === 'doctor' && Boolean(options.strict);
     const passed = harness.status !== 'blocked'
-      && (!strict || readinessStatus === 'ready');
+      && (!strict || required.length === 0);
     environment.emit(name, {
       status: passed ? 'ok' : 'blocked',
       schemaVersion: harness.schemaVersion,
@@ -81,7 +83,9 @@ function registerStatusCommand(
       version: productVersion,
       readiness: {
         status: readinessStatus,
-        nextActions,
+        required,
+        recommended,
+        optional,
       },
       installation,
       sources: harness.sources,

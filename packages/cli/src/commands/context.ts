@@ -33,6 +33,7 @@ interface ContextCommitOptions {
 
 interface ContextApproveOptions {
   approvedBy: string;
+  fingerprint: string[];
   id: string[];
   rcclPath?: string;
 }
@@ -93,6 +94,12 @@ export function registerContextCommands(
     .description('Record independent human approval provenance')
     .argument('[project-root]', 'project root', '.')
     .requiredOption('--id <observation-id>', 'observation to approve (repeatable)', collectOption, [])
+    .requiredOption(
+      '--fingerprint <observation-id=content-fingerprint>',
+      'reviewed observation fingerprint (repeatable)',
+      collectOption,
+      [],
+    )
     .requiredOption('--approved-by <reviewer>', 'reviewer identity')
     .option('--rccl-path <path>', 'RCCL document path')
     .action((
@@ -100,8 +107,15 @@ export function registerContextCommands(
       options: ContextApproveOptions,
       command: Command,
     ) => {
+      const resolvedProjectRoot = resolve(projectRoot);
+      assertApprovalFingerprints({
+        projectRoot: resolvedProjectRoot,
+        observationIds: options.id,
+        fingerprintOptions: options.fingerprint,
+        rcclPath: options.rcclPath,
+      });
       environment.emit('context approve', approveContext({
-        projectRoot: resolve(projectRoot),
+        projectRoot: resolvedProjectRoot,
         observationIds: options.id,
         approvedBy: options.approvedBy,
         rcclPath: options.rcclPath,
@@ -110,6 +124,69 @@ export function registerContextCommands(
 
   registerValidationCommand(context, environment, 'validate', false);
   registerValidationCommand(context, environment, 'refresh-stale', true);
+}
+
+function assertApprovalFingerprints(input: {
+  projectRoot: string;
+  observationIds: string[];
+  fingerprintOptions: string[];
+  rcclPath?: string;
+}): void {
+  const expectedById = new Map<string, string>();
+  for (const value of input.fingerprintOptions) {
+    const separator = value.indexOf('=');
+    const id = separator > 0 ? value.slice(0, separator).trim() : '';
+    const fingerprint = separator > 0 ? value.slice(separator + 1).trim() : '';
+    if (!id || !/^[a-f0-9]{64}$/.test(fingerprint)) {
+      throw usageError(
+        `Invalid --fingerprint ${value}; expected <observation-id>=<64-character-content-fingerprint>.`,
+      );
+    }
+    if (expectedById.has(id)) {
+      throw usageError(`Duplicate --fingerprint for observation ${id}.`);
+    }
+    expectedById.set(id, fingerprint);
+  }
+
+  const requestedIds = [...new Set(input.observationIds)].sort();
+  const expectedIds = [...expectedById.keys()].sort();
+  if (
+    requestedIds.length !== expectedIds.length
+    || requestedIds.some((id, index) => id !== expectedIds[index])
+  ) {
+    throw usageError(
+      'Every --id must have exactly one matching --fingerprint and no extra fingerprints may be supplied.',
+    );
+  }
+
+  const current = validateContext({
+    projectRoot: input.projectRoot,
+    rcclPath: input.rcclPath,
+    write: false,
+  });
+  if (current.status !== 'valid' || !current.document) {
+    throw inputError(
+      `Cannot approve RCCL observations while context status is ${current.status}.`,
+    );
+  }
+  const observationById = new Map(
+    current.document.observations.map((observation) => [
+      observation.id,
+      observation,
+    ]),
+  );
+  for (const id of requestedIds) {
+    const observation = observationById.get(id);
+    if (!observation) {
+      throw inputError(`Observation ${id} does not exist in the current RCCL document.`);
+    }
+    const expected = expectedById.get(id);
+    if (observation.lifecycle.contentFingerprint !== expected) {
+      throw inputError(
+        `Observation ${id} changed after review; expected fingerprint ${expected}, current fingerprint is ${observation.lifecycle.contentFingerprint}.`,
+      );
+    }
+  }
 }
 
 function registerValidationCommand(

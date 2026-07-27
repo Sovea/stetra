@@ -335,34 +335,45 @@ export async function getCodeStatus(options) {
   const feedbackPath = join(paths.projectRoot, '.resonant-code', 'feedback', 'verified-events.jsonl');
   const feedbackAggregatePath = join(paths.projectRoot, '.resonant-code', 'feedback', 'aggregates.json');
   const feedback = feedbackStatus(feedbackPath, feedbackAggregatePath);
-  const nextActions = [];
+  const required = [];
+  const recommended = [];
+  const optional = [];
   if (localAugment === 'absent') {
-    nextActions.push({ code: 'local-augment-absent', message: 'Run bootstrap or add project-specific prescriptive guidance.' });
+    recommended.push({
+      code: 'local-augment-absent',
+      message: 'Bootstrap a Team Playbook only when repository-specific prescriptive guidance is needed.',
+    });
   }
   if (rccl === 'absent') {
-    nextActions.push({ code: 'rccl-absent', message: 'Calibrate decision-relevant repository observations when local reality should affect changes.' });
+    optional.push({
+      code: 'rccl-absent',
+      message: 'RCCL is optional; calibrate only durable repository observations that can change a future implementation or review decision.',
+    });
   } else if (rccl !== 'present') {
-    nextActions.push({ code: 'rccl-invalid', message: 'RCCL exists but cannot be parsed as a current observation document.' });
+    required.push({
+      code: 'rccl-invalid',
+      message: 'RCCL exists but cannot be parsed as a current observation document; repair or remove the invalid source before trusted operation.',
+    });
   }
   if (checks === 'absent') {
-    nextActions.push({
+    required.push({
       code: 'checks-absent',
-      message: 'Add explicit command mappings in .resonant-code/checks.json before trusted completion.',
+      message: 'Ask the Host Agent to inspect project-owned checks, show exact argv and timeouts for approval, then configure .resonant-code/checks.json.',
     });
   } else if (checks !== 'present') {
-    nextActions.push({
+    required.push({
       code: 'checks-invalid',
       message: 'The configured check file is not valid for the current schema.',
     });
   }
   if (feedback === 'invalid') {
-    nextActions.push({
+    required.push({
       code: 'feedback-invalid',
       message: 'Verified feedback events and Runtime-owned aggregates are inconsistent; inspect the files before recording more outcomes.',
     });
   }
   if (missingControlPlaneFiles.length) {
-    nextActions.unshift({
+    required.unshift({
       code: 'core-installation-incomplete',
       message: 'The Core installation is missing its built-in Playbook assets.',
     });
@@ -371,8 +382,14 @@ export async function getCodeStatus(options) {
     status: missingControlPlaneFiles.length ? 'blocked' : 'ok',
     schemaVersion: SESSION_SCHEMA_VERSION,
     readiness: {
-      status: missingControlPlaneFiles.length ? 'blocked' : nextActions.length ? 'needs-attention' : 'ready',
-      nextActions,
+      status: missingControlPlaneFiles.length
+        ? 'blocked'
+        : required.length
+          ? 'needs-attention'
+          : 'ready',
+      required,
+      recommended,
+      optional,
     },
     sources: {
       localAugment,
