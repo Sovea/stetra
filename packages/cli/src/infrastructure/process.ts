@@ -33,7 +33,7 @@ export async function runBufferedCommand(input: {
   });
   return {
     code: result.code,
-    exitCode: result.exitCode ?? null,
+    exitCode: normalizeExitCode(result),
     failed: result.failed,
     message: result.shortMessage ?? result.message,
     signal: result.signal ?? null,
@@ -78,10 +78,20 @@ export async function runStreamingCommand(input: {
   await outputFinished;
   return {
     code: result.code,
-    exitCode: result.exitCode ?? null,
+    exitCode: normalizeExitCode(result),
     failed: result.failed,
     message: result.shortMessage ?? result.message,
     signal: result.signal ?? null,
     timedOut: result.timedOut,
   };
+}
+
+function normalizeExitCode(result: {
+  code?: string;
+  exitCode?: number;
+}): number | null {
+  // cross-spawn can surface ENOENT as exit code 1 on Windows even though the
+  // requested process never started. Execa's system error code is the stable
+  // signal that no meaningful subprocess exit code exists.
+  return result.code === undefined ? result.exitCode ?? null : null;
 }

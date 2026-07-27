@@ -71,8 +71,17 @@ test('Execa-backed checks preserve success, failure, timeout, and spawn facts', 
     assert.equal(results[2].status, 'failed');
     assert.match(results[2].reason ?? '', /timed out/);
     assert.equal(results[3].status, 'failed');
-    assert.equal(results[3].exitCode, null);
-    assert.match(results[3].reason ?? '', /could not start/i);
+    assert.notEqual(results[3].exitCode, 0);
+    assert.match(results[3].reason ?? '', /could not start|exited with/i);
+
+    const spawnFailure = await runCheckPlan({
+      projectRoot: join(root, 'missing-working-directory'),
+      plan: [plan[0]],
+      outputDirectory: join(root, 'spawn-failure-output'),
+    });
+    assert.equal(spawnFailure[0].status, 'failed');
+    assert.equal(spawnFailure[0].exitCode, null);
+    assert.match(spawnFailure[0].reason ?? '', /could not start/i);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

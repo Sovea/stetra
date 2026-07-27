@@ -48,8 +48,13 @@ try {
   assert.equal(coreManifest.version, '0.0.1');
   assert.equal(cliManifest.version, '0.0.1');
   assert.equal(cliManifest.dependencies['@sovea/resonant-code-core'], '0.0.1');
+  assert.equal(cliManifest.bin['resonant-code'], './dist/index.mjs');
+  const cliEntrypoint = resolve(
+    installedCli,
+    cliManifest.bin['resonant-code'],
+  );
   assert.ok(readFileSync(join(installedCore, 'assets', 'playbook', 'core.yaml'), 'utf8'));
-  assert.ok(readFileSync(join(installedCli, 'dist', 'index.mjs'), 'utf8'));
+  assert.ok(readFileSync(cliEntrypoint, 'utf8'));
   const binary = join(
     consumer,
     'node_modules',
@@ -57,14 +62,20 @@ try {
     process.platform === 'win32' ? 'resonant-code.cmd' : 'resonant-code',
   );
   assert.equal(run(binary, ['--version'], consumer).stdout.trim(), '0.0.1');
+  const runInstalledCli = (args) => runJson(
+    process.execPath,
+    [cliEntrypoint, ...args],
+    consumer,
+    { shell: false },
+  );
 
-  const initialized = runJson(binary, [
+  const initialized = runInstalledCli([
     'init',
     project,
     '--adapter',
     'codex',
     '--json',
-  ], consumer);
+  ]);
   assert.equal(initialized.status, 'initialized');
   assert.deepEqual(initialized.adapters, ['codex']);
   writeFileSync(join(project, '.resonant-code', 'checks.json'), JSON.stringify({
@@ -76,12 +87,12 @@ try {
     })),
   }, null, 2), 'utf8');
 
-  const bootstrap = runJson(binary, [
+  const bootstrap = runInstalledCli([
     'bootstrap',
     'prepare',
     project,
     '--json',
-  ], consumer);
+  ]);
   assert.equal(bootstrap.status, 'prepared');
   assert.equal(Object.hasOwn(bootstrap, 'signals'), false);
   assert.match(bootstrap.prompt, /Inspect the repository with your native tools/);
@@ -94,28 +105,28 @@ try {
       rationale: 'The inspected package manifest establishes the TypeScript project boundary.',
     }],
   }, null, 2), 'utf8');
-  const committedBootstrap = runJson(binary, [
+  const committedBootstrap = runInstalledCli([
     'bootstrap',
     'commit',
     project,
     '--input',
     bootstrapCandidate,
     '--json',
-  ], consumer);
+  ]);
   assert.equal(committedBootstrap.status, 'created');
   const gitignore = readFileSync(join(project, '.gitignore'), 'utf8');
   assert.equal(gitignore.match(/# resonant-code:begin/g)?.length, 1);
   assert.equal(gitignore.match(/# resonant-code:end/g)?.length, 1);
   assert.doesNotMatch(gitignore, /# resonant-code: generated runtime artifacts/);
 
-  const context = runJson(binary, [
+  const context = runInstalledCli([
     'context',
     'prepare',
     project,
     '--evidence',
     'src/example.ts:1-1',
     '--json',
-  ], consumer);
+  ]);
   assert.equal(context.status, 'ready');
   const contextContractPath = join(
     project,
@@ -153,7 +164,7 @@ try {
       }],
     }],
   }, null, 2)}\n`, 'utf8');
-  const committedContext = runJson(binary, [
+  const committedContext = runInstalledCli([
     'context',
     'commit',
     project,
@@ -162,11 +173,11 @@ try {
     '--input',
     contextProposalPath,
     '--json',
-  ], consumer);
+  ]);
   assert.equal(committedContext.status, 'committed');
   const observationFingerprint =
     committedContext.document.observations[0].lifecycle.contentFingerprint;
-  const approvedContext = runJson(binary, [
+  const approvedContext = runInstalledCli([
     'context',
     'approve',
     project,
@@ -177,7 +188,7 @@ try {
     '--approved-by',
     'release-smoke-reviewer',
     '--json',
-  ], consumer);
+  ]);
   assert.equal(approvedContext.status, 'approved');
   assert.deepEqual(
     approvedContext.approvedObservationIds,
@@ -190,7 +201,7 @@ try {
   git(project, ['add', '.']);
   git(project, ['commit', '-qm', 'initial']);
 
-  const prepared = runJson(binary, [
+  const prepared = runInstalledCli([
     'change',
     'prepare',
     project,
@@ -207,7 +218,7 @@ try {
     '--guidance-byte-limit',
     '20000',
     '--json',
-  ], consumer);
+  ]);
   assert.ok(prepared.status === 'compiled' || prepared.status === 'needs-attention');
   const session = JSON.parse(readFileSync(prepared.sessionPath, 'utf8'));
   assert.equal(session.controlPlane.kind, 'cli');
@@ -222,7 +233,7 @@ try {
     attestations: attestationsForDecision(prepared),
     exceptions: [],
   }, null, 2), 'utf8');
-  const completed = runJson(binary, [
+  const completed = runInstalledCli([
     'change',
     'complete',
     '--session',
@@ -230,7 +241,7 @@ try {
     '--evaluation-file',
     evaluationPath,
     '--json',
-  ], consumer);
+  ]);
   assert.equal(completed.status, 'accepted');
   assert.deepEqual(
     completed.changes.files.map((file) => [file.path, file.status]),
@@ -238,7 +249,7 @@ try {
   );
   assert.ok(completed.checks.every((check) => check.status === 'passed'));
 
-  const status = runJson(binary, ['status', project, '--json'], consumer);
+  const status = runInstalledCli(['status', project, '--json']);
   assert.equal(status.controlPlane.kind, 'cli');
   assert.equal(status.installation.status, 'current');
 } finally {
@@ -289,16 +300,21 @@ function attestationsForDecision(decision) {
   return attestations;
 }
 
-function runJson(command, args, cwd) {
-  return JSON.parse(run(command, args, cwd).stdout);
+function runJson(command, args, cwd, options) {
+  return JSON.parse(run(command, args, cwd, options).stdout);
 }
 
-function run(command, args, cwd) {
+function run(
+  command,
+  args,
+  cwd,
+  { shell = process.platform === 'win32' } = {},
+) {
   const result = spawnSync(command, args, {
     cwd,
     encoding: 'utf8',
     maxBuffer: 20 * 1024 * 1024,
-    shell: process.platform === 'win32',
+    shell,
   });
   assert.equal(
     result.status,
