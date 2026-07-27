@@ -1,5 +1,4 @@
 /** CLI-owned deterministic check-plan execution and collection. */
-import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import {
   createWriteStream,
@@ -8,11 +7,36 @@ import {
   readFileSync,
 } from 'node:fs';
 import { dirname, relative, resolve } from 'node:path';
-import { finished } from 'node:stream/promises';
 
+import { z } from 'zod';
+
+import { inputError } from '../errors.ts';
+import { runStreamingCommand } from '../infrastructure/process.ts';
+import { parseArtifact } from '../validation.ts';
 import { stableFactHash } from './worktree.mjs';
 
 const CHECK_CONFIG_SCHEMA_VERSION = '1.0';
+const CheckDefinitionSchema = z.strictObject({
+  id: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._-]*$/),
+  command: z.array(z.string().min(1)).min(1),
+  timeoutMs: z.number().int().positive(),
+});
+const CheckConfigurationSchema = z.strictObject({
+  version: z.string(),
+  checks: z.array(CheckDefinitionSchema),
+}).superRefine((configuration, context) => {
+  const ids = new Set();
+  for (const [index, check] of configuration.checks.entries()) {
+    if (ids.has(check.id)) {
+      context.addIssue({
+        code: 'custom',
+        path: ['checks', index, 'id'],
+        message: `duplicate check id ${check.id}`,
+      });
+    }
+    ids.add(check.id);
+  }
+});
 
 export function loadCheckPlan(configPath, verificationPlan) {
   const requested = verificationPlan.commands.map((item) => ({
@@ -94,47 +118,26 @@ function readCheckDefinitions(configPath) {
   try {
     parsed = JSON.parse(readFileSync(resolve(configPath), 'utf8'));
   } catch (error) {
-    throw new Error(
+    throw inputError(
       `Failed to read check configuration at ${configPath}: ${error instanceof Error ? error.message : String(error)}`,
+      error,
     );
   }
-  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
-    throw new Error('Check configuration must be an object.');
-  }
-  const unknown = Object.keys(parsed).filter((key) => !['version', 'checks'].includes(key));
-  if (unknown.length) {
-    throw new Error(`Check configuration contains unsupported field(s): ${unknown.join(', ')}.`);
-  }
-  if (parsed.version !== CHECK_CONFIG_SCHEMA_VERSION) {
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)
+    || parsed.version !== CHECK_CONFIG_SCHEMA_VERSION) {
     throw new Error(
       `UNSUPPORTED_SCHEMA_VERSION: check configuration must use ${CHECK_CONFIG_SCHEMA_VERSION}.`,
     );
   }
-  if (!Array.isArray(parsed.checks)) {
-    throw new Error('Check configuration checks must be an array.');
-  }
+  const configuration = parseArtifact(
+    CheckConfigurationSchema,
+    parsed,
+    'check configuration',
+  );
   const definitions = new Map();
-  for (const [index, value] of parsed.checks.entries()) {
-    const location = `checks[${index}]`;
-    if (!value || typeof value !== 'object' || Array.isArray(value)) {
-      throw new Error(`Check configuration ${location} must be an object.`);
-    }
-    const fields = Object.keys(value).filter((key) => !['id', 'command', 'timeoutMs'].includes(key));
-    if (fields.length) {
-      throw new Error(`Check configuration ${location} contains unsupported field(s): ${fields.join(', ')}.`);
-    }
-    const id = validateCheckId(value.id, location);
-    if (!Array.isArray(value.command)
-      || !value.command.length
-      || value.command.some((part) => typeof part !== 'string' || !part)) {
-      throw new Error(`Check configuration ${location}.command must be a non-empty string array.`);
-    }
-    if (!Number.isInteger(value.timeoutMs) || value.timeoutMs <= 0) {
-      throw new Error(`Check configuration ${location}.timeoutMs must be a positive integer.`);
-    }
-    if (definitions.has(id)) throw new Error(`Duplicate check configuration id: ${id}.`);
-    definitions.set(id, {
-      id,
+  for (const value of configuration.checks) {
+    definitions.set(value.id, {
+      id: value.id,
       command: [...value.command],
       timeoutMs: value.timeoutMs,
     });
@@ -156,58 +159,42 @@ async function runConfiguredCheck({
   const stdoutHash = createHash('sha256');
   const stderrHash = createHash('sha256');
   const [executable, ...args] = item.command;
-  const child = spawn(executable, args, {
+  const result = await runStreamingCommand({
+    file: executable,
+    args,
     cwd: projectRoot,
-    env: process.env,
-    shell: false,
-    stdio: ['ignore', 'pipe', 'pipe'],
+    timeoutMs: item.timeoutMs,
+    stdout: stdoutStream,
+    stderr: stderrStream,
+    onStdout(chunk) {
+      stdoutHash.update(chunk);
+    },
+    onStderr(chunk) {
+      stderrHash.update(chunk);
+    },
   });
-  let spawnError = null;
-  let timedOut = false;
-  child.stdout.on('data', (chunk) => {
-    stdoutHash.update(chunk);
-  });
-  child.stderr.on('data', (chunk) => {
-    stderrHash.update(chunk);
-  });
-  child.stdout.pipe(stdoutStream);
-  child.stderr.pipe(stderrStream);
-  child.on('error', (error) => {
-    spawnError = error;
-  });
-  const timeout = setTimeout(() => {
-    timedOut = true;
-    child.kill('SIGTERM');
-  }, item.timeoutMs);
-  const forceKill = setTimeout(() => {
-    if (timedOut && child.exitCode === null) child.kill('SIGKILL');
-  }, item.timeoutMs + 1_000);
-  const { code, signal } = await new Promise((resolveResult) => {
-    child.on('close', (exitCode, exitSignal) => {
-      resolveResult({ code: exitCode, signal: exitSignal });
-    });
-  });
-  clearTimeout(timeout);
-  clearTimeout(forceKill);
-  await Promise.all([finished(stdoutStream), finished(stderrStream)]);
   const stdoutDigest = stdoutHash.digest('hex');
   const stderrDigest = stderrHash.digest('hex');
   const outputDigest = createHash('sha256')
-    .update(JSON.stringify({ stdoutDigest, stderrDigest, signal }))
+    .update(JSON.stringify({
+      stdoutDigest,
+      stderrDigest,
+      signal: result.signal,
+    }))
     .digest('hex');
-  const status = !spawnError && !timedOut && code === 0 ? 'passed' : 'failed';
-  const reason = timedOut
+  const status = !result.failed && result.exitCode === 0 ? 'passed' : 'failed';
+  const reason = result.timedOut
     ? `Check timed out after ${item.timeoutMs} ms.`
-    : spawnError
-      ? `Check could not start: ${spawnError.message}`
+    : result.code && result.exitCode === null
+      ? `Check could not start: ${result.message ?? result.code}`
       : status === 'failed'
-        ? `Check exited with ${code ?? signal ?? 'unknown status'}.`
+        ? `Check exited with ${result.exitCode ?? result.signal ?? 'unknown status'}.`
         : undefined;
   return {
     id: item.id,
     status,
     command: item.command,
-    exitCode: Number.isInteger(code) ? code : null,
+    exitCode: Number.isInteger(result.exitCode) ? result.exitCode : null,
     outputDigest,
     outputRefs: {
       stdout: relative(projectRoot, stdoutPath).replace(/\\/g, '/'),

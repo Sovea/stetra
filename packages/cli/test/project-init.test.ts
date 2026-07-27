@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 
+import { CliError } from '../src/errors.ts';
 import {
   initializeProject,
   inspectProjectInstallation,
@@ -147,6 +148,32 @@ test('init plans all changes before writing when a managed path conflicts', () =
     assert.throws(
       () => readFileSync(join(root, '.resonant-code', 'manifest.json'), 'utf8'),
       /ENOENT/,
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('manifest validation rejects unknown fields with stable issue paths', () => {
+  const root = mkdtempSync(join(tmpdir(), 'resonant-cli-manifest-schema-'));
+  try {
+    initializeProject({ projectRoot: root, adapters: ['codex'] });
+    const manifestPath = join(root, '.resonant-code', 'manifest.json');
+    const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
+    writeFileSync(
+      manifestPath,
+      `${JSON.stringify({ ...manifest, inferredCompatibility: true }, null, 2)}\n`,
+      'utf8',
+    );
+    assert.throws(
+      () => inspectProjectInstallation(root),
+      (error: unknown) => {
+        assert.ok(error instanceof CliError);
+        assert.equal(error.code, 'INVALID_INPUT');
+        assert.match(error.message, /\$/);
+        assert.match(error.message, /inferredCompatibility/);
+        return true;
+      },
     );
   } finally {
     rmSync(root, { recursive: true, force: true });

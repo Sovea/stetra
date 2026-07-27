@@ -18,7 +18,7 @@
     "README.md"
   ],
   "engines": {
-    "node": ">=22"
+    "node": ">=22.12.0"
   },
   "publishConfig": {
     "access": "public",
@@ -32,7 +32,12 @@
     "test": "tsx --test test/*.test.ts"
   },
   "dependencies": {
-    "@sovea/resonant-code-core": "workspace:*"
+    "@inquirer/prompts": "^8.0.0",
+    "@sovea/resonant-code-core": "workspace:*",
+    "commander": "^15.0.0",
+    "execa": "^9.6.0",
+    "picocolors": "^1.1.1",
+    "zod": "^4.0.0"
   },
   "devDependencies": {
     "@types/node": "^22.19.15",

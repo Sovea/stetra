@@ -4,6 +4,11 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSy
 import process from 'node:process';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 
+import { z } from 'zod';
+
+import { inputError } from '../errors.ts';
+import { parseArtifact } from '../validation.ts';
+
 const DETERMINISTIC_DEFAULT_EXTENDS = [
   'builtin/core',
   'builtin/task-types/*',
@@ -13,40 +18,57 @@ const FALSEY_FLAG_VALUES = new Set(['0', 'false', 'no', 'off']);
 const REPO_SPECIFIC_LAYER_PATTERN = /^builtin\/(languages|frameworks|domains)\/[a-z0-9-]+(?:\/[a-z0-9-]+)*$/;
 const CORE_FILE_NAME = 'core.yaml';
 
-const INIT_CANDIDATE_SCHEMA = {
-  type: 'object',
-  additionalProperties: false,
-  properties: {
-    projectName: { type: 'string' },
-    selectedLayers: {
-      type: 'array',
-      items: {
-        type: 'string',
-        pattern: '^builtin\\/(languages|frameworks|domains)\\/[a-z0-9-]+(?:\\/[a-z0-9-]+)*$',
-      },
-    },
-    evidence: {
-      type: 'array',
-      items: {
-        type: 'object',
-        additionalProperties: false,
-        properties: {
-          layerId: {
-            type: 'string',
-            pattern: '^builtin\\/(languages|frameworks|domains)\\/[a-z0-9-]+(?:\\/[a-z0-9-]+)*$',
-          },
-          paths: {
-            type: 'array',
-            items: { type: 'string', minLength: 1 },
-          },
-          rationale: { type: 'string' },
-        },
-        required: ['layerId', 'paths'],
-      },
-    },
-  },
-  required: ['selectedLayers', 'evidence'],
-};
+const LayerIdSchema = z.string().trim().regex(REPO_SPECIFIC_LAYER_PATTERN);
+const InitCandidateSchema = z.strictObject({
+  projectName: z.string().optional(),
+  selectedLayers: z.array(LayerIdSchema),
+  evidence: z.array(z.strictObject({
+    layerId: LayerIdSchema,
+    paths: z.array(z.string().trim().min(1)).min(1),
+    rationale: z.string().optional(),
+  })),
+}).superRefine((candidate, context) => {
+  const selected = new Set();
+  for (const [index, layerId] of candidate.selectedLayers.entries()) {
+    if (selected.has(layerId)) {
+      context.addIssue({
+        code: 'custom',
+        path: ['selectedLayers', index],
+        message: `duplicate selected layer ${layerId}`,
+      });
+    }
+    selected.add(layerId);
+  }
+
+  const evidence = new Set();
+  for (const [index, entry] of candidate.evidence.entries()) {
+    if (evidence.has(entry.layerId)) {
+      context.addIssue({
+        code: 'custom',
+        path: ['evidence', index, 'layerId'],
+        message: `duplicate evidence entry for ${entry.layerId}`,
+      });
+    }
+    evidence.add(entry.layerId);
+    if (!selected.has(entry.layerId)) {
+      context.addIssue({
+        code: 'custom',
+        path: ['evidence', index, 'layerId'],
+        message: `${entry.layerId} is not present in selectedLayers`,
+      });
+    }
+  }
+  for (const [index, layerId] of candidate.selectedLayers.entries()) {
+    if (!evidence.has(layerId)) {
+      context.addIssue({
+        code: 'custom',
+        path: ['selectedLayers', index],
+        message: `${layerId} is missing a corresponding evidence entry`,
+      });
+    }
+  }
+});
+const INIT_CANDIDATE_SCHEMA = z.toJSONSchema(InitCandidateSchema);
 
 function readJsonField(projectRoot, rel, field) {
   try {
@@ -161,86 +183,27 @@ function shouldEmitDebugArtifacts(options = {}) {
 }
 
 function normalizeCandidate(candidateInput, projectRoot) {
-  if (!candidateInput || typeof candidateInput !== 'object' || Array.isArray(candidateInput)) {
-    throw new Error('Init candidate must be a JSON object.');
-  }
-
-  const projectName = typeof candidateInput.projectName === 'string' && candidateInput.projectName.trim()
-    ? candidateInput.projectName.trim()
+  const candidate = parseArtifact(
+    InitCandidateSchema,
+    candidateInput,
+    'init candidate',
+  );
+  const projectName = typeof candidate.projectName === 'string' && candidate.projectName.trim()
+    ? candidate.projectName.trim()
     : undefined;
-
-  if (!Array.isArray(candidateInput.selectedLayers)) {
-    throw new Error('Init candidate field `selectedLayers` must be an array.');
-  }
-
-  const selectedLayers = [];
-  const selectedLayerSet = new Set();
-  for (const value of candidateInput.selectedLayers) {
-    if (typeof value !== 'string' || !value.trim()) {
-      throw new Error('Every selected layer must be a non-empty string.');
-    }
-    const layerId = value.trim();
-    if (!isRepoSpecificLayer(layerId)) {
-      throw new Error(`Unsupported selected layer id: ${layerId}`);
-    }
-    if (!selectedLayerSet.has(layerId)) {
-      selectedLayerSet.add(layerId);
-      selectedLayers.push(layerId);
-    }
-  }
-
-  if (!Array.isArray(candidateInput.evidence)) {
-    throw new Error('Init candidate field `evidence` must be an array.');
-  }
-
-  const evidence = [];
-  const evidenceLayerSet = new Set();
-  for (const evidenceInput of candidateInput.evidence) {
-    if (!evidenceInput || typeof evidenceInput !== 'object' || Array.isArray(evidenceInput)) {
-      throw new Error('Each evidence entry must be an object.');
-    }
-
-    if (typeof evidenceInput.layerId !== 'string' || !evidenceInput.layerId.trim()) {
-      throw new Error('Each evidence entry must include a non-empty layerId.');
-    }
-    const layerId = evidenceInput.layerId.trim();
-    if (!isRepoSpecificLayer(layerId)) {
-      throw new Error(`Unsupported evidence layer id: ${layerId}`);
-    }
-
-    if (!Array.isArray(evidenceInput.paths) || evidenceInput.paths.length === 0) {
-      throw new Error(`Evidence entry for ${layerId} must include at least one path.`);
-    }
+  const selectedLayers = [...candidate.selectedLayers];
+  const evidence = candidate.evidence.map((evidenceInput) => {
     const paths = evidenceInput.paths.map((item) => {
-      if (typeof item !== 'string' || !item.trim()) {
-        throw new Error(`Evidence entry for ${layerId} contains an invalid path.`);
-      }
-      return normalizeEvidencePath(projectRoot, item, layerId);
+      return normalizeEvidencePath(projectRoot, item, evidenceInput.layerId);
     });
-
-    if (evidenceLayerSet.has(layerId)) {
-      throw new Error(`Duplicate evidence entry for ${layerId}.`);
-    }
-    evidenceLayerSet.add(layerId);
-    evidence.push({
-      layerId,
+    return {
+      layerId: evidenceInput.layerId,
       paths,
       rationale: typeof evidenceInput.rationale === 'string' && evidenceInput.rationale.trim()
         ? evidenceInput.rationale.trim()
         : undefined,
-    });
-  }
-
-  for (const layerId of selectedLayers) {
-    if (!evidenceLayerSet.has(layerId)) {
-      throw new Error(`Selected layer ${layerId} is missing a corresponding evidence entry.`);
-    }
-  }
-  for (const layerId of evidenceLayerSet) {
-    if (!selectedLayerSet.has(layerId)) {
-      throw new Error(`Evidence entry ${layerId} is not present in selectedLayers.`);
-    }
-  }
+    };
+  });
 
   return { projectName, selectedLayers, evidence };
 }
@@ -354,7 +317,10 @@ function readCandidateInput(input) {
       : JSON.parse(readFileSync(input, 'utf-8'));
   } catch (error) {
     const source = input === '-' ? 'stdin' : input;
-    throw new Error(`Failed to read init candidate JSON from ${source}: ${error instanceof Error ? error.message : String(error)}`);
+    throw inputError(
+      `Failed to read init candidate JSON from ${source}: ${error instanceof Error ? error.message : String(error)}`,
+      error,
+    );
   }
 }
 

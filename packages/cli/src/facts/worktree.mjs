@@ -1,5 +1,4 @@
 /** CLI-owned baseline-to-current Git worktree fact collection. */
-import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import {
   lstatSync,
@@ -9,23 +8,25 @@ import {
 } from 'node:fs';
 import { resolve } from 'node:path';
 
+import { runBufferedCommand } from '../infrastructure/process.ts';
+
 const WORKFLOW_OUTPUT_PREFIXES = [
   '.resonant-code/context/',
   '.resonant-code/feedback/',
 ];
 const GIT_OUTPUT_LIMIT = 256 * 1024 * 1024;
 
-export function captureGitWorktree(projectRoot) {
+export async function captureGitWorktree(projectRoot) {
   const root = realpathSync(resolve(projectRoot));
-  const gitPrefix = runGitText(root, ['rev-parse', '--show-prefix']);
+  const gitPrefix = await runGitText(root, ['rev-parse', '--show-prefix']);
   if (gitPrefix !== '') {
-    const gitRoot = runGitText(root, ['rev-parse', '--show-toplevel']);
+    const gitRoot = await runGitText(root, ['rev-parse', '--show-toplevel']);
     throw new Error(
       `Trusted change collection requires project root to equal the Git worktree root. Expected ${gitRoot}, received ${root}.`,
     );
   }
 
-  const listed = runGitBuffer(root, [
+  const listed = await runGitBuffer(root, [
     'ls-files',
     '-z',
     '--cached',
@@ -65,7 +66,7 @@ export function captureGitWorktree(projectRoot) {
       mode: stat.mode & 0o111 ? '100755' : '100644',
     });
   }
-  const head = readHead(root);
+  const head = await readHead(root);
   return {
     schemaVersion: '1.0',
     source: 'git-worktree',
@@ -253,29 +254,33 @@ function sameFact(left, right) {
     && left.mode === right.mode;
 }
 
-function readHead(root) {
+async function readHead(root) {
   try {
-    return runGitText(root, ['rev-parse', '--verify', 'HEAD']);
+    return await runGitText(root, ['rev-parse', '--verify', 'HEAD']);
   } catch {
     return null;
   }
 }
 
-function runGitText(root, args) {
-  return runGitBuffer(root, args).toString('utf8').trim();
+async function runGitText(root, args) {
+  return (await runGitBuffer(root, args)).toString('utf8').trim();
 }
 
-function runGitBuffer(root, args) {
-  try {
-    return execFileSync('git', ['-C', root, ...args], {
-      encoding: 'buffer',
-      maxBuffer: GIT_OUTPUT_LIMIT,
-      stdio: ['ignore', 'pipe', 'pipe'],
-    });
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    throw new Error(`Failed to collect Git worktree facts (${args.join(' ')}): ${message}`);
+async function runGitBuffer(root, args) {
+  const result = await runBufferedCommand({
+    file: 'git',
+    args: ['-C', root, ...args],
+    cwd: root,
+    maxBuffer: GIT_OUTPUT_LIMIT,
+  });
+  if (result.failed) {
+    const stderr = result.stderr.toString('utf8').trim();
+    throw new Error(
+      `Failed to collect Git worktree facts (${args.join(' ')}): `
+      + `${stderr || result.message || result.exitCode || result.signal || 'unknown failure'}`,
+    );
   }
+  return result.stdout;
 }
 
 function stableHash(parts) {

@@ -60,10 +60,15 @@ CLI uses internal modules for application concerns:
 ```text
 packages/cli/src/
 ├── adapters/
+├── commands/
 ├── facts/
+├── infrastructure/
+├── presentation/
 ├── project/
+├── schemas/
 ├── workflow/
-├── cli.ts
+├── main.ts
+├── program.ts
 └── index.ts
 ```
 
@@ -106,11 +111,20 @@ are not package exports.
 | RCCL lifecycle | `resonant-code context prepare/commit/approve/validate/refresh-stale` |
 | Bounded feedback | `resonant-code feedback inspect/propose` |
 
-Human-readable output is the default. Host adapters use `--json`. Actionable
-business states such as `needs-interpretation` and `guidance-overflow` are
-successful machine responses. Invalid input, infrastructure failures, changed
-generated artifacts during init, and strict doctor failures use non-zero exit
-codes.
+Human-readable output is the default. Commander owns command syntax and help;
+command-specific presenters use picocolors. Interactive prompts are enabled
+only for a real TTY and can be disabled with `--no-interactive`.
+
+Host adapters use `--json`. JSON mode never prompts, never emits ANSI, and
+writes only the machine-readable result to stdout. Actionable business states
+such as `needs-interpretation` and `guidance-overflow` are successful machine
+responses. Invalid input, infrastructure failures, changed generated artifacts
+during init, and strict doctor failures use non-zero exit codes.
+
+Zod validates external artifact shape and emits stable issue paths. It does not
+adjudicate Playbook authority, semantic relations, evidence truth, delivery, or
+evaluation. Execa is behind the CLI process adapter for Git and configured
+checks; commands remain argv arrays and never opt into a shell.
 
 ## Project initialization and ownership
 
@@ -138,7 +152,16 @@ managed blocks. Bootstrap owns only Team Playbook generation and never edits
 `.gitignore`.
 
 Adapter installation is additive. Omitting `--adapter` on an initialized
-project retains the installed adapter set.
+project retains the installed adapter set. On a new interactive project, the
+CLI asks which adapters to install. New non-interactive and `--json` runs use
+the documented default of both adapters; `--yes` accepts the same default
+explicitly.
+
+When optional guidance overflows the byte ceiling, an interactive human may
+select IDs and supply a rationale in-place. The CLI sends that exact bounded
+selection back through `compileChange`; it does not rank candidates or choose
+defaults. Host adapters continue to consume the `guidance-overflow` JSON and
+provide their own explicit selection file.
 
 Bootstrap enumerates available Core layers but does not scan, rank, cap, or
 guess repository evidence. The host inspects the repository using native

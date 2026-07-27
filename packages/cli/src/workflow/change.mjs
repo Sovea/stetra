@@ -15,12 +15,22 @@ import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 
 import { compileChange, evaluateChange } from '@sovea/resonant-code-core';
 import { validateContext } from '@sovea/resonant-code-core/rccl';
+import { inputError, usageError } from '../errors.ts';
 import { loadCheckPlan, runCheckPlan } from '../facts/checks.mjs';
 import {
   captureGitWorktree,
   compareGitWorktrees,
   summarizeWorktreeSnapshot,
 } from '../facts/worktree.mjs';
+import {
+  EvaluationInputSchema,
+  FeedbackAggregateSchema,
+  FeedbackProposalCandidateSchema,
+  GuidanceDeliverySelectionSchema,
+  RelationProposalDocumentSchema,
+  RuntimeSessionSchema,
+} from '../schemas/change.ts';
+import { parseArtifact } from '../validation.ts';
 
 const SESSION_SCHEMA_VERSION = '1.0';
 
@@ -69,7 +79,7 @@ export async function prepareCodeTask(options) {
   }
 
   const checkPlan = loadCheckPlan(paths.checkConfigPath, output.verificationPlan);
-  const worktreeBaseline = captureGitWorktree(paths.projectRoot);
+  const worktreeBaseline = await captureGitWorktree(paths.projectRoot);
   const sessionPath = writeSession(paths.projectRoot, {
     schemaVersion: SESSION_SCHEMA_VERSION,
     createdAt: new Date().toISOString(),
@@ -104,22 +114,11 @@ export async function completeCodeTask(options) {
         attestations: [],
         exceptions: [],
       };
-  if (!artifact || typeof artifact !== 'object' || Array.isArray(artifact)) {
-    throw new Error('Evaluation input must be a JSON object.');
-  }
-  const unsupportedFields = Object.keys(artifact)
-    .filter((field) => !['attestations', 'exceptions'].includes(field));
-  if (unsupportedFields.length) {
-    throw new Error(
-      `Evaluation input field(s) ${unsupportedFields.join(', ')} are not accepted; complete collects change/check facts and accepts only attestations and exceptions.`,
-    );
-  }
-  if (artifact.attestations !== undefined && !Array.isArray(artifact.attestations)) {
-    throw new Error('Evaluation input attestations must be an array.');
-  }
-  if (artifact.exceptions !== undefined && !Array.isArray(artifact.exceptions)) {
-    throw new Error('Evaluation input exceptions must be an array.');
-  }
+  const evaluationInput = parseArtifact(
+    EvaluationInputSchema,
+    artifact,
+    'evaluation input',
+  );
   const outputDirectory = join(
     session.projectRoot,
     '.resonant-code',
@@ -133,7 +132,7 @@ export async function completeCodeTask(options) {
     plan: session.checkPlan,
     outputDirectory,
   });
-  const currentWorktree = captureGitWorktree(session.projectRoot);
+  const currentWorktree = await captureGitWorktree(session.projectRoot);
   const changes = compareGitWorktrees(session.worktreeBaseline, currentWorktree);
   const checks = collectedChecks.map((check) => ({
     ...check,
@@ -146,8 +145,8 @@ export async function completeCodeTask(options) {
     decision: session.decision,
     changes,
     checks,
-    attestations: Array.isArray(artifact.attestations) ? artifact.attestations : [],
-    exceptions: Array.isArray(artifact.exceptions) ? artifact.exceptions : [],
+    attestations: evaluationInput.attestations,
+    exceptions: evaluationInput.exceptions,
     feedbackPath: join(session.projectRoot, '.resonant-code', 'feedback', 'verified-events.jsonl'),
   });
   const nextSession = {
@@ -219,8 +218,16 @@ export function inspectCodeFeedback(options) {
 export function createApprovedFeedbackProposal(options) {
   const projectRoot = resolve(requiredString(options.projectRoot, 'project root'));
   const inputPath = requiredPath(options.inputFile, 'propose-feedback-change requires --input <approved-proposal.json>.');
-  const candidate = readJsonFile(inputPath, 'approved feedback proposal');
-  validateFeedbackProposalCandidate(candidate);
+  const candidate = parseArtifact(
+    FeedbackProposalCandidateSchema,
+    readJsonFile(inputPath, 'approved feedback proposal'),
+    'approved feedback proposal',
+  );
+  if (candidate.schemaVersion !== SESSION_SCHEMA_VERSION) {
+    throw new Error(
+      `UNSUPPORTED_SCHEMA_VERSION: feedback proposal must use ${SESSION_SCHEMA_VERSION}.`,
+    );
+  }
 
   const feedbackDirectory = join(projectRoot, '.resonant-code', 'feedback');
   const aggregatePath = join(feedbackDirectory, 'aggregates.json');
@@ -397,57 +404,14 @@ export async function getCodeStatus(options) {
 function readFeedbackAggregate(path) {
   const value = readJsonFile(path, 'feedback aggregate');
   if (!value || typeof value !== 'object' || Array.isArray(value)
-    || value.schemaVersion !== SESSION_SCHEMA_VERSION
-    || !value.source || typeof value.source !== 'object' || Array.isArray(value.source)
-    || typeof value.source.eventsFile !== 'string'
-    || !Number.isInteger(value.source.eventCount) || value.source.eventCount < 0
-    || typeof value.source.eventsFingerprint !== 'string'
-    || !/^[a-f0-9]{16}$/.test(value.source.eventsFingerprint)
-    || !Array.isArray(value.aggregates)) {
+    || value.schemaVersion !== SESSION_SCHEMA_VERSION) {
     throw new Error(`Feedback aggregate at ${path} is invalid or uses an unsupported schema.`);
   }
-  const ids = new Set();
-  for (const aggregate of value.aggregates) {
-    if (!aggregate || typeof aggregate !== 'object' || Array.isArray(aggregate)
-      || typeof aggregate.guidanceId !== 'string' || !aggregate.guidanceId.trim()
-      || ids.has(aggregate.guidanceId)
-      || !Array.isArray(aggregate.sections)
-      || !aggregate.sections.every((section) => ['required', 'consider', 'avoid', 'tension'].includes(section))
-      || !Array.isArray(aggregate.evidenceKinds)
-      || !aggregate.evidenceKinds.every((kind) => ['diff', 'file', 'check', 'semantic'].includes(kind))
-      || !['satisfied', 'violated', 'excepted', 'total'].every((field) =>
-        Number.isInteger(aggregate[field]) && aggregate[field] >= 0)
-      || aggregate.total !== aggregate.satisfied + aggregate.violated + aggregate.excepted
-      || typeof aggregate.aggregateFingerprint !== 'string'
-      || !/^[a-f0-9]{16}$/.test(aggregate.aggregateFingerprint)) {
-      throw new Error(`Feedback aggregate at ${path} contains an invalid guidance entry.`);
-    }
-    ids.add(aggregate.guidanceId);
-  }
-  return value;
-}
-
-function validateFeedbackProposalCandidate(value) {
-  if (!value || typeof value !== 'object' || Array.isArray(value)
-    || value.schemaVersion !== SESSION_SCHEMA_VERSION
-    || typeof value.guidanceId !== 'string' || !value.guidanceId.trim()
-    || typeof value.aggregateFingerprint !== 'string'
-    || !/^[a-f0-9]{16}$/.test(value.aggregateFingerprint)
-    || !['team-playbook', 'personal-overlay'].includes(value.target)
-    || !value.change || typeof value.change !== 'object' || Array.isArray(value.change)
-    || !['add', 'revise', 'retire', 'add-exception'].includes(value.change.kind)
-    || typeof value.change.summary !== 'string' || !value.change.summary.trim()
-    || !value.change.proposedContent || typeof value.change.proposedContent !== 'object'
-    || Array.isArray(value.change.proposedContent)
-    || typeof value.rationale !== 'string' || !value.rationale.trim()
-    || !value.approval || typeof value.approval !== 'object' || Array.isArray(value.approval)
-    || value.approval.status !== 'approved'
-    || typeof value.approval.approvedBy !== 'string' || !value.approval.approvedBy.trim()
-    || typeof value.approval.reason !== 'string' || !value.approval.reason.trim()) {
-    throw new Error(
-      'Approved feedback proposal must include current guidanceId/aggregateFingerprint, target, change, rationale, and approval { status: "approved", approvedBy, reason }.',
-    );
-  }
+  return parseArtifact(
+    FeedbackAggregateSchema,
+    value,
+    `feedback aggregate at ${path}`,
+  );
 }
 
 function buildTaskInput(options) {
@@ -511,17 +475,20 @@ function resolvePaths(options) {
 
 function readRelationProposals(filePath) {
   const value = readJsonFile(filePath, 'relation proposals');
-  const proposals = Array.isArray(value) ? value : value?.relations;
-  if (!Array.isArray(proposals)) throw new Error('Relation proposal file must be a JSON array or { "relations": [] }.');
-  return proposals;
+  return parseArtifact(
+    RelationProposalDocumentSchema,
+    value,
+    'relation proposal file',
+  );
 }
 
 function readDeliverySelection(filePath) {
   const value = readJsonFile(filePath, 'guidance delivery selection');
-  if (!value || typeof value !== 'object' || Array.isArray(value)) {
-    throw new Error('Guidance selection file must contain { "considerIds": [], "rationale": "..." }.');
-  }
-  return value;
+  return parseArtifact(
+    GuidanceDeliverySelectionSchema,
+    value,
+    'guidance selection file',
+  );
 }
 
 function writeSession(projectRoot, session) {
@@ -535,23 +502,19 @@ function writeSession(projectRoot, session) {
 }
 
 function readSession(sessionPath) {
-  const session = readJsonFile(sessionPath, 'runtime session');
-  if (!session || typeof session !== 'object' || Array.isArray(session)) throw new Error('Runtime session must be a JSON object.');
+  const session = parseArtifact(
+    RuntimeSessionSchema,
+    readJsonFile(sessionPath, 'runtime session'),
+    'runtime session',
+  );
   if (session.schemaVersion !== SESSION_SCHEMA_VERSION) {
     throw new Error(`UNSUPPORTED_SCHEMA_VERSION: session must use ${SESSION_SCHEMA_VERSION}; re-run prepare.`);
   }
   if (!session.decision || session.decision.schemaVersion !== SESSION_SCHEMA_VERSION) {
     throw new Error(`UNSUPPORTED_SCHEMA_VERSION: session decision must use ${SESSION_SCHEMA_VERSION}; re-run prepare.`);
   }
-  if (typeof session.decision.decisionId !== 'string'
-    || !/^[a-f0-9]{16}$/.test(session.decision.decisionId)) {
-    throw new Error('Runtime session decisionId is invalid; re-run prepare.');
-  }
-  if (!session.worktreeBaseline || !Array.isArray(session.checkPlan)) {
+  if (!session.worktreeBaseline) {
     throw new Error('Runtime session predates trusted machine-fact collection; re-run prepare.');
-  }
-  if (typeof session.projectRoot !== 'string' || !session.projectRoot.trim()) {
-    throw new Error('Runtime session projectRoot is invalid; re-run prepare.');
   }
   const expectedDirectory = resolve(
     session.projectRoot,
@@ -618,13 +581,18 @@ function readJsonFile(path, label) {
   try {
     return JSON.parse(readFileSync(resolve(path), 'utf8'));
   } catch (error) {
-    throw new Error(`Failed to read ${label} at ${path}: ${error instanceof Error ? error.message : String(error)}`);
+    throw inputError(
+      `Failed to read ${label} at ${path}: ${error instanceof Error ? error.message : String(error)}`,
+      error,
+    );
   }
 }
 
 function normalizeEnum(value, allowed, label) {
   if (value === undefined || value === null || value === '') return undefined;
-  if (!allowed.includes(value)) throw new Error(`Invalid ${label}: expected one of ${allowed.join(', ')}.`);
+  if (!allowed.includes(value)) {
+    throw usageError(`Invalid ${label}: expected one of ${allowed.join(', ')}.`);
+  }
   return value;
 }
 
@@ -632,7 +600,7 @@ function normalizePositiveInteger(value, label) {
   if (value === undefined || value === null || value === '') return undefined;
   const number = typeof value === 'number' ? value : Number(value);
   if (!Number.isInteger(number) || number <= 0) {
-    throw new Error(`Invalid ${label}: expected a positive integer.`);
+    throw usageError(`Invalid ${label}: expected a positive integer.`);
   }
   return number;
 }
@@ -646,11 +614,13 @@ function hashJson(value) {
 }
 
 function requiredString(value, label) {
-  if (typeof value !== 'string' || !value.trim()) throw new Error(`Missing ${label}.`);
+  if (typeof value !== 'string' || !value.trim()) {
+    throw usageError(`Missing ${label}.`);
+  }
   return value.trim();
 }
 
 function requiredPath(value, message) {
-  if (typeof value !== 'string' || !value.trim()) throw new Error(message);
+  if (typeof value !== 'string' || !value.trim()) throw usageError(message);
   return resolve(value);
 }

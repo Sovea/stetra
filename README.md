@@ -112,7 +112,8 @@ npm install @sovea/resonant-code-core
 ```
 
 Then initialize project-local thin adapters. These are generated instructions,
-not copies of Runtime policy:
+not copies of Runtime policy. A TTY prompts for adapters; machine callers pass
+them explicitly or use the documented default of both:
 
 ```sh
 resonant-code init /path/to/project --adapter codex --adapter claude
@@ -137,7 +138,8 @@ resonant-code change prepare . \
   --json
 
 # If prepare reports guidance-overflow, choose relevant optional IDs in a
-# selection JSON and rerun with --selection-file <path>.
+# selection JSON and rerun with --selection-file <path>. Human non-JSON runs
+# can make the same explicit selection interactively.
 
 # Implement the change. Complete will run the prepared check mappings.
 
@@ -264,7 +266,7 @@ measured-improvement claim while it remains `not-run`.
 
 ## Development
 
-Requires Node.js 22 and pnpm.
+Requires Node.js 22.12 or newer and pnpm.
 
 ```sh
 corepack pnpm install --frozen-lockfile

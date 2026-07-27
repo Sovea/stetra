@@ -23,25 +23,18 @@ import {
   renderHostSkill,
   type HostAdapter,
 } from '../adapters/templates.ts';
+import { inputError } from '../errors.ts';
+import {
+  HostAdapterSchema,
+  ProjectManifestSchema,
+  type ManifestArtifact,
+  type ProjectManifest,
+} from '../schemas/project.ts';
+import { parseArtifact } from '../validation.ts';
 
 export type { HostAdapter } from '../adapters/templates.ts';
 
 type ArtifactKind = 'file' | 'managed-block';
-
-interface ManifestArtifact {
-  path: string;
-  kind: ArtifactKind;
-  templateRevision: number;
-  generatedHash: string;
-}
-
-interface ProjectManifest {
-  schemaVersion: string;
-  generatorVersion: string;
-  protocolVersion: string;
-  adapters: HostAdapter[];
-  artifacts: ManifestArtifact[];
-}
 
 interface DesiredArtifact {
   path: string;
@@ -365,64 +358,44 @@ function readManifest(projectRoot: string): ProjectManifest | null {
   try {
     value = JSON.parse(readFileSync(path, 'utf8'));
   } catch (error) {
-    throw new Error(
+    throw inputError(
       `Failed to parse ${MANIFEST_PATH}: ${error instanceof Error ? error.message : String(error)}`,
+      error,
     );
   }
-  if (!isRecord(value) || value.schemaVersion !== MANIFEST_SCHEMA_VERSION) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)
+    || !('schemaVersion' in value)
+    || value.schemaVersion !== MANIFEST_SCHEMA_VERSION) {
     throw new Error(
       `UNSUPPORTED_SCHEMA_VERSION: ${MANIFEST_PATH} must use ${MANIFEST_SCHEMA_VERSION}.`,
     );
   }
-  if (typeof value.generatorVersion !== 'string'
-    || typeof value.protocolVersion !== 'string'
-    || !Array.isArray(value.adapters)
-    || !value.adapters.every(isHostAdapter)
-    || !Array.isArray(value.artifacts)) {
-    throw new Error(`${MANIFEST_PATH} is invalid.`);
-  }
-  if (value.protocolVersion !== PROTOCOL_VERSION) {
+  const manifest = parseArtifact(
+    ProjectManifestSchema,
+    value,
+    MANIFEST_PATH,
+  );
+  if (manifest.protocolVersion !== PROTOCOL_VERSION) {
     throw new Error(
-      `UNSUPPORTED_PROTOCOL_VERSION: ${MANIFEST_PATH} requires ${value.protocolVersion}; this CLI supports ${PROTOCOL_VERSION}.`,
+      `UNSUPPORTED_PROTOCOL_VERSION: ${MANIFEST_PATH} requires ${manifest.protocolVersion}; this CLI supports ${PROTOCOL_VERSION}.`,
     );
   }
-  if (compareVersions(value.generatorVersion, PRODUCT_VERSION) > 0) {
+  if (compareVersions(manifest.generatorVersion, PRODUCT_VERSION) > 0) {
     throw new Error(
-      `UNSUPPORTED_GENERATOR_VERSION: ${MANIFEST_PATH} was written by newer CLI ${value.generatorVersion}; installed CLI is ${PRODUCT_VERSION}.`,
+      `UNSUPPORTED_GENERATOR_VERSION: ${MANIFEST_PATH} was written by newer CLI ${manifest.generatorVersion}; installed CLI is ${PRODUCT_VERSION}.`,
     );
   }
-  const adapters = normalizeAdapters(value.adapters);
-  if (adapters.length !== value.adapters.length) {
-    throw new Error(`${MANIFEST_PATH} contains duplicate adapters.`);
-  }
-  const artifacts: ManifestArtifact[] = value.artifacts.map((artifact, index) => {
-    if (!isRecord(artifact)
-      || typeof artifact.path !== 'string'
-      || !artifact.path
-      || !['file', 'managed-block'].includes(String(artifact.kind))
-      || !Number.isInteger(artifact.templateRevision)
-      || Number(artifact.templateRevision) <= 0
-      || Number(artifact.templateRevision) > TEMPLATE_REVISION
-      || typeof artifact.generatedHash !== 'string'
-      || !/^sha256:[a-f0-9]{64}$/.test(artifact.generatedHash)) {
+  const artifacts: ManifestArtifact[] = manifest.artifacts.map((artifact, index) => {
+    if (artifact.templateRevision > TEMPLATE_REVISION) {
       throw new Error(`${MANIFEST_PATH} artifact ${index} is invalid.`);
     }
-    return {
-      path: artifact.path,
-      kind: artifact.kind as ArtifactKind,
-      templateRevision: Number(artifact.templateRevision),
-      generatedHash: artifact.generatedHash,
-    };
+    return artifact;
   });
-  const keys = artifacts.map(artifactKey);
-  if (new Set(keys).size !== keys.length) {
-    throw new Error(`${MANIFEST_PATH} contains duplicate artifacts.`);
-  }
   return {
-    schemaVersion: value.schemaVersion,
-    generatorVersion: value.generatorVersion,
-    protocolVersion: value.protocolVersion,
-    adapters,
+    schemaVersion: manifest.schemaVersion,
+    generatorVersion: manifest.generatorVersion,
+    protocolVersion: manifest.protocolVersion,
+    adapters: manifest.adapters,
     artifacts,
   };
 }
@@ -507,7 +480,7 @@ function indexesOf(source: string, needle: string): number[] {
 function normalizeAdapters(adapters: HostAdapter[] | undefined): HostAdapter[] {
   const input: HostAdapter[] = adapters?.length ? adapters : ['codex', 'claude'];
   for (const adapter of input) {
-    if (!isHostAdapter(adapter)) {
+    if (!HostAdapterSchema.safeParse(adapter).success) {
       throw new Error(`Unsupported adapter: ${String(adapter)}. Expected codex or claude.`);
     }
   }
@@ -615,12 +588,4 @@ function countActions(plan: PlannedWrite[]) {
         plan.filter((item) => item.action === action).length,
       ]),
   );
-}
-
-function isHostAdapter(value: unknown): value is HostAdapter {
-  return value === 'codex' || value === 'claude';
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 }

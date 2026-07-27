@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import {
+  existsSync,
   mkdtempSync,
   mkdirSync,
   readFileSync,
@@ -9,9 +10,12 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { PassThrough } from 'node:stream';
 import test from 'node:test';
 
-import { runCli } from '../src/cli.ts';
+import { CliError } from '../src/errors.ts';
+import { formatCliOutput, runCli } from '../src/cli.ts';
+import type { PromptProvider } from '../src/runtime-context.ts';
 
 test('CLI owns init, bootstrap, RCCL, and change prepare without installation paths', async () => {
   const root = mkdtempSync(join(tmpdir(), 'resonant-cli-flow-'));
@@ -148,8 +152,8 @@ test('CLI rejects removed change aliases and validates RCCL through Core', async
   const root = mkdtempSync(join(tmpdir(), 'resonant-cli-validation-'));
   try {
     await assert.rejects(
-      () => runCli(['change', 'auto', root, '--task', 'Do something']),
-      /Unknown change command: auto/,
+      () => runCli(['change', 'auto']),
+      /unknown command 'auto'/i,
     );
 
     mkdirSync(join(root, '.resonant-code'), { recursive: true });
@@ -165,6 +169,210 @@ test('CLI rejects removed change aliases and validates RCCL through Core', async
     };
     assert.equal(output.sources.rccl, 'invalid');
     assert.ok(output.readiness.nextActions.some((action) => action.code === 'rccl-invalid'));
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('Commander exposes nested help and classifies usage errors', async () => {
+  const help = await runCli(['change', 'prepare', '--help']);
+  assert.equal(help.exitCode, 0);
+  assert.equal(help.json, false);
+  assert.match(String(help.output), /--guidance-byte-limit/);
+
+  await assert.rejects(
+    () => runCli(['change', 'prepare']),
+    (error: unknown) => {
+      assert.ok(error instanceof CliError);
+      assert.equal(error.code, 'USAGE_ERROR');
+      assert.equal(error.exitCode, 2);
+      assert.match(error.message, /required option '--task/);
+      return true;
+    },
+  );
+
+  await assert.rejects(
+    () => runCli([
+      'change',
+      'prepare',
+      '--task',
+      'Invalid option fixture',
+      '--risk',
+      'critical',
+    ]),
+    (error: unknown) => {
+      assert.ok(error instanceof CliError);
+      assert.equal(error.code, 'USAGE_ERROR');
+      assert.equal(error.exitCode, 2);
+      assert.match(error.message, /Invalid risk/);
+      return true;
+    },
+  );
+});
+
+test('machine mode never prompts or emits ANSI', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'resonant-cli-machine-'));
+  let promptCalls = 0;
+  const prompts: PromptProvider = {
+    async selectAdapters() {
+      promptCalls += 1;
+      throw new Error('machine mode attempted to prompt');
+    },
+    async selectGuidance() {
+      promptCalls += 1;
+      throw new Error('machine mode attempted to prompt');
+    },
+  };
+  try {
+    const execution = await runCli(
+      ['init', root, '--json'],
+      {
+        interactive: true,
+        color: true,
+        input: new PassThrough(),
+        output: new PassThrough(),
+        prompts,
+      },
+    );
+    assert.equal(promptCalls, 0);
+    assert.deepEqual(
+      (execution.output as { adapters: string[] }).adapters,
+      ['claude', 'codex'],
+    );
+    const rendered = formatCliOutput(execution);
+    assert.deepEqual(JSON.parse(rendered), execution.output);
+    assert.doesNotMatch(rendered, /\u001B\[/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('interactive init collects adapters without changing project planning rules', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'resonant-cli-interactive-init-'));
+  let adapterPrompts = 0;
+  const prompts: PromptProvider = {
+    async selectAdapters() {
+      adapterPrompts += 1;
+      return ['codex'];
+    },
+    async selectGuidance() {
+      throw new Error('unexpected guidance prompt');
+    },
+  };
+  try {
+    const execution = await runCli(
+      ['init', root, '--dry-run'],
+      {
+        interactive: true,
+        color: true,
+        input: new PassThrough(),
+        output: new PassThrough(),
+        prompts,
+      },
+    );
+    assert.equal(adapterPrompts, 1);
+    assert.deepEqual(
+      (execution.output as { adapters: string[] }).adapters,
+      ['codex'],
+    );
+    const rendered = formatCliOutput(execution);
+    assert.match(rendered, /\u001B\[/);
+    assert.equal(existsSync(join(root, '.resonant-code', 'manifest.json')), false);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('interactive guidance overflow returns an explicit selection to Runtime', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'resonant-cli-interactive-overflow-'));
+  let guidancePrompts = 0;
+  const prompts: PromptProvider = {
+    async selectAdapters() {
+      throw new Error('unexpected adapter prompt');
+    },
+    async selectGuidance(input) {
+      guidancePrompts += 1;
+      assert.ok(input.candidates.length > 0);
+      assert.ok(input.mandatoryBytes <= input.byteLimit);
+      return {
+        considerIds: [],
+        rationale: 'The mandatory guidance is sufficient for this focused fixture.',
+      };
+    },
+  };
+  try {
+    writeFileSync(join(root, 'example.ts'), 'export const value = 1;\n', 'utf8');
+    git(root, ['init', '-q']);
+    git(root, ['config', 'user.email', 'cli@example.invalid']);
+    git(root, ['config', 'user.name', 'CLI Test']);
+    git(root, ['add', '.']);
+    git(root, ['commit', '-qm', 'initial']);
+
+    const execution = await runCli(
+      [
+        'change',
+        'prepare',
+        root,
+        '--task',
+        'Add an exported feature',
+        '--change-type',
+        'feature',
+        '--target',
+        'example.ts',
+        '--tech',
+        'typescript',
+        '--guidance-byte-limit',
+        '3000',
+      ],
+      {
+        interactive: true,
+        input: new PassThrough(),
+        output: new PassThrough(),
+        prompts,
+      },
+    );
+    assert.equal(guidancePrompts, 1);
+    assert.notEqual(
+      (execution.output as { status: string }).status,
+      'guidance-overflow',
+    );
+    const decision = execution.output as {
+      delivery: { selection: { considerIds: string[]; rationale: string } };
+    };
+    assert.deepEqual(decision.delivery.selection.considerIds, []);
+    assert.match(decision.delivery.selection.rationale, /mandatory guidance/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('prompt cancellation maps to conventional exit code 130', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'resonant-cli-cancel-'));
+  const prompts: PromptProvider = {
+    async selectAdapters() {
+      const error = new Error('cancelled');
+      error.name = 'ExitPromptError';
+      throw error;
+    },
+    async selectGuidance() {
+      throw new Error('unexpected guidance prompt');
+    },
+  };
+  try {
+    await assert.rejects(
+      () => runCli(['init', root], {
+        interactive: true,
+        input: new PassThrough(),
+        output: new PassThrough(),
+        prompts,
+      }),
+      (error: unknown) => {
+        assert.ok(error instanceof CliError);
+        assert.equal(error.code, 'PROMPT_CANCELLED');
+        assert.equal(error.exitCode, 130);
+        return true;
+      },
+    );
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
