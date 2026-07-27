@@ -1,22 +1,51 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { cpSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import {
+  mkdtempSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 const workspace = resolve(import.meta.dirname, '..');
-const temporary = mkdtempSync(join(tmpdir(), 'resonant-code-release-'));
+const temporary = mkdtempSync(join(tmpdir(), 'resonant-core-release-'));
 try {
-  const plugin = join(temporary, 'plugin');
+  const packDirectory = join(temporary, 'pack');
+  const consumer = join(temporary, 'consumer');
   const project = join(temporary, 'project');
-  mkdirSync(plugin, { recursive: true });
+  mkdirSync(packDirectory, { recursive: true });
+  mkdirSync(consumer, { recursive: true });
   mkdirSync(join(project, '.resonant-code'), { recursive: true });
-  cpSync(join(workspace, '.codex-plugin'), join(plugin, '.codex-plugin'), { recursive: true });
-  cpSync(join(workspace, 'playbook'), join(plugin, 'playbook'), { recursive: true });
-  cpSync(join(workspace, 'runtime', 'dist'), join(plugin, 'runtime', 'dist'), { recursive: true });
-  cpSync(join(workspace, 'rccl', 'dist'), join(plugin, 'rccl', 'dist'), { recursive: true });
-  cpSync(join(workspace, 'skills'), join(plugin, 'skills'), { recursive: true });
+  writeFileSync(join(consumer, 'package.json'), '{"private":true}\n', 'utf8');
+
+  const coreTarball = packPackage(
+    join(workspace, 'packages', 'core'),
+    packDirectory,
+  );
+  run(npmCommand(), [
+    'install',
+    coreTarball,
+    '--ignore-scripts',
+    '--no-audit',
+    '--no-fund',
+  ], consumer);
+  const installedCore = join(
+    consumer,
+    'node_modules',
+    '@sovea',
+    'resonant-code-core',
+  );
+  const coreManifest = JSON.parse(readFileSync(join(installedCore, 'package.json'), 'utf8'));
+  assert.equal(coreManifest.name, '@sovea/resonant-code-core');
+  assert.equal(coreManifest.version, '0.0.1');
+  assert.ok(!Object.hasOwn(coreManifest, 'private'));
+  assert.ok(readFileSync(join(installedCore, 'assets', 'playbook', 'core.yaml'), 'utf8'));
 
   writeFileSync(join(project, 'example.ts'), 'export const answer = 42;\n', 'utf8');
   mkdirSync(join(project, '.resonant-code', 'playbook'), { recursive: true });
@@ -40,7 +69,7 @@ additions:
           code: "export const answer = 42;"
         note: The export name communicates its role.
 `, 'utf8');
-  const rccl = await import(pathToFileURL(join(plugin, 'rccl', 'dist', 'index.mjs')).href);
+  const rccl = await import(pathToFileURL(join(installedCore, 'dist', 'rccl.mjs')).href);
   const preparedRccl = rccl.prepareCalibration({
     projectRoot: project,
     evidenceSelections: [{ file: 'example.ts', lineRange: [1, 1] }],
@@ -75,10 +104,10 @@ additions:
   assert.equal(approvedRccl.status, 'approved');
   assert.equal(approvedRccl.document.observations[0].reviewStatus, 'reviewed');
 
-  const runtime = await import(pathToFileURL(join(plugin, 'runtime', 'dist', 'index.mjs')).href);
-  assert.deepEqual(Object.keys(runtime).sort(), ['compileChange', 'evaluateChange']);
+  const core = await import(pathToFileURL(join(installedCore, 'dist', 'index.mjs')).href);
+  assert.deepEqual(Object.keys(core).sort(), ['compileChange', 'evaluateChange']);
   const compileInput = {
-    builtinRoot: join(plugin, 'playbook'),
+    builtinRoot: join(installedCore, 'assets', 'playbook'),
     personalOverlayPath,
     rcclPath: join(project, '.resonant-code', 'rccl.yaml'),
     projectRoot: project,
@@ -98,13 +127,13 @@ additions:
       evidenceRefs: ['example.ts:1-1'],
     }],
   };
-  const direct = await runtime.compileChange(compileInput);
+  const direct = await core.compileChange(compileInput);
   assert.equal(direct.status, 'compiled');
   assert.ok(direct.trace.delivery.deliveredBytes <= direct.trace.delivery.byteLimit);
   assert.ok(direct.trace.delivery.fullGuidanceBytes > direct.trace.delivery.deliveredBytes);
   assert.deepEqual(direct.executionGuidance.required.map((item) => item.id), direct.guidance.required.map((item) => item.id));
 
-  const overflow = await runtime.compileChange({
+  const overflow = await core.compileChange({
     ...compileInput,
     guidanceByteLimit: 3_000,
   });
@@ -112,7 +141,7 @@ additions:
   assert.ok(overflow.selectableConsider.length > 3);
   assert.ok(overflow.candidateDetails.some((item) => item.id === 'rccl:obs-export-boundary'));
 
-  const decision = await runtime.compileChange({
+  const decision = await core.compileChange({
     ...compileInput,
     guidanceByteLimit: 3_000,
     deliverySelection: {
@@ -175,7 +204,7 @@ additions:
     attestations: attestationsForDecision(decision),
     feedbackPath: join(project, '.resonant-code', 'feedback', 'verified-events.jsonl'),
   };
-  const evaluation = runtime.evaluateChange(evaluationInput);
+  const evaluation = core.evaluateChange(evaluationInput);
   assert.equal(evaluation.schemaVersion, '1.0');
   assert.equal(evaluation.status, 'accepted');
   assert.equal(evaluation.operation, 'modify');
@@ -186,7 +215,7 @@ additions:
   assert.ok(feedbackAggregate.aggregates.every((aggregate) =>
     !Object.hasOwn(aggregate, 'explanation')
     && aggregate.total === aggregate.satisfied + aggregate.violated + aggregate.excepted));
-  assert.equal(runtime.evaluateChange(evaluationInput).feedback.recorded, 0);
+  assert.equal(core.evaluateChange(evaluationInput).feedback.recorded, 0);
 } finally {
   rmSync(temporary, { recursive: true, force: true });
 }
@@ -265,4 +294,40 @@ function stableHash(parts) {
     .update(JSON.stringify(parts))
     .digest('hex')
     .slice(0, 16);
+}
+
+function packPackage(packageDirectory, destination) {
+  const before = new Set(readdirSync(destination));
+  run(
+    'corepack',
+    ['pnpm', 'pack', '--pack-destination', destination],
+    packageDirectory,
+  );
+  const created = readdirSync(destination)
+    .filter((name) => name.endsWith('.tgz') && !before.has(name));
+  assert.equal(created.length, 1, `Expected one tarball from ${packageDirectory}.`);
+  return join(destination, created[0]);
+}
+
+function run(command, args, cwd) {
+  const result = spawnSync(command, args, {
+    cwd,
+    encoding: 'utf8',
+    maxBuffer: 20 * 1024 * 1024,
+    shell: process.platform === 'win32',
+  });
+  assert.equal(
+    result.status,
+    0,
+    [
+      `Command failed: ${command} ${args.join(' ')}`,
+      result.stdout,
+      result.stderr,
+    ].join('\n'),
+  );
+  return result;
+}
+
+function npmCommand() {
+  return process.platform === 'win32' ? 'npm.cmd' : 'npm';
 }

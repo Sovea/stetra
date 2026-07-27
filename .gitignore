@@ -1,7 +1,6 @@
 .claude/
 node_modules/
-runtime/node_modules
-rccl/node_modules
+**/dist/
 .entire/
 coverage/
 .resonant-code/context/

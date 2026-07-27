@@ -1,54 +1,10 @@
 version: "1.0"
-generatedAt: 2026-07-25T18:14:35.678Z
-gitRef: 7fb5175be596b9e84a7bb786236221ebaf1e2e1d
+generatedAt: 2026-07-27T10:57:39.988Z
+gitRef: 26ff19403928fd9d8f9678140a16eedd165696dc
 observations:
-  - id: obs-runtime-public-harness-boundary
-    category: architecture
-    scope: runtime/src/**
-    statement: The Runtime public value API is limited to compileChange and evaluateChange; task helpers and governance internals are not public entrypoints.
-    affects:
-      - api-shape
-      - architecture-boundary
-    decisionImpact: Adding workflow-specific policy entrypoints would expand the supported Runtime boundary and let consumers bypass the compile/evaluate harness.
-    semanticConfidence: high
-    evidence:
-      - file: runtime/src/index.ts
-        lineRange:
-          - 1
-          - 17
-        snippet: |-
-          /** resonant-code Runtime public change-harness boundary. */
-          export { compileChange } from './decision/compile-change.ts';
-          export { evaluateChange } from './evaluation/evaluate-change.ts';
-
-          export type {
-            ChangeDecisionPacket,
-            CompileChangeInput,
-            CompileChangeOutput,
-            DecisionDiagnostic,
-            DecisionTension,
-            EffectiveGuidance,
-            GuidanceDeliverySelection,
-            GuidanceDetail,
-            GuidanceItem,
-            GuidanceOverflow,
-            InterpretationRequest,
-            RelationProposal,
-    reviewStatus: generated
-    evidenceVerification:
-      status: current
-      verifiedCount: 1
-      totalCount: 1
-      checkedAt: 2026-07-25T18:14:35.674Z
-    lifecycle:
-      status: active
-      contentFingerprint: 0519376403f7e66ff063595dfb202352327db357d4a1145978e450e4ce9412ca
-      firstSeenGitRef: 9e2a16297e2ff0a5dc80c4a36e307c43df4d2df8
-      lastSeenGitRef: 7fb5175be596b9e84a7bb786236221ebaf1e2e1d
-      lastVerifiedAt: 2026-07-25T18:14:35.674Z
   - id: obs-rccl-evidence-path-boundary
     category: constraint
-    scope: rccl/src/**
+    scope: packages/core/src/rccl/**
     statement: RCCL source evidence must resolve from a safe relative path inside the project root before line-range and snippet matching can establish evidence currency.
     affects:
       - architecture-boundary
@@ -56,7 +12,7 @@ observations:
     decisionImpact: Weakening this boundary could let out-of-repository files or invalid ranges influence repository observations and downstream guidance.
     semanticConfidence: high
     evidence:
-      - file: rccl/src/evidence.ts
+      - file: packages/core/src/rccl/evidence.ts
         lineRange:
           - 24
           - 62
@@ -105,10 +61,44 @@ observations:
       status: current
       verifiedCount: 1
       totalCount: 1
-      checkedAt: 2026-07-25T18:14:35.676Z
+      checkedAt: 2026-07-27T10:57:39.986Z
     lifecycle:
       status: active
-      contentFingerprint: 15d9559012b59a477918a2ba8b02b5838886a80a5cb90ad5207c4f8fc11fd34f
+      contentFingerprint: 51f1d74fc4412bdc20f8ba968890c383fe8bd3942ab5a75116a7ced6bb00cbd8
       firstSeenGitRef: 9e2a16297e2ff0a5dc80c4a36e307c43df4d2df8
-      lastSeenGitRef: 7fb5175be596b9e84a7bb786236221ebaf1e2e1d
-      lastVerifiedAt: 2026-07-25T18:14:35.676Z
+      lastSeenGitRef: 26ff19403928fd9d8f9678140a16eedd165696dc
+      lastVerifiedAt: 2026-07-27T10:57:39.986Z
+  - id: obs-runtime-public-harness-boundary
+    category: architecture
+    scope: packages/core/src/**
+    statement: The Core root public value API is limited to compileChange and evaluateChange; RCCL lifecycle operations use an explicit subpath.
+    affects:
+      - api-shape
+      - architecture-boundary
+    decisionImpact: Adding workflow or policy helpers to the Core root would expand the supported SDK boundary and let consumers bypass the compile/evaluate harness.
+    semanticConfidence: high
+    evidence:
+      - file: packages/core/src/index.ts
+        lineRange:
+          - 1
+          - 7
+        snippet: |-
+          /**
+           * Public resonant-code hard-kernel boundary.
+           *
+           * RCCL lifecycle operations are intentionally available only from
+           * `@sovea/resonant-code-core/rccl`.
+           */
+          export { compileChange, evaluateChange } from './runtime/index.ts';
+    reviewStatus: generated
+    evidenceVerification:
+      status: current
+      verifiedCount: 1
+      totalCount: 1
+      checkedAt: 2026-07-27T10:57:39.983Z
+    lifecycle:
+      status: active
+      contentFingerprint: bf00f0f15fae7cbb5200afa19679c237d8c8deb5f4dc4cf71891cee185f21d9f
+      firstSeenGitRef: 9e2a16297e2ff0a5dc80c4a36e307c43df4d2df8
+      lastSeenGitRef: 26ff19403928fd9d8f9678140a16eedd165696dc
+      lastVerifiedAt: 2026-07-27T10:57:39.983Z

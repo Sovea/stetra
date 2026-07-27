@@ -1,0 +1,43 @@
+{
+  "name": "@sovea/resonant-code",
+  "version": "0.0.1",
+  "description": "Publishable CLI-first control plane for the resonant-code AI coding change harness.",
+  "type": "module",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Sovea/resonant-code.git",
+    "directory": "packages/cli"
+  },
+  "bin": {
+    "resonant-code": "./dist/index.mjs"
+  },
+  "files": [
+    "dist",
+    "LICENSE",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
+  "scripts": {
+    "build": "tsdown --config ./tsdown.config.ts",
+    "clean": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\"",
+    "prepack": "pnpm -w build",
+    "typecheck": "tsc --noEmit",
+    "test": "tsx --test test/*.test.ts"
+  },
+  "dependencies": {
+    "@sovea/resonant-code-core": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "^22.19.15",
+    "tsdown": "^0.21.8",
+    "tsx": "^4.23.1",
+    "typescript": "^6.0.2"
+  }
+}

@@ -7,17 +7,17 @@
   "lines": 75,
   "reporter": ["text", "text-summary"],
   "include": [
-    "runtime/src/decision/**/*.ts",
-    "runtime/src/evaluation/**/*.ts",
-    "runtime/src/feedback/**/*.ts",
-    "runtime/src/load/**/*.ts",
-    "runtime/src/task/**/*.ts",
-    "runtime/src/utils/**/*.ts",
-    "rccl/src/evidence.ts",
-    "rccl/src/lifecycle.ts",
-    "rccl/src/parse.ts",
-    "rccl/src/types.ts",
-    "rccl/src/verify.ts",
-    "rccl/src/utils/**/*.ts"
+    "packages/core/src/runtime/decision/**/*.ts",
+    "packages/core/src/runtime/evaluation/**/*.ts",
+    "packages/core/src/runtime/feedback/**/*.ts",
+    "packages/core/src/runtime/load/**/*.ts",
+    "packages/core/src/runtime/task/**/*.ts",
+    "packages/core/src/runtime/utils/**/*.ts",
+    "packages/core/src/rccl/evidence.ts",
+    "packages/core/src/rccl/lifecycle.ts",
+    "packages/core/src/rccl/parse.ts",
+    "packages/core/src/rccl/types.ts",
+    "packages/core/src/rccl/verify.ts",
+    "packages/core/src/rccl/utils/**/*.ts"
   ]
 }

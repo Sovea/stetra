@@ -18,11 +18,11 @@ importers:
         specifier: ^4.23.1
         version: 4.23.1
 
-  rccl:
+  packages/cli:
     dependencies:
-      yaml:
-        specifier: ^2.9.0
-        version: 2.9.0
+      '@sovea/resonant-code-core':
+        specifier: workspace:*
+        version: link:../core
     devDependencies:
       '@types/node':
         specifier: ^22.19.15
@@ -30,18 +30,14 @@ importers:
       tsdown:
         specifier: ^0.21.8
         version: 0.21.9(typescript@6.0.2)
+      tsx:
+        specifier: ^4.23.1
+        version: 4.23.1
       typescript:
         specifier: ^6.0.2
         version: 6.0.2
 
-  runtime:
-    dependencies:
-      '@resonant-code/rccl':
-        specifier: workspace:*
-        version: link:../rccl
-      yaml:
-        specifier: ^2.9.0
-        version: 2.9.0
+  packages/core:
     devDependencies:
       '@types/node':
         specifier: ^22.19.15
@@ -49,9 +45,15 @@ importers:
       tsdown:
         specifier: ^0.21.8
         version: 0.21.9(typescript@6.0.2)
+      tsx:
+        specifier: ^4.23.1
+        version: 4.23.1
       typescript:
         specifier: ^6.0.2
         version: 6.0.2
+      yaml:
+        specifier: ^2.9.0
+        version: 2.9.0
 
 packages:
 

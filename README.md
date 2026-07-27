@@ -4,6 +4,9 @@
 
 The project targets the gap between code that is plausible and a change that a team would adopt and keep. It is intentionally more than a bundle of Markdown instructions, but it is also intentionally smaller than a general agent framework.
 
+See [CLI-first architecture](docs/cli-first-architecture.md) for the Core/CLI
+package boundary and generated-adapter ownership model.
+
 ## Why a harness
 
 Text-only coding workflows are good at teaching an agent a method. They are weaker when a team needs stable answers to questions such as:
@@ -28,7 +31,13 @@ Task context ──────────┘          └─> Decision Trace  
 verified feedback <──────── evaluateChange <──── machine facts + attestations
 ```
 
-The two public Runtime operations are:
+The project publishes two lockstep packages:
+
+- `@sovea/resonant-code-core` — Playbook, RCCL, and the deterministic Runtime
+- `@sovea/resonant-code` — CLI workflow, machine facts, project initialization,
+  and generated Host Adapters
+
+The Core root keeps exactly two public value operations:
 
 - `compileChange` — normalize the task, activate Playbook directives, recheck relevant RCCL evidence, adjudicate optional semantic relations, and emit bounded guidance.
 - `evaluateChange` — combine workflow-collected file/check facts with explicit
@@ -80,50 +89,65 @@ Postflight evaluates only guidance that the compiled task actually received.
 
 ## Installation
 
-### Claude Code
+The registry packages are not published yet. From a source checkout:
 
 ```sh
-/plugin marketplace add sovea/cc-marketplace
-/plugin install resonant-code@sovea
+corepack pnpm install --frozen-lockfile
+corepack pnpm build
+node packages/cli/dist/index.mjs --help
 ```
 
-### Codex
+Once published, the intended installation becomes:
 
-Ask Codex to fetch and follow:
-
-```text
-https://raw.githubusercontent.com/Sovea/resonant-code/refs/heads/main/.codex/INSTALL.md
+```sh
+npm install --global @sovea/resonant-code
 ```
+
+The CLI pins and installs the exact matching
+`@sovea/resonant-code-core` version automatically. Programmatic integrations
+may install Core directly:
+
+```sh
+npm install @sovea/resonant-code-core
+```
+
+Then initialize project-local thin adapters. These are generated instructions,
+not copies of Runtime policy:
+
+```sh
+resonant-code init /path/to/project --adapter codex --adapter claude
+resonant-code status /path/to/project
+```
+
+`init` owns only `.resonant-code/manifest.json`, generated adapter skill files,
+and marked pointer/ignore blocks. It does not overwrite the Team Playbook,
+RCCL, checks, sessions, or feedback. Modified generated files are preserved
+unless `--force` is explicitly supplied.
 
 ## Quickstart
 
-Initialize the local Playbook, calibrate only repository context that could change a coding decision, then use the change harness:
+Prepare a change, let the host agent implement it, and then evaluate the actual
+diff and configured checks:
 
 ```sh
-/resonant-code:init
-/resonant-code:calibrate-repo-context
-/resonant-code:code <task description>
-```
-
-The underlying `code` workflow is:
-
-```sh
-node skills/code/scripts/code.mjs prepare . \
+resonant-code change prepare . \
   --task "Fix the parser boundary" \
   --change-type bugfix \
-  --target runtime/src/load/load-playbook.ts
+  --target packages/core/src/runtime/load/load-playbook.ts \
+  --json
 
 # If prepare reports guidance-overflow, choose relevant optional IDs in a
 # selection JSON and rerun with --selection-file <path>.
 
 # Implement the change. Complete will run the prepared check mappings.
 
-node skills/code/scripts/code.mjs complete \
+resonant-code change complete \
   --session <session-path> \
-  --evaluation-file <evaluation.json>
+  --evaluation-file <evaluation.json> \
+  --json
 
 # Inspect fact-only feedback; this never changes policy.
-node skills/code/scripts/code.mjs feedback . \
+resonant-code feedback inspect . \
   --guidance-id <directive-id>
 ```
 
@@ -132,21 +156,52 @@ the prepare contract, commit a generated proposal that references only its
 window IDs, then approve reviewed observations separately:
 
 ```sh
-node skills/calibrate-repo-context/scripts/calibrate-repo-context.mjs prepare . \
-  --evidence runtime/src/index.ts:1-17 \
+resonant-code context prepare . \
+  --evidence packages/core/src/index.ts:1-7 \
+  --json \
   > .resonant-code/context/rccl-prepare.json
-node skills/calibrate-repo-context/scripts/calibrate-repo-context.mjs commit . \
+resonant-code context commit . \
   --contract .resonant-code/context/rccl-prepare.json \
-  --input <proposal.yaml>
-node skills/calibrate-repo-context/scripts/calibrate-repo-context.mjs approve . \
+  --input <proposal.yaml> \
+  --json
+resonant-code context approve . \
   --id <observation-id> \
-  --approved-by <reviewer>
+  --approved-by <reviewer> \
+  --json
+```
+
+Project-specific Playbook layer selection remains host-assisted because it
+requires semantic judgment. `bootstrap prepare` enumerates available Core
+layers but does not crawl, rank, or preselect repository files. The host
+inspects the repository with its native tools and supplies concrete
+repository-relative evidence paths:
+
+```sh
+resonant-code bootstrap prepare . --json
+resonant-code bootstrap commit . --input <candidate.json> --json
+```
+
+The candidate contains only Host-selected layer evidence:
+
+```json
+{
+  "selectedLayers": ["builtin/languages/typescript"],
+  "evidence": [
+    {
+      "layerId": "builtin/languages/typescript",
+      "paths": ["package.json", "tsconfig.json"],
+      "rationale": "These inspected files establish the TypeScript project boundary."
+    }
+  ]
+}
 ```
 
 ## Project state
 
 Durable, reviewable project data:
 
+- `.resonant-code/manifest.json` — generated-adapter ownership, generator
+  version, and protocol version
 - `.resonant-code/playbook/local-augment.yaml` — project prescription
 - `.resonant-code/checks.json` — explicit logical-check-to-command mappings
 - `.resonant-code/rccl.yaml` — evidence-current repository observations
@@ -164,16 +219,31 @@ Optional user-scoped data:
 
 Generated task sessions live under `.resonant-code/context/` and should normally remain ignored.
 
+Generated, replaceable host adapters live under:
+
+- `.agents/skills/resonant-code/SKILL.md` for Codex
+- `.claude/skills/resonant-code/SKILL.md` for Claude Code
+
+`AGENTS.md`, `CLAUDE.md`, and `.gitignore` receive only explicitly marked
+managed blocks; owner content outside those blocks remains untouched. Project
+initialization is the sole owner of these generated blocks—Bootstrap never
+rewrites `.gitignore`.
+
 ## Design constraints
 
-- Runtime exposes only `compileChange` and `evaluateChange` as public value APIs.
+- Core root exposes only `compileChange` and `evaluateChange` as public value
+  APIs; RCCL lifecycle APIs use the explicit `/rccl` subpath.
+- CLI depends on the exact matching Core version. Successful CLI sessions
+  record both package identities instead of an absolute installation path.
 - Team policy outranks personal taste. Personal overlays cannot override,
   suppress, score-rank, or create hard constraints/prohibitions.
 - RCCL stores only observations with an explicit decision impact and non-empty evidence.
 - Only current, fully matched RCCL evidence with high semantic confidence, reviewed status, and an accepted semantic relation may change directive execution.
 - Scope overlap may make an RCCL observation task-relevant and ambient; only an
   explicit accepted host relation may connect it to a directive.
-- Skills perform lifecycle orchestration and filesystem IO; they do not reconstruct Playbook, RCCL, budgeting, or evaluation policy.
+- CLI performs lifecycle orchestration and filesystem IO. Thin generated host
+  adapters use host semantic judgment and never reconstruct Playbook, RCCL,
+  budgeting, or evaluation policy.
 - Successful `prepare` captures the dirty-worktree baseline. `complete` computes
   exact baseline-to-current file facts and runs only explicit non-shell check
   mappings; attestation JSON cannot supply its own changes or check results.
@@ -202,8 +272,8 @@ corepack pnpm verify
 ```
 
 The verification gate runs type checks, unit and workflow tests, coverage,
-deterministic builds, an isolated release smoke test, paired-evaluation ledger
-validation, and plugin readiness checks.
+deterministic builds, an isolated Core tarball smoke test, a paired Core/CLI
+tarball install and binary smoke test, and paired-evaluation ledger validation.
 
 ## License
 

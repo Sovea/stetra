@@ -22,24 +22,39 @@ If not, remove it.
 
 ## Architecture
 
-The execution loop has four parts:
+The execution loop has five parts:
 
 1. Playbook — prescriptive built-in, repository-committed team, and
    user-scoped personal directives.
 2. RCCL — observational repository context with separate evidence, semantic-confidence, and review signals.
 3. Runtime — the deterministic `compileChange` / `evaluateChange` hard kernel.
-4. Skills — thin host workflows for IO, lifecycle sequencing, and presentation.
+4. CLI — the distributable deterministic control plane for assets, project
+   initialization, IO, lifecycle sequencing, machine-fact collection, and
+   presentation.
+5. Host adapters — generated thin Codex/Claude skills that preserve native host
+   judgment and invoke the CLI's stable JSON protocol.
 
-Runtime source lives under `runtime/src/`; RCCL source lives under `rccl/src/`. Build output is ESM under each package's `dist/` directory.
+The workspace has exactly two publishable packages:
 
-### Public Runtime API
+- `packages/core/` → `@sovea/resonant-code-core`
+- `packages/cli/` → `@sovea/resonant-code`
 
-Runtime exposes exactly two value entrypoints:
+Runtime, RCCL, and Playbook sources are separate modules inside Core. Workflow,
+machine-fact collection, project initialization, and generated Host Adapters
+are modules inside CLI. Do not create another package without an independent
+consumer, public API, version, and release need.
+
+### Public Core API
+
+The Core root exposes exactly two value entrypoints:
 
 - `compileChange(input)`
 - `evaluateChange(input)`
 
-Do not expose task helpers, parsers, merge functions, feedback helpers, or skill-specific workflow APIs from `runtime/src/index.ts`.
+RCCL lifecycle operations are exported only from
+`@sovea/resonant-code-core/rccl`. Do not expose task helpers, parsers, merge
+functions, feedback helpers, or CLI workflow APIs from
+`packages/core/src/index.ts`.
 
 ### Compile boundary
 
@@ -134,16 +149,27 @@ completed paired-agent results under `evaluation/paired-agent/PROTOCOL.md`;
 the machine-validated ledger may explicitly leave that claim unverified for the
 technical MVP.
 
-### Skill boundary
+### CLI and host-adapter boundary
 
-Skills may parse CLI flags, orchestrate prepare/complete steps, read and write artifacts, and present Runtime/RCCL results. Skills must not parse Playbook data to make policy decisions, rank directives, adjudicate relations, decide execution modes, or independently determine feedback eligibility.
+CLI may parse flags, orchestrate prepare/complete steps, read and write
+artifacts, and present Core results. It depends on the exact same published
+Core version. Core ships the built-in Playbook assets, so installed workflows
+never depend on a source-checkout path.
+
+Generated host adapters contain workflow instructions only. They invoke CLI
+JSON commands and use host judgment for task semantics, exact evidence-window
+selection, relation proposals, implementation, and attestations. They must not
+parse Playbook data to make policy decisions, rank directives, adjudicate
+relations, decide execution modes, or independently determine feedback
+eligibility. The source repository does not ship `.claude-plugin`,
+`.codex-plugin`, `.codex`, or repository-native `skills/` entrypoints.
 
 The normal code lifecycle is:
 
-1. `prepare` → compile compact task guidance
+1. `resonant-code change prepare --json` → compile compact task guidance
 2. host implements the change
-3. `complete` → collect actual change/check facts, evaluate attestations, and
-   write bounded feedback
+3. `resonant-code change complete --json` → collect actual change/check facts,
+   evaluate attestations, and write bounded feedback
 
 ## Data separation
 
@@ -159,13 +185,28 @@ Do not collapse them into one score, one prose prompt, or one “verified truth�
 
 ## Engineering rules
 
-- Use TypeScript for Runtime and RCCL core logic.
+- Use TypeScript for Core and new CLI control-plane logic.
 - Prefer narrow modules and explicit input/output types.
 - Keep output deterministic enough to diff; timestamps may appear only in lifecycle or feedback records.
 - Reject unsupported schema versions with actionable errors. The project is a prototype; do not add compatibility adapters unless explicitly requested.
 - Preserve existing user changes in a dirty worktree.
 - Use `rg` for search and `apply_patch` for edits.
 - Keep generated sessions under `.resonant-code/context/`; do not use them as authoritative task-time cache reads.
+- Keep project adapter ownership in `.resonant-code/manifest.json`. Never
+  overwrite Team Playbook, RCCL, checks, feedback, or owner-modified generated
+  adapter content as an upgrade.
+- Project initialization is the sole owner of generated host files and marked
+  blocks in `AGENTS.md`, `CLAUDE.md`, and `.gitignore`; Bootstrap must not
+  mutate those paths.
+- Bootstrap may enumerate available Playbook layers, but the host selects
+  concrete repository evidence. Do not maintain framework filename lists,
+  rank candidate files, or cap the repository evidence visible to the host.
+- CLI sessions record CLI/Core package identity, not an absolute installation
+  path.
+- Core and CLI versions move together. CLI package archives must pin Core to
+  the exact matching version after `workspace:*` is rewritten during pack.
+- `dist/` is generated by build/prepack, ignored by Git, and never reviewed as
+  source. Both public npm archives contain their own `dist/`.
 - Avoid direct LLM API calls from Runtime. The host agent already has task context and repository tools.
 
 ## Verification
@@ -188,7 +229,8 @@ Tests must cover the behavior that justifies the harness:
 - strict interpretation and exception gates
 - evaluation against actual diff/check evidence
 - feedback idempotency
-- isolated built-package smoke behavior
+- isolated Core npm-tarball API smoke behavior
+- paired Core/CLI npm-tarball installation and binary smoke behavior
 - paired-evaluation protocol and claim/ledger consistency
 
 When changing architecture, report complexity movement and observable behavior, not only passing tests.
