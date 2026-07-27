@@ -58,8 +58,12 @@ Playbook and RCCL remain separate. A source excerpt can prove that cited evidenc
 
 ## Output budgets
 
-Preflight guidance has one configurable UTF-8 byte ceiling: 6,000 bytes by
-default. It has no per-section item counts.
+Preflight has one configurable UTF-8 byte ceiling: 6,000 bytes by default. It
+applies to the agent-facing `executionGuidance`: IDs, instructions,
+prohibitions, execution modes, applicable exceptions, examples, and tensions.
+Machine-facing source, verification, evidence, and trace metadata remain in the
+full decision packet and do not consume this attention budget. There are no
+per-section item counts.
 
 Runtime never silently removes required guidance, prohibitions, or unresolved
 tensions. When optional considerations exceed the ceiling, compilation returns
@@ -69,6 +73,9 @@ semantic rationale; Runtime records the selection in the Decision Trace and
 Decision ID. If mandatory guidance alone exceeds the ceiling, the task/policy
 scope or ceiling must be resolved explicitly.
 
+The normal workflow presents `executionGuidance` as `guidance` and persists the
+full decision for inspection and evaluation. Delivery diagnostics distinguish
+agent-facing bytes, full structured-guidance bytes, and full packet bytes.
 Postflight evaluates only guidance that the compiled task actually received.
 
 ## Installation

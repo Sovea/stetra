@@ -13948,14 +13948,19 @@ function applyGuidanceDelivery(input, byteLimit = DEFAULT_GUIDANCE_BYTE_LIMIT, s
 		avoid: input.avoid,
 		tensions: input.tensions
 	};
-	const deliveredBytes = serializedBytes(guidance);
-	const mandatoryBytes = serializedBytes(mandatory);
+	const executionGuidance = toExecutionGuidance(guidance);
+	const mandatoryExecutionGuidance = toExecutionGuidance(mandatory);
+	const deliveredBytes = serializedBytes(executionGuidance);
+	const mandatoryBytes = serializedBytes(mandatoryExecutionGuidance);
+	const fullGuidanceBytes = serializedBytes(guidance);
 	if (deliveredBytes <= byteLimit) return {
 		status: "ready",
 		guidance,
+		executionGuidance,
 		omissions,
 		deliveredBytes,
 		mandatoryBytes,
+		fullGuidanceBytes,
 		selection: normalizedSelection
 	};
 	return {
@@ -13964,29 +13969,56 @@ function applyGuidanceDelivery(input, byteLimit = DEFAULT_GUIDANCE_BYTE_LIMIT, s
 			byteLimit,
 			totalBytes: deliveredBytes,
 			mandatoryBytes,
+			fullGuidanceBytes,
 			mandatoryGuidanceIds: [
 				...input.required.map((item) => item.id),
 				...input.avoid.map((item) => item.id),
 				...input.tensions.map((item) => item.id)
 			],
 			mandatoryGuidance: {
-				required: input.required,
-				avoid: input.avoid,
-				tensions: input.tensions
+				required: mandatoryExecutionGuidance.required,
+				avoid: mandatoryExecutionGuidance.avoid,
+				tensions: mandatoryExecutionGuidance.tensions
 			},
-			selectableConsider: input.consider.map((item) => ({
-				id: item.id,
-				instruction: item.instruction,
-				bytes: serializedBytes(item),
-				source: item.source
-			})),
+			selectableConsider: input.consider.map((item) => {
+				const executionItem = toExecutionGuidanceItem(item);
+				return {
+					...executionItem,
+					bytes: serializedBytes(executionItem),
+					source: item.source
+				};
+			}),
 			selection: normalizedSelection,
 			reasons: mandatoryBytes > byteLimit ? ["Mandatory required, avoid, and tension guidance exceeds the configured byte limit; policy or task scope must be resolved explicitly."] : ["Optional consider guidance exceeds the configured byte limit; submit an explicit delivery selection with a rationale."]
 		}
 	};
 }
+function toExecutionGuidance(input) {
+	return {
+		required: input.required.map(toExecutionGuidanceItem),
+		consider: input.consider.map(toExecutionGuidanceItem),
+		avoid: input.avoid.map(toExecutionAvoidGuidanceItem),
+		tensions: input.tensions
+	};
+}
 function serializedBytes(value) {
 	return Buffer.byteLength(JSON.stringify(value), "utf8");
+}
+function toExecutionGuidanceItem(item) {
+	return {
+		id: item.id,
+		instruction: item.instruction,
+		exceptions: item.exceptions,
+		executionMode: item.executionMode,
+		...item.example ? { example: item.example } : {}
+	};
+}
+function toExecutionAvoidGuidanceItem(item) {
+	return {
+		id: item.id,
+		pattern: item.pattern,
+		exceptions: item.exceptions
+	};
 }
 function assertByteLimit(value) {
 	if (!Number.isInteger(value) || value <= 0) throw new Error("compileChange guidanceByteLimit must be a positive integer number of UTF-8 bytes.");
@@ -14076,10 +14108,11 @@ async function compileChange(input) {
 		delivery: stableHash([
 			guidanceByteLimit,
 			delivery.selection,
-			delivery.guidance
+			delivery.guidance,
+			delivery.executionGuidance
 		])
 	};
-	return {
+	const packet = {
 		schemaVersion: "1.0",
 		decisionId: stableHash([
 			"1.0",
@@ -14092,6 +14125,7 @@ async function compileChange(input) {
 		mode,
 		task,
 		guidance: delivery.guidance,
+		executionGuidance: delivery.executionGuidance,
 		verificationPlan,
 		trace: {
 			selectedLayers: loaded.selectedLayers,
@@ -14107,6 +14141,8 @@ async function compileChange(input) {
 				byteLimit: guidanceByteLimit,
 				deliveredBytes: delivery.deliveredBytes,
 				mandatoryBytes: delivery.mandatoryBytes,
+				fullGuidanceBytes: delivery.fullGuidanceBytes,
+				fullPacketBytes: 0,
 				selection: delivery.selection
 			},
 			omissions: delivery.omissions,
@@ -14114,6 +14150,16 @@ async function compileChange(input) {
 		},
 		fingerprints
 	};
+	stabilizeFullPacketBytes(packet);
+	return packet;
+}
+function stabilizeFullPacketBytes(packet) {
+	for (let attempts = 0; attempts < 4; attempts += 1) {
+		const actualBytes = serializedBytes(packet);
+		if (packet.trace.delivery.fullPacketBytes === actualBytes) return;
+		packet.trace.delivery.fullPacketBytes = actualBytes;
+	}
+	throw new Error("Unable to stabilize compileChange full packet byte diagnostics.");
 }
 async function loadGovernanceSources(input, task) {
 	const builtinLayers = discoverBuiltinLayers(input.builtinRoot);

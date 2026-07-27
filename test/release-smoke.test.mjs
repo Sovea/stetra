@@ -98,13 +98,23 @@ additions:
       evidenceRefs: ['example.ts:1-1'],
     }],
   };
-  const overflow = await runtime.compileChange(compileInput);
+  const direct = await runtime.compileChange(compileInput);
+  assert.equal(direct.status, 'compiled');
+  assert.ok(direct.trace.delivery.deliveredBytes <= direct.trace.delivery.byteLimit);
+  assert.ok(direct.trace.delivery.fullGuidanceBytes > direct.trace.delivery.deliveredBytes);
+  assert.deepEqual(direct.executionGuidance.required.map((item) => item.id), direct.guidance.required.map((item) => item.id));
+
+  const overflow = await runtime.compileChange({
+    ...compileInput,
+    guidanceByteLimit: 3_000,
+  });
   assert.equal(overflow.status, 'guidance-overflow');
   assert.ok(overflow.selectableConsider.length > 3);
   assert.ok(overflow.candidateDetails.some((item) => item.id === 'rccl:obs-export-boundary'));
 
   const decision = await runtime.compileChange({
     ...compileInput,
+    guidanceByteLimit: 3_000,
     deliverySelection: {
       considerIds: [
         'feature-start-from-requested-behavior-01',

@@ -63,8 +63,15 @@ IDs with host semantic judgment, and write:
 
 Then rerun `prepare` with `--selection-file <path>`. The execution packet uses
 one configurable UTF-8 byte ceiling (6,000 by default); it has no fixed
-required/consider/avoid item counts. A larger ceiling must be an explicit host
-choice via `--guidance-byte-limit`.
+required/consider/avoid item counts. The ceiling covers the normative
+agent-facing guidance, including applicable exceptions and tensions, but not
+machine-facing source, verification, or Decision Trace metadata. A larger
+ceiling must be an explicit host choice via `--guidance-byte-limit`.
+
+Successful `prepare` presents compact agent-facing `guidance`, a separate
+`verificationPlan`, and delivery diagnostics. The full decision remains in the
+session for `explain`, postflight evaluation, and audit. Do not treat trace-only
+metadata as an additional hidden implementation requirement.
 
 Trusted completion requires a Git worktree whose root is the supplied project
 root. On successful `prepare`, the workflow snapshots every tracked and

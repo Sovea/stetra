@@ -25,6 +25,7 @@ import { pathMatchesScope, scopeOverlapsPath } from '../utils/paths.ts';
 import {
   applyGuidanceDelivery,
   DEFAULT_GUIDANCE_BYTE_LIMIT,
+  serializedBytes,
 } from './budget.ts';
 import {
   DECISION_SCHEMA_VERSION,
@@ -173,6 +174,7 @@ export async function compileChange(input: CompileChangeInput): Promise<CompileC
       guidanceByteLimit,
       delivery.selection,
       delivery.guidance,
+      delivery.executionGuidance,
     ]),
   };
   const decisionId = stableHash([
@@ -191,6 +193,7 @@ export async function compileChange(input: CompileChangeInput): Promise<CompileC
     mode,
     task,
     guidance: delivery.guidance,
+    executionGuidance: delivery.executionGuidance,
     verificationPlan,
     trace: {
       selectedLayers: loaded.selectedLayers,
@@ -206,6 +209,8 @@ export async function compileChange(input: CompileChangeInput): Promise<CompileC
         byteLimit: guidanceByteLimit,
         deliveredBytes: delivery.deliveredBytes,
         mandatoryBytes: delivery.mandatoryBytes,
+        fullGuidanceBytes: delivery.fullGuidanceBytes,
+        fullPacketBytes: 0,
         selection: delivery.selection,
       },
       omissions: delivery.omissions,
@@ -213,7 +218,17 @@ export async function compileChange(input: CompileChangeInput): Promise<CompileC
     },
     fingerprints,
   };
+  stabilizeFullPacketBytes(packet);
   return packet;
+}
+
+function stabilizeFullPacketBytes(packet: ChangeDecisionPacket): void {
+  for (let attempts = 0; attempts < 4; attempts += 1) {
+    const actualBytes = serializedBytes(packet);
+    if (packet.trace.delivery.fullPacketBytes === actualBytes) return;
+    packet.trace.delivery.fullPacketBytes = actualBytes;
+  }
+  throw new Error('Unable to stabilize compileChange full packet byte diagnostics.');
 }
 
 async function loadGovernanceSources(input: CompileChangeInput, task: NormalizedTaskContext): Promise<{

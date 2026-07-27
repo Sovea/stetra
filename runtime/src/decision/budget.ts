@@ -1,6 +1,9 @@
 import type {
   DecisionTrace,
   EffectiveGuidance,
+  ExecutionAvoidGuidanceItem,
+  ExecutionGuidance,
+  ExecutionGuidanceItem,
   GuidanceDeliverySelection,
   GuidanceOverflow,
 } from './types.ts';
@@ -11,9 +14,11 @@ export type GuidanceDeliveryResult =
   | {
       status: 'ready';
       guidance: EffectiveGuidance;
+      executionGuidance: ExecutionGuidance;
       omissions: DecisionTrace['omissions'];
       deliveredBytes: number;
       mandatoryBytes: number;
+      fullGuidanceBytes: number;
       selection: GuidanceDeliverySelection | null;
     }
   | {
@@ -54,15 +59,20 @@ export function applyGuidanceDelivery(
     avoid: input.avoid,
     tensions: input.tensions,
   };
-  const deliveredBytes = serializedBytes(guidance);
-  const mandatoryBytes = serializedBytes(mandatory);
+  const executionGuidance = toExecutionGuidance(guidance);
+  const mandatoryExecutionGuidance = toExecutionGuidance(mandatory);
+  const deliveredBytes = serializedBytes(executionGuidance);
+  const mandatoryBytes = serializedBytes(mandatoryExecutionGuidance);
+  const fullGuidanceBytes = serializedBytes(guidance);
   if (deliveredBytes <= byteLimit) {
     return {
       status: 'ready',
       guidance,
+      executionGuidance,
       omissions,
       deliveredBytes,
       mandatoryBytes,
+      fullGuidanceBytes,
       selection: normalizedSelection,
     };
   }
@@ -73,22 +83,25 @@ export function applyGuidanceDelivery(
       byteLimit,
       totalBytes: deliveredBytes,
       mandatoryBytes,
+      fullGuidanceBytes,
       mandatoryGuidanceIds: [
         ...input.required.map((item) => item.id),
         ...input.avoid.map((item) => item.id),
         ...input.tensions.map((item) => item.id),
       ],
       mandatoryGuidance: {
-        required: input.required,
-        avoid: input.avoid,
-        tensions: input.tensions,
+        required: mandatoryExecutionGuidance.required,
+        avoid: mandatoryExecutionGuidance.avoid,
+        tensions: mandatoryExecutionGuidance.tensions,
       },
-      selectableConsider: input.consider.map((item) => ({
-        id: item.id,
-        instruction: item.instruction,
-        bytes: serializedBytes(item),
-        source: item.source,
-      })),
+      selectableConsider: input.consider.map((item) => {
+        const executionItem = toExecutionGuidanceItem(item);
+        return {
+          ...executionItem,
+          bytes: serializedBytes(executionItem),
+          source: item.source,
+        };
+      }),
       selection: normalizedSelection,
       reasons: mandatoryBytes > byteLimit
         ? ['Mandatory required, avoid, and tension guidance exceeds the configured byte limit; policy or task scope must be resolved explicitly.']
@@ -97,8 +110,39 @@ export function applyGuidanceDelivery(
   };
 }
 
+export function toExecutionGuidance(input: EffectiveGuidance): ExecutionGuidance {
+  return {
+    required: input.required.map(toExecutionGuidanceItem),
+    consider: input.consider.map(toExecutionGuidanceItem),
+    avoid: input.avoid.map(toExecutionAvoidGuidanceItem),
+    tensions: input.tensions,
+  };
+}
+
 export function serializedBytes(value: unknown): number {
   return Buffer.byteLength(JSON.stringify(value), 'utf8');
+}
+
+function toExecutionGuidanceItem(
+  item: EffectiveGuidance['required'][number],
+): ExecutionGuidanceItem {
+  return {
+    id: item.id,
+    instruction: item.instruction,
+    exceptions: item.exceptions,
+    executionMode: item.executionMode,
+    ...(item.example ? { example: item.example } : {}),
+  };
+}
+
+function toExecutionAvoidGuidanceItem(
+  item: EffectiveGuidance['avoid'][number],
+): ExecutionAvoidGuidanceItem {
+  return {
+    id: item.id,
+    pattern: item.pattern,
+    exceptions: item.exceptions,
+  };
 }
 
 function assertByteLimit(value: number): void {

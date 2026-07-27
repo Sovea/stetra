@@ -25,10 +25,8 @@ augments:
           code: "import { parseConfig } from './config/parse.js';"
         note: "This project uses explicit ESM extensions at runtime boundaries."
 
-# Disable a built-in directive that is wrong for this project.
-suppresses:
-  - id: "core-comments-only-when-they-carry-meaning-01"
-    reason: "Generated protocol modules require field comments for downstream tooling."
+# Disable a built-in only when repository policy makes it inapplicable.
+suppresses: []
 
 # Add truly project-specific prescription. Examples are required.
 additions:

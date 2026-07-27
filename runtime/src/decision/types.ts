@@ -86,6 +86,27 @@ export interface EffectiveGuidance {
   tensions: DecisionTension[];
 }
 
+export interface ExecutionGuidanceItem {
+  id: string;
+  instruction: string;
+  exceptions: string[];
+  executionMode: ExecutionMode;
+  example?: DirectiveExample;
+}
+
+export interface ExecutionAvoidGuidanceItem {
+  id: string;
+  pattern: string;
+  exceptions: string[];
+}
+
+export interface ExecutionGuidance {
+  required: ExecutionGuidanceItem[];
+  consider: ExecutionGuidanceItem[];
+  avoid: ExecutionAvoidGuidanceItem[];
+  tensions: DecisionTension[];
+}
+
 export interface VerificationPlan {
   commands: Array<{ id: string; reason: string }>;
   semanticChecks: Array<{ guidanceId: string; description: string }>;
@@ -155,6 +176,8 @@ export interface DecisionTrace {
     byteLimit: number;
     deliveredBytes: number;
     mandatoryBytes: number;
+    fullGuidanceBytes: number;
+    fullPacketBytes: number;
     selection: GuidanceDeliverySelection | null;
   };
   omissions: Array<{
@@ -172,6 +195,7 @@ export interface ChangeDecisionPacket {
   mode: GuidanceMode;
   task: NormalizedTaskContext;
   guidance: EffectiveGuidance;
+  executionGuidance: ExecutionGuidance;
   verificationPlan: VerificationPlan;
   trace: DecisionTrace;
   fingerprints: {
@@ -191,15 +215,19 @@ export interface GuidanceOverflow {
   byteLimit: number;
   totalBytes: number;
   mandatoryBytes: number;
+  fullGuidanceBytes: number;
   mandatoryGuidanceIds: string[];
   mandatoryGuidance: {
-    required: GuidanceItem[];
-    avoid: AvoidGuidanceItem[];
+    required: ExecutionGuidanceItem[];
+    avoid: ExecutionAvoidGuidanceItem[];
     tensions: DecisionTension[];
   };
   selectableConsider: Array<{
     id: string;
     instruction: string;
+    exceptions: string[];
+    executionMode: ExecutionMode;
+    example?: DirectiveExample;
     bytes: number;
     source: GuidanceSource;
   }>;

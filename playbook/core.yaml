@@ -1,560 +1,67 @@
-# core.yaml
-# Built-in core directives: language-agnostic, framework-agnostic, task-agnostic defaults.
-# These form the default foundation for all code generation and review.
-# More specific layers (languages/, frameworks/, domains/) refine but do not contradict these.
-
-- id: core-simplicity-over-cleverness-01
-  type: convention
-  layer: core
-  scope:
-    path: "**/*"
-  prescription: should
-  weight: high
-
-  description: "Choose the simplest solution that fully satisfies the task."
-
-  rationale: >
-    Complexity introduced ahead of need becomes permanent. It raises the cognitive
-    cost of every future change without delivering present value. Simplicity is not
-    a quality shortcut — it is the default posture until the problem itself demands otherwise.
-
-  exceptions:
-    - "A more complex design is acceptable when the task has clear present pressure
-       such as correctness, safety, or stable repeated reuse — and the trade-off
-       is made explicit in a comment or documentation."
-
-  examples:
-    - avoid:
-        code: |
-          class UserFetcherFactory {
-            create(strategy: FetchStrategy): UserFetcher {
-              return new UserFetcher(strategy);
-            }
-          }
-      good:
-        code: |
-          async function fetchUser(id: string): Promise<User> {
-            return db.users.findById(id);
-          }
-      note: "The factory adds an indirection layer the task has not earned.
-             One function is the correct scope for this problem right now."
-
-    - avoid:
-        code: |
-          function getUserName(user, opts = {}) {
-            return ((opts.formatter || ((x) => x?.profile?.name ?? 'Unknown')))(user);
-          }
-      good:
-        code: |
-          function getUserName(user) {
-            return user?.profile?.name ?? 'Unknown';
-          }
-      note: "Prefer the direct implementation when no real extension point exists.
-             The options parameter anticipates flexibility that has not been requested."
-
+# Built-in language- and task-agnostic guidance.
+# Keep this layer small: host agents already own generic coding judgment.
 
 - id: core-clarity-and-legibility-01
   type: convention
   layer: core
-  scope:
-    path: "**/*"
+  scope: { path: "**/*" }
   prescription: should
   weight: high
-
-  description: "Prefer clear, explicit, and legible code over compressed or indirect code."
-
-  rationale: >
-    Code is read far more often than it is written. Clarity is not cosmetic —
-    it is what allows future changes to be made correctly and with appropriate confidence.
-    Compressed or indirect code transfers cognitive cost to every future reader.
-
+  description: "Choose a direct, legible solution whose complexity is proportionate to the task."
+  rationale: "A compact harness should reinforce proportionate implementation choices, not restate every general quality preference an advanced host agent already understands."
   exceptions:
-    - "A denser form is acceptable when it is already the clear and conventional
-       local style and does not reduce comprehension for a reader familiar with the codebase."
-
+    - "Additional complexity is justified when correctness, safety, or stable repeated reuse creates concrete present pressure."
   examples:
-    - avoid:
-        code: |
-          const ok = !!items?.filter((x) => x.active)?.map((x) => x.id)?.length;
-      good:
-        code: |
-          const activeItems = items.filter((item) => item.active);
-          const ok = activeItems.length > 0;
-      note: "The chained one-liner forces reconstruction of intent.
-             Intermediate names make each step independently readable and debuggable."
-
-    - avoid:
-        code: |
-          // increment i by one
-          i += 1;
-      good:
-        code: |
-          // Retry only once — duplicate submission is not idempotent on this endpoint.
-          retryCount += 1;
-      note: "A comment restating the code adds no information.
-             A comment explaining the non-obvious decision prevents future mistakes."
-
-
-- id: core-comments-only-when-they-carry-meaning-01
-  type: convention
-  layer: core
-  scope:
-    path: "**/*"
-  prescription: should
-  weight: high
-
-  description: "Write short comments only when intent, constraints, edge cases, or workarounds are non-obvious. Do not comment obvious implementation details."
-
-  rationale: >
-    Comments are most valuable when they explain something the code alone cannot make
-    obvious to a future reader: why a decision exists, what constraint shapes it, or
-    what surprising edge or workaround must be preserved. Comments that merely narrate
-    the code increase noise, drift quickly, and train readers to ignore the comments
-    that actually matter.
-
-  exceptions:
-    - "More explicit documentation is acceptable when required by the host language,
-       framework, public API expectations, or generated code conventions."
-
-  examples:
-    - avoid:
-        code: |
-          // Sort users by createdAt descending.
-          const sortedUsers = users.sort((a, b) => b.createdAt - a.createdAt);
-      good:
-        code: |
-          // Preserve server order when timestamps tie — pagination cursors depend on it.
-          const sortedUsers = users.sort((a, b) => b.createdAt - a.createdAt);
-      note: "The first comment repeats the implementation. The second captures a
-             non-obvious constraint that protects future changes from breaking behavior."
-
-    - avoid:
-        code: |
-          # increment retry counter
-          retry_count += 1
-      good:
-        code: |
-          # Retry only once — the upstream endpoint can create duplicate jobs on repeat submission.
-          retry_count += 1
-      note: "A short comment is justified when it explains a boundary, workaround,
-             or decision that the next maintainer would not reliably infer from the code."
-
+    - avoid: { code: "return createFactory(options).build().run(input)" }
+      good: { code: "return processInput(input)" }
+      note: "Use indirection only when the current task has earned it."
 
 - id: core-preserve-local-consistency-01
   type: convention
   layer: core
-  scope:
-    path: "**/*"
+  scope: { path: "**/*" }
   prescription: should
   weight: critical
-
-  description: "Match local naming, structural, and organizational conventions of the surrounding codebase."
-
-  rationale: >
-    A codebase is a shared language between its contributors. Introducing a foreign
-    style — even a technically superior one — breaks that language locally and signals
-    to future readers that conventions are negotiable. Consistency has compounding value;
-    deviation has compounding cost.
-
+  description: "Match the repository's established naming, structure, and organization unless that local pattern is the problem being changed."
+  rationale: "Repository fit affects adoption and review cost; technically plausible code that introduces a foreign local dialect is still a poor change."
   exceptions:
-    - "Deviate from local style when the local pattern is demonstrably unsafe, deprecated,
-       or explicitly suppressed by stronger guidance. The deviation should be scoped,
-       communicated, and adopted consistently going forward."
-
+    - "Deviate when the local pattern is unsafe, deprecated, or explicitly in scope for replacement, and keep the deviation bounded."
   examples:
-    - avoid:
-        code: |
-          # rest of codebase uses snake_case — this new module introduces camelCase
-          def getUserById(userId):
-              return db.query(userId)
-      good:
-        code: |
-          def get_user_by_id(user_id):
-              return db.query(user_id)
-      note: "camelCase is not wrong in isolation but is wrong in this repository.
-             A reader will assume the inconsistency is meaningful and waste time investigating."
-
-    - avoid:
-        code: |
-          // codebase organises by feature — this adds a global services/ layer
-          import { analytics } from '@/services/analytics';
-      good:
-        code: |
-          import { analytics } from '@/features/analytics';
-      note: "Introducing a structural pattern foreign to the repository creates two mental
-             models for future contributors to hold simultaneously."
-
+    - avoid: { code: "Add a new global services layer to a feature-oriented repository." }
+      good: { code: "Extend the existing feature-local boundary." }
+      note: "Use repository evidence rather than personal architectural taste."
 
 - id: core-smallest-reasonable-change-01
   type: constraint
   layer: core
-  scope:
-    path: "**/*"
+  scope: { path: "**/*" }
   prescription: should
   weight: critical
   traits:
     compatibility_sensitive: true
-
-  description: "When modifying existing code, make the smallest coherent change that fully solves the task."
-
-  rationale: >
-    Every change beyond the task boundary is an unreviewed change. It expands the blast
-    radius, introduces unrelated risk, and makes the diff harder to reason about.
-    The goal is not the smallest possible diff at any cost, but the most contained
-    change that remains structurally honest and does not introduce compatibility
-    machinery the task has not earned.
-
+  description: "Make the smallest coherent change that fully solves the task without hiding necessary structural work."
+  rationale: "Unrelated edits increase risk and review burden, while artificial shims can make a superficially small diff structurally dishonest."
   exceptions:
-    - "Broader change is acceptable when a narrower fix would be misleading, unsafe,
-       structurally dishonest, or would immediately require follow-up repair in the
-       same area. Scope expansion should be explicit and communicated in the change
-       description."
-    - "Introduce shims, adapters, fallback branches, dual-path logic, or temporary
-       compatibility wrappers only when compatibility preservation is an explicit task
-       requirement, migration boundary, or public API constraint. Do not add them only
-       to keep a local diff superficially small."
-
+    - "Expand scope only when a narrower change would be unsafe, misleading, or immediately require repair; add compatibility machinery only for an explicit compatibility boundary."
   examples:
-    - avoid:
-        code: |
-          # task: fix the off-by-one in pagination
-          # actual diff: renamed 12 variables, reformatted the file,
-          #              extracted a helper that was not requested
-      good:
-        code: |
-          # task: fix the off-by-one in pagination
-          # actual diff: corrected `page * size` to `(page - 1) * size` in one location
-      note: "Unrelated cleanup obscures the fix, complicates review, and risks
-             introducing new bugs outside the task scope."
-
-    - avoid:
-        code: |
-          // task: add email validation to the existing form field
-          // actual change: rewrote the entire form to use a new validation library
-      good:
-        code: |
-          // task: add email validation to the existing form field
-          // actual change: added isValidEmail() guard to the existing onChange handler
-      note: "Library migrations are real tasks that deserve their own scope and review.
-             Embedding them inside a different task hides the decision and its trade-offs."
-
-    - avoid:
-        code: |
-          // task: rename `user_name` to `display_name` inside one module
-          // actual change: kept both names alive through an adapter to avoid touching call sites
-          export function getDisplayName(user) {
-            return getUserNameCompat(user);
-          }
-      good:
-        code: |
-          // task: rename `user_name` to `display_name` inside one module
-          export function getDisplayName(user) {
-            return user.display_name;
-          }
-      note: "A compatibility shim is not the smaller reasonable change when the task
-             does not require compatibility at a real boundary. It preserves old shape
-             unnecessarily and leaves extra logic behind."
-
-
-- id: core-clear-boundaries-and-responsibilities-01
-  type: architecture
-  layer: core
-  scope:
-    path: "**/*"
-  prescription: should
-  weight: high
-  traits:
-    broad_scope: true
-
-  description: "Keep concerns separated and interfaces intentional. Do not mix unrelated responsibilities in the same unit."
-
-  rationale: >
-    Code that mixes concerns is harder to test, harder to change, and harder to understand.
-    Clear boundaries make the cost of a future change local rather than systemic.
-    The goal is not purity for its own sake but changeability without fear.
-
-  exceptions:
-    - "A small amount of local co-location is acceptable when it improves readability
-       without mixing unrelated responsibilities or making the unit harder to test."
-
-  examples:
-    - avoid:
-        code: |
-          async function handleSubmit(formData) {
-            const errors = validate(formData);
-            if (errors.length) {
-              setErrors(errors);
-              analytics.track('form_validation_failed', errors);
-              return;
-            }
-            const res = await fetch('/api/submit', {
-              method: 'POST',
-              body: JSON.stringify(formData),
-            });
-            analytics.track('form_submitted');
-            navigate('/success');
-          }
-      good:
-        code: |
-          async function handleSubmit(formData) {
-            const errors = validate(formData);
-            if (errors.length) { setErrors(errors); return; }
-            await submitForm(formData);   // owns fetch + analytics side effects
-            navigate('/success');
-          }
-      note: "The original mixes validation, network, analytics, and navigation in one function.
-             Each concern is untestable in isolation and any change risks touching all of them."
-
-    - avoid:
-        code: |
-          # repository method that also formats output for the HTTP response
-          def find_user(id):
-              user = db.query(id)
-              return { 'data': { 'id': user.id, 'name': user.name.title() }, 'status': 200 }
-      good:
-        code: |
-          def find_user(id) -> User:
-              return db.query(id)
-      note: "A repository method returning an HTTP envelope cannot be reused outside
-             the HTTP layer and conflates persistence with presentation."
-
-
-- id: core-abstraction-follows-real-pressure-01
-  type: convention
-  layer: core
-  scope:
-    path: "**/*"
-  prescription: should
-  weight: high
-  traits:
-    broad_scope: true
-
-  description: "Introduce abstraction only when there is real, coherent, repeated pressure that justifies it."
-
-  rationale: >
-    The wrong abstraction is worse than duplication. It couples unrelated things under
-    a shared name, making each change ripple further than it should. Duplication preserves
-    optionality; premature abstraction forecloses it. Let the abstraction emerge from
-    real pressure, not from anticipation of it.
-
-  exceptions:
-    - "Extraction is appropriate when duplicated behavior is real, repeated, and clearly
-       represents a stable shared concept — not just structural similarity."
-
-  examples:
-    - avoid:
-        code: |
-          // second usage of similar logic — immediately unified into a shared utility
-          function formatUserName(user) { ... }
-          function formatAdminName(admin) { ... }
-          // "they both format names"
-          function formatEntityName(entity, type) { ... }
-      good:
-        code: |
-          function formatUserName(user) { ... }
-          function formatAdminName(admin) { ... }
-          // wait until a third case or a stable shared concept emerges before extracting
-      note: "Two similar functions might diverge rather than converge.
-             Unifying them prematurely couples their future evolution under a name
-             that may not survive contact with the third use case."
-
-    - avoid:
-        code: |
-          class GenericDataProcessor<T, R, S extends Strategy<T, R>> {
-            process(input: T, strategy: S): R { ... }
-          }
-      good:
-        code: |
-          function processPayment(payment: Payment): Receipt { ... }
-      note: "The generic processor anticipates reuse that does not exist yet.
-             The concrete function is correct today and can be generalized when a
-             second coherent use case actually appears."
-
-
-- id: core-correctness-before-optimization-01
-  type: constraint
-  layer: core
-  scope:
-    path: "**/*"
-  prescription: should
-  weight: high
-  rccl_immune: false
-  traits:
-    safety_critical: true
-
-  description: "Prefer correctness and clarity before optimization. Do not optimize prematurely without evidence or clear need."
-
-  rationale: >
-    Performance and elegance are recoverable. Correctness problems compound silently
-    and often surface only in production under real load or real data.
-    Optimization should be driven by measured evidence, not guesswork.
-
-  exceptions:
-    - "Performance-driven design is acceptable when the task explicitly targets a
-       measured bottleneck or a known system constraint with evidence to support it."
-
-  examples:
-    - avoid:
-        code: |
-          # replace full validation with a micro-optimized shortcut that skips edge-case checks
-          def is_valid(data):
-              return bool(data)   # fast, but misses None, empty dict, invalid structure
-      good:
-        code: |
-          def is_valid(data):
-              if not isinstance(data, dict): return False
-              if 'id' not in data or 'email' not in data: return False
-              return bool(data['id']) and '@' in data['email']
-      note: "The shortcut is faster but silently accepts invalid inputs.
-             Correctness is not negotiable; optimize only after correctness is preserved
-             and the need is established by measurement."
-
+    - avoid: { code: "Fix one defect while renaming unrelated APIs and adding an unrequested adapter." }
+      good: { code: "Change the defective path and its directly supporting test." }
+      note: "Contain the change, but do not optimize for line count at the expense of honesty."
 
 - id: core-handle-failures-and-edge-cases-carefully-01
   type: constraint
   layer: core
-  scope:
-    path: "**/*"
+  scope: { path: "**/*" }
   prescription: should
   weight: critical
   rccl_immune: true
   traits:
     safety_critical: true
-
-  description: "Handle assumptions, failure modes, and edge cases carefully at boundaries and during state transitions."
-
-  rationale: >
-    Boundary errors and incorrect state transitions are a frequent source of production
-    defects. They compound silently and are expensive to fix after the fact.
-    Historical local shortcuts must not normalize unsafe handling of inputs, state,
-    or side effects — RCCL patterns of unsafe handling are never inherited.
-
+  description: "Handle task-relevant failure modes, assumptions, and boundary cases explicitly enough to preserve safe behavior."
+  rationale: "Happy-path code is incomplete when realistic boundary behavior can produce a different and worse result."
   exceptions:
-    - "None for externally visible correctness boundaries. Any narrowing of checks must
-       still preserve safe failure behavior and explicit documentation of the assumption."
-
+    - "Checks may be lighter only at a genuinely controlled boundary whose assumptions remain explicit."
   examples:
-    - avoid:
-        code: |
-          function divide(a, b) {
-            return a / b;
-          }
-      good:
-        code: |
-          function divide(a: number, b: number): number {
-            if (b === 0) throw new Error('Division by zero');
-            return a / b;
-          }
-      note: "The original silently returns Infinity or NaN.
-             Every caller inherits a latent correctness problem that is invisible until it isn't."
-
-    - avoid:
-        code: |
-          # assume request body is valid and proceed with state mutation
-          def update_balance(user_id, amount):
-              db.execute('UPDATE accounts SET balance = balance + ? WHERE id = ?', amount, user_id)
-      good:
-        code: |
-          def update_balance(user_id: int, amount: Decimal) -> None:
-              if amount <= 0:
-                  raise ValueError(f'amount must be positive, got {amount}')
-              if not db.exists('accounts', id=user_id):
-                  raise NotFoundError(f'account {user_id} not found')
-              db.execute('UPDATE accounts SET balance = balance + ? WHERE id = ?', amount, user_id)
-      note: "Unvalidated mutation at a financial boundary can silently corrupt state.
-             Local precedent of skipping checks does not make this safe — rccl_immune
-             ensures this directive is never softened by observed repository patterns."
-
-
-- id: core-apply-judgment-not-checklist-compliance-01
-  type: preference
-  layer: core
-  scope:
-    path: "**/*"
-  prescription: should
-  weight: normal
-
-  description: "Apply the intent of a rule, not just its wording. When guidance conflicts, prefer correctness, clarity, local consistency, and minimal change — in that order."
-
-  rationale: >
-    Rules are instruments of judgment, not replacements for it. Mechanical compliance
-    with a rule that produces awkward or wrong code is a failure mode, not a success.
-    The measure of good engineering is whether the result feels well-judged, proportional,
-    and appropriate to the task and the repository.
-
-  exceptions:
-    - "Do not use judgment language to bypass stronger correctness, safety, or
-       repository-fit constraints. This directive sharpens judgment within the rules,
-       it does not override them."
-
-  examples:
-    - avoid:
-        code: |
-          # rule says "no magic numbers" — applied mechanically
-          HTTP_STATUS_OK = 200
-          HTTP_STATUS_NOT_FOUND = 404
-          if response.status == HTTP_STATUS_OK:
-      good:
-        code: |
-          # 200 is a universal convention — aliasing it adds noise without adding clarity
-          if response.status == 200:
-      note: "Apply the intent of the rule (eliminate unclear constants), not its surface form.
-             200 is not a magic number. Wrapping universal conventions in constants
-             signals a misapplication of the rule."
-
-    - avoid:
-        code: |
-          # two rules conflict: core-smallest-reasonable-change-01 vs core-handle-failures-01
-          # resolution chosen: skip the edge case to keep the diff small
-      good:
-        code: |
-          # resolution: correctness outranks minimal change in the priority order.
-          # handle the edge case; note in the PR why the scope expanded.
-      note: "When principles conflict, the priority order resolves it:
-             correctness > clarity > local consistency > minimal change.
-             A well-judged result beats mechanical rule compliance every time."
-
-
-- id: core-solution-ordering-preference-01
-  type: preference
-  layer: core
-  scope:
-    path: "**/*"
-  prescription: should
-  weight: high
-
-  description: "When multiple valid solutions exist, prefer the one that is most correct, clear, locally consistent, proportionate, and maintainable — in that order."
-
-  rationale: >
-    Engineering quality is often decided between several acceptable options.
-    This ordering ensures the agent chooses restrained, durable solutions over
-    impressive, fashionable, or technically elaborate ones when the task does
-    not require the added complexity.
-
-  exceptions:
-    - "A less typical solution is acceptable when it is clearly required by explicit
-       task constraints or stronger local or project-level guidance."
-
-  examples:
-    - avoid:
-        code: |
-          // task: display a sorted list of user names
-          // solution chosen: custom red-black tree implementation for O(log n) insertion
-      good:
-        code: |
-          // task: display a sorted list of user names
-          // solution chosen: Array.sort() — correct, clear, and proportionate to the task
-      note: "The custom tree is technically interesting but the task has not earned it.
-             Prefer the solution that is correct and proportionate before considering
-             performance or technical impressiveness."
-
-    - avoid:
-        code: |
-          # choose the most abstract design because it demonstrates architectural knowledge
-          class StrategyPatternSortingContextFactory: ...
-      good:
-        code: |
-          def sorted_names(users):
-              return sorted(u.name for u in users)
-      note: "Prefer sound judgment and restrained taste over technical flourish.
-             The simpler solution is easier to verify, extend, and hand off."
+    - avoid: { code: "Assume parsed external input already has the required shape." }
+      good: { code: "Validate the boundary before using the value internally." }
+      note: "Match defensive work to the concrete boundary and risk."

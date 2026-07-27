@@ -1,382 +1,54 @@
-# languages/typescript.yaml
-# TypeScript-specific directives. Applied when tech_stack includes 'typescript'.
-# Refines but does not override core/ or task-types/ directives.
-
-- id: ts-use-types-to-clarify-intent-01
-  type: convention
-  layer: languages
-  scope:
-    path: "**/*.{ts,tsx}"
-  prescription: should
-  weight: high
-
-  description: "Use types to communicate intent clearly to readers and maintainers. Prefer direct, explainable typing over impressive type machinery."
-
-  rationale: >
-    Types are read far more often than they are written. A type that requires
-    reconstructing its derivation to understand what it represents has failed its
-    primary job. The measure of good typing is whether it makes the code easier
-    to understand and safer to change — not whether it is technically sophisticated.
-
-  exceptions:
-    - "Advanced type constructs are appropriate when they materially improve API
-       correctness or prevent a real class of error that simpler typing cannot catch,
-       and the complexity is justified by concrete present value."
-
-  examples:
-    - avoid:
-        code: |
-          type UserField = keyof ReturnType<typeof createUserSelector>;
-          type PickedUser = Pick<Awaited<ReturnType<typeof fetchUser>>, UserField>;
-      good:
-        code: |
-          type UserSummary = {
-            id: string;
-            name: string;
-            email: string;
-          };
-      note: "The derived type chain requires reading three other definitions to understand
-             what UserField actually contains. The explicit type states its shape directly
-             and is readable without any context."
-
-    - avoid:
-        code: |
-          function process<T extends Record<string, unknown>, K extends keyof T>(
-            obj: T,
-            keys: K[],
-          ): { [P in K]: T[P] } {
-            return Object.fromEntries(keys.map((k) => [k, obj[k]])) as { [P in K]: T[P] };
-          }
-      good:
-        code: |
-          function pickFields(user: User, fields: (keyof User)[]): Partial<User> {
-            return Object.fromEntries(fields.map((f) => [f, user[f]]));
-          }
-      note: "The generic version is technically more reusable but the task only needs
-             it for User. The concrete version is immediately readable and correctly typed
-             for the actual use case."
-
+# TypeScript-specific deltas. Generic clarity and proportionality live in core.
 
 - id: ts-explicit-public-interfaces-01
   type: constraint
   layer: languages
-  scope:
-    path: "**/*.{ts,tsx}"
+  scope: { path: "**/*.{ts,tsx}" }
   prescription: should
   weight: high
   traits:
     compatibility_sensitive: true
-
-  description: "Keep exported function signatures, component props, and shared contracts explicit. Do not leak internal implementation detail into public types."
-
-  rationale: >
-    Public interfaces are contracts. An implicit or inferred public type couples
-    consumers to implementation details they did not choose and cannot control.
-    When the implementation changes, the inferred type changes with it — silently
-    breaking every consumer without a deliberate decision being made.
-
+  description: "Keep exported TypeScript contracts explicit and avoid leaking implementation details into public types."
+  rationale: "Public inferred shapes can change accidentally with implementation details and silently couple consumers to internals."
   exceptions:
-    - "Return type inference is acceptable for private or module-internal functions
-       where the inferred type is simple, stable, and not consumed by external code."
-
+    - "Simple private or module-internal functions may use stable, obvious inferred return types."
   examples:
-    - avoid:
-        code: |
-          // exported function with no explicit return type
-          // consumers are coupled to whatever the implementation happens to return
-          export function getUserPermissions(user: User) {
-            return user.roles.flatMap((r) => r.permissions).filter(Boolean);
-          }
-      good:
-        code: |
-          export type Permission = 'read' | 'write' | 'admin';
-
-          export function getUserPermissions(user: User): Permission[] {
-            return user.roles.flatMap((r) => r.permissions).filter(Boolean);
-          }
-      note: "Without the explicit return type, a refactor that changes the internal
-             representation silently changes the public contract. The explicit type makes
-             the contract deliberate and stable."
-
-    - avoid:
-        code: |
-          // props inferred from default values — internal structure leaks into public API
-          function UserCard({ user = { id: '', name: '', role: 'guest', _internalFlags: {} } }) {
-            ...
-          }
-      good:
-        code: |
-          type UserCardProps = {
-            user: {
-              id: string;
-              name: string;
-              role: UserRole;
-            };
-          };
-
-          function UserCard({ user }: UserCardProps) { ... }
-      note: "_internalFlags is an implementation detail. An explicit props type defines
-             exactly what the component's public interface is and nothing more."
-
+    - avoid: { code: "export function load() { return internalState; }" }
+      good: { code: "export function load(): PublicState { return toPublicState(internalState); }" }
+      note: "Make the intended consumer contract deliberate."
 
 - id: ts-honest-and-precise-types-01
   type: constraint
   layer: languages
-  scope:
-    path: "**/*.{ts,tsx}"
+  scope: { path: "**/*.{ts,tsx}" }
   prescription: should
   weight: critical
   rccl_immune: true
   traits:
     safety_critical: true
-
-  description: "Avoid any except at unavoidable boundaries. Prefer narrowing and modeling over assertion. Model nullability, optionality, and variant states explicitly."
-
-  rationale: >
-    any silences the type checker without solving the underlying problem. Every
-    any in production code is an assertion that nothing can go wrong at that site —
-    an assertion the compiler cannot verify. Type assertions applied before runtime
-    reality is established are the same: they create the appearance of type safety
-    while removing the substance of it. Historical patterns of any usage in a
-    codebase do not make new any usage safe.
-
+  description: "Model nullability and variants honestly; narrow unknown values instead of bypassing the type system with unjustified any or assertions."
+  rationale: "Assertions can create the appearance of safety while discarding the compiler's evidence about runtime possibilities."
   exceptions:
-    - "any is acceptable at genuine escape hatches: third-party library boundaries
-       with no type definitions, dynamic interop with untyped external systems, or
-       deliberate runtime reflection with explicit validation immediately following.
-       Each use must be commented with the reason."
-
+    - "Use an escape hatch only at an unavoidable untyped boundary and validate or document the boundary immediately."
   examples:
-    - avoid:
-        code: |
-          async function loadConfig(): Promise<any> {
-            const raw = await fs.readFile('config.json', 'utf-8');
-            return JSON.parse(raw);
-          }
-      good:
-        code: |
-          import { z } from 'zod';
-
-          const ConfigSchema = z.object({
-            apiUrl: z.string().url(),
-            timeout: z.number().positive(),
-            featureFlags: z.record(z.boolean()),
-          });
-
-          type Config = z.infer<typeof ConfigSchema>;
-
-          async function loadConfig(): Promise<Config> {
-            const raw = await fs.readFile('config.json', 'utf-8');
-            return ConfigSchema.parse(JSON.parse(raw));
-          }
-      note: "JSON.parse returns any — the value is unknown until validated.
-             The schema parse moves from unknown external data to a typed internal value
-             through an explicit check, not an assertion."
-
-    - avoid:
-        code: |
-          function processEvent(event: MouseEvent | KeyboardEvent) {
-            const key = (event as KeyboardEvent).key;   // assertion without narrowing
-            console.log(key);   // undefined when event is MouseEvent
-          }
-      good:
-        code: |
-          function processEvent(event: MouseEvent | KeyboardEvent) {
-            if (event instanceof KeyboardEvent) {
-              console.log(event.key);   // narrowed — safe
-            }
-          }
-      note: "The assertion forces a type that may not match the runtime value.
-             The instanceof guard narrows to the correct type before accessing
-             the keyboard-specific property."
-
-
-- id: ts-simple-type-modeling-01
-  type: convention
-  layer: languages
-  scope:
-    path: "**/*.{ts,tsx}"
-  prescription: should
-  weight: high
-
-  description: "Prefer object types, unions, and simple generics over abstract type patterns. Introduce shared types only when the shared concept is real and recurring."
-
-  rationale: >
-    Type abstractions carry the same risks as code abstractions: they can obscure
-    the actual model, couple unrelated concepts under a shared name, and make
-    maintenance harder than the underlying problem warrants. The simplest type
-    shape that correctly models the domain is usually the right one.
-
-  exceptions:
-    - "A shared generic or utility type is warranted when the same structural pattern
-       recurs across multiple stable domains and the abstraction names a real concept
-       rather than just structural similarity."
-
-  examples:
-    - avoid:
-        code: |
-          type AsyncState<T, E = Error> = {
-            status: 'idle' | 'loading' | 'success' | 'error';
-            data: T | null;
-            error: E | null;
-          };
-
-          // used in one place for one purpose — the abstraction is premature
-          const userState: AsyncState<User> = { status: 'idle', data: null, error: null };
-      good:
-        code: |
-          type UserLoadState =
-            | { status: 'idle' }
-            | { status: 'loading' }
-            | { status: 'success'; user: User }
-            | { status: 'error'; error: Error };
-      note: "The discriminated union models the actual states correctly and prevents
-             invalid combinations like status:'success' with data:null.
-             The generic AsyncState can be extracted later if the same pattern genuinely
-             recurs across multiple stable domains."
-
-    - avoid:
-        code: |
-          type DeepReadonly<T> = {
-            readonly [K in keyof T]: T[K] extends object ? DeepReadonly<T[K]> : T[K];
-          };
-
-          // applied to a simple config object that is never mutated in practice
-          const config: DeepReadonly<AppConfig> = loadConfig();
-      good:
-        code: |
-          const config: Readonly<AppConfig> = loadConfig();
-      note: "DeepReadonly solves a real problem when deep mutation is a genuine risk.
-             For a flat config object, Readonly is sufficient and immediately readable."
-
+    - avoid: { code: "const event = input as KnownEvent;" }
+      good: { code: "if (isKnownEvent(input)) handle(input);" }
+      note: "Establish runtime reality before claiming a narrower type."
 
 - id: ts-respect-runtime-boundaries-01
   type: constraint
   layer: languages
-  scope:
-    path: "**/*.{ts,tsx}"
+  scope: { path: "**/*.{ts,tsx}" }
   prescription: should
   weight: critical
   rccl_immune: true
   traits:
     safety_critical: true
-
-  description: "Treat network data, user input, environment variables, and third-party values as untrusted until explicitly validated. Do not use TypeScript types as a substitute for runtime validation at boundaries."
-
-  rationale: >
-    TypeScript's type system is erased at runtime. A type annotation on data from
-    fetch(), JSON.parse(), process.env, or localStorage is a compile-time claim
-    about a runtime value the compiler has never seen. That claim can be wrong —
-    and when it is, the failure is silent until production. Runtime validation at
-    every external boundary is not redundant with TypeScript; it is what makes
-    TypeScript's type system trustworthy beyond that boundary.
-
+  description: "Validate untrusted runtime values at external boundaries; TypeScript declarations alone do not validate network, environment, or user input."
+  rationale: "Static types disappear at runtime and cannot establish the shape of values supplied by uncontrolled systems."
   exceptions:
-    - "Runtime validation can be lighter for internal service-to-service calls
-       within a fully controlled deployment where both ends are typed and deployed
-       atomically. The boundary must be genuinely internal and the assumption documented."
-
+    - "Validation may be lighter across a genuinely internal, atomically deployed typed boundary when that assumption is explicit."
   examples:
-    - avoid:
-        code: |
-          async function fetchUserProfile(id: string): Promise<UserProfile> {
-            const res = await fetch(`/api/users/${id}`);
-            // cast without validation — if API shape changes, error is silent
-            return res.json() as Promise<UserProfile>;
-          }
-      good:
-        code: |
-          import { z } from 'zod';
-
-          const UserProfileSchema = z.object({
-            id: z.string(),
-            name: z.string(),
-            email: z.string().email(),
-            role: z.enum(['admin', 'editor', 'viewer']),
-          });
-
-          async function fetchUserProfile(id: string): Promise<UserProfile> {
-            const res = await fetch(`/api/users/${id}`);
-            if (!res.ok) throw new ApiError(res.status);
-            const data = await res.json();
-            return UserProfileSchema.parse(data);
-          }
-      note: "The cast tells the compiler the shape is correct without verifying it.
-             If the API adds a required field or changes a type, the cast silently accepts
-             the wrong shape and the error surfaces at the point of use, not at the boundary."
-
-    - avoid:
-        code: |
-          // environment variable assumed to be present and valid
-          const timeout = parseInt(process.env.REQUEST_TIMEOUT as string);
-          const client = new HttpClient({ timeout });
-      good:
-        code: |
-          const rawTimeout = process.env.REQUEST_TIMEOUT;
-          if (!rawTimeout) throw new Error('REQUEST_TIMEOUT environment variable is required');
-
-          const timeout = parseInt(rawTimeout, 10);
-          if (isNaN(timeout) || timeout <= 0) {
-            throw new Error(`REQUEST_TIMEOUT must be a positive integer, got: ${rawTimeout}`);
-          }
-
-          const client = new HttpClient({ timeout });
-      note: "process.env values are always string | undefined at runtime regardless of
-             what the type annotation says. The assertion hides two failure modes:
-             missing variable and non-numeric value."
-
-
-- id: ts-conventional-maintainable-style-01
-  type: convention
-  layer: languages
-  scope:
-    path: "**/*.{ts,tsx}"
-  prescription: should
-  weight: normal
-
-  description: "Favor common and legible TypeScript idioms. Use advanced generics and conditional types only when they materially improve correctness or API quality."
-
-  rationale: >
-    TypeScript's advanced type system features — conditional types, template literal
-    types, infer, complex mapped types — can express sophisticated invariants. They
-    can also produce code that is opaque to most engineers, difficult to debug, and
-    fragile to maintain. The value of a type construct must be measured against its
-    maintenance cost, not just its technical correctness.
-
-  exceptions:
-    - "Complex utility types are appropriate in shared library or design system code
-       where type-level guarantees provide significant value to many consumers and
-       the complexity is encapsulated behind a clean public API."
-
-  examples:
-    - avoid:
-        code: |
-          type EventHandler<T extends Record<string, unknown>> = {
-            [K in keyof T as `on${Capitalize<string & K>}`]: (payload: T[K]) => void;
-          };
-
-          // used to type a single component's props
-          type ButtonProps = EventHandler<{ click: MouseEvent; focus: FocusEvent }>;
-      good:
-        code: |
-          type ButtonProps = {
-            onClick: (event: MouseEvent) => void;
-            onFocus: (event: FocusEvent) => void;
-          };
-      note: "The template literal mapped type derives the same shape through indirection
-             that requires reconstructing the logic to read. The explicit type states the
-             shape directly and is maintainable by any engineer on the team."
-
-    - avoid:
-        code: |
-          type NonNullableFields<T> = {
-            [K in keyof T]-?: NonNullable<T[K]>;
-          };
-
-          type RequiredConfig = NonNullableFields<Partial<AppConfig>>;
-      good:
-        code: |
-          type RequiredConfig = Required<AppConfig>;
-      note: "Required<T> is a standard library utility that communicates intent clearly.
-             The custom NonNullableFields composition solves the same problem with
-             more indirection and less recognizability."
+    - avoid: { code: "const config: Config = JSON.parse(raw);" }
+      good: { code: "const config = ConfigSchema.parse(JSON.parse(raw));" }
+      note: "Cross from unknown external data to trusted internal data through a real check."

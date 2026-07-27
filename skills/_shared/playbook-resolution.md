@@ -53,11 +53,16 @@ deliverySelection: {
 ```
 
 The default limit is 6,000 UTF-8 bytes and may be changed explicitly with
-`guidanceByteLimit`. There are no per-section item limits.
+`guidanceByteLimit`. It applies to `executionGuidance`, the normative view the
+host implements: IDs, instructions, prohibitions, execution modes, exceptions,
+selected examples, and tensions. Source, verification, and trace metadata remain
+inspectable in the full decision without consuming this attention budget. There
+are no per-section item limits.
 
 ## Apply the decision
 
-Use sections in this order:
+The normal code workflow presents `decision.executionGuidance` as `guidance`.
+Use its sections in this order:
 
 1. `guidance.required` — implementation constraints.
 2. `guidance.tensions` — repository boundaries with an explicit resolution.

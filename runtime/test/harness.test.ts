@@ -12,7 +12,11 @@ import {
   type ChangeSet,
   type CheckResult,
 } from '../src/index.ts';
-import { serializedBytes } from '../src/decision/budget.ts';
+import {
+  applyGuidanceDelivery,
+  serializedBytes,
+  toExecutionGuidance,
+} from '../src/decision/budget.ts';
 import { normalizeTaskContext } from '../src/task/normalize.ts';
 import { stableHash } from '../src/utils/hash.ts';
 
@@ -33,7 +37,7 @@ test('canonical task context treats bugfix as change type and infers mechanical 
   assert.ok(task.provenance.every((item) => !('confidence' in item)));
 });
 
-test('standard compile reports overflow, then applies an explicit optional-guidance selection', async () => {
+test('standard compile directly delivers compact agent-facing guidance', async () => {
   const input = {
     projectRoot,
     builtinRoot,
@@ -47,13 +51,97 @@ test('standard compile reports overflow, then applies an explicit optional-guida
       scope: 'local',
     },
   } as const;
+  const output = await compileChange(input);
+  assert.equal(output.status, 'compiled');
+  if (output.status !== 'compiled') return;
+  assert.ok(output.trace.selectedLayers.includes('builtin/task-types/bugfix'));
+  assert.ok(output.guidance.required.some((item) => item.id === 'local-runtime-compile-evaluate-boundary-01'));
+  assert.ok(output.guidance.consider.some((item) => item.id === 'bugfix-add-supporting-validation-01'));
+  assert.deepEqual(output.executionGuidance, toExecutionGuidance(output.guidance));
+  assert.ok(output.trace.delivery.deliveredBytes <= output.trace.delivery.byteLimit);
+  assert.equal(output.trace.delivery.deliveredBytes, serializedBytes(output.executionGuidance));
+  assert.equal(output.trace.delivery.fullGuidanceBytes, serializedBytes(output.guidance));
+  assert.ok(output.trace.delivery.fullGuidanceBytes > output.trace.delivery.deliveredBytes);
+  assert.equal(output.trace.delivery.fullPacketBytes, serializedBytes(output));
+  assert.equal(output.trace.delivery.selection, null);
+  assert.deepEqual(output.trace.omissions, []);
+  assert.ok(!('source' in output.executionGuidance.consider[0]));
+  assert.ok(!('verification' in output.executionGuidance.consider[0]));
+});
+
+test('ordinary TypeScript change types compile directly under the default ceiling', async () => {
+  const cases = [
+    {
+      description: 'Add a decision trace field',
+      changeType: 'feature' as const,
+      target: 'runtime/src/decision/types.ts',
+      risk: 'low' as const,
+    },
+    {
+      description: 'Refactor the Runtime public boundary',
+      changeType: 'refactor' as const,
+      target: 'runtime/src/index.ts',
+      risk: 'medium' as const,
+    },
+    {
+      description: 'Migrate the Runtime decision schema',
+      changeType: 'migration' as const,
+      target: 'runtime/src/decision/types.ts',
+      risk: 'high' as const,
+    },
+    {
+      description: 'Add coverage for compact guidance',
+      changeType: 'test' as const,
+      target: 'runtime/test/harness.test.ts',
+      risk: 'low' as const,
+    },
+  ];
+
+  for (const item of cases) {
+    const output = await compileChange({
+      projectRoot,
+      builtinRoot,
+      localAugmentPath: resolve(projectRoot, '.resonant-code/playbook/local-augment.yaml'),
+      rcclPath: resolve(projectRoot, '.resonant-code/rccl.yaml'),
+      task: {
+        description: item.description,
+        changeType: item.changeType,
+        targets: [item.target],
+        risk: item.risk,
+        scope: 'local',
+      },
+    });
+    assert.equal(output.status, 'compiled', `${item.changeType} should compile without a selection round trip`);
+    if (output.status !== 'compiled') continue;
+    assert.ok(output.trace.delivery.deliveredBytes <= output.trace.delivery.byteLimit);
+    assert.equal(output.trace.delivery.selection, null);
+  }
+});
+
+test('an intentionally smaller ceiling requests explicit optional-guidance selection', async () => {
+  const input = {
+    projectRoot,
+    builtinRoot,
+    localAugmentPath: resolve(projectRoot, '.resonant-code/playbook/local-augment.yaml'),
+    rcclPath: resolve(projectRoot, '.resonant-code/rccl.yaml'),
+    guidanceByteLimit: 3_500,
+    task: {
+      description: 'Fix a cache inspection bug',
+      changeType: 'bugfix',
+      targets: ['runtime/src/decision/compile-change.ts'],
+      risk: 'low',
+      scope: 'local',
+    },
+  } as const;
   const overflow = await compileChange(input);
   assert.equal(overflow.status, 'guidance-overflow');
   if (overflow.status !== 'guidance-overflow') return;
   assert.ok(overflow.totalBytes > overflow.byteLimit);
   assert.ok(overflow.mandatoryBytes <= overflow.byteLimit);
+  assert.ok(overflow.fullGuidanceBytes > overflow.totalBytes);
   assert.ok(overflow.mandatoryGuidanceIds.includes('local-runtime-compile-evaluate-boundary-01'));
   assert.ok(overflow.selectableConsider.length > 3);
+  assert.ok(overflow.selectableConsider.every((item) => !('verification' in item)));
 
   const selectedConsiderIds = [
     'bugfix-add-supporting-validation-01',
@@ -74,8 +162,9 @@ test('standard compile reports overflow, then applies an explicit optional-guida
   assert.deepEqual(output.guidance.consider.map((item) => item.id), selectedConsiderIds);
   assert.ok(output.guidance.required.every((item) => item.executionMode === 'enforce' || item.executionMode === 'deviation-noted'));
   assert.ok(output.guidance.consider.every((item) => item.executionMode === 'ambient'));
-  assert.ok(serializedBytes(output.guidance) <= 6_000);
-  assert.equal(output.trace.delivery.deliveredBytes, serializedBytes(output.guidance));
+  assert.ok(serializedBytes(output.executionGuidance) <= 3_500);
+  assert.equal(output.trace.delivery.deliveredBytes, serializedBytes(output.executionGuidance));
+  assert.equal(output.trace.delivery.fullGuidanceBytes, serializedBytes(output.guidance));
   assert.equal(output.trace.delivery.selection?.rationale, 'These optional items directly address the defect, its TypeScript boundary, and the repository API boundary.');
   assert.ok(output.trace.omissions.every((item) => item.reason === 'host-selection'));
   assert.ok(output.trace.guidanceDetails.length > output.trace.deliveredGuidanceIds.length);
@@ -121,7 +210,8 @@ test('a larger total byte ceiling delivers every eligible item without per-secti
   if (output.status !== 'compiled') return;
   assert.ok(output.guidance.consider.length > 3);
   assert.deepEqual(output.trace.omissions, []);
-  assert.equal(output.trace.delivery.deliveredBytes, serializedBytes(output.guidance));
+  assert.equal(output.trace.delivery.deliveredBytes, serializedBytes(output.executionGuidance));
+  assert.equal(output.trace.delivery.fullGuidanceBytes, serializedBytes(output.guidance));
 });
 
 test('mandatory guidance cannot be selected away when the byte ceiling is too small', async () => {
@@ -149,10 +239,47 @@ test('mandatory guidance cannot be selected away when the byte ceiling is too sm
   assert.match(output.reasons[0], /Mandatory/);
 });
 
-test('guidance size uses UTF-8 bytes rather than JavaScript character count', () => {
-  const value = { instruction: '保持接口清晰' };
-  assert.equal(serializedBytes(value), Buffer.byteLength(JSON.stringify(value), 'utf8'));
-  assert.ok(serializedBytes(value) > JSON.stringify(value).length);
+test('delivery budget uses UTF-8 agent-visible content and ignores machine metadata growth', () => {
+  const guidance = {
+    required: [{
+      id: 'required-cn',
+      instruction: '保持接口清晰',
+      exceptions: [],
+      source: { kind: 'builtin-playbook' as const, id: 'test' },
+      executionMode: 'enforce' as const,
+      verification: [{ kind: 'diff' as const }],
+    }],
+    consider: [],
+    avoid: [],
+    tensions: [],
+  };
+  const executionGuidance = toExecutionGuidance(guidance);
+  assert.ok(serializedBytes(executionGuidance) > JSON.stringify(executionGuidance).length);
+
+  const byteLimit = serializedBytes(executionGuidance);
+  const base = applyGuidanceDelivery(guidance, byteLimit);
+  assert.equal(base.status, 'ready');
+
+  const metadataHeavy = {
+    ...guidance,
+    required: [{
+      ...guidance.required[0],
+      source: { kind: 'builtin-playbook' as const, id: 'x'.repeat(10_000) },
+      verification: [{ kind: 'semantic' as const, description: 'x'.repeat(10_000) }],
+    }],
+  };
+  const metadataResult = applyGuidanceDelivery(metadataHeavy, byteLimit);
+  assert.equal(metadataResult.status, 'ready');
+  assert.deepEqual(toExecutionGuidance(metadataHeavy), executionGuidance);
+
+  const instructionHeavy = {
+    ...guidance,
+    required: [{
+      ...guidance.required[0],
+      instruction: `${guidance.required[0].instruction}${'界'.repeat(10)}`,
+    }],
+  };
+  assert.equal(applyGuidanceDelivery(instructionHeavy, byteLimit).status, 'overflow');
 });
 
 test('directive delivery order follows explicit authority groups, not weight scores', async () => {
@@ -165,9 +292,9 @@ test('directive delivery order follows explicit authority groups, not weight sco
       '  name: explicit-authority-order',
       '  extends: [builtin/core]',
       'overrides:',
-      '  - supersedes: core-abstraction-follows-real-pressure-01',
-      '    weight: low',
       '  - supersedes: core-clarity-and-legibility-01',
+      '    weight: low',
+      '  - supersedes: core-preserve-local-consistency-01',
       '    weight: critical',
       'augments: []',
       'suppresses: []',
@@ -192,13 +319,13 @@ test('directive delivery order follows explicit authority groups, not weight sco
     assert.deepEqual(
       output.guidance.consider
         .filter((item) => [
-          'core-abstraction-follows-real-pressure-01',
           'core-clarity-and-legibility-01',
+          'core-preserve-local-consistency-01',
         ].includes(item.id))
         .map((item) => item.id),
       [
-        'core-abstraction-follows-real-pressure-01',
         'core-clarity-and-legibility-01',
+        'core-preserve-local-consistency-01',
       ],
     );
     assert.ok(output.guidance.consider
@@ -300,7 +427,7 @@ test('personal overlay adds optional taste and examples without weakening team p
       ['builtin-playbook', 'personal-playbook'],
     );
     const personalIndex = output.guidance.consider.findIndex((item) => item.id === 'personal-prefer-early-returns-01');
-    const builtinIndex = output.guidance.consider.findIndex((item) => item.id === 'core-abstraction-follows-real-pressure-01');
+    const builtinIndex = output.guidance.consider.findIndex((item) => item.id === 'core-preserve-local-consistency-01');
     assert.ok(personalIndex >= 0 && builtinIndex > personalIndex);
   } finally {
     rmSync(directory, { recursive: true, force: true });
@@ -1009,6 +1136,22 @@ test('public boundaries reject malformed host artifacts without type errors', as
 });
 
 function minimalDecision(mode: 'standard' | 'strict'): ChangeDecisionPacket {
+  const guidance: ChangeDecisionPacket['guidance'] = {
+    required: [{
+      id: 'required-1',
+      instruction: 'Keep the public entrypoint narrow.',
+      exceptions: [],
+      source: { kind: 'builtin-playbook', id: 'test' },
+      executionMode: 'enforce',
+      verification: [
+        { kind: 'diff', description: 'Inspect the entrypoint diff.' },
+        { kind: 'command', commandId: 'typecheck', description: 'Run typecheck.' },
+      ],
+    }],
+    consider: [],
+    avoid: [],
+    tensions: [],
+  };
   return {
     schemaVersion: '1.0',
     decisionId: `decision-${mode}`,
@@ -1021,22 +1164,8 @@ function minimalDecision(mode: 'standard' | 'strict'): ChangeDecisionPacket {
       risk: 'low',
       scope: 'local',
     }),
-    guidance: {
-      required: [{
-        id: 'required-1',
-        instruction: 'Keep the public entrypoint narrow.',
-        exceptions: [],
-        source: { kind: 'builtin-playbook', id: 'test' },
-        executionMode: 'enforce',
-        verification: [
-          { kind: 'diff', description: 'Inspect the entrypoint diff.' },
-          { kind: 'command', commandId: 'typecheck', description: 'Run typecheck.' },
-        ],
-      }],
-      consider: [],
-      avoid: [],
-      tensions: [],
-    },
+    guidance,
+    executionGuidance: toExecutionGuidance(guidance),
     verificationPlan: { commands: [{ id: 'typecheck', reason: 'Run typecheck.' }], semanticChecks: [] },
     trace: {
       selectedLayers: ['builtin/core'],
@@ -1060,6 +1189,8 @@ function minimalDecision(mode: 'standard' | 'strict'): ChangeDecisionPacket {
         byteLimit: 6_000,
         deliveredBytes: 1,
         mandatoryBytes: 1,
+        fullGuidanceBytes: 1,
+        fullPacketBytes: 1,
         selection: null,
       },
       omissions: [],

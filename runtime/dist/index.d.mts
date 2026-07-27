@@ -120,6 +120,24 @@ interface EffectiveGuidance {
   avoid: AvoidGuidanceItem[];
   tensions: DecisionTension[];
 }
+interface ExecutionGuidanceItem {
+  id: string;
+  instruction: string;
+  exceptions: string[];
+  executionMode: ExecutionMode;
+  example?: DirectiveExample;
+}
+interface ExecutionAvoidGuidanceItem {
+  id: string;
+  pattern: string;
+  exceptions: string[];
+}
+interface ExecutionGuidance {
+  required: ExecutionGuidanceItem[];
+  consider: ExecutionGuidanceItem[];
+  avoid: ExecutionAvoidGuidanceItem[];
+  tensions: DecisionTension[];
+}
 interface VerificationPlan {
   commands: Array<{
     id: string;
@@ -187,6 +205,8 @@ interface DecisionTrace {
     byteLimit: number;
     deliveredBytes: number;
     mandatoryBytes: number;
+    fullGuidanceBytes: number;
+    fullPacketBytes: number;
     selection: GuidanceDeliverySelection | null;
   };
   omissions: Array<{
@@ -203,6 +223,7 @@ interface ChangeDecisionPacket {
   mode: GuidanceMode;
   task: NormalizedTaskContext;
   guidance: EffectiveGuidance;
+  executionGuidance: ExecutionGuidance;
   verificationPlan: VerificationPlan;
   trace: DecisionTrace;
   fingerprints: {
@@ -221,15 +242,19 @@ interface GuidanceOverflow {
   byteLimit: number;
   totalBytes: number;
   mandatoryBytes: number;
+  fullGuidanceBytes: number;
   mandatoryGuidanceIds: string[];
   mandatoryGuidance: {
-    required: GuidanceItem[];
-    avoid: AvoidGuidanceItem[];
+    required: ExecutionGuidanceItem[];
+    avoid: ExecutionAvoidGuidanceItem[];
     tensions: DecisionTension[];
   };
   selectableConsider: Array<{
     id: string;
     instruction: string;
+    exceptions: string[];
+    executionMode: ExecutionMode;
+    example?: DirectiveExample;
     bytes: number;
     source: GuidanceSource;
   }>;
@@ -366,4 +391,4 @@ interface ChangeEvaluation {
 //#region src/evaluation/evaluate-change.d.ts
 declare function evaluateChange(input: EvaluateChangeInput): ChangeEvaluation;
 //#endregion
-export { type ChangeDecisionPacket, type ChangeEvaluation, type ChangeException, type ChangeSet, type ChangedFile, type CheckResult, type CompileChangeInput, type CompileChangeOutput, type DecisionDiagnostic, type DecisionTension, type EffectiveGuidance, type EvaluateChangeInput, type EvaluationEvidenceRef, type FileFact, type GuidanceAttestation, type GuidanceDeliverySelection, type GuidanceDetail, type GuidanceEvaluation, type GuidanceItem, type GuidanceMode, type GuidanceOverflow, type InterpretationRequest, type MachineFactProvenance, type NormalizedTaskContext, type RelationProposal, type ScopeLevel, type TaskContextInput, type RiskLevel as TaskRiskLevel, type VerificationPlan, type VerificationRequirement, compileChange, evaluateChange };
+export { type ChangeDecisionPacket, type ChangeEvaluation, type ChangeException, type ChangeSet, type ChangedFile, type CheckResult, type CompileChangeInput, type CompileChangeOutput, type DecisionDiagnostic, type DecisionTension, type EffectiveGuidance, type EvaluateChangeInput, type EvaluationEvidenceRef, type ExecutionAvoidGuidanceItem, type ExecutionGuidance, type ExecutionGuidanceItem, type FileFact, type GuidanceAttestation, type GuidanceDeliverySelection, type GuidanceDetail, type GuidanceEvaluation, type GuidanceItem, type GuidanceMode, type GuidanceOverflow, type InterpretationRequest, type MachineFactProvenance, type NormalizedTaskContext, type RelationProposal, type ScopeLevel, type TaskContextInput, type RiskLevel as TaskRiskLevel, type VerificationPlan, type VerificationRequirement, compileChange, evaluateChange };

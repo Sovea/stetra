@@ -57,10 +57,12 @@ deterministic, or defaulted without decorative confidence decimals.
 
 There are no per-section item limits.
 
-The execution packet has one UTF-8 byte ceiling. It contains compact
-implementation instructions and verification requirements. Full rationale,
-source details, examples, evidence, and activation history remain available in
-the Decision Trace.
+The agent-facing execution view has one UTF-8 byte ceiling. It contains IDs,
+compact implementation instructions, prohibitions, execution modes, applicable
+exceptions, selected execution examples, and tensions. Verification plans,
+source details, full rationale/examples, evidence, and activation history remain
+available in the full decision and Decision Trace without consuming the
+agent-facing attention budget.
 
 Runtime must never silently remove:
 
@@ -71,7 +73,8 @@ Runtime must never silently remove:
 If the mandatory packet exceeds the byte ceiling, compilation returns an
 actionable overflow result. If optional guidance causes overflow, the host may
 submit an explicit selection. The selection and its rationale become part of
-the Decision Trace and Decision ID.
+the Decision Trace and Decision ID. Runtime reports agent-facing delivery bytes,
+full structured-guidance bytes, and full decision-packet bytes separately.
 
 ## Repository observations
 

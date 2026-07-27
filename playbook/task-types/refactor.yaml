@@ -1,477 +1,67 @@
-# task-types/refactor.yaml
-# Directives for improving code structure, clarity, and maintainability without changing external behavior.
-# Applied when operation: refactor.
-# Refines but does not override core/ directives.
+# Refactor-specific guidance. Core already owns proportionality and repository fit.
 
 - id: refactor-preserve-intended-behavior-01
   type: constraint
   layer: task-types
-  scope:
-    path: "**/*"
+  scope: { path: "**/*" }
   prescription: must
   weight: critical
   rccl_immune: true
   traits:
     safety_critical: true
     compatibility_sensitive: true
-
-  description: "A refactor must not change externally expected behavior. Treat behavior drift as a refactor failure, not an acceptable side effect."
-
-  rationale: >
-    A refactor that changes behavior is not a refactor — it is a combined change with
-    two different risk profiles reviewed as one. Behavior drift during refactoring is
-    particularly dangerous because it is unexpected: reviewers are not looking for it,
-    tests may not cover it, and the change may reach production before anyone notices.
-    Behavioral stability is the non-negotiable constraint that makes refactoring safe.
-
+  description: "Preserve externally expected behavior unless a behavior change is explicitly part of the task."
+  rationale: "Unintended behavior drift turns a structural change into an unreviewed feature or regression."
   exceptions:
-    - "Behavior change is acceptable when it is explicitly part of the task, clearly
-       separated into its own commit or clearly marked in the diff, and reviewed
-       as a deliberate change rather than a structural side effect."
-
+    - "An intended behavior change must be explicit and reviewable as behavior, not hidden inside restructuring."
   examples:
-    - avoid:
-        code: |
-          # refactor: extracted validation into a shared helper
-          # side effect: changed validation order — email now validated before required fields
-          # this altered which error message appears first in the UI
-          def validate_form(data):
-              validate_email(data['email'])      # was third, now first
-              validate_required_fields(data)
-              validate_phone(data['phone'])
-      good:
-        code: |
-          # refactor: extracted validation into a shared helper
-          # validation order preserved exactly — same behavior, better structure
-          def validate_form(data):
-              validate_required_fields(data)
-              validate_phone(data['phone'])
-              validate_email(data['email'])
-      note: "Validation order is externally visible behavior when it determines which error
-             the user sees first. Preserving order is part of preserving behavior."
-
-    - avoid:
-        code: |
-          // refactor: simplified permission check logic
-          // original: denied if role === 'guest' || role === 'banned'
-          // refactored: allowed if PERMITTED_ROLES.includes(role)
-          // side effect: new roles added in future default to denied instead of allowed
-          const PERMITTED_ROLES = ['admin', 'editor', 'viewer'];
-          const canAccess = PERMITTED_ROLES.includes(user.role);
-      good:
-        code: |
-          // preserve the original semantics: deny specific roles, allow everything else
-          const DENIED_ROLES = new Set(['guest', 'banned']);
-          const canAccess = !DENIED_ROLES.has(user.role);
-      note: "Allowlist and denylist semantics are not interchangeable when new values
-             can be introduced. The refactor changed the default behavior for unknown roles."
-
+    - avoid: { code: "Change error semantics while extracting a helper." }
+      good: { code: "Extract the helper while preserving the observable error contract." }
+      note: "Separate structural intent from behavior intent."
 
 - id: refactor-improve-for-real-reason-01
-  type: convention
+  type: architecture
   layer: task-types
-  scope:
-    path: "**/*"
+  scope: { path: "**/*" }
   prescription: should
   weight: high
   traits:
     broad_scope: true
-
-  description: "Refactor in response to concrete structural problems. Make the motivating problem clear in the resulting structure."
-
-  rationale: >
-    Refactoring without a concrete motivating problem produces churn rather than
-    improvement. The structural change should visibly solve something — reduced confusion,
-    eliminated duplication, reduced fragility, lower maintenance cost. If the improvement
-    cannot be articulated concretely, the refactor has not earned its risk.
-
+  description: "Make the refactor address a concrete structural problem that remains visible in the resulting design."
+  rationale: "A refactor without present pressure tends to exchange familiar complexity for speculative complexity."
   exceptions:
-    - "Mechanical cleanup — consistent naming, formatting, obvious dead code removal —
-       is acceptable without deep justification when the improvement is clear and the
-       risk is negligible."
-
+    - "Trivially safe mechanical cleanup needs only an obvious local benefit."
   examples:
-    - avoid:
-        code: |
-          # refactor motivation: "the code felt messy"
-          # result: reorganized the module into a different file structure
-          #         with no reduction in complexity or coupling
-      good:
-        code: |
-          # refactor motivation: UserService had 4 unrelated responsibilities — auth, profile,
-          #                      billing, and notification — making it impossible to test any
-          #                      one concern in isolation
-          # result: split into AuthService, ProfileService, BillingService, NotificationService
-          #         each independently testable and with a single clear responsibility
-      note: "The motivation names the real friction — untestable mixed concerns — and the
-             result directly addresses it. A reviewer can evaluate whether the refactor succeeded."
-
-    - avoid:
-        code: |
-          // refactor: rewrote the data fetching layer to use a more sophisticated pattern
-          // the previous pattern worked correctly and had no known maintenance problems
-      good:
-        code: |
-          // refactor: the data fetching layer had duplicated error handling in 7 places —
-          //           each with slightly different behavior. Centralized into one error boundary
-          //           to make behavior consistent and reduce the surface for divergence.
-      note: "Sophistication is not a motivating reason. Concrete duplication with real
-             divergence risk is."
-
+    - avoid: { code: "Introduce a pattern because it is generally fashionable." }
+      good: { code: "Separate responsibilities that currently force unrelated changes together." }
+      note: "The new structure should explain the pressure that earned it."
 
 - id: refactor-disciplined-scope-01
   type: constraint
   layer: task-types
-  scope:
-    path: "**/*"
+  scope: { path: "**/*" }
   prescription: must
   weight: critical
-
-  description: "Change only what is necessary to achieve the intended structural improvement. Do not mix unrelated cleanup, feature work, or speculative redesign."
-
-  rationale: >
-    A refactor that expands beyond its structural goal becomes difficult to review,
-    difficult to revert, and difficult to attribute when something breaks. Scope
-    discipline is what makes a refactor safe to merge with confidence.
-
+  description: "Limit the refactor to the intended structural improvement and directly necessary cleanup."
+  rationale: "Mixing unrelated cleanup or feature work makes behavior preservation and review scope ambiguous."
   exceptions:
-    - "Incidental cleanup directly adjacent to the refactor — renaming a variable in
-       a function being restructured, removing dead code uncovered by the change — is
-       acceptable when it is trivially safe and clearly part of the improvement."
-
+    - "Trivially safe cleanup uncovered in the changed unit is acceptable when it is inseparable from the improvement."
   examples:
-    - avoid:
-        code: |
-          # refactor goal: extract order validation into its own module
-          # actual diff: moved order validation, renamed 15 unrelated symbols,
-          #              reformatted the payments module, added speculative
-          #              OrderValidatorFactory for future extensibility
-      good:
-        code: |
-          # refactor goal: extract order validation into its own module
-          # actual diff: moved validation functions to order_validator.py,
-          #              updated the 3 call sites, added targeted tests for the extracted module
-      note: "The speculative factory and unrelated renames are separate decisions
-             with separate risk profiles. They do not belong in this diff."
-
-    - avoid:
-        code: |
-          // refactor: consolidate duplicate fetch logic
-          // also added: new caching layer, retry mechanism, and request deduplication
-          //             because "we were in the area"
-      good:
-        code: |
-          // refactor: consolidated 3 copies of the same fetch + error handling pattern
-          //           into one shared useFetch hook
-          // caching and retry are separate concerns — opened follow-up tasks for each
-      note: "Being in the area does not justify bundling unrelated improvements.
-             Each concern deserves its own reviewable scope and its own justification."
-
-
-- id: refactor-clarity-over-abstraction-01
-  type: convention
-  layer: task-types
-  scope:
-    path: "**/*"
-  prescription: should
-  weight: high
-  traits:
-    broad_scope: true
-
-  description: "Prefer simpler control flow, clearer naming, and cleaner boundaries. Introduce abstractions only when they make the code more coherent or reduce real duplication."
-
-  rationale: >
-    Refactoring toward abstraction without a concrete benefit produces code that is
-    harder to follow, harder to debug, and harder to modify than what it replaced.
-    The measure of a good refactor is whether the code becomes easier to reason about —
-    not whether it looks more architected.
-
-  exceptions:
-    - "A new abstraction is warranted when it names a real concept, removes meaningful
-       duplication, or makes a boundary that was implicit explicit. The abstraction must
-       serve the code, not demonstrate architectural knowledge."
-
-  examples:
-    - avoid:
-        code: |
-          // refactor: replaced a readable conditional with a strategy pattern
-          // original:
-          function getDiscount(user) {
-            if (user.isPremium) return 0.20;
-            if (user.isStudent) return 0.10;
-            return 0;
-          }
-          // refactored:
-          const strategies = {
-            premium: new PremiumDiscountStrategy(),
-            student: new StudentDiscountStrategy(),
-            default: new NullDiscountStrategy(),
-          };
-          function getDiscount(user) {
-            return strategies[user.type ?? 'default'].calculate();
-          }
-      good:
-        code: |
-          // clarity improvement: named the magic numbers
-          const PREMIUM_DISCOUNT = 0.20;
-          const STUDENT_DISCOUNT = 0.10;
-
-          function getDiscount(user: User): number {
-            if (user.isPremium) return PREMIUM_DISCOUNT;
-            if (user.isStudent) return STUDENT_DISCOUNT;
-            return 0;
-          }
-      note: "The strategy pattern adds three classes and an indirection layer to code
-             that was already clear. The named constants improve the original without
-             obscuring it."
-
-    - avoid:
-        code: |
-          # refactor: extracted a generic Pipeline[T] base class from two similar functions
-          # the two functions have similar structure but different semantics and are
-          # unlikely to share future behavior
-      good:
-        code: |
-          # refactor: renamed ambiguous variables and split the function at a natural
-          # responsibility boundary — no new abstraction required
-      note: "Structural similarity is not sufficient justification for a shared abstraction.
-             The abstraction must represent a real, stable shared concept."
-
-
-- id: refactor-improve-boundaries-01
-  type: architecture
-  layer: task-types
-  scope:
-    path: "**/*"
-  prescription: should
-  weight: high
-  traits:
-    broad_scope: true
-
-  description: "Separate entangled concerns, make interfaces intentional, and reduce hidden coupling where it meaningfully improves maintainability."
-
-  rationale: >
-    Entangled concerns are the most common source of structural friction: they make
-    units hard to test, changes expensive to scope, and behavior hard to reason about
-    locally. A refactor that cleanly separates concerns reduces this friction for every
-    future change in the area.
-
-  exceptions:
-    - "Co-location of related concerns is acceptable when separation would add structural
-       overhead without meaningful benefit to testability, changeability, or comprehension."
-
-  examples:
-    - avoid:
-        code: |
-          class UserService:
-              def register(self, data):
-                  # validate
-                  if not data.get('email') or '@' not in data['email']:
-                      raise ValueError('Invalid email')
-                  # persist
-                  user = User(**data)
-                  db.session.add(user)
-                  db.session.commit()
-                  # notify
-                  send_welcome_email(user.email)
-                  # audit
-                  audit_log.write(f'User registered: {user.id}')
-                  return user
-      good:
-        code: |
-          class UserService:
-              def register(self, data: RegistrationInput) -> User:
-                  validate_registration(data)          # raises on invalid input
-                  user = self.repo.create(data)        # persistence isolated
-                  self.events.emit('user.registered', user)  # notification + audit
-                  return user                          # caller gets the domain object
-      note: "The original mixes validation, persistence, notification, and audit in one
-             method. None is independently testable. The refactored version separates each
-             concern so it can be changed, tested, and understood in isolation."
-
-    - avoid:
-        code: |
-          // component directly accesses localStorage, calls fetch, and formats display output
-          function UserProfile({ userId }) {
-            const theme = localStorage.getItem('theme');
-            const [user, setUser] = useState(null);
-            useEffect(() => {
-              fetch(`/api/users/${userId}`)
-                .then(r => r.json())
-                .then(data => setUser({ ...data, name: data.name.toUpperCase() }));
-            }, [userId]);
-            return <div className={theme}>{user?.name}</div>;
-          }
-      good:
-        code: |
-          // component owns rendering only; data and formatting separated
-          function UserProfile({ userId }) {
-            const theme = useTheme();
-            const user = useUser(userId);          // fetch + state in hook
-            return <div className={theme}>{user ? formatDisplayName(user) : null}</div>;
-          }
-      note: "Storage access, fetch logic, and display formatting are three separate concerns
-             mixed in one render function. Separating them makes each independently testable
-             and the component easier to reason about locally."
-
-
-- id: refactor-preserve-repository-fit-01
-  type: convention
-  layer: task-types
-  scope:
-    path: "**/*"
-  prescription: should
-  weight: normal
-
-  description: "Respect local conventions during a refactor. Do not import a foreign architectural style into the area being improved."
-
-  rationale: >
-    A refactor that improves one dimension of code quality while introducing a foreign
-    style creates a different kind of friction. Future engineers must now hold two
-    mental models for the same area. Repository fit is part of what makes a refactor
-    a net improvement rather than a trade.
-
-  exceptions:
-    - "Deviating from local conventions is acceptable when the local convention is itself
-       the structural problem being addressed. The deviation should be scoped, documented,
-       and adopted consistently going forward rather than left as a local divergence."
-
-  examples:
-    - avoid:
-        code: |
-          # codebase uses procedural modules throughout
-          # refactor introduces a class hierarchy for one area
-          class OrderProcessorBase:
-              def process(self): raise NotImplementedError
-          class StandardOrderProcessor(OrderProcessorBase):
-              def process(self): ...
-      good:
-        code: |
-          # stay within the local procedural style — improve structure within that idiom
-          def process_standard_order(order: Order) -> Receipt: ...
-          def process_express_order(order: Order) -> Receipt: ...
-      note: "The class hierarchy may be architecturally interesting but it is foreign to
-             the repository's idiom. The improvement should work within the local style."
-
-    - avoid:
-        code: |
-          // codebase uses CommonJS throughout
-          // refactor converts one module to ESM because "it's the modern approach"
-          export const formatDate = (date) => date.toISOString().split('T')[0];
-      good:
-        code: |
-          // stay consistent with local module style
-          const formatDate = (date) => date.toISOString().split('T')[0];
-          module.exports = { formatDate };
-      note: "Module system migrations affect build tooling and every import site.
-             That is a project-level decision, not a local refactor."
-
+    - avoid: { code: "Restructure one boundary and rename unrelated APIs." }
+      good: { code: "Change the boundary and its affected callers only." }
+      note: "Keep the structural claim bounded and testable."
 
 - id: refactor-keep-verifiable-01
   type: constraint
   layer: task-types
-  scope:
-    path: "**/*"
+  scope: { path: "**/*" }
   prescription: should
   weight: high
-
-  description: "Keep refactors verifiable. Existing tests must pass; add targeted tests when structural change affects confidence in behavior preservation."
-
-  rationale: >
-    A refactor's safety claim — that behavior is preserved — must be backed by
-    evidence, not asserted by elegance. Existing tests that pass are the primary
-    evidence. Where structural change moves behavior in ways the existing tests do not
-    cover, targeted additions close that gap. Elegance is not a substitute for
-    a passing test suite.
-
+  description: "Keep behavior preservation verifiable with existing checks and targeted tests where structural change weakens confidence."
+  rationale: "Refactor safety requires evidence that observable behavior survived the structural movement."
   exceptions:
-    - "Mechanical refactors — variable renames, file moves with no logic change,
-       formatting — do not require new tests when existing coverage is sufficient
-       and the change is trivially verifiable."
-
+    - "Purely mechanical renames or moves need no new test when existing coverage makes equivalence clear."
   examples:
-    - avoid:
-        code: |
-          # refactor: extracted calculateTax() from OrderService into TaxCalculator
-          # no tests added — "the logic didn't change, just moved"
-          # existing tests call through OrderService and don't cover TaxCalculator directly
-      good:
-        code: |
-          # added direct tests for TaxCalculator after extraction
-          # the move changed the test surface — direct coverage closes the gap
-          def test_tax_calculator_applies_standard_rate(): ...
-          def test_tax_calculator_returns_zero_for_exempt_items(): ...
-          def test_tax_calculator_raises_on_negative_amount(): ...
-      note: "Moving logic into a new unit changes what the existing tests actually exercise.
-             Direct tests for the extracted unit are not ceremony — they are the verification
-             that the extraction preserved the behavior."
-
-    - avoid:
-        code: |
-          // refactor: reorganized state management into slices
-          // all existing tests pass
-          // but the reorganization changed how derived state is computed —
-          // no test covers the specific selector that was affected
-      good:
-        code: |
-          // added targeted selector tests for the affected derived state
-          it('computes total correctly after slice reorganization', () => {
-            const state = buildState({ items: mockItems });
-            expect(selectOrderTotal(state)).toBe(expectedTotal);
-          });
-      note: "Passing tests are necessary but not sufficient when the refactor touches
-             areas the existing suite does not exercise. Targeted additions fill the gap."
-
-
-- id: refactor-escalate-carefully-01
-  type: convention
-  layer: task-types
-  scope:
-    path: "**/*"
-  prescription: should
-  weight: high
-  traits:
-    broad_scope: true
-
-  description: "Prefer local refactors when the problem is local. Escalate to broader structural change only when a smaller refactor would remain confusing, fragile, or repeatedly costly."
-
-  rationale: >
-    Most structural problems are local and can be solved locally. Escalating to broad
-    restructuring when a narrow improvement would suffice adds risk, review burden, and
-    behavioral surface without proportionate benefit. The escalation must be justified
-    by the defect in the current structure — not by architectural ambition.
-
-  exceptions:
-    - "Broader restructuring is warranted when the structural problem is systemic — for
-       example, a cross-cutting concern entangled throughout multiple modules — and a
-       local fix would address the symptom without reducing the friction for future work.
-       The rationale must be visible in the change."
-
-  examples:
-    - avoid:
-        code: |
-          # problem: one module has a confusing mix of two responsibilities
-          # escalation: redesigned the entire service layer architecture across 12 modules
-          #             because "the underlying architecture was the real problem"
-      good:
-        code: |
-          # problem: one module has a confusing mix of two responsibilities
-          # refactor: split the module into two focused units at the natural boundary
-          # note: if the pattern recurs elsewhere, a broader refactor can be scoped separately
-      note: "The broader architectural observation may be valid but it belongs in its own
-             scoped effort with its own justification. This refactor solves the local problem."
-
-    - avoid:
-        code: |
-          // problem: one utility function has grown to 80 lines with nested conditionals
-          // escalation: rewrote the entire utilities layer with a plugin architecture
-      good:
-        code: |
-          // refactor: broke the 80-line function into 4 focused helpers at natural boundaries
-          // each helper is independently readable and testable
-          function validateInput(data) { ... }
-          function normalizeFields(data) { ... }
-          function applyDefaults(data) { ... }
-          function buildResult(data) { ... }
-      note: "The function needed decomposition, not an architecture. Four focused helpers
-             solve the readability problem without introducing structural overhead."
+    - avoid: { code: "Move stateful logic across modules without exercising its contract." }
+      good: { code: "Run existing checks and add a focused boundary test where needed." }
+      note: "Match new evidence to the risk introduced by structural movement."

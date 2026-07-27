@@ -1,449 +1,66 @@
-# task-types/feature.yaml
-# Directives for feature implementation and material behavioral extension.
-# Applied when operation: create | modify with meaningful new capability.
-# Refines but does not override core/ directives.
+# Feature-specific guidance. Do not repeat core implementation preferences.
 
 - id: feature-start-from-requested-behavior-01
   type: convention
   layer: task-types
-  scope:
-    path: "**/*"
+  scope: { path: "**/*" }
   prescription: should
   weight: high
-
-  description: "Implement the feature around the actual behavior the user or system needs, not around architecture."
-
-  rationale: >
-    Feature work that starts from structure rather than behavior tends to produce
-    implementations that are architecturally interesting but miss the real task.
-    The requested outcome is the anchor; structure serves it, not the reverse.
-
+  description: "Shape the feature around the requested observable behavior and explicit constraints, not an architecture invented ahead of need."
+  rationale: "Feature adoption depends on solving the requested behavior with proportionate structure."
   exceptions:
-    - "Upfront structural clarification is warranted when the feature touches a shared
-       boundary, a public interface, or a critical state machine where getting the shape
-       wrong would require a disruptive rewrite."
-
+    - "Clarify structure first when a shared public boundary or critical state machine would make the wrong shape costly to reverse."
   examples:
-    - avoid:
-        code: |
-          // task: show a badge count on the nav icon
-          // actual work: designed a generic NotificationBus, EventRegistry,
-          //              and BadgeRenderer abstraction before writing any visible behavior
-      good:
-        code: |
-          // task: show a badge count on the nav icon
-          // actual work: read unread count from existing store, render badge in NavIcon component
-          const unreadCount = useNotificationStore((s) => s.unreadCount);
-          return <NavIcon badge={unreadCount > 0 ? unreadCount : undefined} />;
-      note: "The abstraction-first approach delays working behavior and often produces structure
-             the feature never actually needs. Solve the visible outcome first."
-
-    - avoid:
-        code: |
-          # task: send a welcome email on user registration
-          # actual work: built a flexible multi-channel notification pipeline
-          #              before the feature needs anything beyond email
-      good:
-        code: |
-          # task: send a welcome email on user registration
-          def after_registration(user):
-              send_welcome_email(user.email, user.name)
-      note: "Speculative flexibility that does not exist as a real requirement is
-             indistinguishable from scope creep at review time."
-
+    - avoid: { code: "Build a generic plugin system for one requested option." }
+      good: { code: "Add the requested option at the existing extension point." }
+      note: "Let concrete behavior earn structure."
 
 - id: feature-fit-existing-system-01
   type: constraint
   layer: task-types
-  scope:
-    path: "**/*"
+  scope: { path: "**/*" }
   prescription: must
   weight: critical
-
-  description: "Make the feature feel native to the repository. Follow local conventions and extend existing patterns when they are sound."
-
-  rationale: >
-    A feature that works but feels foreign increases the maintenance burden for every
-    engineer who touches that area afterward. Repository fit is not aesthetic preference —
-    it is a direct cost to future changeability and comprehension.
-
+  description: "Integrate the feature through sound existing repository boundaries and conventions."
+  rationale: "A feature that behaves correctly but bypasses established ownership or extension points raises long-term adoption cost."
   exceptions:
-    - "Introducing a new pattern is acceptable when the existing pattern is demonstrably
-       unsound for the feature's requirements, and the deviation is scoped, documented,
-       and adopted consistently rather than left as a one-off divergence."
-
+    - "Introduce a new pattern only when the existing boundary cannot satisfy the requirement safely, and make the scoped deviation explicit."
   examples:
-    - avoid:
-        code: |
-          // codebase uses Zustand slices throughout — new feature introduces Redux Toolkit
-          import { createSlice } from '@reduxjs/toolkit';
-          export const cartSlice = createSlice({ name: 'cart', ... });
-      good:
-        code: |
-          // follow existing Zustand slice pattern
-          export const cartSlice: StateSlice<CartState> = (set, get) => ({
-            items: [],
-            addItem: (item) => set((s) => ({ items: [...s.items, item] })),
-          });
-      note: "Introducing a second state management library for one feature creates two
-             mental models. Extend the existing pattern unless it is genuinely inadequate."
-
-    - avoid:
-        code: |
-          # codebase uses class-based views — new feature adds a standalone FastAPI router
-          # as a side-by-side subsystem with its own routing conventions
-      good:
-        code: |
-          # add the new endpoint following the existing class-based view and URL config pattern
-      note: "A parallel subsystem for one feature signals that the feature was implemented
-             in isolation from the repository, not fitted into it."
-
-
-- id: feature-earn-your-structure-01
-  type: convention
-  layer: task-types
-  scope:
-    path: "**/*"
-  prescription: should
-  weight: high
-  traits:
-    broad_scope: true
-
-  description: "Give the implementation enough structure to remain clear and maintainable, but no more."
-
-  rationale: >
-    Over-designing a feature front-loads complexity that may never be needed and
-    makes the initial implementation harder to review, test, and change. Let the
-    structure reflect the actual present shape of the problem.
-
-  exceptions:
-    - "Additional structure is earned when the feature has meaningful internal complexity,
-       multiple distinct responsibilities, or clear near-term extension pressure backed
-       by real product requirements."
-
-  examples:
-    - avoid:
-        code: |
-          // task: render a user avatar with initials fallback
-          // structure introduced: AvatarProvider, AvatarStrategy, AvatarRendererFactory,
-          //                       InitialsFallbackStrategy, ImageLoadStrategy
-      good:
-        code: |
-          function Avatar({ user }: { user: User }) {
-            if (user.avatarUrl) {
-              return <img src={user.avatarUrl} alt={user.name} />;
-            }
-            return <span className="avatar-initials">{getInitials(user.name)}</span>;
-          }
-      note: "The strategy pattern anticipates variation that does not yet exist.
-             A single component with a conditional is correct, clear, and proportionate."
-
-    - avoid:
-        code: |
-          # task: apply a 10% discount to orders over $100
-          # structure introduced: DiscountEngine, DiscountRule, RuleEvaluationContext,
-          #                       OrderDiscountPipeline
-      good:
-        code: |
-          def apply_discount(order: Order) -> Decimal:
-              if order.subtotal >= Decimal('100.00'):
-                  return order.subtotal * Decimal('0.90')
-              return order.subtotal
-      note: "A rules engine for one rule is premature. Extract only when a second
-             real discount rule appears and the shared concept is stable."
-
-
-- id: feature-keep-responsibilities-clear-01
-  type: architecture
-  layer: task-types
-  scope:
-    path: "**/*"
-  prescription: should
-  weight: high
-  traits:
-    broad_scope: true
-
-  description: "Keep domain logic, transport, rendering, persistence, and framework glue separated where the distinction matters."
-
-  rationale: >
-    Feature work frequently introduces new state, new I/O, and new domain behavior
-    simultaneously. Mixing them produces units that cannot be tested in isolation,
-    that accumulate unrelated reasons to change, and that make data flow hard to follow.
-
-  exceptions:
-    - "Co-location of related concerns is acceptable in small, self-contained features
-       where separation would add structural overhead with no meaningful testing or
-       maintainability benefit."
-
-  examples:
-    - avoid:
-        code: |
-          async function CheckoutButton({ cartId }) {
-            const [loading, setLoading] = useState(false);
-            async function handleClick() {
-              setLoading(true);
-              const cart = await fetch(`/api/cart/${cartId}`).then(r => r.json());
-              const total = cart.items.reduce((s, i) => s + i.price * i.qty, 0);
-              if (total < 10) { alert('Minimum order is $10'); setLoading(false); return; }
-              await fetch('/api/orders', { method: 'POST', body: JSON.stringify({ cartId }) });
-              setLoading(false);
-              window.location.href = '/confirmation';
-            }
-            return <button onClick={handleClick}>{loading ? 'Processing...' : 'Checkout'}</button>;
-          }
-      good:
-        code: |
-          // domain logic in useCheckout hook, component owns only rendering and interaction
-          async function CheckoutButton({ cartId }) {
-            const { checkout, loading, error } = useCheckout(cartId);
-            return (
-              <button onClick={checkout} disabled={loading}>
-                {loading ? 'Processing...' : 'Checkout'}
-              </button>
-            );
-          }
-      note: "The original mixes fetch, business validation, side effects, and navigation
-             in a render function. None of it is independently testable or reusable."
-
-    - avoid:
-        code: |
-          # repository method that enforces business rules and formats an API response
-          def create_order(data):
-              if data['total'] < 10:
-                  return {'error': 'Minimum order is $10', 'status': 400}
-              order = db.insert('orders', data)
-              return {'data': {'id': order.id}, 'status': 201}
-      good:
-        code: |
-          # domain layer: enforce rule, return domain object
-          def create_order(data: OrderInput) -> Order:
-              if data.total < Decimal('10.00'):
-                  raise MinimumOrderError(data.total)
-              return db.insert('orders', data)
-      note: "HTTP shape and status codes are transport concerns.
-             A repository method that returns them cannot be reused outside the HTTP layer."
-
+    - avoid: { code: "Add a parallel persistence path beside the repository abstraction." }
+      good: { code: "Extend the repository's existing persistence boundary." }
+      note: "Repository fit is part of feature correctness."
 
 - id: feature-careful-at-boundaries-01
   type: constraint
   layer: task-types
-  scope:
-    path: "**/*"
+  scope: { path: "**/*" }
   prescription: must
   weight: critical
   rccl_immune: true
   traits:
     safety_critical: true
-
-  description: "Treat external inputs, state transitions, and side effects deliberately. Do not let happy-path implementation hide boundary fragility."
-
-  rationale: >
-    Feature work is where new boundary surfaces are most often introduced. An unvalidated
-    assumption at a new boundary does not stay local — it propagates into every call site
-    that depends on the feature. Fragility introduced during feature work is the most
-    expensive kind to fix because it is rarely visible until production.
-
+  description: "Handle feature inputs, state transitions, and side effects deliberately rather than implementing only the happy path."
+  rationale: "New behavior creates new failure surfaces; boundary behavior must be part of the feature design."
   exceptions:
-    - "Lightweight boundary handling is proportionate for genuinely low-risk, internal-only,
-       fully-typed surfaces with no external input. Document the assumption explicitly."
-
+    - "Boundary handling may be lighter for a genuinely internal, low-risk surface whose assumptions are explicit."
   examples:
-    - avoid:
-        code: |
-          async function processWebhook(req: Request) {
-            const { event, data } = req.body;
-            await handleEvent(event, data);   // assumes body shape, assumes event is known
-          }
-      good:
-        code: |
-          async function processWebhook(req: Request) {
-            const parsed = WebhookPayloadSchema.safeParse(req.body);
-            if (!parsed.success) {
-              logger.warn('Invalid webhook payload', { error: parsed.error });
-              return res.status(400).json({ error: 'Invalid payload' });
-            }
-            const { event, data } = parsed.data;
-            if (!SUPPORTED_EVENTS.has(event)) {
-              return res.status(422).json({ error: `Unsupported event: ${event}` });
-            }
-            await handleEvent(event, data);
-          }
-      note: "Webhooks arrive from an external system. Every assumption about shape or content
-             is a production incident waiting to happen. Validate explicitly at the boundary."
-
-    - avoid:
-        code: |
-          def transfer_funds(from_account, to_account, amount):
-              accounts[from_account]['balance'] -= amount
-              accounts[to_account]['balance'] += amount
-      good:
-        code: |
-          def transfer_funds(from_id: int, to_id: int, amount: Decimal) -> None:
-              if amount <= 0:
-                  raise ValueError(f'Transfer amount must be positive, got {amount}')
-              from_acc = get_account_or_raise(from_id)
-              if from_acc.balance < amount:
-                  raise InsufficientFundsError(from_id, amount)
-              with db.transaction():
-                  debit(from_id, amount)
-                  credit(to_id, amount)
-      note: "State transitions on financial data without validation and atomicity guarantees
-             silently corrupt state. rccl_immune ensures no observed local shortcut overrides this."
-
-
-- id: feature-preserve-change-proportionality-01
-  type: constraint
-  layer: task-types
-  scope:
-    path: "**/*"
-  prescription: should
-  weight: critical
-
-  description: "Keep the feature's change surface proportionate to what was requested. Do not bundle unrelated refactors into feature delivery."
-
-  rationale: >
-    Feature branches that also reorganize unrelated areas make review harder, increase
-    regression risk, and hide the actual feature change inside a large diff. Each concern
-    deserves its own reviewable surface.
-
-  exceptions:
-    - "Refactoring is appropriate within a feature branch when it is directly necessary
-       to implement the feature safely — for example, breaking a circular dependency that
-       blocks the feature's architecture. The refactor should be a clearly separated commit."
-
-  examples:
-    - avoid:
-        code: |
-          # task: add sorting to the user list
-          # diff also contains: renamed 8 unrelated components, moved 3 utility files,
-          #                     reformatted the entire users/ directory
-      good:
-        code: |
-          # task: add sorting to the user list
-          # diff contains: added sortKey state, updated fetch params, updated UserList props
-      note: "The cleanup may be valid but it buries the feature, complicates review,
-             and introduces risk outside the task scope. Separate commits are the right tool."
-
-    - avoid:
-        code: |
-          // feature requires a new API endpoint
-          // also rewrote the existing router to use a new framework because it felt like the right time
-      good:
-        code: |
-          // add the new endpoint following the existing router pattern
-          // open a separate task for the router migration if it is genuinely needed
-      note: "Infrastructure migrations triggered by proximity to feature work, not by necessity,
-             mix two decisions that should each be reviewed on their own merits."
-
-
-- id: feature-easy-to-evolve-01
-  type: convention
-  layer: task-types
-  scope:
-    path: "**/*"
-  prescription: should
-  weight: normal
-  traits:
-    broad_scope: true
-
-  description: "Choose names, interfaces, and boundaries that support near-term evolution without premature generalization."
-
-  rationale: >
-    A feature implementation that is brittle to the next adjacent change imposes a
-    hidden cost on the team. The goal is not to anticipate all future needs — it is
-    to avoid choices that make the obvious next step unnecessarily hard.
-
-  exceptions:
-    - "Stability over evolvability is appropriate for narrow, terminal features that are
-       unlikely to change and where the cost of over-designing is higher than the cost
-       of rewriting if requirements change."
-
-  examples:
-    - avoid:
-        code: |
-          // name implies a single hardcoded case, but the feature will clearly need more
-          function applyChristmasDiscount(order: Order): Order { ... }
-      good:
-        code: |
-          function applyDiscount(order: Order, discount: Discount): Order { ... }
-      note: "The holiday-specific name forecloses reuse for the next discount type.
-             A name that reflects the real concept costs nothing and opens the obvious door."
-
-    - avoid:
-        code: |
-          # status stored as a boolean — already known to need pending/active/suspended/closed
-          is_active = models.BooleanField(default=True)
-      good:
-        code: |
-          class AccountStatus(str, Enum):
-              ACTIVE = 'active'
-              SUSPENDED = 'suspended'
-              CLOSED = 'closed'
-          status = models.CharField(choices=AccountStatus.choices, default=AccountStatus.ACTIVE)
-      note: "A boolean status field that already has known non-binary states traps future
-             work in a migration. The enum costs almost nothing now and avoids a schema change later."
-
+    - avoid: { code: "Persist state before validating the requested transition." }
+      good: { code: "Validate the transition, then perform the side effect." }
+      note: "Make failure ordering intentional."
 
 - id: feature-include-supporting-work-01
   type: constraint
   layer: task-types
-  scope:
-    path: "**/*"
+  scope: { path: "**/*" }
   prescription: should
   weight: high
   traits:
     safety_critical: true
-
-  description: "Include validation, error handling, test coverage, and state handling appropriate to the feature's importance and risk."
-
-  rationale: >
-    A feature that works on the happy path but ignores validation, failure modes,
-    and test coverage is incomplete — it transfers risk to production and to the
-    next engineer who touches the area. Supporting work is part of feature delivery,
-    not a separate optional task.
-
+  description: "Include tests, validation, error handling, and state handling proportionate to the feature's risk."
+  rationale: "Supporting work is part of a usable feature, not optional polish after implementation."
   exceptions:
-    - "Supporting work can be deferred explicitly when the feature is a deliberately
-       scoped spike or prototype, and the deferral is documented as a follow-up task
-       rather than left implicit."
-
+    - "A deliberately scoped prototype may defer supporting work only through an explicit follow-up."
   examples:
-    - avoid:
-        code: |
-          // new payment feature: happy path only, no validation, no error handling,
-          // no tests, payment failures silently swallowed
-          async function createPayment(amount: number) {
-            const result = await stripe.charges.create({ amount, currency: 'usd' });
-            return result.id;
-          }
-      good:
-        code: |
-          async function createPayment(amount: number, idempotencyKey: string): Promise<string> {
-            if (amount <= 0) throw new ValidationError('Payment amount must be positive');
-            try {
-              const result = await stripe.charges.create(
-                { amount, currency: 'usd' },
-                { idempotencyKey }
-              );
-              return result.id;
-            } catch (err) {
-              if (err instanceof Stripe.errors.StripeCardError) {
-                throw new PaymentDeclinedError(err.message);
-              }
-              throw new PaymentError('Unexpected payment failure', { cause: err });
-            }
-          }
-      note: "Payment boundaries require explicit validation, typed error handling, and
-             idempotency. Leaving these out is not a scope reduction — it is a correctness gap."
-
-    - avoid:
-        code: |
-          # feature ships with no tests because "it's just a simple form"
-      good:
-        code: |
-          # at minimum: test the validation logic, the success path, and the main failure path
-          def test_registration_rejects_duplicate_email(): ...
-          def test_registration_sends_welcome_email(): ...
-          def test_registration_returns_422_on_invalid_input(): ...
-      note: "Test coverage proportionate to risk is part of feature completeness.
-             The simplicity of a feature does not reduce the value of knowing it works correctly."
+    - avoid: { code: "Add a new command without error-path or behavior coverage." }
+      good: { code: "Cover the command's success and task-relevant failure behavior." }
+      note: "Scale supporting evidence with risk."

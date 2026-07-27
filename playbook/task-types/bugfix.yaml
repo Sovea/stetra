@@ -1,430 +1,69 @@
-# task-types/bugfix.yaml
-# Directives for correcting incorrect behavior, resolving regressions, and addressing defects.
-# Applied when operation: bugfix | modify targeting a defect.
-# Refines but does not override core/ directives.
+# Bugfix-specific guidance. Core already owns clarity, repository fit, and scope.
 
 - id: bugfix-fix-the-real-problem-01
   type: constraint
   layer: task-types
-  scope:
-    path: "**/*"
+  scope: { path: "**/*" }
   prescription: must
   weight: critical
   traits:
     safety_critical: true
-
-  description: "Fix the actual defect, not just its visible symptom. Confirm the real failure mode before changing structure."
-
-  rationale: >
-    Symptom patches create the illusion of a fix while leaving the underlying defect
-    intact. The original failure resurfaces — often in a different form, in a different
-    location, and at a worse time. A root-cause fix is more work upfront but eliminates
-    the problem rather than relocating it.
-
+  description: "Confirm and fix the actual defect rather than changing only its visible symptom."
+  rationale: "A plausible patch that leaves the failure mechanism intact creates repeat corrections and false confidence."
   exceptions:
-    - "A targeted symptom patch is acceptable as a short-term hotfix when the root cause
-       requires significant investigation and the symptom is causing immediate production
-       impact. The patch must be documented as temporary with a follow-up task created."
-
+    - "A documented temporary symptom patch is acceptable only for an active incident with an explicit root-cause follow-up."
   examples:
-    - avoid:
-        code: |
-          // bug: NaN appearing in price calculations
-          // fix applied: added display-layer guard
-          function formatPrice(price) {
-            if (isNaN(price)) return '$0.00';   // masks the real problem
-            return `$${price.toFixed(2)}`;
-          }
-      good:
-        code: |
-          // root cause: discount calculation returns NaN when coupon.value is undefined
-          function applyDiscount(price: number, coupon: Coupon): number {
-            if (coupon.value === undefined || coupon.value === null) {
-              throw new Error(`Invalid coupon: missing value for coupon ${coupon.id}`);
-            }
-            return price - coupon.value;
-          }
-      note: "The display guard silences the symptom but NaN continues to propagate through
-             all downstream calculations. Every call site inherits the latent defect."
-
-    - avoid:
-        code: |
-          # bug: user occasionally logged out mid-session
-          # fix applied: increased session TTL from 1h to 24h
-      good:
-        code: |
-          # root cause: session renewal was not firing on API calls, only on page loads
-          # fix: call renew_session() in the API request middleware, not just in the page handler
-      note: "Increasing TTL reduces the frequency of the symptom but does not fix the renewal logic.
-             The bug still exists — it just takes longer to surface."
-
+    - avoid: { code: "Catch and ignore the error without correcting the invalid state." }
+      good: { code: "Correct the state transition that produces the error." }
+      note: "Tie the implementation to the demonstrated failure mode."
 
 - id: bugfix-narrow-change-surface-01
   type: constraint
   layer: task-types
-  scope:
-    path: "**/*"
+  scope: { path: "**/*" }
   prescription: must
   weight: critical
-
-  description: "Make the smallest reasonable change that fully resolves the defect. Do not expand scope for style, cleanup, or architecture."
-
-  rationale: >
-    A bugfix diff that is hard to review is a bugfix that is hard to trust. Every line
-    changed beyond the fix is an unreviewed risk. Narrow changes are easier to verify,
-    easier to revert, and less likely to introduce new failures outside the fix area.
-
+  description: "Keep a bugfix bounded to the defect and its necessary support; do not mix in unrelated cleanup or redesign."
+  rationale: "A focused defect change is easier to verify and less likely to introduce adjacent regressions."
   exceptions:
-    - "A broader change is warranted when a narrow fix would be structurally misleading,
-       immediately fragile, or would require a follow-up change in the same area within
-       the same release cycle. The expanded scope must be directly justified by the defect."
-
+    - "Broaden the change only when the defect demonstrates that a narrow patch would be unsafe or immediately fragile."
   examples:
-    - avoid:
-        code: |
-          # bug: incorrect date comparison in billing cycle check
-          # diff also contains: renamed 6 variables, reformatted the billing module,
-          #                     extracted a DateUtils helper that was not required for the fix
-      good:
-        code: |
-          # bug: incorrect date comparison in billing cycle check
-          # diff contains: changed `date < cycleEnd` to `date <= cycleEnd` in one location
-          # added one regression test for the boundary condition
-      note: "The cleanup may be valid but it buries the fix in noise, makes the diff
-             harder to review, and introduces risk outside the intended change surface."
-
-    - avoid:
-        code: |
-          // bug: missing null check on user.profile access
-          // fix: rewrote the entire user data access layer to use Optional chaining throughout
-      good:
-        code: |
-          // fix: added null check at the specific access site where the crash occurs
-          const displayName = user.profile?.name ?? 'Anonymous';
-      note: "A codebase-wide optional chaining pass may be worthwhile but it is not this fix.
-             Scope it separately so it can be reviewed on its own merits."
-
+    - avoid: { code: "Fix pagination while reorganizing unrelated modules." }
+      good: { code: "Correct the pagination calculation and update its regression test." }
+      note: "Let a structural cause expand scope only as far as the defect requires."
 
 - id: bugfix-preserve-adjacent-behavior-01
   type: constraint
   layer: task-types
-  scope:
-    path: "**/*"
+  scope: { path: "**/*" }
   prescription: should
   weight: critical
   rccl_immune: true
   traits:
     safety_critical: true
     compatibility_sensitive: true
-
-  description: "Correct the defect without destabilizing behavior outside the bug surface. Treat regressions introduced by the fix as part of the failure."
-
-  rationale: >
-    A fix that introduces a regression is not a fix — it is a trade. Shared utilities,
-    common abstractions, and public interfaces are especially dangerous to change during
-    a bugfix because their blast radius extends beyond the immediate area. The stability
-    of adjacent behavior is a correctness requirement, not a secondary concern.
-
+  description: "Correct the defect without changing adjacent behavior that is outside the demonstrated bug surface."
+  rationale: "A fix that introduces a regression has moved rather than resolved the failure."
   exceptions:
-    - "Changing shared code is acceptable when the defect is located in the shared code
-       itself. In that case, every call site must be audited as part of the fix."
-
+    - "When shared code is the defect source, audit the affected consumers and make any intended behavior change explicit."
   examples:
-    - avoid:
-        code: |
-          // bug: formatCurrency() drops decimals for whole-number amounts
-          // fix applied: changed toFixed(0) to toFixed(2) throughout the shared utility
-          // side effect: broke invoice PDF generation which intentionally used no decimals
-          function formatCurrency(amount: number): string {
-            return `$${amount.toFixed(2)}`;  // changed globally without auditing call sites
-          }
-      good:
-        code: |
-          // fix: pass decimal precision as a parameter, defaulting to 2
-          // all existing call sites that passed no argument continue to work as before
-          function formatCurrency(amount: number, decimals = 2): string {
-            return `$${amount.toFixed(decimals)}`;
-          }
-      note: "Changing a shared utility without auditing call sites transfers the bug
-             surface to every consumer. The backward-compatible default preserves existing behavior."
-
-    - avoid:
-        code: |
-          # bug: in one endpoint, status code 200 is returned instead of 201 on creation
-          # fix: changed the base response handler to always return 201
-      good:
-        code: |
-          # fix: override the status code at the specific endpoint, not in the base handler
-          return JsonResponse(serializer.data, status=status.HTTP_201_CREATED)
-      note: "Fixing the base handler changes every endpoint that inherits it.
-             The targeted override corrects the defect without touching adjacent behavior."
-
-
-- id: bugfix-make-assumptions-visible-01
-  type: convention
-  layer: task-types
-  scope:
-    path: "**/*"
-  prescription: should
-  weight: high
-
-  description: "Make important assumptions visible in the fix. Handle edge cases and boundary conditions directly related to the defect."
-
-  rationale: >
-    Bugs frequently originate in implicit assumptions that held in one context and
-    broke in another. A fix that corrects the behavior without surfacing the assumption
-    leaves the next engineer — or the next edge case — to rediscover the same failure.
-    Making the assumption explicit is part of the fix.
-
-  exceptions:
-    - "Brief, obvious fixes with self-evident assumptions do not require additional
-       documentation. Reserve explicit assumption notes for non-obvious invariants,
-       concurrency constraints, and boundary conditions that are not clear from the code."
-
-  examples:
-    - avoid:
-        code: |
-          def calculate_tax(price, rate):
-              return price * rate   # original; bug: crashes when rate is None
-          
-          # fix applied:
-          def calculate_tax(price, rate):
-              return price * (rate or 0)   # silently converts None to 0 with no explanation
-      good:
-        code: |
-          def calculate_tax(price: Decimal, rate: Decimal | None) -> Decimal:
-              # rate is None for tax-exempt items — correct behavior is zero tax, not an error
-              if rate is None:
-                  return Decimal('0.00')
-              return price * rate
-      note: "The silent `or 0` hides the business rule. The explicit check makes the assumption
-             — tax-exempt items have no rate — visible to the next engineer reading this code."
-
-    - avoid:
-        code: |
-          // bug: race condition when two requests update the same record simultaneously
-          // fix: added a try/catch around the update
-          try {
-            await db.update(record);
-          } catch {
-            // ignore
-          }
-      good:
-        code: |
-          // fix: use optimistic locking — include the current version in the update predicate
-          // if another request updated first, the WHERE clause matches zero rows and we retry
-          const updated = await db.update(record).where({ version: record.version });
-          if (updated.count === 0) throw new ConflictError('Record was modified concurrently');
-      note: "Swallowing the error hides the race condition rather than handling it.
-             The optimistic lock makes the concurrency assumption explicit and enforces it."
-
-
-- id: bugfix-prefer-clarity-over-cleverness-01
-  type: convention
-  layer: task-types
-  scope:
-    path: "**/*"
-  prescription: should
-  weight: high
-
-  description: "Prefer direct, legible fixes over clever or terse patches. Keep control flow and intent easy to follow."
-
-  rationale: >
-    A clever fix that is hard to read will be misunderstood, incorrectly modified,
-    or reverted. Legibility is especially important in bugfixes because the fix itself
-    is evidence of what the correct behavior is — future engineers will read it as
-    documentation of the intended invariant.
-
-  exceptions:
-    - "A less explicit form is acceptable when it is already the clear and conventional
-       local style and a more verbose fix would introduce unnecessary noise without
-       improving comprehension."
-
-  examples:
-    - avoid:
-        code: |
-          // bug: filter was including archived items
-          // clever fix:
-          const visible = items.filter(Boolean).filter(({s}) => ~['active','pending'].indexOf(s));
-      good:
-        code: |
-          const visible = items.filter(
-            (item) => item !== null && (item.status === 'active' || item.status === 'pending')
-          );
-      note: "The tilde-indexOf trick and destructured single-letter params obscure the intent.
-             The explicit version is immediately readable and correctly documents the invariant."
-
-    - avoid:
-        code: |
-          # bug: division by zero when sample set is empty
-          # fix: one-liner with implicit fallback
-          average = sum(values) / (len(values) or 1)
-      good:
-        code: |
-          # an empty sample set has no meaningful average — return None rather than a misleading 0
-          def average(values: list[float]) -> float | None:
-              if not values:
-                  return None
-              return sum(values) / len(values)
-      note: "The `or 1` trick silently returns 0.0 for an empty list, which is a wrong answer
-             presented as a correct one. The explicit guard returns None and documents why."
-
-
-- id: bugfix-respect-repository-reality-01
-  type: convention
-  layer: task-types
-  scope:
-    path: "**/*"
-  prescription: should
-  weight: normal
-
-  description: "Match local conventions in the fix. Do not introduce foreign patterns or a new architectural style during a local repair."
-
-  rationale: >
-    A fix that works but feels foreign increases the cost of maintaining the surrounding
-    area. It also signals to future readers that the conventions in this area are
-    negotiable, which compounds over time.
-
-  exceptions:
-    - "Deviating from local convention is acceptable when the local convention is itself
-       the cause of the defect, or when following it would make the fix structurally unsound."
-
-  examples:
-    - avoid:
-        code: |
-          # rest of module uses procedural helpers — fix introduces a class hierarchy
-          class NullSafeUserResolver:
-              def resolve(self, user_id: int) -> User | None:
-                  return db.find(User, user_id)
-      good:
-        code: |
-          # follow the local helper function pattern
-          def find_user_or_none(user_id: int) -> User | None:
-              return db.find(User, user_id)
-      note: "A class introduced for a single bugfix creates an architectural divergence
-             the surrounding code did not ask for and future maintainers must now navigate."
-
-    - avoid:
-        code: |
-          // codebase uses callbacks throughout — fix rewrites the affected function with async/await
-          async function loadUser(id) {
-            const user = await db.findUser(id);
-            return user;
-          }
-      good:
-        code: |
-          // fix the callback logic; leave the async style migration as a separate task
-          function loadUser(id, callback) {
-            db.findUser(id, (err, user) => {
-              if (err) return callback(new UserLoadError(id, err));
-              callback(null, user);
-            });
-          }
-      note: "An async/await migration may be worthwhile but mixing styles during a bugfix
-             creates an inconsistent area and conflates two separate decisions in the same diff."
-
+    - avoid: { code: "Change the shared default while fixing one caller." }
+      good: { code: "Preserve the default and correct the defective caller path." }
+      note: "Treat compatibility impact as part of bug verification."
 
 - id: bugfix-add-supporting-validation-01
   type: constraint
   layer: task-types
-  scope:
-    path: "**/*"
+  scope: { path: "**/*" }
   prescription: should
   weight: high
   traits:
     safety_critical: true
-
-  description: "Include a targeted test or test update that captures the corrected behavior. Do not leave a fixed defect undetected by the test suite."
-
-  rationale: >
-    A bugfix without a regression test is an assertion that the defect will not reappear —
-    made without any mechanism to enforce it. The test is part of the fix: it captures
-    the corrected invariant and makes any future regression immediately visible.
-
+  description: "Add or update a targeted test that fails for the defect and protects the corrected behavior."
+  rationale: "A regression test turns the diagnosed failure mode into durable, inspectable evidence."
   exceptions:
-    - "A test can be deferred when the fix is a hotfix under active incident conditions,
-       provided the test is added in the immediate follow-up before the fix is considered closed."
-
+    - "During an active incident, the test may follow immediately after mitigation but before the fix is considered complete."
   examples:
-    - avoid:
-        code: |
-          # bug fixed: pagination off-by-one returning duplicate items on page boundary
-          # no test added — "it was a one-line fix, it's obviously correct"
-      good:
-        code: |
-          def test_pagination_does_not_duplicate_items_at_page_boundary():
-              items = [Item(id=i) for i in range(10)]
-              page_1 = paginate(items, page=1, size=5)
-              page_2 = paginate(items, page=2, size=5)
-              assert set(page_1.ids).isdisjoint(set(page_2.ids)), (
-                  "Items must not appear on both pages"
-              )
-      note: "The fix is one line. The test is the evidence that the fix is correct and
-             that no future change can reintroduce the same boundary error silently."
-
-    - avoid:
-        code: |
-          // bug fixed: null pointer when user has no subscription
-          // test suite untouched
-      good:
-        code: |
-          it('returns free tier defaults when user has no subscription', () => {
-            const user = buildUser({ subscription: null });
-            const plan = getUserPlan(user);
-            expect(plan.tier).toBe('free');
-            expect(plan.limits).toEqual(FREE_TIER_LIMITS);
-          });
-      note: "The null case was not in the test suite — which is why it reached production.
-             The regression test closes that gap and documents the intended behavior explicitly."
-
-
-- id: bugfix-escalate-structure-only-when-necessary-01
-  type: convention
-  layer: task-types
-  scope:
-    path: "**/*"
-  prescription: should
-  weight: high
-  traits:
-    broad_scope: true
-
-  description: "Prefer local fixes when the bug is local. Escalate to structural change only when a narrow fix would be fragile, misleading, or repeatedly error-prone."
-
-  rationale: >
-    Most bugs do not require redesign — they require a precise correction. Using a bug
-    as an opportunity for broader restructuring conflates two decisions that have
-    different risk profiles, different review requirements, and different justifications.
-    Structural changes that are not justified by the defect add risk without adding
-    correctness.
-
-  exceptions:
-    - "Structural escalation is warranted when the defect is a direct symptom of a
-       structural flaw — for example, a missing abstraction that causes the same class
-       of bug to appear repeatedly across multiple locations. The escalation must be
-       tightly scoped to what the defect requires."
-
-  examples:
-    - avoid:
-        code: |
-          # bug: one validation function missing a null check
-          # escalation: refactored the entire validation layer into a new ValidatorChain
-          #             architecture because "the validation approach was fragile"
-      good:
-        code: |
-          # fix: added the missing null check in the one function where it was absent
-          # note: if this class of null check is missing broadly, open a separate audit task
-      note: "The structural observation may be correct, but it belongs in a separate task
-             with its own justification, scope, and review. The bugfix branch is not the place."
-
-    - avoid:
-        code: |
-          // bug: error message missing in one form validation path
-          // escalation: rewrote all form error handling to use a centralized error registry
-      good:
-        code: |
-          // fix: returned the missing error message from the specific validation branch
-          if (!isValidEmail(value)) {
-            return { valid: false, message: 'Please enter a valid email address.' };
-          }
-      note: "A centralized error registry might be a good idea. It is not justified by one
-             missing message. Scope that work separately where its value can be evaluated cleanly."
+    - avoid: { code: "Change production logic with no reproduction of the defect." }
+      good: { code: "Add a focused failing case, then make it pass with the fix." }
+      note: "Test the failure mechanism rather than incidental implementation detail."

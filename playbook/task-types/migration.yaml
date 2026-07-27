@@ -1,217 +1,46 @@
-# task-types/migration.yaml
-# Directives for moving code, behavior, or interfaces across APIs, libraries,
-# framework versions, architectural patterns, or system boundaries.
-# Applied when operation: modify | refactor with explicit migration intent.
-# Refines but does not override core/ directives.
+# Migration-specific guidance. Migrations may legitimately approach the byte ceiling.
 
 - id: migration-optimize-for-safe-transition-01
   type: constraint
   layer: task-types
-  scope:
-    path: "**/*"
+  scope: { path: "**/*" }
   prescription: must
   weight: critical
   traits:
     safety_critical: true
     compatibility_sensitive: true
     migration_sensitive: true
-
-  description: "Optimize for a safe, reviewable, reversible transition — not just the cleanest final architecture."
-
-  rationale: >
-    A migration that reaches the target state but destabilizes the system in transit
-    is not a successful migration. The path matters as much as the destination.
-    Operational safety, reviewability, and the ability to recover from a partial
-    migration are first-class concerns, not constraints to be traded away for
-    architectural elegance.
-
+  description: "Prefer a reviewable, recoverable transition and stage the migration when partial states can remain coherent."
+  rationale: "Migration quality depends on safely crossing between states, not only on the cleanliness of the destination."
   exceptions:
-    - "A less incremental migration is acceptable when the source and target states
-       are fundamentally incompatible and a parallel running period is not technically
-       feasible. The risk trade-off must be documented explicitly."
-
+    - "Use a single cutover when source and target cannot safely coexist, and make the risk explicit."
   examples:
-    - avoid:
-        code: |
-          // migrating from REST to tRPC
-          // approach: deleted all REST endpoints in one PR, rewrote all client call sites simultaneously
-          // result: 47 files changed, no working intermediate state, impossible to review safely
-      good:
-        code: |
-          // phase 1: introduce tRPC router alongside existing REST endpoints
-          // both work simultaneously — no client changes yet
-          export const appRouter = router({
-            user: userRouter,   // new tRPC route
-          });
-
-          // existing REST endpoint untouched
-          app.get('/api/users/:id', getUserHandler);
-      note: "The parallel running state is safe to deploy, easy to review, and easy to
-             revert. Each phase can be validated independently before the next begins."
-
-    - avoid:
-        code: |
-          // migrating from class components to React hooks
-          // approach: rewrote all 34 components in one branch
-          // nothing is deployable until the entire migration is complete
-      good:
-        code: |
-          // migrate one component at a time — each PR is independently deployable
-          // UserCard.tsx migrated in this PR; remaining class components untouched
-          export function UserCard({ userId }: UserCardProps) {
-            const user = useUser(userId);
-            return <div>{user?.name}</div>;
-          }
-      note: "Incremental migration keeps the codebase shippable throughout.
-             A regression in one component does not block the entire migration."
-
+    - avoid: { code: "Replace every consumer without a recovery boundary." }
+      good: { code: "Move consumers in verifiable steps with a defined rollback point." }
+      note: "Optimize the transition path as well as the endpoint."
 
 - id: migration-explicit-source-and-target-01
-  type: convention
+  type: constraint
   layer: task-types
-  scope:
-    path: "**/*"
+  scope: { path: "**/*" }
   prescription: should
   weight: high
   traits:
     compatibility_sensitive: true
     migration_sensitive: true
-
-  description: "Make the source pattern, target pattern, and change boundary explicit. Do not mix multiple migration goals into one indistinct rewrite."
-
-  rationale: >
-    A migration that is not legible about what it is replacing, what it is introducing,
-    and where the boundary lies is impossible to review with confidence. Clarity about
-    source and target is what allows reviewers to evaluate whether the migration is
-    correct, complete, and safe — not just whether the tests pass.
-
+  description: "Make the source state, target state, and migration boundary explicit."
+  rationale: "Reviewers cannot judge completeness or compatibility without knowing which old and new patterns are in scope."
   exceptions:
-    - "Explicit boundary documentation can be lighter for trivially scoped migrations
-       such as a single dependency version bump with no API changes."
-
+    - "A trivial dependency bump with no API change needs only a concise source/target statement."
   examples:
-    - avoid:
-        code: |
-          // PR description: "updated auth"
-          // diff contains: removed passport.js, added Auth0, changed session handling,
-          //                updated middleware, modified token format, changed cookie names
-          // no comment distinguishes what is being replaced from what is being introduced
-      good:
-        code: |
-          // MIGRATION: passport.js (local JWT) → Auth0 (managed identity)
-          //
-          // SOURCE:  verifyToken() in src/middleware/auth.ts using jsonwebtoken
-          // TARGET:  auth0.expressjwt() middleware from express-oauth2-jwt-bearer
-          // BOUNDARY: all routes currently using requireAuth() middleware
-          //
-          // Compatibility: existing session cookies are invalidated — users must re-login.
-          // Temporary: legacyTokenFallback() removed in follow-up after rollout confirmed.
-
-          import { auth } from 'express-oauth2-jwt-bearer';
-
-          export const requireAuth = auth({
-            audience: process.env.AUTH0_AUDIENCE,
-            issuerBaseURL: process.env.AUTH0_ISSUER_BASE_URL,
-          });
-      note: "The boundary comment makes source, target, compatibility impact, and
-             temporary scaffolding visible to every reviewer without reading the entire diff."
-
-    - avoid:
-        code: |
-          // migrating Axios to fetch — also updated error handling, refactored request
-          // abstraction, added retry logic, and changed the response shape convention
-          // simultaneously with no separation between migration and improvement
-      good:
-        code: |
-          // MIGRATION: axios → native fetch
-          // Scope: drop-in replacement only — error handling, retry, and response shape
-          //        are unchanged in this PR. Improvements scoped to follow-up tasks.
-
-          async function getUser(id: string): Promise<User> {
-            const res = await fetch(`/api/users/${id}`);
-            if (!res.ok) throw new ApiError(res.status, await res.text());
-            return res.json() as Promise<User>;
-          }
-      note: "Mixing migration with improvement makes it impossible to evaluate whether
-             a behavior change is a migration side effect or an intentional improvement."
-
-
-- id: migration-prefer-incremental-change-01
-  type: constraint
-  layer: task-types
-  scope:
-    path: "**/*"
-  prescription: should
-  weight: critical
-  traits:
-    compatibility_sensitive: true
-    migration_sensitive: true
-
-  description: "Prefer staged migration over sweeping replacement when both are viable. Keep steps small enough to review, validate, and recover from."
-
-  rationale: >
-    Incremental migration keeps the system shippable, reduces the blast radius of any
-    single step, and makes it possible to validate behavior at each stage rather than
-    only at the end. A migration that requires everything to land at once is a migration
-    that can only be validated once — and reverted as a whole if something goes wrong.
-
-  exceptions:
-    - "A single-step migration is acceptable when the source and target are tightly coupled
-       and a partial migration would leave the system in an incoherent state that is
-       harder to reason about than either endpoint."
-
-  examples:
-    - avoid:
-        code: |
-          // migrating from moment.js to date-fns
-          // approach: search-replaced all moment imports in 60 files simultaneously
-          // no intermediate state, no per-file validation, 60-file diff to review
-      good:
-        code: |
-          // phase 1: introduce date-fns alongside moment in the date utility module only
-          // all call sites continue to use the existing API — no changes required yet
-
-          // src/utils/date.ts
-          // SOURCE: moment(date).format('YYYY-MM-DD')
-          // TARGET: format(date, 'yyyy-MM-dd') from date-fns
-          // STATUS: migrated — moment no longer imported in this file
-
-          import { format, parseISO, isAfter } from 'date-fns';
-
-          export function formatDate(date: Date): string {
-            return format(date, 'yyyy-MM-dd');
-          }
-      note: "Migrating the utility layer first keeps all call sites unchanged.
-             Phase 2 migrates call sites one module at a time, each independently shippable."
-
-    - avoid:
-        code: |
-          // migrating from Redux to Zustand
-          // approach: removed redux store and all connected components in one PR
-          // application non-functional until migration is 100% complete
-      good:
-        code: |
-          // phase 1: introduce Zustand store for user slice only
-          // Redux store still running for all other slices — app fully functional
-
-          // src/store/user.ts (new Zustand slice)
-          export const useUserStore = create<UserState>((set) => ({
-            user: null,
-            setUser: (user) => set({ user }),
-            clearUser: () => set({ user: null }),
-          }));
-
-          // Redux userReducer still in place — removed in phase 2
-          // after all components consuming user state are migrated
-      note: "Running both state systems simultaneously is not ideal long-term, but it
-             keeps the app functional throughout and allows per-slice validation."
-
+    - avoid: { code: "Modernize configuration throughout the repository." }
+      good: { code: "Move package A from config v1 to v2; packages B and C remain on v1." }
+      note: "Bound the transition precisely."
 
 - id: migration-control-compatibility-01
   type: constraint
   layer: task-types
-  scope:
-    path: "**/*"
+  scope: { path: "**/*" }
   prescription: must
   weight: critical
   rccl_immune: true
@@ -219,432 +48,48 @@
     safety_critical: true
     compatibility_sensitive: true
     migration_sensitive: true
-
-  description: "Be explicit about whether compatibility must be preserved, partially preserved, or intentionally broken. Keep public contracts stable until the migration explicitly changes them."
-
-  rationale: >
-    Accidental interface drift during migration is one of the most expensive failure
-    modes — it breaks consumers in ways that are not visible until runtime, often in
-    production. Whether compatibility is preserved or broken must be a deliberate
-    decision, documented in the code, not an emergent property of implementation choices.
-
+  description: "State whether compatibility is preserved or intentionally broken, and update affected consumers within that declared boundary."
+  rationale: "Implicit compatibility assumptions create hidden partial migrations and unpredictable consumer failures."
   exceptions:
-    - "Compatibility can be intentionally broken when the migration explicitly targets
-       a breaking change, the break is clearly documented, and all known consumers are
-       updated or notified within the same migration scope."
-
+    - "A breaking transition is acceptable when it is explicit, documented, and coordinated with known consumers."
   examples:
-    - avoid:
-        code: |
-          // migrating internal user service response shape
-          // before: { user: { id, name, email } }
-          // after:  { data: { id, name, email } }
-          // change made without updating consumers or marking the field as changed
-
-          export async function getUser(id: string) {
-            const user = await db.findUser(id);
-            return { data: user };   // silently broke: callers expected { user }
-          }
-      good:
-        code: |
-          // COMPATIBILITY: response shape change is intentional and breaking
-          // All internal consumers updated in this PR.
-          // External API consumers (mobile app) use v1 endpoint — unchanged.
-          // v2 endpoint introduces new shape; v1 remains until mobile migration completes.
-
-          // v2 handler — new shape
-          export async function getUserV2(id: string) {
-            const user = await db.findUser(id);
-            return { data: user };
-          }
-
-          // v1 handler — preserved for external consumers
-          export async function getUserV1(id: string) {
-            const user = await db.findUser(id);
-            return { user };   // legacy shape maintained
-          }
-      note: "The shape change is intentional but has external consumers.
-             Versioning makes the break explicit and keeps the external contract stable."
-
-    - avoid:
-        code: |
-          // migrating from positional to named arguments in a shared utility
-          // before: formatCurrency(amount, 'USD', true)
-          // after:  formatCurrency({ amount, currency: 'USD', showSymbol: true })
-          // call sites not updated — silently broken
-          export function formatCurrency({ amount, currency, showSymbol }: FormatOptions) {
-            ...
-          }
-      good:
-        code: |
-          // temporary overload preserves compatibility during call site migration
-          // named form is the target; positional form deprecated — removed in phase 2
-
-          export function formatCurrency(
-            amountOrOptions: number | FormatOptions,
-            currency = 'USD',
-            showSymbol = true,
-          ): string {
-            const opts: FormatOptions =
-              typeof amountOrOptions === 'number'
-                ? { amount: amountOrOptions, currency, showSymbol }
-                : amountOrOptions;
-            return formatWithOptions(opts);
-          }
-      note: "The overload keeps every existing call site working without changes.
-             Call sites migrate to named arguments incrementally — each change is safe to ship."
-
-
-- id: migration-temporary-structures-intentional-01
-  type: convention
-  layer: task-types
-  scope:
-    path: "**/*"
-  prescription: should
-  weight: high
-  traits:
-    compatibility_sensitive: true
-    migration_sensitive: true
-
-  description: "Mark transitional code by structure and intent. Do not let migration scaffolding become indistinguishable from permanent design."
-
-  rationale: >
-    Adapters, shims, and compatibility wrappers introduced during migration have a
-    known finite lifespan. When they are not clearly marked as temporary, they are
-    inevitably treated as permanent — adopted by new call sites, depended on by
-    future engineers, and never removed. Explicit marking is the only reliable way
-    to ensure temporary structures stay temporary.
-
-  exceptions:
-    - "A temporary structure that is trivially scoped to a single file or a single
-       call site does not require formal deprecation marking when its purpose is
-       obvious from context and it will be removed in the same migration PR."
-
-  examples:
-    - avoid:
-        code: |
-          // compatibility shim introduced during migration — no marking, no removal plan
-          export function legacyFormatDate(date: string): string {
-            return moment(date).format('DD/MM/YYYY');
-          }
-      good:
-        code: |
-          /**
-           * @deprecated MIGRATION SHIM — moment.js → date-fns
-           * Remove after all call sites migrated to formatDate() from src/utils/date.ts
-           * Tracking: [PROJ-1234]
-           * Do not use in new code.
-           */
-          export function legacyFormatDate(date: string): string {
-            return moment(date).format('DD/MM/YYYY');
-          }
-      note: "The JSDoc deprecation marker surfaces in IDE tooling — new call sites get
-             a warning immediately. The tracking issue provides a removal milestone."
-
-    - avoid:
-        code: |
-          // adapter wrapping old Redux actions to work with new Zustand store
-          // no comment indicating it is temporary or when it should be removed
-          export const reduxCompatAdapter = {
-            dispatch: (action: AnyAction) => zustandStore.getState().dispatch(action),
-          };
-      good:
-        code: |
-          // MIGRATION ADAPTER: Redux dispatch → Zustand
-          // Temporary: exists only to keep legacy Redux-connected components working
-          // during phased migration. Remove when all components in src/legacy/ are migrated.
-          // Do not use outside src/legacy/ — new components use Zustand hooks directly.
-          export const reduxCompatAdapter = {
-            dispatch: (action: AnyAction) => zustandStore.getState().dispatch(action),
-          };
-      note: "The scope boundary (src/legacy/ only) and the removal condition are explicit.
-             A future engineer finding this knows immediately whether it applies to their work."
-
-
-- id: migration-preserve-repository-coherence-01
-  type: convention
-  layer: task-types
-  scope:
-    path: "**/*"
-  prescription: should
-  weight: normal
-  traits:
-    broad_scope: true
-    migration_sensitive: true
-
-  description: "Match local conventions during migration unless the migration specifically exists to replace them. Do not spread the target pattern more broadly than the migration requires."
-
-  rationale: >
-    A migration that imports its target pattern into areas outside its intended scope
-    creates a confused codebase where multiple patterns coexist without a clear
-    migration boundary. Future engineers cannot tell which pattern to follow in
-    unmigrated areas, and the migration becomes harder to complete because its
-    boundaries are no longer legible.
-
-  exceptions:
-    - "Spreading the target pattern beyond the immediate migration scope is acceptable
-       when the scope is explicitly defined and the broader adoption is part of the
-       planned migration rather than opportunistic drift."
-
-  examples:
-    - avoid:
-        code: |
-          // migrating the auth module from callbacks to async/await
-          // also converted 12 unrelated utility files to async/await "while in the area"
-          // migration boundary is now impossible to identify in the diff
-      good:
-        code: |
-          // SCOPE: auth module only (src/auth/*.ts)
-          // Other callback-based modules are out of scope for this migration.
-          // A follow-up migration task covers the remaining modules.
-
-          // src/auth/verify.ts — migrated
-          export async function verifyToken(token: string): Promise<Payload> {
-            const payload = await jwt.verify(token, process.env.JWT_SECRET!);
-            return payload as Payload;
-          }
-      note: "Keeping the migration boundary explicit in a comment prevents scope creep
-             and makes the diff reviewable without understanding the full codebase."
-
-    - avoid:
-        code: |
-          // migrating one service to use the repository pattern
-          // introduced repository interfaces across 8 other services simultaneously
-          // because "the architecture should be consistent"
-      good:
-        code: |
-          // repository pattern introduced for UserService only in this migration
-          // other services follow their existing patterns until explicitly migrated
-          export interface UserRepository {
-            findById(id: string): Promise<User | null>;
-            save(user: User): Promise<User>;
-          }
-      note: "Architectural consistency is a valid goal but it is a separate migration.
-             Introducing the pattern in one service does not require immediately applying
-             it everywhere — that conflates two scopes in one diff."
-
+    - avoid: { code: "Change a public shape and leave callers to discover the break." }
+      good: { code: "Declare the break and update or notify every known consumer in scope." }
+      note: "Compatibility is a decision, not an accidental side effect."
 
 - id: migration-keep-verifiable-01
   type: constraint
   layer: task-types
-  scope:
-    path: "**/*"
+  scope: { path: "**/*" }
   prescription: should
   weight: high
   traits:
     safety_critical: true
     compatibility_sensitive: true
     migration_sensitive: true
-
-  description: "Validate source behavior and target behavior at each meaningful migration step. Include checks around adapters, boundary transformations, and data shape changes."
-
-  rationale: >
-    A migration that cannot be validated incrementally can only be validated at the end.
-    End-state validation catches integration problems too late, with too many variables
-    in play to isolate the cause. Step-level validation makes each phase safe to ship
-    and makes regression detection immediate.
-
+  description: "Verify source behavior, target behavior, and boundary transformations at each meaningful migration step."
+  rationale: "A migration can appear complete while adapters or data transformations silently lose behavior."
   exceptions:
-    - "Validation can be deferred to the final migration step when intermediate states
-       are intentionally non-functional and the migration cannot be broken into
-       independently deployable phases."
-
+    - "Final-step validation is acceptable only when intermediate states are intentionally non-functional and cannot be deployed."
   examples:
-    - avoid:
-        code: |
-          // migrated all date formatting from moment.js to date-fns
-          // existing tests still reference moment output format
-          // no tests added to verify date-fns produces identical output
-          // assumed to be correct because the API looks similar
-      good:
-        code: |
-          // parity tests added to verify date-fns output matches moment output
-          // for all formats used in the codebase before moment is removed
-
-          describe('date-fns migration parity', () => {
-            const testCases = [
-              { input: '2024-01-15T10:30:00Z', format: 'display' },
-              { input: '2024-12-31T23:59:59Z', format: 'display' },
-              { input: '2024-02-29T00:00:00Z', format: 'display' },   // leap year
-            ];
-
-            it.each(testCases)('formats $input identically', ({ input }) => {
-              const date = new Date(input);
-              expect(formatDateNew(date)).toBe(formatDateLegacy(input));
-            });
-          });
-      note: "Parity tests prove the migration produces identical output before the
-             source library is removed. Edge cases like leap years are explicitly covered."
-
-    - avoid:
-        code: |
-          // introduced compatibility shim between Redux and Zustand
-          // shim is untested — "it's just forwarding calls"
-          export const reduxCompatAdapter = {
-            dispatch: (action: AnyAction) => zustandStore.getState().dispatch(action),
-          };
-      good:
-        code: |
-          describe('reduxCompatAdapter', () => {
-            it('forwards dispatch to zustand store', () => {
-              const mockDispatch = vi.fn();
-              vi.spyOn(zustandStore, 'getState').mockReturnValue({
-                dispatch: mockDispatch,
-              } as any);
-
-              reduxCompatAdapter.dispatch({ type: 'user/setName', payload: 'Alice' });
-
-              expect(mockDispatch).toHaveBeenCalledWith({
-                type: 'user/setName',
-                payload: 'Alice',
-              });
-            });
-          });
-      note: "The shim is temporary but it is load-bearing during the migration.
-             A test proves it behaves as expected and catches any future accidental breakage."
-
-
-- id: migration-separate-from-redesign-01
-  type: constraint
-  layer: task-types
-  scope:
-    path: "**/*"
-  prescription: should
-  weight: high
-  traits:
-    broad_scope: true
-    migration_sensitive: true
-
-  description: "Do not use migration as cover for opportunistic redesign. Distinguish required transition changes from optional structural improvement."
-
-  rationale: >
-    Migration work carries its own risk budget. Adding redesign to that budget conflates
-    two sets of decisions — what is required to migrate safely and what is desired
-    structurally — and makes both harder to evaluate. A reviewer cannot tell whether
-    a change is a migration requirement or an architectural preference, and cannot
-    hold either decision accountable on its own terms.
-
-  exceptions:
-    - "Structural improvement is appropriate within a migration when the existing
-       structure is directly blocking a safe migration and the improvement is the
-       minimum required to proceed. The justification must be explicit."
-
-  examples:
-    - avoid:
-        code: |
-          // migrating from Express to Fastify
-          // also restructured routing into a plugin architecture,
-          // introduced dependency injection container,
-          // reorganized middleware into a pipeline abstraction,
-          // refactored error handling into typed result objects
-          // all in the same PR as the framework swap
-      good:
-        code: |
-          // MIGRATION SCOPE: Express → Fastify (route registration and middleware only)
-          // Structural improvements (DI container, typed errors) are separate tasks.
-          // Existing route structure preserved — only the framework adapter changes.
-
-          import Fastify from 'fastify';
-          const app = Fastify();
-
-          // existing route handlers registered as-is — no logic changes
-          app.get('/users/:id', getUserHandler);
-          app.post('/users', createUserHandler);
-      note: "The framework swap is already a significant change. Bundling architectural
-             redesigns makes the migration unreviable and untestable as a discrete change."
-
-    - avoid:
-        code: |
-          // migrating from CommonJS to ESM
-          // also converted all default exports to named exports,
-          // reorganized barrel files, removed circular dependencies,
-          // and standardized import alias paths
-      good:
-        code: |
-          // MIGRATION SCOPE: CJS → ESM module syntax only
-          // Export style, barrel structure, and alias paths are unchanged in this migration.
-          // Those improvements are tracked as follow-up tasks.
-
-          // before: module.exports = { formatDate }
-          // after:  export { formatDate }  — syntax change only, no structural change
-          export { formatDate } from './formatDate.js';
-      note: "ESM migration is already a cross-cutting change that touches every module.
-             Combining it with export style changes and dependency restructuring makes
-             any single regression impossible to attribute."
-
+    - avoid: { code: "Check only that the target compiles." }
+      good: { code: "Exercise the source-to-target transformation and affected consumer contract." }
+      note: "Verification should cross the same boundary as the migration."
 
 - id: migration-convergent-end-state-01
-  type: convention
+  type: architecture
   layer: task-types
-  scope:
-    path: "**/*"
+  scope: { path: "**/*" }
   prescription: should
   weight: high
   traits:
     broad_scope: true
     migration_sensitive: true
-
-  description: "Each migration step should reduce ambiguity between old and new patterns. Avoid creating multiple competing long-term patterns without a clear convergence direction."
-
-  rationale: >
-    A migration that leaves the codebase in a state where engineers cannot tell which
-    pattern to follow for new code is a migration that has increased confusion rather
-    than reduced it. Each step should make the direction clearer, not more ambiguous.
-    The intermediate state is acceptable; a permanent mixed state is not.
-
+  description: "Make each migration step reduce ambiguity between old and new patterns, with temporary structures visibly bounded."
+  rationale: "Unbounded coexistence turns migration scaffolding into accidental permanent architecture."
   exceptions:
-    - "Coexistence of two patterns is acceptable indefinitely when the domain genuinely
-       requires them for different use cases — for example, different fetch strategies
-       for different network conditions. This must be documented as intentional design,
-       not as an incomplete migration."
-
+    - "Multiple patterns may remain when distinct domain needs justify them as intentional long-term design."
   examples:
-    - avoid:
-        code: |
-          // after 6 months of migrating from callbacks to promises:
-          // some modules use callbacks, some use promises, some use async/await
-          // no guidance on which pattern new code should follow
-          // no tracking of what remains to be migrated
-
-          // legacy module
-          export function getUser(id, callback) { ... }
-
-          // partially migrated module
-          export function getOrder(id): Promise<Order> { ... }
-
-          // new module — engineer unsure which pattern to use, picks randomly
-          export async function getProduct(id): Promise<Product> { ... }
-      good:
-        code: |
-          // MIGRATION STATUS: callbacks → async/await
-          // Target pattern: async/await throughout (see ADR-012)
-          // New code: always use async/await
-          // Legacy modules still on callbacks: see MIGRATION.md for remaining scope
-          //
-          // The following modules are fully migrated:
-          //   src/services/user.ts    ✓
-          //   src/services/order.ts  ✓
-          // Remaining:
-          //   src/services/payment.ts  (tracked: PROJ-1456)
-          //   src/services/email.ts    (tracked: PROJ-1457)
-      note: "The status comment makes the direction unambiguous for anyone writing new code.
-             The tracking references give the migration a completion path rather than an
-             open-ended coexistence."
-
-    - avoid:
-        code: |
-          // started migrating from REST fetch calls to tRPC
-          // after migrating 8 of 20 endpoints, decided to also introduce React Query
-          // for some endpoints, leaving three patterns coexisting indefinitely:
-          // raw fetch, tRPC, and React Query + tRPC
-      good:
-        code: |
-          // MIGRATION: REST fetch → tRPC + React Query
-          // All new endpoints: use tRPC procedure + useQuery hook
-          // In-progress: remaining REST endpoints migrated in PROJ-1489
-          // Do not introduce raw fetch calls for new features — use tRPC
-
-          export const useUser = (id: string) =>
-            trpc.user.getById.useQuery({ id });
-      note: "The directive comment tells future engineers which pattern to follow for
-             new code without requiring them to infer it from the existing mixture."
+    - avoid: { code: "Add an adapter with no owner or removal condition." }
+      good: { code: "Name the adapter as transitional and define the remaining consumers." }
+      note: "Every step should make convergence easier to inspect."

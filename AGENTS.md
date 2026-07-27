@@ -61,6 +61,8 @@ Guidance budgeting is hard product behavior:
 
 - no per-section item limits
 - one configurable UTF-8 byte ceiling, 6 KB by default
+- the ceiling applies to normative agent-facing guidance, not source,
+  verification, evidence, or Decision Trace metadata
 - required, avoid, and unresolved-tension guidance is never silently omitted
 - optional omissions require an explicit host selection and rationale
 - overflow returns an actionable result instead of truncating guidance

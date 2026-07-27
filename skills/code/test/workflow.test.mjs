@@ -90,7 +90,10 @@ try {
     personalOverlayPath,
     checkConfigPath,
   };
-  const overflow = await autoCodeTask(taskOptions);
+  const overflow = await autoCodeTask({
+    ...taskOptions,
+    guidanceByteLimit: 3_500,
+  });
   assert.equal(overflow.status, 'guidance-overflow');
   assert.ok(overflow.selectableConsider.length > 3);
   assert.ok(!('sessionPath' in overflow));
@@ -104,23 +107,33 @@ try {
     ],
     rationale: 'The defect requires a regression test and precise TypeScript boundary handling.',
   }, null, 2), 'utf8');
-  const prepared = await autoCodeTask({
+  const selected = await autoCodeTask({
     ...taskOptions,
+    guidanceByteLimit: 3_500,
     selectionFile: selectionPath,
   });
-
-  assert.ok(prepared.status === 'compiled' || prepared.status === 'needs-attention');
-  assert.equal(prepared.schemaVersion, '1.0');
-  assert.equal(prepared.guidanceMode, 'standard');
-  assert.equal(prepared.task.changeType, 'bugfix');
+  assert.ok(selected.status === 'compiled' || selected.status === 'needs-attention');
   assert.deepEqual(
-    prepared.guidance.consider.map((item) => item.id),
+    selected.guidance.consider.map((item) => item.id),
     [
       'personal-readable-control-flow-01',
       'bugfix-add-supporting-validation-01',
       'ts-honest-and-precise-types-01',
     ],
   );
+
+  const prepared = await autoCodeTask(taskOptions);
+
+  assert.ok(prepared.status === 'compiled' || prepared.status === 'needs-attention');
+  assert.equal(prepared.schemaVersion, '1.0');
+  assert.equal(prepared.guidanceMode, 'standard');
+  assert.equal(prepared.task.changeType, 'bugfix');
+  assert.ok(prepared.guidance.consider.some((item) => item.id === 'personal-readable-control-flow-01'));
+  assert.ok(prepared.guidance.consider.some((item) => item.id === 'bugfix-add-supporting-validation-01'));
+  assert.ok(prepared.delivery.deliveredBytes <= prepared.delivery.byteLimit);
+  assert.ok(prepared.delivery.fullGuidanceBytes > prepared.delivery.deliveredBytes);
+  assert.ok(!('source' in prepared.guidance.consider[0]));
+  assert.ok(!('verification' in prepared.guidance.consider[0]));
   assert.ok(prepared.sessionPath);
   assert.ok(prepared.baseline.entryCount >= 6);
   assert.ok(prepared.checkPlan.every((item) => item.status === 'configured'));
@@ -130,8 +143,8 @@ try {
   writeFileSync(join(root, 'src', 'example.ts'), 'export const value = 2;\n', 'utf8');
   const evaluationPath = join(root, '.resonant-code', 'context', 'evaluation.json');
   const attestations = [
-    ...prepared.guidance.required.map(guidanceAttestation),
-    ...prepared.guidance.consider.map(guidanceAttestation),
+    ...prepared.guidance.required.map((item) => guidanceAttestation(item, prepared.verificationPlan)),
+    ...prepared.guidance.consider.map((item) => guidanceAttestation(item, prepared.verificationPlan)),
     ...prepared.guidance.avoid.map((item) => ({
       guidanceId: item.id,
       verdict: 'satisfied',
@@ -299,9 +312,9 @@ try {
   rmSync(root, { recursive: true, force: true });
 }
 
-function guidanceAttestation(item) {
+function guidanceAttestation(item, verificationPlan) {
   const refs = [{ kind: 'diff', ref: 'diff:example', file: 'src/example.ts' }];
-  if (item.verification.some((requirement) => requirement.kind === 'semantic')) {
+  if (verificationPlan.semanticChecks.some((check) => check.guidanceId === item.id)) {
     refs.push({ kind: 'semantic', ref: `semantic:${item.id}`, description: `Verified ${item.id} against the implementation.` });
   }
   return {
