@@ -1,7 +1,7 @@
 # Full local directive example. Add under local-augment.yaml `additions:`.
 
 - id: local-public-api-validation-01
-  # Stable join key for overrides, evaluation, trace, and feedback.
+  # Stable join key for overrides, evaluation, and trace.
   type: constraint
   layer: local
   scope:

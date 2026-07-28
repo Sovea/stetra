@@ -70,7 +70,6 @@ assert.match(readFileSync(resolve(root, '.gitignore'), 'utf8'), /^\*\*\/dist\/$/
 for (const file of [
   'templates/checks.template.json',
   'templates/personal-overlay.template.yaml',
-  'templates/feedback-change-proposal.template.json',
   'evaluation/paired-agent/PROTOCOL.md',
   'evaluation/paired-agent/ledger.json',
 ]) {

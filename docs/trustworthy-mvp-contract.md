@@ -124,18 +124,22 @@ Runtime validates that attestations reference collected facts. It does not call
 host prose independently verified. A result cannot be accepted when machine
 facts are absent or merely host-declared.
 
-## Feedback
+## Runtime persistence
 
-Feedback records only evidence-backed satisfied, violated, and approved
-exception outcomes. Runtime maintains bounded aggregates by guidance ID.
-Aggregates contain counts, evidence kinds, timestamps, and content
-fingerprints, not host explanations. They report facts and never apply a
-promotion, retirement, or exception threshold.
+Runtime state is task-scoped, not a repository-global history database.
 
-Feedback never mutates team or personal policy automatically. It can support an
-inspectable change proposal, which is written only after explicit user approval
-bound to the current aggregate fingerprint. A written proposal remains marked
-unapplied; changing a Playbook source is a separate review and edit.
+- Interpretation, guidance-overflow, and missing-check outcomes write nothing.
+- A runnable prepare creates one `.resonant-code/runs/<runId>/` directory with
+  the decision, worktree baseline, and an empty Host evaluation input.
+- Completion stores check logs and the resulting evaluation in that same run.
+  It does not duplicate the full current worktree snapshot. Each persisted
+  check stream is capped at 1 MiB; the output digest still covers the complete
+  stream and the result records whether either log was truncated.
+- Prepared runs are never removed automatically. Retention cleanup applies
+  only to whole completed-run directories, so logs cannot become orphaned.
+- The initial release does not persist cross-task feedback events, aggregates,
+  or policy proposals. Such a store must first demonstrate a concrete compile
+  or evaluation consumer and measurable benefit over inspecting task runs.
 
 ## Release evidence
 
@@ -145,7 +149,7 @@ The release gate includes:
 - authority, overlay, overflow, and no-silent-omission tests;
 - RCCL evidence-contract and approval tests;
 - dirty-worktree and machine-fact completion tests;
-- feedback idempotency and aggregation tests;
+- checks-required no-write and task-run isolation tests;
 - isolated built-package smoke behavior;
 - a paired agent-evaluation protocol and machine-validated result ledger.
 

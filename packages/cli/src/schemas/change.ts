@@ -2,6 +2,9 @@ import { z } from 'zod';
 
 const FingerprintSchema = z.string().regex(/^[a-f0-9]{16}$/);
 const NonEmptyStringSchema = z.string().trim().min(1);
+const RunIdSchema = z.string().regex(
+  /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+);
 
 export const GuidanceDeliverySelectionSchema = z.strictObject({
   considerIds: z.array(NonEmptyStringSchema),
@@ -20,73 +23,11 @@ export const EvaluationInputSchema = z.strictObject({
   exceptions: z.array(z.unknown()).default([]),
 });
 
-const FeedbackAggregateEntrySchema = z.strictObject({
-  guidanceId: NonEmptyStringSchema,
-  sections: z.array(z.enum(['required', 'consider', 'avoid', 'tension'])),
-  satisfied: z.number().int().nonnegative(),
-  violated: z.number().int().nonnegative(),
-  excepted: z.number().int().nonnegative(),
-  total: z.number().int().nonnegative(),
-  evidenceKinds: z.array(z.enum(['diff', 'file', 'check', 'semantic'])),
-  firstRecordedAt: NonEmptyStringSchema,
-  lastRecordedAt: NonEmptyStringSchema,
-  aggregateFingerprint: FingerprintSchema,
-}).superRefine((aggregate, context) => {
-  if (
-    aggregate.total
-    !== aggregate.satisfied + aggregate.violated + aggregate.excepted
-  ) {
-    context.addIssue({
-      code: 'custom',
-      path: ['total'],
-      message: 'must equal satisfied + violated + excepted',
-    });
-  }
-});
-
-export const FeedbackAggregateSchema = z.strictObject({
+export const RuntimeRunSchema = z.looseObject({
   schemaVersion: z.string(),
-  generatedAt: NonEmptyStringSchema,
-  source: z.strictObject({
-    eventsFile: NonEmptyStringSchema,
-    eventCount: z.number().int().nonnegative(),
-    eventsFingerprint: FingerprintSchema,
-  }),
-  aggregates: z.array(FeedbackAggregateEntrySchema),
-}).superRefine((document, context) => {
-  const ids = new Set<string>();
-  for (const [index, aggregate] of document.aggregates.entries()) {
-    if (ids.has(aggregate.guidanceId)) {
-      context.addIssue({
-        code: 'custom',
-        path: ['aggregates', index, 'guidanceId'],
-        message: `duplicate guidance aggregate ${aggregate.guidanceId}`,
-      });
-    }
-    ids.add(aggregate.guidanceId);
-  }
-});
-
-export const FeedbackProposalCandidateSchema = z.strictObject({
-  schemaVersion: z.string(),
-  guidanceId: NonEmptyStringSchema,
-  aggregateFingerprint: FingerprintSchema,
-  target: z.enum(['team-playbook', 'personal-overlay']),
-  change: z.strictObject({
-    kind: z.enum(['add', 'revise', 'retire', 'add-exception']),
-    summary: NonEmptyStringSchema,
-    proposedContent: z.record(z.string(), z.unknown()),
-  }),
-  rationale: NonEmptyStringSchema,
-  approval: z.strictObject({
-    status: z.literal('approved'),
-    approvedBy: NonEmptyStringSchema,
-    reason: NonEmptyStringSchema,
-  }),
-});
-
-export const RuntimeSessionSchema = z.looseObject({
-  schemaVersion: z.string(),
+  runId: RunIdSchema,
+  workflow: z.literal('change'),
+  state: z.enum(['prepared', 'completed']),
   projectRoot: NonEmptyStringSchema,
   decision: z.looseObject({
     schemaVersion: z.string(),
@@ -94,4 +35,23 @@ export const RuntimeSessionSchema = z.looseObject({
   }),
   worktreeBaseline: z.unknown(),
   checkPlan: z.array(z.unknown()),
+  completion: z.looseObject({
+    completedAt: NonEmptyStringSchema,
+    evaluation: z.unknown(),
+  }).optional(),
+}).superRefine((run, context) => {
+  if (run.state === 'completed' && !run.completion) {
+    context.addIssue({
+      code: 'custom',
+      path: ['completion'],
+      message: 'is required when state is completed',
+    });
+  }
+  if (run.state === 'prepared' && run.completion) {
+    context.addIssue({
+      code: 'custom',
+      path: ['completion'],
+      message: 'must be absent when state is prepared',
+    });
+  }
 });

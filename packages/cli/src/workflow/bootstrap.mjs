@@ -1,8 +1,6 @@
 /** CLI-owned host-assisted Playbook bootstrap workflow. */
-import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
-import process from 'node:process';
-import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
+import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 
 import { z } from 'zod';
 
@@ -14,7 +12,6 @@ const DETERMINISTIC_DEFAULT_EXTENDS = [
   'builtin/task-types/*',
 ];
 
-const FALSEY_FLAG_VALUES = new Set(['0', 'false', 'no', 'off']);
 const REPO_SPECIFIC_LAYER_PATTERN = /^builtin\/(languages|frameworks|domains)\/[a-z0-9-]+(?:\/[a-z0-9-]+)*$/;
 const CORE_FILE_NAME = 'core.yaml';
 
@@ -119,27 +116,6 @@ function isRepoSpecificLayer(layerId) {
   return REPO_SPECIFIC_LAYER_PATTERN.test(layerId);
 }
 
-function writeContextArtifact(projectRoot, folder, extension, content, seed) {
-  const digest = createHash('sha1').update(JSON.stringify(seed)).digest('hex').slice(0, 10);
-  const stamp = new Date().toISOString().replace(/[-:.TZ]/g, '').slice(0, 14);
-  const filePath = join(projectRoot, '.resonant-code', 'context', folder, `${stamp}-${digest}.${extension}`);
-  mkdirSync(dirname(filePath), { recursive: true });
-  writeFileSync(filePath, content, 'utf-8');
-  return filePath;
-}
-
-function buildCandidatePath(projectRoot, repoSpecificKnownLayers) {
-  const digest = createHash('sha1')
-    .update(JSON.stringify({
-      type: 'init-candidate',
-      availableLayers: repoSpecificKnownLayers,
-    }))
-    .digest('hex')
-    .slice(0, 10);
-  const stamp = new Date().toISOString().replace(/[-:.TZ]/g, '').slice(0, 14);
-  return join(projectRoot, '.resonant-code', 'context', 'task-candidates', 'init', `${stamp}-${digest}.json`);
-}
-
 function buildInterpretationPrompt({ projectName, repoSpecificKnownLayers }) {
   const lines = [
     '# Init layer selection',
@@ -173,13 +149,6 @@ function buildInterpretationPrompt({ projectName, repoSpecificKnownLayers }) {
   ];
 
   return lines.join('\n');
-}
-
-function shouldEmitDebugArtifacts(options = {}) {
-  if (options.debugArtifacts !== undefined) return Boolean(options.debugArtifacts);
-  const value = process.env.RESONANT_CODE_DEBUG_ARTIFACTS;
-  if (!value) return false;
-  return !FALSEY_FLAG_VALUES.has(String(value).trim().toLowerCase());
 }
 
 function normalizeCandidate(candidateInput, projectRoot) {
@@ -324,30 +293,10 @@ function readCandidateInput(input) {
   }
 }
 
-function buildDebugArtifacts(projectRoot, prompt, projectName, repoSpecificKnownLayers, enabled) {
-  if (!enabled) return { enabled: false };
+function buildCandidateInput() {
   return {
-    enabled: true,
-    promptPath: writeContextArtifact(
-      projectRoot,
-      'init-prompts',
-      'md',
-      prompt,
-      {
-        kind: 'init-prompt',
-        projectName,
-        repoSpecificKnownLayers,
-      },
-    ),
-  };
-}
-
-function buildCandidateArtifact(projectRoot, repoSpecificKnownLayers) {
-  const candidatePath = buildCandidatePath(projectRoot, repoSpecificKnownLayers);
-  return {
-    suggestedPath: candidatePath,
     format: 'json',
-    usage: `Write a single init candidate JSON object to ${candidatePath}, then run commit with --input ${candidatePath}. You can also pass --input - and provide the same JSON via stdin.`,
+    usage: 'Pass one candidate JSON object to bootstrap commit with --input -. A temporary JSON file may be used instead; prepare does not persist an artifact in the project.',
   };
 }
 
@@ -363,19 +312,12 @@ export function prepareInit(options) {
   const repoSpecificKnownLayers = [...knownLayers].filter(isRepoSpecificLayer).sort();
   const projectName = detectProjectName(projectRoot);
   const prompt = buildInterpretationPrompt({ projectName, repoSpecificKnownLayers });
-  const debugArtifacts = buildDebugArtifacts(
-    projectRoot,
-    prompt,
-    projectName,
-    repoSpecificKnownLayers,
-    shouldEmitDebugArtifacts(options),
-  );
 
   return {
     status: 'prepared',
     prompt,
     candidateSchema: JSON.stringify(INIT_CANDIDATE_SCHEMA, null, 2),
-    candidateArtifact: buildCandidateArtifact(projectRoot, repoSpecificKnownLayers),
+    candidateInput: buildCandidateInput(),
     projectNameDefault: projectName,
     defaults: {
       extends: DETERMINISTIC_DEFAULT_EXTENDS,
@@ -387,7 +329,6 @@ export function prepareInit(options) {
       path: '.resonant-code/playbook/local-augment.yaml',
       exists: existsSync(join(projectRoot, '.resonant-code', 'playbook', 'local-augment.yaml')),
     },
-    debugArtifacts,
   };
 }
 
@@ -404,7 +345,6 @@ export function commitInit(options) {
     throw new Error('Commit requires --input <path-to-candidate-json> or --input -.');
   }
 
-  const debugArtifacts = { enabled: shouldEmitDebugArtifacts(options) };
   const input = {
     source: candidateInput === '-' ? 'stdin' : candidateInput,
     supportsStdin: true,
@@ -418,7 +358,6 @@ export function commitInit(options) {
       augmentPath: '.resonant-code/playbook/local-augment.yaml',
       message: '.resonant-code/playbook/local-augment.yaml already exists. Re-run commit with --force to overwrite it.',
       input,
-      debugArtifacts,
     };
   }
 
@@ -444,7 +383,6 @@ export function commitInit(options) {
     evidence: candidate.evidence,
     augmentPath: '.resonant-code/playbook/local-augment.yaml',
     input,
-    debugArtifacts,
   };
 
   return {

@@ -42,8 +42,8 @@ optional-guidance selection, use of already-approved RCCL, implementation
 inside the requested scope, configured checks, and evidence-backed
 attestations.
 
-Inform the user without blocking for absent optional Team Playbook, RCCL,
-personal overlay, or feedback history.
+Inform the user without blocking for absent optional Team Playbook, RCCL, or
+personal overlay.
 
 Pause for user direction before changing persistent team authority or trusted
 configuration, approving an RCCL observation or policy exception, resolving a
@@ -120,9 +120,10 @@ Handle results as follows:
   \`--selection-file\`. Do not ask the user merely to rank optional advice.
 - \`guidance-overflow\` with mandatory guidance over budget: pause for a scope,
   policy, or explicitly larger-budget decision.
-- Missing checks in \`checkPlan\`: read \`setup.md\`, propose exact commands,
-  obtain approval, configure them, and rerun prepare before editing.
-- A returned session path authorizes implementation under the delivered
+- \`checks-required\`: read \`setup.md\`, propose exact commands, obtain
+  approval, configure them, and rerun prepare before editing. This result does
+  not create a run or baseline.
+- A returned \`runId\` authorizes implementation under the delivered
   required, avoid, tension, and consider sections.
 
 The workflow automatically loads existing Team Playbook, personal overlay, and
@@ -158,7 +159,8 @@ boundary makes the current work unsafe; suggest context calibration separately.
 
 ## Complete
 
-Write semantic attestations and user-approved exceptions only:
+Open the exact \`evaluationInputPath\` returned by prepare and replace its empty
+arrays with semantic attestations and user-approved exceptions only:
 
 \`\`\`json
 {
@@ -190,9 +192,8 @@ An exception may be marked \`approved\` only after the user reviews its exact
 guidance ID and reason. Do not invent \`approvedBy\`.
 
 \`\`\`sh
-resonant-code change complete \\
-  --session <prepare-session-path> \\
-  --evaluation-file <evaluation.json> \\
+resonant-code change complete . \\
+  --run <run-id> \\
   --json
 \`\`\`
 
@@ -219,7 +220,8 @@ Treat readiness levels differently:
 
 - Required issues block trusted operation and must be resolved.
 - Recommended items improve repository-specific guidance but do not block.
-- Optional items such as RCCL and feedback history are not setup requirements.
+- Optional items such as RCCL and personal preferences are not setup
+  requirements.
 
 ## Configure checks
 

@@ -3,7 +3,6 @@ import { Command } from 'commander';
 import { registerBootstrapCommands } from './commands/bootstrap.ts';
 import { registerChangeCommands } from './commands/change.ts';
 import { registerContextCommands } from './commands/context.ts';
-import { registerFeedbackCommands } from './commands/feedback.ts';
 import { registerInitCommand } from './commands/init.ts';
 import type { CommandEnvironment, GlobalCommandOptions } from './commands/shared.ts';
 import { globalOptions } from './commands/shared.ts';
@@ -74,7 +73,6 @@ contains ANSI formatting.`);
   registerBootstrapCommands(program, environment);
   registerChangeCommands(program, environment, PRODUCT_VERSION);
   registerContextCommands(program, environment);
-  registerFeedbackCommands(program, environment);
   return program;
 }
 

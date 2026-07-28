@@ -4,11 +4,7 @@ import { resolveBuiltinRoot } from '../paths.ts';
 import { commitInit, prepareInit } from '../workflow/bootstrap.mjs';
 import type { CommandEnvironment } from './shared.ts';
 
-interface BootstrapPrepareOptions {
-  debugArtifacts?: boolean;
-}
-
-interface BootstrapCommitOptions extends BootstrapPrepareOptions {
+interface BootstrapCommitOptions {
   force?: boolean;
   input: string;
 }
@@ -25,16 +21,14 @@ export function registerBootstrapCommands(
     .command('prepare')
     .description('Prepare the bounded host interpretation contract')
     .argument('[project-root]', 'project root', '.')
-    .option('--debug-artifacts', 'write inspectable prompt artifacts')
     .action((
       projectRoot: string,
-      options: BootstrapPrepareOptions,
+      _options: object,
       command: Command,
     ) => {
       environment.emit('bootstrap prepare', prepareInit({
         projectRoot,
         builtinRoot: resolveBuiltinRoot(),
-        debugArtifacts: Boolean(options.debugArtifacts),
       }), command);
     });
 
@@ -44,7 +38,6 @@ export function registerBootstrapCommands(
     .argument('[project-root]', 'project root', '.')
     .requiredOption('--input <candidate.json|->', 'host-selected layer candidate')
     .option('--force', 'replace an existing local augment explicitly')
-    .option('--debug-artifacts', 'write inspectable lifecycle artifacts')
     .action((
       projectRoot: string,
       options: BootstrapCommitOptions,
@@ -55,7 +48,6 @@ export function registerBootstrapCommands(
         builtinRoot: resolveBuiltinRoot(),
         input: options.input,
         force: Boolean(options.force),
-        debugArtifacts: Boolean(options.debugArtifacts),
       }), command);
     });
 }

@@ -24,7 +24,7 @@ Generated thin adapter
    v
 @sovea/resonant-code (CLI)
    |-- commands and presentation
-   |-- prepare/complete workflow and sessions
+   |-- prepare/complete workflow and task-scoped runs
    |-- Git worktree and check facts
    |-- project manifest and Host Adapter generation
    |
@@ -88,7 +88,7 @@ Host Adapter -> CLI -> Core
 Core does not know about CLI commands, output formatting, Codex, Claude,
 generated files, or process exit codes. CLI and generated adapters do not
 parse Playbook policy, rank directives, adjudicate semantic relations, or
-determine feedback eligibility.
+invent evaluation facts.
 
 The Core root exposes exactly:
 
@@ -110,7 +110,6 @@ are not package exports.
 | Host-assisted Team Playbook setup | `resonant-code bootstrap prepare/commit` |
 | Change lifecycle | `resonant-code change prepare/complete/explain` |
 | RCCL lifecycle | `resonant-code context prepare/commit/approve/validate/refresh-stale` |
-| Bounded feedback | `resonant-code feedback inspect/propose` |
 
 The generated Host Adapter remains one logical skill. Its root `SKILL.md`
 contains only triggering, workflow routing, shared safety boundaries, and the
@@ -136,9 +135,9 @@ only for a real TTY and can be disabled with `--no-interactive`.
 
 Human output is a decision surface, not a lossy echo of JSON. Completion
 summarizes changed-file operations, check outcomes, guidance verdicts,
-exceptions, feedback, and unresolved review needs. Bootstrap and RCCL output
-show the persistent candidate evidence and content fingerprints needed for a
-meaningful review.
+exceptions, and unresolved review needs. Bootstrap exposes a bounded
+layer-selection contract; RCCL output shows the persistent evidence and content
+fingerprints needed for a meaningful review.
 
 Host adapters use `--json`. JSON mode never prompts, never emits ANSI, and
 writes only the machine-readable result to stdout. Actionable business states
@@ -172,12 +171,22 @@ The CLI never claims ownership of:
 - `.resonant-code/playbook/local-augment.yaml`
 - `.resonant-code/checks.json`
 - `.resonant-code/rccl.yaml`
-- sessions, feedback events, aggregates, or policy proposals
 - content outside marked blocks in `AGENTS.md`, `CLAUDE.md`, or `.gitignore`
+
+The CLI owns ignored task runtime state under
+`.resonant-code/runs/<runId>/`. A successful prepare writes one `run.json` and
+one empty `evaluation.json`; completion writes check logs inside that run and
+adds the evaluation to `run.json`. Results that still need interpretation,
+guidance selection, or check configuration create no run. Completed-run
+cleanup removes whole run directories, while prepared runs are retained.
+Persisted stdout and stderr are capped independently while their digests cover
+the complete streams. There is no global feedback ledger or aggregate store in
+the initial release.
 
 Project initialization is the only workflow allowed to create or update those
 managed blocks. Bootstrap owns only Team Playbook generation and never edits
-`.gitignore`.
+`.gitignore`. Bootstrap prepare returns its prompt and schema without writing
+debug or candidate artifacts into the project.
 
 Adapter installation is additive. Omitting `--adapter` on an initialized
 project retains the installed adapter set. On a new interactive project, the
@@ -190,7 +199,7 @@ Readiness is consequence-based:
 - required issues cover Core/Adapter integrity, checks, and invalid configured
   sources; `doctor --strict` fails on these
 - recommended items cover repository-specific Team Playbook guidance
-- optional items cover absent RCCL and other nonessential history
+- optional items cover absent RCCL and personal preferences
 
 The Host may resolve repository-discoverable task details, choose optional
 guidance, use reviewed RCCL, implement within scope, run checks, and attest
@@ -220,7 +229,7 @@ New task families remain CLI modules and conditional references under the same
 logical Host skill while their triggers and collaboration contract overlap. A
 future review workflow should collect an explicit worktree, staged, or ref-range
 changeset and remain read-only by default. “Review and fix” must transition
-from review into a separately authorized change session; review must not
+from review into a separately authorized change run; review must not
 silently acquire write authority.
 
 Split a workflow into a separate top-level skill only when forward tests show
@@ -254,7 +263,7 @@ Release verification:
 6. installs both archives in an isolated consumer
 7. runs init, bootstrap, RCCL prepare/commit/fingerprint-bound approval,
    change prepare/complete, and status
-8. verifies sessions contain package identities and no source-checkout paths
+8. verifies runs contain package identities and no source-checkout paths
 
 The CLI transition changes distribution and orchestration, not the product
 effectiveness claim. That claim remains governed by

@@ -1,12 +1,15 @@
 /** CLI-owned deterministic check-plan execution and collection. */
 import { createHash } from 'node:crypto';
 import {
-  createWriteStream,
+  closeSync,
   existsSync,
   mkdirSync,
+  openSync,
   readFileSync,
+  writeSync,
 } from 'node:fs';
 import { dirname, relative, resolve } from 'node:path';
+import { Writable } from 'node:stream';
 
 import { z } from 'zod';
 
@@ -16,6 +19,10 @@ import { parseArtifact } from '../validation.ts';
 import { stableFactHash } from './worktree.mjs';
 
 const CHECK_CONFIG_SCHEMA_VERSION = '1.0';
+const MAX_CHECK_LOG_BYTES = 1024 * 1024;
+const TRUNCATION_MARKER = Buffer.from(
+  '\n[resonant-code: persisted check output truncated; outputDigest covers the full stream]\n',
+);
 const CheckDefinitionSchema = z.strictObject({
   id: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._-]*$/),
   command: z.array(z.string().min(1)).min(1),
@@ -154,8 +161,8 @@ async function runConfiguredCheck({
   const stdoutPath = resolve(outputDirectory, `${item.id}.stdout.log`);
   const stderrPath = resolve(outputDirectory, `${item.id}.stderr.log`);
   mkdirSync(dirname(stdoutPath), { recursive: true });
-  const stdoutStream = createWriteStream(stdoutPath, { flags: 'w' });
-  const stderrStream = createWriteStream(stderrPath, { flags: 'w' });
+  const stdoutStream = new BoundedLogWriter(stdoutPath, MAX_CHECK_LOG_BYTES);
+  const stderrStream = new BoundedLogWriter(stderrPath, MAX_CHECK_LOG_BYTES);
   const stdoutHash = createHash('sha256');
   const stderrHash = createHash('sha256');
   const [executable, ...args] = item.command;
@@ -200,6 +207,14 @@ async function runConfiguredCheck({
       stdout: relative(projectRoot, stdoutPath).replace(/\\/g, '/'),
       stderr: relative(projectRoot, stderrPath).replace(/\\/g, '/'),
     },
+    ...(stdoutStream.truncated || stderrStream.truncated
+      ? {
+          outputTruncated: {
+            stdout: stdoutStream.truncated,
+            stderr: stderrStream.truncated,
+          },
+        }
+      : {}),
     definitionFingerprint: item.definitionFingerprint,
     ...(reason ? { reason } : {}),
     provenance: {
@@ -214,4 +229,62 @@ function validateCheckId(value, location) {
     throw new Error(`Invalid check id at ${location}.`);
   }
   return value;
+}
+
+class BoundedLogWriter extends Writable {
+  constructor(path, maxBytes) {
+    super();
+    this.descriptor = openSync(path, 'w');
+    this.contentLimit = maxBytes - TRUNCATION_MARKER.length;
+    this.contentBytes = 0;
+    this.truncated = false;
+  }
+
+  _write(chunk, encoding, callback) {
+    try {
+      const value = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk, encoding);
+      const remaining = Math.max(0, this.contentLimit - this.contentBytes);
+      const persisted = value.subarray(0, remaining);
+      if (persisted.length) {
+        writeBuffer(this.descriptor, persisted);
+        this.contentBytes += persisted.length;
+      }
+      if (persisted.length < value.length) this.truncated = true;
+      callback();
+    } catch (error) {
+      callback(error);
+    }
+  }
+
+  _final(callback) {
+    try {
+      if (this.truncated) writeBuffer(this.descriptor, TRUNCATION_MARKER);
+      this.close();
+      callback();
+    } catch (error) {
+      callback(error);
+    }
+  }
+
+  _destroy(error, callback) {
+    try {
+      this.close();
+      callback(error);
+    } catch (closeError) {
+      callback(closeError);
+    }
+  }
+
+  close() {
+    if (this.descriptor === null) return;
+    closeSync(this.descriptor);
+    this.descriptor = null;
+  }
+}
+
+function writeBuffer(descriptor, value) {
+  let offset = 0;
+  while (offset < value.length) {
+    offset += writeSync(descriptor, value, offset, value.length - offset);
+  }
 }

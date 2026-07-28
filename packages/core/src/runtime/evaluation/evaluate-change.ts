@@ -1,7 +1,6 @@
 import { DECISION_SCHEMA_VERSION, type VerificationRequirement } from '../decision/types.ts';
 import { stableHash } from '../utils/hash.ts';
 import { normalizePath } from '../utils/paths.ts';
-import { recordEvaluationFeedback } from '../feedback/record-evaluation.ts';
 import {
   EVALUATION_SCHEMA_VERSION,
   type ChangeEvaluation,
@@ -99,7 +98,7 @@ export function evaluateChange(input: EvaluateChangeInput): ChangeEvaluation {
     warningCount: countWarnings(results),
   };
   const operation = inferOperation(changes.files);
-  const evaluation: ChangeEvaluation = {
+  return {
     schemaVersion: EVALUATION_SCHEMA_VERSION,
     evaluationId: stableHash([
       EVALUATION_SCHEMA_VERSION,
@@ -124,10 +123,6 @@ export function evaluateChange(input: EvaluateChangeInput): ChangeEvaluation {
     },
     summary,
   };
-  if (input.feedbackPath) {
-    evaluation.feedback = recordEvaluationFeedback(input.feedbackPath, evaluation);
-  }
-  return evaluation;
 }
 
 function assertEvaluateShape(input: EvaluateChangeInput): void {
@@ -196,6 +191,12 @@ function assertEvaluateShape(input: EvaluateChangeInput): void {
       }
       assertSafeRelativePath(normalizePath(check.outputRefs.stdout), 'check stdout outputRef');
       assertSafeRelativePath(normalizePath(check.outputRefs.stderr), 'check stderr outputRef');
+    }
+    if (check.outputTruncated !== undefined
+      && (!isRecord(check.outputTruncated)
+        || typeof check.outputTruncated.stdout !== 'boolean'
+        || typeof check.outputTruncated.stderr !== 'boolean')) {
+      throw new Error('evaluateChange check outputTruncated requires stdout and stderr booleans.');
     }
     if (check.status === 'skipped' && (typeof check.reason !== 'string' || !check.reason.trim())) {
       throw new Error('evaluateChange skipped checks require a reason.');

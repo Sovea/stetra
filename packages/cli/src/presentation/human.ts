@@ -39,8 +39,8 @@ function formatStructured(output: JsonObject, colors: Colors): string {
   for (const [label, field] of [
     ['Decision', 'decisionId'],
     ['Evaluation', 'evaluationId'],
-    ['Session', 'sessionPath'],
-    ['Proposal', 'proposalPath'],
+    ['Run', 'runId'],
+    ['Run file', 'runPath'],
   ] as const) {
     if (typeof output[field] === 'string') {
       lines.push(`${colors.bold(`${label}:`)} ${output[field]}`);
@@ -51,7 +51,7 @@ function formatStructured(output: JsonObject, colors: Colors): string {
   if (typeof output.nextStep === 'string') {
     lines.push(`${colors.bold('Next:')} ${output.nextStep}`);
   }
-  if ('evaluation' in output || 'aggregates' in output) {
+  if ('evaluation' in output) {
     lines.push(colors.dim('Use --json for the complete machine-readable result.'));
   }
   return lines.join('\n');

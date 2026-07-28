@@ -3,6 +3,7 @@ import {
   mkdtempSync,
   readFileSync,
   rmSync,
+  statSync,
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -42,6 +43,11 @@ test('Execa-backed checks preserve success, failure, timeout, and spawn facts', 
           command: ['resonant-code-definitely-missing-executable'],
           timeoutMs: 2_000,
         },
+        {
+          id: 'large-output',
+          command: [process.execPath, '-e', 'process.stdout.write("x".repeat(1100000))'],
+          timeoutMs: 2_000,
+        },
       ],
     }, null, 2)}\n`, 'utf8');
     const plan = loadCheckPlan(configPath, {
@@ -50,6 +56,7 @@ test('Execa-backed checks preserve success, failure, timeout, and spawn facts', 
         { id: 'failure', reason: 'fixture' },
         { id: 'timeout', reason: 'fixture' },
         { id: 'missing-command', reason: 'fixture' },
+        { id: 'large-output', reason: 'fixture' },
       ],
     });
     const outputDirectory = join(root, 'check-output');
@@ -73,6 +80,15 @@ test('Execa-backed checks preserve success, failure, timeout, and spawn facts', 
     assert.equal(results[3].status, 'failed');
     assert.notEqual(results[3].exitCode, 0);
     assert.match(results[3].reason ?? '', /could not start|exited with/i);
+    assert.equal(results[4].status, 'passed');
+    assert.ok('outputTruncated' in results[4]);
+    assert.deepEqual(results[4].outputTruncated, {
+      stdout: true,
+      stderr: false,
+    });
+    const largeOutputPath = join(outputDirectory, 'large-output.stdout.log');
+    assert.ok(statSync(largeOutputPath).size <= 1024 * 1024);
+    assert.match(readFileSync(largeOutputPath, 'utf8'), /persisted check output truncated/);
 
     const spawnFailure = await runCheckPlan({
       projectRoot: join(root, 'missing-working-directory'),

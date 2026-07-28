@@ -4,7 +4,7 @@ import { resolveBuiltinRoot } from '../paths.ts';
 import type { GuidancePromptCandidate } from '../runtime-context.ts';
 import {
   completeCodeTask,
-  explainCodeSession,
+  explainCodeRun,
   prepareCodeTask,
 } from '../workflow/change.mjs';
 import type { CommandEnvironment } from './shared.ts';
@@ -29,12 +29,11 @@ interface ChangePrepareOptions {
 }
 
 interface ChangeCompleteOptions {
-  evaluationFile?: string;
-  session: string;
+  run: string;
 }
 
 interface ChangeExplainOptions {
-  session: string;
+  run: string;
 }
 
 export function registerChangeCommands(
@@ -117,23 +116,33 @@ export function registerChangeCommands(
   change
     .command('complete')
     .description('Collect actual diff/check facts and evaluate host attestations')
-    .requiredOption('--session <path>', 'prepare session path')
-    .option('--evaluation-file <path>', 'host attestations and approved exceptions')
-    .action(async (options: ChangeCompleteOptions, command: Command) => {
+    .argument('[project-root]', 'project root', '.')
+    .requiredOption('--run <id>', 'run ID returned by prepare')
+    .action(async (
+      projectRoot: string,
+      options: ChangeCompleteOptions,
+      command: Command,
+    ) => {
       environment.emit('change complete', await completeCodeTask({
-        sessionPath: options.session,
-        evaluationFile: options.evaluationFile,
+        projectRoot,
+        runId: options.run,
         productVersion,
       }), command);
     });
 
   change
     .command('explain')
-    .description('Show the decision and evaluation stored in a session')
-    .requiredOption('--session <path>', 'prepare session path')
-    .action((options: ChangeExplainOptions, command: Command) => {
-      environment.emit('change explain', explainCodeSession({
-        sessionPath: options.session,
+    .description('Show the decision and evaluation stored in a run')
+    .argument('[project-root]', 'project root', '.')
+    .requiredOption('--run <id>', 'run ID returned by prepare')
+    .action((
+      projectRoot: string,
+      options: ChangeExplainOptions,
+      command: Command,
+    ) => {
+      environment.emit('change explain', explainCodeRun({
+        projectRoot,
+        runId: options.run,
       }), command);
     });
 }

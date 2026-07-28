@@ -4,7 +4,7 @@
 
 `resonant-code` is an AI coding change harness. It exists to make task-specific engineering guidance stable, inspectable, evidence-aware, and reusable across host agents.
 
-It is not a repository wiki, a general agent framework, or a collection of static prompt rules. Its differentiator is a small deterministic kernel around the part text-only workflows cannot reliably own: activating project policy, qualifying repository observations, budgeting delivered guidance, evaluating the actual change, and recording bounded feedback.
+It is not a repository wiki, a general agent framework, or a collection of static prompt rules. Its differentiator is a small deterministic kernel around the part text-only workflows cannot reliably own: activating project policy, qualifying repository observations, budgeting delivered guidance, collecting machine facts, and evaluating the actual change.
 
 ## Product thesis
 
@@ -53,7 +53,7 @@ The Core root exposes exactly two value entrypoints:
 
 RCCL lifecycle operations are exported only from
 `@sovea/resonant-code-core/rccl`. Do not expose task helpers, parsers, merge
-functions, feedback helpers, or CLI workflow APIs from
+functions or CLI workflow APIs from
 `packages/core/src/index.ts`.
 
 ### Compile boundary
@@ -116,7 +116,7 @@ evidence references. Do not accept numeric host self-confidence or use a
 numeric threshold to adjudicate semantic relations. Task provenance records
 source categories without decorative confidence scores.
 
-### Evaluation and feedback boundary
+### Evaluation boundary
 
 `evaluateChange` evaluates workflow-collected changed-file/check facts, host
 attestations, and approved exceptions. It infers file operation after
@@ -136,12 +136,17 @@ Attestation evidence must be structurally tied to collected facts:
 
 Strict mode requires an exception for unverified required guidance or unresolved tensions. Hard required/avoid violations reject the evaluation.
 
-Feedback is Runtime-owned and bounded. Record only evidence-backed satisfied,
-violated, and approved-exception outcomes. Maintain fact-only aggregates by
-guidance ID; never count unverified output as followed or persist raw host
-explanations in aggregates. No count or rate may automatically mutate policy.
-An inspectable change proposal requires explicit approval bound to the current
-aggregate fingerprint and remains unapplied until a separate policy edit.
+Runtime persistence is task-scoped. A runnable prepare creates exactly one
+`.resonant-code/runs/<runId>/` directory containing `run.json` and the Host
+evaluation input. Completion stores its check logs and evaluation inside that
+same run and must not duplicate the full current worktree snapshot.
+Interpretation, guidance-overflow, and checks-required outcomes create no run.
+Cleanup may remove only whole completed runs; prepared runs remain untouched.
+Persisted check stdout/stderr is capped at 1 MiB per stream; the digest covers
+the complete stream and truncation remains explicit in the collected facts.
+Do not add a global feedback ledger, aggregate store, or policy-proposal
+lifecycle until it has a concrete compile/evaluation consumer and measurable
+benefit over inspecting task runs.
 
 Do not infer product effectiveness from passing deterministic tests. A claim
 that the harness reduces correction cost or improves adoption requires
@@ -160,8 +165,8 @@ Generated host adapters contain workflow instructions only. They invoke CLI
 JSON commands and use host judgment for task semantics, exact evidence-window
 selection, relation proposals, implementation, and attestations. They must not
 parse Playbook data to make policy decisions, rank directives, adjudicate
-relations, decide execution modes, or independently determine feedback
-eligibility. The source repository does not ship `.claude-plugin`,
+relations, decide execution modes, or invent evaluation facts. The source
+repository does not ship `.claude-plugin`,
 `.codex-plugin`, `.codex`, or repository-native `skills/` entrypoints.
 
 The normal code lifecycle is:
@@ -169,7 +174,7 @@ The normal code lifecycle is:
 1. `resonant-code change prepare --json` → compile compact task guidance
 2. host implements the change
 3. `resonant-code change complete --json` → collect actual change/check facts,
-   evaluate attestations, and write bounded feedback
+   evaluate attestations, and complete the task run
 
 ## Data separation
 
@@ -187,13 +192,14 @@ Do not collapse them into one score, one prose prompt, or one “verified truth�
 
 - Use TypeScript for Core and new CLI control-plane logic.
 - Prefer narrow modules and explicit input/output types.
-- Keep output deterministic enough to diff; timestamps may appear only in lifecycle or feedback records.
+- Keep output deterministic enough to diff; timestamps may appear only in lifecycle records.
 - Reject unsupported schema versions with actionable errors. The project is a prototype; do not add compatibility adapters unless explicitly requested.
 - Preserve existing user changes in a dirty worktree.
 - Use `rg` for search and `apply_patch` for edits.
-- Keep generated sessions under `.resonant-code/context/`; do not use them as authoritative task-time cache reads.
+- Keep task runtime state under `.resonant-code/runs/<runId>/`; do not use one
+  run as an authoritative cache for another task.
 - Keep project adapter ownership in `.resonant-code/manifest.json`. Never
-  overwrite Team Playbook, RCCL, checks, feedback, or owner-modified generated
+  overwrite Team Playbook, RCCL, checks, or owner-modified generated
   adapter content as an upgrade.
 - Project initialization is the sole owner of generated host files and marked
   blocks in `AGENTS.md`, `CLAUDE.md`, and `.gitignore`; Bootstrap must not
@@ -201,7 +207,9 @@ Do not collapse them into one score, one prose prompt, or one “verified truth�
 - Bootstrap may enumerate available Playbook layers, but the host selects
   concrete repository evidence. Do not maintain framework filename lists,
   rank candidate files, or cap the repository evidence visible to the host.
-- CLI sessions record CLI/Core package identity, not an absolute installation
+- Bootstrap prepare returns its prompt and schema without persisting debug or
+  candidate artifacts in the project.
+- CLI runs record CLI/Core package identity, not an absolute installation
   path.
 - Core and CLI versions move together. CLI package archives must pin Core to
   the exact matching version after `workspace:*` is rewritten during pack.
@@ -228,7 +236,7 @@ Tests must cover the behavior that justifies the harness:
 - accepted, rejected, and downgraded semantic relations
 - strict interpretation and exception gates
 - evaluation against actual diff/check evidence
-- feedback idempotency
+- checks-required no-write behavior and task-run isolation
 - isolated Core npm-tarball API smoke behavior
 - paired Core/CLI npm-tarball installation and binary smoke behavior
 - paired-evaluation protocol and claim/ledger consistency
@@ -237,4 +245,4 @@ When changing architecture, report complexity movement and observable behavior, 
 
 ## Non-negotiable regressions
 
-Do not regress to raw prompt concatenation, skill-local policy engines, trusting an RCCL semantic claim because its snippet matched, evaluating directives the agent never received, omitting Decision Trace, or treating feedback as decoration.
+Do not regress to raw prompt concatenation, skill-local policy engines, trusting an RCCL semantic claim because its snippet matched, evaluating directives the agent never received, omitting Decision Trace, or introducing persistent lifecycle data without a decision-changing or inspectable consumer.

@@ -64,7 +64,7 @@ export interface InitializeProjectOptions {
 }
 
 const MANIFEST_PATH = '.resonant-code/manifest.json';
-const TEMPLATE_REVISION = 2;
+const TEMPLATE_REVISION = 3;
 const DOC_MARKERS = {
   start: '<!-- resonant-code:begin -->',
   end: '<!-- resonant-code:end -->',
@@ -244,7 +244,7 @@ function buildDesiredArtifacts(adapters: HostAdapter[]): DesiredArtifact[] {
     markers: GITIGNORE_MARKERS,
     content: [
       GITIGNORE_MARKERS.start,
-      '.resonant-code/context/',
+      '.resonant-code/runs/',
       GITIGNORE_MARKERS.end,
     ].join('\n'),
   }];

@@ -43,6 +43,10 @@ export interface CheckResult {
     stdout: string;
     stderr: string;
   };
+  outputTruncated?: {
+    stdout: boolean;
+    stderr: boolean;
+  };
   definitionFingerprint?: string;
   reason?: string;
   provenance: MachineFactProvenance;
@@ -79,7 +83,6 @@ export interface EvaluateChangeInput {
   checks?: CheckResult[];
   attestations?: GuidanceAttestation[];
   exceptions?: ChangeException[];
-  feedbackPath?: string;
 }
 
 export type EvaluationVerdict = 'satisfied' | 'violated' | 'partial' | 'unverified' | 'excepted';
@@ -120,12 +123,5 @@ export interface ChangeEvaluation {
     requiredViolated: number;
     requiredUnverified: number;
     warningCount: number;
-  };
-  feedback?: {
-    recorded: number;
-    path: string;
-    aggregatePath: string;
-    aggregateCount: number;
-    eventsFingerprint: string | null;
   };
 }

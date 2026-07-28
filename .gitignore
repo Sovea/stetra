@@ -3,4 +3,4 @@ node_modules/
 **/dist/
 .entire/
 coverage/
-.resonant-code/context/
+.resonant-code/runs/

@@ -4,7 +4,7 @@
 Claude Code, and future hosts a small deterministic control plane around the
 parts that should not depend on model improvisation: project policy, current
 repository evidence, delivered-guidance budgets, actual diff/check facts, and
-bounded feedback.
+task-scoped evaluation records.
 
 The normal user experience is still a natural-language coding request. The
 generated Host Adapter runs the lifecycle in the background.
@@ -43,7 +43,7 @@ Then use the coding agent normally:
 
 > Fix the parser boundary and add a regression test.
 
-You do not need to run `change prepare`, create session files, or write
+You do not need to run `change prepare`, manage run files, or write
 evaluation JSON yourself. Those are Host-to-CLI protocol details.
 
 ## What happens during a change
@@ -93,7 +93,7 @@ The Host must pause before:
 - **Required** — Core/Adapter integrity, valid checks, and valid configured
   sources. `doctor --strict` fails while any required item is unresolved.
 - **Recommended** — repository-specific Team Playbook guidance.
-- **Optional** — RCCL, personal preferences, and feedback history.
+- **Optional** — RCCL and personal preferences.
 
 Built-in guidance works without a Team Playbook or RCCL. Their absence is not a
 blocker.
@@ -125,11 +125,9 @@ These workflows are not part of the everyday Quickstart.
 |---|---|
 | Inspect installation and readiness | `status`, `doctor` |
 | Add repository-specific Playbook layers | `bootstrap prepare/commit` |
-| Inspect a prepared or completed session | `change explain` |
+| Inspect a prepared or completed run | `change explain` |
 | Calibrate durable repository observations | `context prepare/commit/approve` |
 | Validate or refresh RCCL evidence | `context validate/refresh-stale` |
-| Inspect bounded outcome aggregates | `feedback inspect` |
-| Persist an approved, unapplied policy proposal | `feedback propose` |
 
 ### Team Playbook
 
@@ -137,7 +135,9 @@ The Team Playbook is shared prescriptive policy. `bootstrap prepare` gives the
 Host a bounded layer-selection contract. The Host inspects the repository and
 must show the user its selected layers, exact evidence paths, and rationale
 before `bootstrap commit` writes
-`.resonant-code/playbook/local-augment.yaml`.
+`.resonant-code/playbook/local-augment.yaml`. Prepare itself writes no project
+artifact; the candidate can be passed to commit over stdin or through a
+temporary file.
 
 ### Repository context
 
@@ -151,13 +151,6 @@ stores generated observations separately from human review. Approval requires
 the exact current content fingerprint; changing the observation invalidates
 the approval. Existing reviewed RCCL is loaded and reverified automatically
 during relevant changes.
-
-### Feedback
-
-Feedback records only evidence-backed satisfied, violated, and approved
-exception outcomes for guidance the agent actually received. It never changes
-policy automatically. An approved feedback proposal remains inspectable and
-unapplied until a separate policy edit.
 
 ## Architecture
 
@@ -216,9 +209,24 @@ Durable team-owned state:
 - `.resonant-code/playbook/local-augment.yaml`
 - `.resonant-code/checks.json`
 - `.resonant-code/rccl.yaml`
-- `.resonant-code/feedback/`
 
-Generated sessions live under `.resonant-code/context/` and are ignored.
+Task runtime state is isolated and ignored:
+
+```text
+.resonant-code/runs/<runId>/
+├── run.json          # decision, baseline, and completed evaluation
+├── evaluation.json   # Host attestations and approved exceptions
+└── checks/           # bounded stdout/stderr from the exact prepared checks
+```
+
+A run is created only after every task check is configured. Interpretation,
+guidance-overflow, and checks-required results do not write runtime state.
+Prepared runs are never pruned automatically; completion removes only
+completed runs older than the most recent 50. Each persisted check stream is
+capped at 1 MiB, with an explicit truncation marker while its digest still
+covers the complete output. There is no repository-global feedback event log
+or aggregate database in the initial release.
+
 Owner content outside marked blocks is preserved. Modified generated files are
 not replaced unless `--force` is explicit.
 

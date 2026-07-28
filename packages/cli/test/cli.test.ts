@@ -1,10 +1,12 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 import {
   existsSync,
   mkdtempSync,
   mkdirSync,
   readFileSync,
+  readdirSync,
   rmSync,
   writeFileSync,
 } from 'node:fs';
@@ -214,16 +216,13 @@ test('CLI owns init, bootstrap, RCCL, and change prepare without installation pa
     ]);
     const decision = prepared.output as {
       status: string;
-      sessionPath: string;
+      runId?: string;
+      runPath?: string;
     };
-    assert.ok(decision.status === 'compiled' || decision.status === 'needs-attention');
-    assert.ok(decision.sessionPath);
-    const session = JSON.parse(readFileSync(decision.sessionPath, 'utf8'));
-    assert.equal(session.controlPlane.kind, 'cli');
-    assert.equal(session.controlPlane.version, '0.0.1');
-    assert.equal(session.controlPlane.corePackage, '@sovea/resonant-code-core');
-    assert.equal(session.controlPlane.coreVersion, '0.0.1');
-    assert.equal(Object.hasOwn(session, 'pluginRoot'), false);
+    assert.equal(decision.status, 'checks-required');
+    assert.equal(decision.runId, undefined);
+    assert.equal(decision.runPath, undefined);
+    assert.equal(existsSync(join(root, '.resonant-code', 'runs')), false);
 
     const status = await runCli(['status', root, '--json']);
     assert.equal((status.output as {
@@ -251,6 +250,150 @@ test('CLI owns init, bootstrap, RCCL, and change prepare without installation pa
     assert.equal(
       doctorReadiness.optional.some((action) => action.code === 'rccl-absent'),
       false,
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('change lifecycle creates one task-scoped run only after checks are configured', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'resonant-cli-run-'));
+  try {
+    mkdirSync(join(root, 'src'), { recursive: true });
+    writeFileSync(join(root, 'package.json'), '{"name":"run-fixture","type":"module"}\n', 'utf8');
+    writeFileSync(join(root, 'src', 'example.ts'), 'export const value = 1;\n', 'utf8');
+    git(root, ['init', '-q']);
+    git(root, ['config', 'user.email', 'run@example.invalid']);
+    git(root, ['config', 'user.name', 'Run Test']);
+    git(root, ['add', '.']);
+    git(root, ['commit', '-qm', 'initial']);
+
+    const prepareArgs = [
+      'change',
+      'prepare',
+      root,
+      '--task',
+      'Document the exported example',
+      '--change-type',
+      'docs',
+      '--target',
+      'src/example.ts',
+      '--risk',
+      'low',
+      '--scope',
+      'local',
+      '--guidance-byte-limit',
+      '20000',
+      '--json',
+    ];
+    const blocked = (await runCli(prepareArgs)).output as {
+      status: string;
+      checkPlan: Array<{ id: string }>;
+      runId?: string;
+    };
+    assert.equal(blocked.status, 'checks-required');
+    assert.equal(blocked.runId, undefined);
+    assert.equal(existsSync(join(root, '.resonant-code', 'runs')), false);
+
+    mkdirSync(join(root, '.resonant-code'), { recursive: true });
+    writeFileSync(join(root, '.resonant-code', 'checks.json'), JSON.stringify({
+      version: '1.0',
+      checks: blocked.checkPlan.map((check) => ({
+        id: check.id,
+        command: [process.execPath, '-e', 'process.exit(0)'],
+        timeoutMs: 10_000,
+      })),
+    }, null, 2), 'utf8');
+
+    const prepared = (await runCli(prepareArgs)).output as {
+      status: string;
+      runId: string;
+      runPath: string;
+      evaluationInputPath: string;
+    };
+    assert.ok(prepared.status === 'compiled' || prepared.status === 'needs-attention');
+    assert.match(prepared.runId, /^[0-9a-f-]{36}$/);
+    const run = JSON.parse(readFileSync(prepared.runPath, 'utf8'));
+    assert.equal(run.runId, prepared.runId);
+    assert.equal(run.workflow, 'change');
+    assert.equal(run.state, 'prepared');
+    assert.deepEqual(
+      JSON.parse(readFileSync(prepared.evaluationInputPath, 'utf8')),
+      { attestations: [], exceptions: [] },
+    );
+    assert.ok(run.worktreeBaseline.entries.every((entry: { path: string }) =>
+      !entry.path.startsWith('.resonant-code/runs/')));
+
+    const runsDirectory = join(root, '.resonant-code', 'runs');
+    const oldCompletedRuns = Array.from({ length: 51 }, () => {
+      const runId = randomUUID();
+      const runDirectory = join(runsDirectory, runId);
+      mkdirSync(join(runDirectory, 'checks'), { recursive: true });
+      writeFileSync(
+        join(runDirectory, 'run.json'),
+        `${JSON.stringify({ state: 'completed' })}\n`,
+        'utf8',
+      );
+      writeFileSync(join(runDirectory, 'checks', 'fixture.log'), 'old\n', 'utf8');
+      return runDirectory;
+    });
+    const retainedPreparedRun = join(runsDirectory, randomUUID());
+    mkdirSync(retainedPreparedRun);
+    writeFileSync(
+      join(retainedPreparedRun, 'run.json'),
+      `${JSON.stringify({ state: 'prepared' })}\n`,
+      'utf8',
+    );
+
+    writeFileSync(join(root, 'src', 'example.ts'), 'export const value = 2;\n', 'utf8');
+    const completed = (await runCli([
+      'change',
+      'complete',
+      root,
+      '--run',
+      prepared.runId,
+      '--json',
+    ])).output as {
+      status: string;
+      runId: string;
+      runPath: string;
+      checks: Array<{ outputRefs?: { stdout: string; stderr: string } }>;
+    };
+    assert.equal(completed.runId, prepared.runId);
+    assert.equal(completed.runPath, prepared.runPath);
+    assert.ok(completed.checks.every((check) =>
+      check.outputRefs?.stdout.startsWith(
+        `.resonant-code/runs/${prepared.runId}/checks/`,
+      )));
+    const completedRun = JSON.parse(readFileSync(prepared.runPath, 'utf8'));
+    assert.equal(completedRun.state, 'completed');
+    assert.equal(Object.hasOwn(completedRun, 'completionFacts'), false);
+    assert.equal(existsSync(join(root, '.resonant-code', 'feedback')), false);
+    const retainedRunStates = readdirSync(runsDirectory)
+      .map((runId) =>
+        JSON.parse(readFileSync(join(runsDirectory, runId, 'run.json'), 'utf8')).state);
+    assert.equal(retainedRunStates.filter((state) => state === 'completed').length, 50);
+    assert.equal(retainedRunStates.filter((state) => state === 'prepared').length, 1);
+    assert.ok(oldCompletedRuns.some((runDirectory) => !existsSync(runDirectory)));
+    assert.equal(existsSync(retainedPreparedRun), true);
+
+    const explained = (await runCli([
+      'change',
+      'explain',
+      root,
+      '--run',
+      prepared.runId,
+      '--json',
+    ])).output as {
+      state: string;
+      runId: string;
+      evaluation: { evaluationId: string };
+    };
+    assert.equal(explained.state, 'completed');
+    assert.equal(explained.runId, prepared.runId);
+    assert.equal(
+      explained.evaluation.evaluationId,
+      completedRun.completion.evaluation.evaluationId,
     );
   } finally {
     rmSync(root, { recursive: true, force: true });
@@ -593,8 +736,8 @@ test('human completion output presents facts, guidance, and review needs', () =>
           reasons: ['No evidence-backed verdict was provided.'],
         },
       ],
-      feedback: { recorded: 1 },
-      sessionPath: '/tmp/session.json',
+      runId: 'f61d2968-155a-4249-a72e-4789001bb515',
+      runPath: '/tmp/run/run.json',
     },
   });
   assert.match(rendered, /Changed files: 2/);
@@ -602,7 +745,7 @@ test('human completion output presents facts, guidance, and review needs', () =>
   assert.match(rendered, /test: Check exited with 1/);
   assert.match(rendered, /required: satisfied=1/);
   assert.match(rendered, /consider-1 \(unverified\)/);
-  assert.match(rendered, /Feedback recorded: 1/);
+  assert.match(rendered, /Run: f61d2968-155a-4249-a72e-4789001bb515/);
   assert.match(rendered, /Review unresolved evidence/);
 });
 

@@ -1,5 +1,5 @@
 /** CLI-owned change orchestration around the Runtime hard kernel. */
-import { createHash } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
 import {
   existsSync,
   mkdirSync,
@@ -11,7 +11,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { homedir } from 'node:os';
-import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 
 import { compileChange, evaluateChange } from '@sovea/resonant-code-core';
 import { validateContext } from '@sovea/resonant-code-core/rccl';
@@ -24,15 +24,15 @@ import {
 } from '../facts/worktree.mjs';
 import {
   EvaluationInputSchema,
-  FeedbackAggregateSchema,
-  FeedbackProposalCandidateSchema,
   GuidanceDeliverySelectionSchema,
   RelationProposalDocumentSchema,
-  RuntimeSessionSchema,
+  RuntimeRunSchema,
 } from '../schemas/change.ts';
 import { parseArtifact } from '../validation.ts';
 
-const SESSION_SCHEMA_VERSION = '1.0';
+const RUN_SCHEMA_VERSION = '1.0';
+const RUN_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+const MAX_COMPLETED_RUNS = 50;
 
 export async function prepareCodeTask(options) {
   const paths = resolvePaths(options);
@@ -62,7 +62,7 @@ export async function prepareCodeTask(options) {
   if (output.status === 'needs-interpretation') {
     return {
       status: 'needs-interpretation',
-      schemaVersion: SESSION_SCHEMA_VERSION,
+      schemaVersion: RUN_SCHEMA_VERSION,
       task: output.task,
       reasons: output.reasons,
       requiredFields: output.requiredFields,
@@ -79,10 +79,28 @@ export async function prepareCodeTask(options) {
   }
 
   const checkPlan = loadCheckPlan(paths.checkConfigPath, output.verificationPlan);
+  if (checkPlan.some((item) => item.status === 'missing')) {
+    return {
+      status: 'checks-required',
+      schemaVersion: RUN_SCHEMA_VERSION,
+      decisionStatus: output.status,
+      decisionId: output.decisionId,
+      task: output.task,
+      guidance: output.executionGuidance,
+      verificationPlan: output.verificationPlan,
+      delivery: output.trace.delivery,
+      checkPlan,
+      diagnostics: output.trace.diagnostics,
+      nextStep: 'Configure every missing check and rerun prepare. No run or worktree baseline was created.',
+    };
+  }
+
   const worktreeBaseline = await captureGitWorktree(paths.projectRoot);
-  const sessionPath = writeSession(paths.projectRoot, {
-    schemaVersion: SESSION_SCHEMA_VERSION,
-    createdAt: new Date().toISOString(),
+  const run = createRun(paths.projectRoot, {
+    schemaVersion: RUN_SCHEMA_VERSION,
+    workflow: 'change',
+    state: 'prepared',
+    preparedAt: new Date().toISOString(),
     projectRoot: paths.projectRoot,
     controlPlane: {
       kind: 'cli',
@@ -94,46 +112,33 @@ export async function prepareCodeTask(options) {
     decision: output,
     worktreeBaseline,
     checkPlan,
-    evaluation: null,
   });
   return compactDecision(
     output,
-    sessionPath,
+    run,
     checkPlan,
     summarizeWorktreeSnapshot(worktreeBaseline),
   );
 }
 
 export async function completeCodeTask(options) {
-  const sessionPath = requiredPath(options.sessionPath, 'complete requires --session <path>.');
-  const session = readSession(sessionPath);
-  summarizeWorktreeSnapshot(session.worktreeBaseline);
-  const artifact = options.evaluationFile
-    ? readJsonFile(options.evaluationFile, 'evaluation input')
-    : {
-        attestations: [],
-        exceptions: [],
-      };
+  const projectRoot = resolve(requiredString(options.projectRoot, 'project root'));
+  const loaded = readRun(projectRoot, requiredRunId(options.runId));
+  const { run, runDirectory, runPath, evaluationInputPath } = loaded;
+  summarizeWorktreeSnapshot(run.worktreeBaseline);
+  const artifact = readJsonFile(evaluationInputPath, 'evaluation input');
   const evaluationInput = parseArtifact(
     EvaluationInputSchema,
     artifact,
     'evaluation input',
   );
-  const outputDirectory = join(
-    session.projectRoot,
-    '.resonant-code',
-    'context',
-    'runtime-sessions',
-    'check-output',
-    session.decision.decisionId,
-  );
   const collectedChecks = await runCheckPlan({
-    projectRoot: session.projectRoot,
-    plan: session.checkPlan,
-    outputDirectory,
+    projectRoot,
+    plan: run.checkPlan,
+    outputDirectory: join(runDirectory, 'checks'),
   });
-  const currentWorktree = await captureGitWorktree(session.projectRoot);
-  const changes = compareGitWorktrees(session.worktreeBaseline, currentWorktree);
+  const currentWorktree = await captureGitWorktree(projectRoot);
+  const changes = compareGitWorktrees(run.worktreeBaseline, currentWorktree);
   const checks = collectedChecks.map((check) => ({
     ...check,
     provenance: {
@@ -142,26 +147,24 @@ export async function completeCodeTask(options) {
     },
   }));
   const evaluation = evaluateChange({
-    decision: session.decision,
+    decision: run.decision,
     changes,
     checks,
     attestations: evaluationInput.attestations,
     exceptions: evaluationInput.exceptions,
-    feedbackPath: join(session.projectRoot, '.resonant-code', 'feedback', 'verified-events.jsonl'),
   });
-  const nextSession = {
-    ...session,
-    completionFacts: {
-      currentWorktree,
-      checks,
+  writeJsonAtomic(runPath, {
+    ...run,
+    state: 'completed',
+    completion: {
+      completedAt: new Date().toISOString(),
+      evaluation,
     },
-    evaluation,
-    completedAt: new Date().toISOString(),
-  };
-  writeJsonAtomic(sessionPath, nextSession);
+  });
+  cleanupCompletedRuns(projectRoot);
   return {
     status: evaluation.status,
-    schemaVersion: SESSION_SCHEMA_VERSION,
+    schemaVersion: RUN_SCHEMA_VERSION,
     decisionId: evaluation.decisionId,
     evaluationId: evaluation.evaluationId,
     operation: evaluation.operation,
@@ -170,157 +173,27 @@ export async function completeCodeTask(options) {
     assurance: evaluation.assurance,
     results: evaluation.results,
     checks: evaluation.checks,
-    feedback: evaluation.feedback ?? { recorded: 0, path: null },
-    sessionPath,
+    runId: run.runId,
+    runPath,
+    evaluationInputPath,
   };
 }
 
-export function explainCodeSession(options) {
-  const sessionPath = requiredPath(options.sessionPath, 'explain requires --session <path>.');
-  const session = readSession(sessionPath);
-  return {
-    status: 'ok',
-    schemaVersion: session.schemaVersion,
-    sessionPath,
-    decision: session.decision,
-    evaluation: session.evaluation ?? null,
-  };
-}
-
-export function inspectCodeFeedback(options) {
+export function explainCodeRun(options) {
   const projectRoot = resolve(requiredString(options.projectRoot, 'project root'));
-  const feedbackDirectory = join(projectRoot, '.resonant-code', 'feedback');
-  const aggregatePath = join(feedbackDirectory, 'aggregates.json');
-  if (!existsSync(aggregatePath)) {
-    return {
-      status: 'absent',
-      schemaVersion: SESSION_SCHEMA_VERSION,
-      aggregatePath,
-      aggregates: [],
-      missingGuidanceIds: unique(options.guidanceIds ?? []),
-    };
-  }
-  const document = readFeedbackAggregate(aggregatePath);
-  const requested = unique(options.guidanceIds ?? []);
-  const byId = new Map(document.aggregates.map((aggregate) => [aggregate.guidanceId, aggregate]));
-  return {
-    status: 'ok',
-    schemaVersion: SESSION_SCHEMA_VERSION,
-    aggregatePath,
-    source: document.source,
-    aggregates: requested.length
-      ? requested.flatMap((id) => byId.has(id) ? [byId.get(id)] : [])
-      : document.aggregates,
-    missingGuidanceIds: requested.filter((id) => !byId.has(id)),
-  };
-}
-
-export function createApprovedFeedbackProposal(options) {
-  const projectRoot = resolve(requiredString(options.projectRoot, 'project root'));
-  const inputPath = requiredPath(options.inputFile, 'propose-feedback-change requires --input <approved-proposal.json>.');
-  const candidate = parseArtifact(
-    FeedbackProposalCandidateSchema,
-    readJsonFile(inputPath, 'approved feedback proposal'),
-    'approved feedback proposal',
+  const { run, runPath, evaluationInputPath } = readRun(
+    projectRoot,
+    requiredRunId(options.runId),
   );
-  if (candidate.schemaVersion !== SESSION_SCHEMA_VERSION) {
-    throw new Error(
-      `UNSUPPORTED_SCHEMA_VERSION: feedback proposal must use ${SESSION_SCHEMA_VERSION}.`,
-    );
-  }
-
-  const feedbackDirectory = join(projectRoot, '.resonant-code', 'feedback');
-  const aggregatePath = join(feedbackDirectory, 'aggregates.json');
-  if (!existsSync(aggregatePath)) {
-    throw new Error('Feedback aggregates are absent; complete evidence-backed tasks before proposing a policy change.');
-  }
-  const aggregates = readFeedbackAggregate(aggregatePath);
-  const sourceAggregate = aggregates.aggregates
-    .find((aggregate) => aggregate.guidanceId === candidate.guidanceId);
-  if (!sourceAggregate) {
-    throw new Error(`Feedback has no aggregate for guidance ${candidate.guidanceId}.`);
-  }
-  if (candidate.aggregateFingerprint !== sourceAggregate.aggregateFingerprint) {
-    throw new Error(`Feedback aggregate for ${candidate.guidanceId} changed; inspect it again before approving a proposal.`);
-  }
-
-  const semanticProposal = {
-    schemaVersion: SESSION_SCHEMA_VERSION,
-    guidanceId: candidate.guidanceId,
-    aggregateFingerprint: candidate.aggregateFingerprint,
-    target: candidate.target,
-    change: {
-      kind: candidate.change.kind,
-      summary: candidate.change.summary.trim(),
-      proposedContent: candidate.change.proposedContent,
-    },
-    rationale: candidate.rationale.trim(),
-    approval: {
-      status: 'approved',
-      approvedBy: candidate.approval.approvedBy.trim(),
-      reason: candidate.approval.reason.trim(),
-    },
-  };
-  const proposalId = hashJson([
-    'feedback-change-proposal',
-    semanticProposal,
-    sourceAggregate,
-  ]);
-  const directory = join(feedbackDirectory, 'change-proposals');
-  const proposalPath = join(directory, `${proposalId}.json`);
-  if (existsSync(proposalPath)) {
-    const existing = readJsonFile(proposalPath, 'existing feedback proposal');
-    const existingSemantic = existing && typeof existing === 'object' && !Array.isArray(existing)
-      ? {
-          schemaVersion: existing.schemaVersion,
-          guidanceId: existing.guidanceId,
-          aggregateFingerprint: existing.aggregateFingerprint,
-          target: existing.target,
-          change: existing.change,
-          rationale: existing.rationale,
-          approval: existing.approval && typeof existing.approval === 'object'
-            ? {
-                status: existing.approval.status,
-                approvedBy: existing.approval.approvedBy,
-                reason: existing.approval.reason,
-              }
-            : null,
-        }
-      : null;
-    if (existing?.proposalId !== proposalId
-      || JSON.stringify(existingSemantic) !== JSON.stringify(semanticProposal)
-      || JSON.stringify(existing.sourceAggregate) !== JSON.stringify(sourceAggregate)
-      || existing.applyStatus !== 'not-applied') {
-      throw new Error(`Existing feedback proposal at ${proposalPath} does not match its content-derived identity.`);
-    }
-    return {
-      status: 'approved-proposal',
-      schemaVersion: SESSION_SCHEMA_VERSION,
-      proposalId,
-      proposalPath,
-      written: false,
-      applyStatus: 'not-applied',
-    };
-  }
-  const approvedAt = new Date().toISOString();
-  writeJsonAtomic(proposalPath, {
-    ...semanticProposal,
-    proposalId,
-    createdAt: approvedAt,
-    approval: {
-      ...semanticProposal.approval,
-      approvedAt,
-    },
-    sourceAggregate,
-    applyStatus: 'not-applied',
-  });
   return {
-    status: 'approved-proposal',
-    schemaVersion: SESSION_SCHEMA_VERSION,
-    proposalId,
-    proposalPath,
-    written: true,
-    applyStatus: 'not-applied',
+    status: 'ok',
+    schemaVersion: run.schemaVersion,
+    runId: run.runId,
+    runPath,
+    evaluationInputPath,
+    state: run.state,
+    decision: run.decision,
+    evaluation: run.completion?.evaluation ?? null,
   };
 }
 
@@ -332,9 +205,6 @@ export async function getCodeStatus(options) {
   const personalOverlay = existsSync(paths.personalOverlayPath) ? 'present' : 'absent';
   const checks = checkConfigStatus(paths.checkConfigPath);
   const rccl = rcclStatus(paths.projectRoot, paths.rcclPath);
-  const feedbackPath = join(paths.projectRoot, '.resonant-code', 'feedback', 'verified-events.jsonl');
-  const feedbackAggregatePath = join(paths.projectRoot, '.resonant-code', 'feedback', 'aggregates.json');
-  const feedback = feedbackStatus(feedbackPath, feedbackAggregatePath);
   const required = [];
   const recommended = [];
   const optional = [];
@@ -366,12 +236,6 @@ export async function getCodeStatus(options) {
       message: 'The configured check file is not valid for the current schema.',
     });
   }
-  if (feedback === 'invalid') {
-    required.push({
-      code: 'feedback-invalid',
-      message: 'Verified feedback events and Runtime-owned aggregates are inconsistent; inspect the files before recording more outcomes.',
-    });
-  }
   if (missingControlPlaneFiles.length) {
     required.unshift({
       code: 'core-installation-incomplete',
@@ -380,7 +244,7 @@ export async function getCodeStatus(options) {
   }
   return {
     status: missingControlPlaneFiles.length ? 'blocked' : 'ok',
-    schemaVersion: SESSION_SCHEMA_VERSION,
+    schemaVersion: RUN_SCHEMA_VERSION,
     readiness: {
       status: missingControlPlaneFiles.length
         ? 'blocked'
@@ -396,7 +260,6 @@ export async function getCodeStatus(options) {
       personalOverlay,
       rccl,
       checks,
-      feedback,
     },
     controlPlane: {
       kind: 'cli',
@@ -412,23 +275,8 @@ export async function getCodeStatus(options) {
       personalOverlayPath: paths.personalOverlayPath,
       rcclPath: paths.rcclPath,
       checkConfigPath: paths.checkConfigPath,
-      feedbackPath,
-      feedbackAggregatePath,
     },
   };
-}
-
-function readFeedbackAggregate(path) {
-  const value = readJsonFile(path, 'feedback aggregate');
-  if (!value || typeof value !== 'object' || Array.isArray(value)
-    || value.schemaVersion !== SESSION_SCHEMA_VERSION) {
-    throw new Error(`Feedback aggregate at ${path} is invalid or uses an unsupported schema.`);
-  }
-  return parseArtifact(
-    FeedbackAggregateSchema,
-    value,
-    `feedback aggregate at ${path}`,
-  );
 }
 
 function buildTaskInput(options) {
@@ -452,7 +300,7 @@ function buildTaskInput(options) {
   };
 }
 
-function compactDecision(decision, sessionPath, checkPlan, baseline) {
+function compactDecision(decision, run, checkPlan, baseline) {
   return {
     status: decision.status,
     schemaVersion: decision.schemaVersion,
@@ -465,10 +313,10 @@ function compactDecision(decision, sessionPath, checkPlan, baseline) {
     checkPlan,
     baseline,
     diagnostics: decision.trace.diagnostics,
-    sessionPath,
-    nextStep: checkPlan.some((item) => item.status === 'missing')
-      ? 'Configure every missing check and rerun prepare before implementation; complete will collect the baseline-to-current diff and run only configured commands.'
-      : 'Implement using required/consider/avoid/tensions, then complete with host attestations; complete will collect the baseline-to-current diff and run the configured commands.',
+    runId: run.runId,
+    runPath: run.runPath,
+    evaluationInputPath: run.evaluationInputPath,
+    nextStep: `Implement using the delivered guidance, write semantic attestations to ${run.evaluationInputPath}, then run change complete with --run ${run.runId}.`,
   };
 }
 
@@ -508,54 +356,82 @@ function readDeliverySelection(filePath) {
   );
 }
 
-function writeSession(projectRoot, session) {
-  const directory = join(projectRoot, '.resonant-code', 'context', 'runtime-sessions', 'code');
-  mkdirSync(directory, { recursive: true });
-  cleanupSessions(directory);
-  const stamp = new Date().toISOString().replace(/[:.]/g, '-');
-  const sessionPath = join(directory, `${stamp}-${session.decision.decisionId}.json`);
-  writeJsonAtomic(sessionPath, session);
-  return sessionPath;
+function createRun(projectRoot, value) {
+  const runId = randomUUID();
+  const runsDirectory = join(projectRoot, '.resonant-code', 'runs');
+  const runDirectory = join(runsDirectory, runId);
+  const runPath = join(runDirectory, 'run.json');
+  const evaluationInputPath = join(runDirectory, 'evaluation.json');
+  mkdirSync(runsDirectory, { recursive: true });
+  mkdirSync(runDirectory);
+  writeJsonAtomic(runPath, {
+    ...value,
+    runId,
+  });
+  writeJsonAtomic(evaluationInputPath, {
+    attestations: [],
+    exceptions: [],
+  });
+  return {
+    runId,
+    runPath,
+    evaluationInputPath,
+  };
 }
 
-function readSession(sessionPath) {
-  const session = parseArtifact(
-    RuntimeSessionSchema,
-    readJsonFile(sessionPath, 'runtime session'),
-    'runtime session',
+function readRun(projectRoot, runId) {
+  const runDirectory = join(projectRoot, '.resonant-code', 'runs', runId);
+  const runPath = join(runDirectory, 'run.json');
+  const evaluationInputPath = join(runDirectory, 'evaluation.json');
+  const run = parseArtifact(
+    RuntimeRunSchema,
+    readJsonFile(runPath, 'runtime run'),
+    'runtime run',
   );
-  if (session.schemaVersion !== SESSION_SCHEMA_VERSION) {
-    throw new Error(`UNSUPPORTED_SCHEMA_VERSION: session must use ${SESSION_SCHEMA_VERSION}; re-run prepare.`);
+  if (run.schemaVersion !== RUN_SCHEMA_VERSION) {
+    throw new Error(`UNSUPPORTED_SCHEMA_VERSION: run must use ${RUN_SCHEMA_VERSION}; re-run prepare.`);
   }
-  if (!session.decision || session.decision.schemaVersion !== SESSION_SCHEMA_VERSION) {
-    throw new Error(`UNSUPPORTED_SCHEMA_VERSION: session decision must use ${SESSION_SCHEMA_VERSION}; re-run prepare.`);
+  if (run.runId !== runId) {
+    throw new Error(`Runtime run identity does not match ${runId}; re-run prepare.`);
   }
-  if (!session.worktreeBaseline) {
-    throw new Error('Runtime session predates trusted machine-fact collection; re-run prepare.');
+  if (resolve(run.projectRoot) !== projectRoot) {
+    throw new Error('Runtime run belongs to a different project root.');
   }
-  const expectedDirectory = resolve(
-    session.projectRoot,
-    '.resonant-code',
-    'context',
-    'runtime-sessions',
-    'code',
-  );
-  const sessionRelativePath = relative(expectedDirectory, resolve(sessionPath));
-  if (!sessionRelativePath
-    || isAbsolute(sessionRelativePath)
-    || sessionRelativePath === '..'
-    || sessionRelativePath.startsWith(`..${process.platform === 'win32' ? '\\' : '/'}`)) {
-    throw new Error('Runtime session must remain in the project runtime-session directory.');
+  if (!run.decision || run.decision.schemaVersion !== RUN_SCHEMA_VERSION) {
+    throw new Error(`UNSUPPORTED_SCHEMA_VERSION: run decision must use ${RUN_SCHEMA_VERSION}; re-run prepare.`);
   }
-  return session;
+  if (!run.worktreeBaseline) {
+    throw new Error('Runtime run is missing its trusted worktree baseline; re-run prepare.');
+  }
+  return {
+    run,
+    runDirectory,
+    runPath,
+    evaluationInputPath,
+  };
 }
 
-function cleanupSessions(directory) {
-  const entries = readdirSync(directory)
-    .filter((name) => name.endsWith('.json'))
-    .map((name) => ({ name, mtime: statSync(join(directory, name)).mtimeMs }))
+function cleanupCompletedRuns(projectRoot) {
+  const directory = join(projectRoot, '.resonant-code', 'runs');
+  if (!existsSync(directory)) return;
+  const entries = readdirSync(directory, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory() && RUN_ID_PATTERN.test(entry.name))
+    .flatMap((entry) => {
+      const runDirectory = join(directory, entry.name);
+      try {
+        const runPath = join(runDirectory, 'run.json');
+        const run = JSON.parse(readFileSync(runPath, 'utf8'));
+        return run?.state === 'completed'
+          ? [{ path: runDirectory, mtime: statSync(runPath).mtimeMs }]
+          : [];
+      } catch {
+        return [];
+      }
+    })
     .sort((left, right) => right.mtime - left.mtime);
-  for (const entry of entries.slice(50)) rmSync(join(directory, entry.name), { force: true });
+  for (const entry of entries.slice(MAX_COMPLETED_RUNS)) {
+    rmSync(entry.path, { recursive: true, force: true });
+  }
 }
 
 function rcclStatus(projectRoot, rcclPath) {
@@ -568,19 +444,6 @@ function checkConfigStatus(path) {
   if (!existsSync(path)) return 'absent';
   try {
     loadCheckPlan(path, { commands: [] });
-    return 'present';
-  } catch {
-    return 'invalid';
-  }
-}
-
-function feedbackStatus(eventsPath, aggregatePath) {
-  const events = existsSync(eventsPath);
-  const aggregate = existsSync(aggregatePath);
-  if (!events && !aggregate) return 'absent';
-  if (!events || !aggregate) return 'invalid';
-  try {
-    readFeedbackAggregate(aggregatePath);
     return 'present';
   } catch {
     return 'invalid';
@@ -626,10 +489,6 @@ function unique(values) {
   return [...new Set(values.map((value) => String(value).trim()).filter(Boolean))];
 }
 
-function hashJson(value) {
-  return createHash('sha256').update(JSON.stringify(value)).digest('hex').slice(0, 16);
-}
-
 function requiredString(value, label) {
   if (typeof value !== 'string' || !value.trim()) {
     throw usageError(`Missing ${label}.`);
@@ -637,7 +496,10 @@ function requiredString(value, label) {
   return value.trim();
 }
 
-function requiredPath(value, message) {
-  if (typeof value !== 'string' || !value.trim()) throw usageError(message);
-  return resolve(value);
+function requiredRunId(value) {
+  const runId = requiredString(value, 'run ID');
+  if (!RUN_ID_PATTERN.test(runId)) {
+    throw usageError('Invalid run ID: expected the UUID returned by change prepare.');
+  }
+  return runId;
 }

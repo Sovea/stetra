@@ -188,8 +188,8 @@ additions:
     exitCode: 0,
     outputDigest: stableHash([command.id, 'passed']),
     outputRefs: {
-      stdout: `.resonant-code/context/${command.id}.stdout.log`,
-      stderr: `.resonant-code/context/${command.id}.stderr.log`,
+      stdout: `.resonant-code/runs/release-smoke/checks/${command.id}.stdout.log`,
+      stderr: `.resonant-code/runs/release-smoke/checks/${command.id}.stderr.log`,
     },
     definitionFingerprint: stableHash([command.id, 'definition']),
     provenance: {
@@ -202,20 +202,12 @@ additions:
     changes,
     checks,
     attestations: attestationsForDecision(decision),
-    feedbackPath: join(project, '.resonant-code', 'feedback', 'verified-events.jsonl'),
   };
   const evaluation = core.evaluateChange(evaluationInput);
   assert.equal(evaluation.schemaVersion, '1.0');
   assert.equal(evaluation.status, 'accepted');
   assert.equal(evaluation.operation, 'modify');
-  assert.ok(evaluation.feedback.recorded > 0);
-  assert.ok(evaluation.feedback.aggregateCount > 0);
-  const feedbackAggregate = JSON.parse(readFileSync(evaluation.feedback.aggregatePath, 'utf8'));
-  assert.equal(feedbackAggregate.source.eventCount, evaluation.feedback.recorded);
-  assert.ok(feedbackAggregate.aggregates.every((aggregate) =>
-    !Object.hasOwn(aggregate, 'explanation')
-    && aggregate.total === aggregate.satisfied + aggregate.violated + aggregate.excepted));
-  assert.equal(core.evaluateChange(evaluationInput).feedback.recorded, 0);
+  assert.equal(core.evaluateChange(evaluationInput).evaluationId, evaluation.evaluationId);
 } finally {
   rmSync(temporary, { recursive: true, force: true });
 }

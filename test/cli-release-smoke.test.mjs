@@ -220,26 +220,26 @@ try {
     '--json',
   ]);
   assert.ok(prepared.status === 'compiled' || prepared.status === 'needs-attention');
-  const session = JSON.parse(readFileSync(prepared.sessionPath, 'utf8'));
-  assert.equal(session.controlPlane.kind, 'cli');
-  assert.equal(session.controlPlane.corePackage, '@sovea/resonant-code-core');
-  assert.equal(session.controlPlane.coreVersion, '0.0.1');
-  assert.equal(Object.hasOwn(session, 'pluginRoot'), false);
+  const preparedRun = JSON.parse(readFileSync(prepared.runPath, 'utf8'));
+  assert.equal(preparedRun.runId, prepared.runId);
+  assert.equal(preparedRun.workflow, 'change');
+  assert.equal(preparedRun.state, 'prepared');
+  assert.equal(preparedRun.controlPlane.kind, 'cli');
+  assert.equal(preparedRun.controlPlane.corePackage, '@sovea/resonant-code-core');
+  assert.equal(preparedRun.controlPlane.coreVersion, '0.0.1');
+  assert.equal(Object.hasOwn(preparedRun, 'pluginRoot'), false);
 
   writeFileSync(join(project, 'src', 'example.ts'), 'export const value = 2;\n', 'utf8');
-  const evaluationPath = join(project, '.resonant-code', 'context', 'evaluation.json');
-  mkdirSync(join(project, '.resonant-code', 'context'), { recursive: true });
-  writeFileSync(evaluationPath, JSON.stringify({
+  writeFileSync(prepared.evaluationInputPath, JSON.stringify({
     attestations: attestationsForDecision(prepared),
     exceptions: [],
   }, null, 2), 'utf8');
   const completed = runInstalledCli([
     'change',
     'complete',
-    '--session',
-    prepared.sessionPath,
-    '--evaluation-file',
-    evaluationPath,
+    project,
+    '--run',
+    prepared.runId,
     '--json',
   ]);
   assert.equal(completed.status, 'accepted');
@@ -248,6 +248,10 @@ try {
     [['src/example.ts', 'modified']],
   );
   assert.ok(completed.checks.every((check) => check.status === 'passed'));
+  const completedRun = JSON.parse(readFileSync(prepared.runPath, 'utf8'));
+  assert.equal(completedRun.state, 'completed');
+  assert.equal(completedRun.completion.evaluation.evaluationId, completed.evaluationId);
+  assert.equal(Object.hasOwn(completedRun, 'completionFacts'), false);
 
   const status = runInstalledCli(['status', project, '--json']);
   assert.equal(status.controlPlane.kind, 'cli');

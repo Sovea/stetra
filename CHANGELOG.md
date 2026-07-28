@@ -16,7 +16,7 @@
   evidence while the CLI validates exact paths instead of maintaining a
   framework filename heuristic.
 - Moves prepare/complete orchestration behind the CLI control plane, records
-  CLI/Core package identity in sessions, and removes repository-native plugin
+  CLI/Core package identity in task runs, and removes repository-native plugin
   distribution and compatibility entrypoints.
 - Stops tracking all generated `dist/` files and verifies deterministic rebuilds.
 - Verifies the real Core and CLI npm tarballs through isolated API and
@@ -33,5 +33,8 @@
 - Captures an exact Git worktree baseline at prepare, derives actual task
   add/modify/delete/unique-rename facts at complete, runs explicit check
   commands, and separates those machine facts from host semantic attestations.
-- Records idempotent, evidence-backed feedback events instead of optimistic adherence rates.
+- Isolates runtime state under `.resonant-code/runs/<runId>/`, creates no run
+  until checks are configured, bounds persisted check streams, and avoids a
+  repository-global feedback ledger without a demonstrated initial-release
+  consumer.
 - Keeps task understanding and semantic relations as bounded host inputs rather than mandatory multi-stage artifacts.

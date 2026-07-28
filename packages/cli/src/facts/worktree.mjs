@@ -11,8 +11,7 @@ import { resolve } from 'node:path';
 import { runBufferedCommand } from '../infrastructure/process.ts';
 
 const WORKFLOW_OUTPUT_PREFIXES = [
-  '.resonant-code/context/',
-  '.resonant-code/feedback/',
+  '.resonant-code/runs/',
 ];
 const GIT_OUTPUT_LIMIT = 256 * 1024 * 1024;
 

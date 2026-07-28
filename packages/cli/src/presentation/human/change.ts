@@ -41,15 +41,33 @@ export function formatChangePrepare(
     return lines.join('\n');
   }
 
+  const checksRequired = output.status === 'checks-required';
   const lines = [
-    heading('Change guidance prepared', colors),
+    heading(checksRequired ? 'Checks required before run' : 'Change guidance prepared', colors),
     statusLine(String(output.status ?? 'unknown'), colors),
   ];
   if (typeof output.decisionId === 'string') {
     lines.push(`${colors.bold('Decision:')} ${output.decisionId}`);
   }
-  if (typeof output.sessionPath === 'string') {
-    lines.push(`${colors.bold('Session:')} ${output.sessionPath}`);
+  if (typeof output.runId === 'string') {
+    lines.push(`${colors.bold('Run:')} ${output.runId}`);
+  }
+  if (typeof output.runPath === 'string') {
+    lines.push(`${colors.bold('Run file:')} ${output.runPath}`);
+  }
+  if (typeof output.evaluationInputPath === 'string') {
+    lines.push(`${colors.bold('Evaluation input:')} ${output.evaluationInputPath}`);
+  }
+  if (checksRequired && Array.isArray(output.checkPlan)) {
+    const missing = output.checkPlan
+      .filter(isRecord)
+      .filter((check) => check.status === 'missing');
+    if (missing.length) {
+      lines.push('', colors.bold('Missing checks'));
+      for (const check of missing) {
+        lines.push(`${colors.yellow('•')} ${String(check.id ?? 'check')}`);
+      }
+    }
   }
   appendGuidance(lines, output.guidance, colors);
   appendReasons(lines, output.reasons, colors);
@@ -118,13 +136,11 @@ export function formatChangeComplete(
   appendExceptions(lines, results, colors);
   appendAttention(lines, results, colors);
 
-  if (isRecord(output.feedback)) {
-    lines.push(
-      `${colors.bold('Feedback recorded:')} ${String(output.feedback.recorded ?? 0)}`,
-    );
+  if (typeof output.runId === 'string') {
+    lines.push(`${colors.bold('Run:')} ${output.runId}`);
   }
-  if (typeof output.sessionPath === 'string') {
-    lines.push(`${colors.bold('Session:')} ${output.sessionPath}`);
+  if (typeof output.runPath === 'string') {
+    lines.push(`${colors.bold('Run file:')} ${output.runPath}`);
   }
 
   if (status === 'warning') {

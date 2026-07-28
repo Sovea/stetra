@@ -19,7 +19,7 @@ After setup, use the Host Agent normally:
 > Fix the parser boundary and add a regression test.
 
 The generated adapter runs `change prepare` before implementation and
-`change complete` afterward. Human users do not need to manage session,
+`change complete` afterward. Human users do not need to manage task runs,
 selection, relation, or evaluation artifacts.
 
 Human-readable output is the default. Host Adapters use `--json`; JSON mode
@@ -29,8 +29,8 @@ recommended or optional.
 
 The package exposes one binary, `resonant-code`, and pins the exact matching
 `@sovea/resonant-code-core` version. Core owns Playbook, RCCL, compilation,
-evaluation, and bounded feedback decisions. CLI owns reproducible workflow IO,
-machine facts, presentation, and generated adapters. Neither package calls an
-LLM.
+and evaluation decisions. CLI owns reproducible workflow IO, task-scoped run
+state, machine facts, presentation, and generated adapters. Neither package
+calls an LLM.
 
 Use `resonant-code --help` for the complete advanced command surface.
