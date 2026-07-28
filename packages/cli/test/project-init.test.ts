@@ -39,16 +39,23 @@ test('project init creates and safely upgrades only managed adapter artifacts', 
       changeReference,
       /--scope[\s\S]*local\|module\|cross-module\|repository/,
     );
+    assert.match(changeReference, /## Align/);
+    assert.match(changeReference, /ask one consolidated\s+question/);
+    assert.match(changeReference, /not a file write allowlist/);
+    assert.match(changeReference, /at most one durable learning/);
     assert.match(changeReference, /perform a contradiction review/);
     assert.match(changeReference, /first try to falsify satisfaction/);
-    assert.match(
-      readFileSync(join(skillRoot, 'references', 'setup.md'), 'utf8'),
-      /Configure checks/,
+    const setupReference = readFileSync(
+      join(skillRoot, 'references', 'setup.md'),
+      'utf8',
     );
-    assert.match(
-      readFileSync(join(skillRoot, 'references', 'context.md'), 'utf8'),
-      /--fingerprint/,
+    assert.match(setupReference, /semantic team policy/);
+    const contextReference = readFileSync(
+      join(skillRoot, 'references', 'context.md'),
+      'utf8',
     );
+    assert.match(contextReference, /--fingerprint/);
+    assert.match(contextReference, /Host handles[\s\S]*fingerprint binding/);
     assert.equal(inspectProjectInstallation(root).status, 'current');
 
     const unchanged = initializeProject({ projectRoot: root });

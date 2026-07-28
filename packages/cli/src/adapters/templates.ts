@@ -37,18 +37,22 @@ Read only the workflow reference needed for the current request.
 
 ## Collaboration boundary
 
+Use human collaboration for semantic design and acceptance decisions, not as a
+routine tool-permission layer.
+
 Proceed without interrupting the user for repository-discoverable task fields,
-optional-guidance selection, use of already-approved RCCL, implementation
-inside the requested scope, configured checks, and evidence-backed
-attestations for attention-required guidance.
+optional-guidance selection, use of already-approved RCCL, implementation and
+necessary adjacent changes that preserve the aligned intent, configured
+non-destructive checks, and evidence-backed attestations for
+attention-required guidance.
 
 Inform the user without blocking for absent optional Team Playbook, RCCL, or
 personal overlay.
 
-Pause for user direction before changing persistent team authority or trusted
-configuration, approving an RCCL observation or policy exception, resolving a
-task-intent ambiguity or policy tension, expanding scope, or accepting an
-unresolved failed check, hard violation, or high-risk unverified outcome.
+Pause for user direction when materially different choices would change the
+goal, public behavior, compatibility promise, architectural ownership,
+irreversible migration strategy, persistent team authority, or acceptance of
+an unresolved failure, policy exception, or design tradeoff.
 Never claim that an agent-generated approval came from a human.
 
 ## Shared boundaries
@@ -94,10 +98,28 @@ ${hostName} owns task semantics, implementation, and semantic attestations.
 The CLI owns policy compilation, the worktree baseline, check execution, and
 evaluation facts.
 
+## Align
+
+Inspect the request and repository before prepare. Use the existing task fields
+to carry the resulting semantic contract:
+
+- \`task\`: the concrete goal;
+- \`constraint\`: confirmed design decisions and invariants;
+- \`avoid\`: non-goals and boundaries that must remain unchanged;
+- \`target\`: intended ownership or impact roots for policy activation;
+- \`uncertainty\`: only a still-unresolved human decision.
+
+Do not manufacture a planning checkpoint for a self-contained task. When an
+assumption is worth exposing but does not require a choice, state it briefly
+and continue without waiting. When materially different approaches would
+change public behavior, compatibility, architectural ownership, an
+irreversible migration, or another long-lived tradeoff, ask one consolidated
+question before prepare. Resolve repository-discoverable implementation
+details yourself.
+
 ## Prepare
 
-Use normal read-only repository inspection to understand the task before
-prepare. Run prepare before editing:
+After alignment, run prepare before editing:
 
 \`\`\`sh
 resonant-code change prepare . \\
@@ -134,10 +156,9 @@ Handle results as follows:
 - \`checks-required\`: read \`setup.md\`, propose exact commands, obtain
   approval, configure them, and rerun prepare before editing. This result does
   not create a run or baseline.
-- A returned \`runId\` authorizes implementation under the delivered
-  required, avoid, tension, and consider sections. Inspect \`activation\` to
-  confirm expected Team Playbook contributors and checks were activated before
-  editing.
+- A returned \`runId\` establishes the compiled task contract and worktree
+  baseline. Inspect \`activation\` to confirm expected Team Playbook
+  contributors and checks were activated before editing.
 
 The workflow automatically loads existing Team Playbook, personal overlay, and
 RCCL sources. Do not recalibrate RCCL for every task.
@@ -165,10 +186,17 @@ the Host, decides whether a proposal can affect execution.
 
 ## Implement
 
-Stay within the requested scope and the prepared baseline. Follow only the
-delivered guidance as normative task guidance. If implementation reveals a
-durable missing repository boundary, finish the authorized change unless that
-boundary makes the current work unsafe; suggest context calibration separately.
+Follow only the delivered guidance as normative task guidance. Targets focus
+policy activation; they are not a file write allowlist. Modify adjacent tests,
+types, documentation, and directly coupled implementation when necessary to
+complete the aligned change, and report the actual changed files afterward.
+Re-align with the user only when discovered work would change the agreed goal,
+public behavior, compatibility promise, architectural ownership, irreversible
+migration strategy, or another top-level tradeoff.
+
+If implementation reveals a durable missing repository boundary, finish the
+aligned change unless that boundary makes the current work unsafe; suggest
+context calibration separately.
 
 ## Complete
 
@@ -232,10 +260,26 @@ resonant-code change complete . \\
 \`\`\`
 
 Report changed-file counts, check outcomes, guidance verdicts, exceptions, and
-remaining review needs. Fix in-scope failures and rerun completion when safe;
-pause for unresolved failures, hard violations, exceptions, or scope changes.
+remaining review needs. Compare the actual diff with the aligned intent and
+report the outcome in this order:
+
+1. result;
+2. core design choice implemented;
+3. any deviation from the aligned goal, non-goals, or ownership boundary;
+4. verification;
+5. remaining tradeoff that needs a human decision.
+
+Fix safely repairable failures and rerun completion without asking. Pause only
+when resolution changes the semantic contract or requires the user to accept
+an unresolved failure, violation, exception, or design tradeoff.
 Do not rerun completion solely to turn optional consider information into a
 satisfied verdict.
+
+After completion, propose at most one durable learning only when it would
+change a future implementation or review decision. Prescriptive team consensus
+belongs in the Playbook; an observed repository constraint belongs in RCCL;
+local implementation detail is not persisted. Never update either source
+without semantic confirmation from the user.
 `;
 }
 
@@ -298,9 +342,11 @@ resonant-code bootstrap prepare . --json
 
 Inspect the repository, choose only concretely supported layers, and create the
 candidate requested by the prepare contract. Before
-\`resonant-code bootstrap commit\`, show the user the selected layers, exact
-repository evidence paths, rationale, and destination file. Commit only after
-approval because the resulting Team Playbook affects future tasks.
+\`resonant-code bootstrap commit\`, show the user the proposed normative
+statements, their scope, rationale, and how they would change future decisions.
+Layer IDs, exact evidence paths, and the destination remain inspectable
+protocol details handled by the Host. Commit only after the user confirms the
+semantic team policy.
 
 Do not calibrate RCCL as a generic setup step. Use \`context.md\` only for a
 specific durable repository boundary whose omission could worsen a future
@@ -357,8 +403,10 @@ observations:
 
 ## Persist a generated candidate
 
-Before writing, show the user each statement, decision impact, confidence,
-scope, and exact evidence window. After authorization to persist the candidate:
+Before writing, show the user each statement, decision impact, scope, and the
+exact source evidence that supports it. Ask whether this is an accurate
+repository fact worth influencing future decisions, not whether an internal
+artifact may be written. After semantic confirmation:
 
 \`\`\`sh
 resonant-code context commit . \\
@@ -371,9 +419,9 @@ Committed observations remain generated and cannot change directive execution.
 
 ## Approve independently
 
-Show the stored observation and its current
-\`lifecycle.contentFingerprint\` to the reviewer. Only after explicit review,
-run:
+Show the stored observation, decision impact, and evidence to the reviewer.
+Only after explicit semantic review, read its current
+\`lifecycle.contentFingerprint\` and run:
 
 \`\`\`sh
 resonant-code context approve . \\
@@ -385,7 +433,9 @@ resonant-code context approve . \\
 
 Never approve an observation merely because its snippet still matches, and
 never attribute approval to a human who did not provide it. A fingerprint
-mismatch means the content changed and must be reviewed again.
+mismatch means the content changed and must be reviewed again. The Host handles
+fingerprint binding; do not ask the user to transcribe or approve protocol
+identifiers.
 
 Use \`context validate\` for a read-only evidence check and
 \`context refresh-stale\` to persist evidence lifecycle changes. Evidence

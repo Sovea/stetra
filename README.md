@@ -54,6 +54,9 @@ Developer request
       v
 Host Agent + generated resonant-code skill
       |
+      +--> Host aligns only material design choices
+      |      Goal, non-goals, ownership, compatibility, and lasting tradeoffs
+      |
       +--> change prepare --json
       |      Runtime normalizes targets/technology, activates overlapping policy,
       |      verifies relevant RCCL evidence, and budgets delivered guidance
@@ -69,9 +72,11 @@ Host Agent + generated resonant-code skill
              Host reports a human-readable result
 ```
 
-Ordinary repository-discoverable decisions stay with the Host Agent. The user
-is interrupted only when a decision changes intent, persistent team authority,
-trusted commands, policy exceptions, or acceptance of an unresolved risk.
+Ordinary repository-discoverable and implementation decisions stay with the
+Host Agent. The user is interrupted only when materially different choices
+change the goal, public behavior, compatibility, architectural ownership,
+irreversible migration strategy, persistent team authority, or acceptance of
+an unresolved tradeoff.
 
 The Host may automatically:
 
@@ -80,7 +85,8 @@ The Host may automatically:
   justified file or directory scope roots
 - select task-relevant optional guidance when it exceeds the attention budget
 - use already-reviewed RCCL observations
-- implement and repair work inside the requested scope
+- implement and repair necessary adjacent files while preserving the aligned
+  semantic contract
 - run configured checks and provide evidence-backed attestations for required,
   avoid, and tension guidance
 
@@ -88,9 +94,9 @@ The Host must pause before:
 
 - changing Team Playbook, RCCL, or trusted check configuration
 - approving an RCCL observation or policy exception
-- resolving a user-intent ambiguity or unresolved policy tension
-- expanding scope
-- accepting a failed check, hard violation, or high-risk unverified outcome
+- choosing between materially different goals, public behavior, compatibility,
+  ownership, migration, or other long-lived tradeoffs
+- accepting a failed check, hard violation, exception, or unresolved outcome
 
 ## Readiness levels
 

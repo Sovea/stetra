@@ -22,6 +22,11 @@ The generated adapter runs `change prepare` before implementation and
 `change complete` afterward. Human users do not need to manage task runs,
 selection, relation, or evaluation artifacts.
 
+Before prepare, the Host aligns only material choices about goals, public
+behavior, compatibility, architectural ownership, migrations, or other
+long-lived tradeoffs. Repository-discoverable details and necessary adjacent
+file changes remain autonomous. No separate design artifact is created.
+
 The Host may inspect the repository read-only before prepare. It supplies
 intended file or directory scope roots and canonical technology IDs; Runtime
 then reports exactly which Team Playbook guidance and checks activated.

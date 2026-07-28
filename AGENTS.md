@@ -180,15 +180,25 @@ parse Playbook data to make policy decisions, rank directives, adjudicate
 relations, decide execution modes, or invent evaluation facts. The source
 repository does not ship `.claude-plugin`,
 `.codex-plugin`, `.codex`, or repository-native `skills/` entrypoints.
-The host may inspect the repository read-only before prepare. CLI exposes
-configured-but-not-requested checks without executing them; it must not infer
-additional check activation.
+Before prepare, the Host owns a transient semantic alignment step. It resolves
+repository-discoverable details itself and asks one consolidated question only
+when materially different choices change the goal, public behavior,
+compatibility, architectural ownership, irreversible migration strategy, or
+another long-lived tradeoff. Confirmed decisions use the existing task,
+constraint, avoid, target, and uncertainty inputs; do not persist a separate
+design artifact.
+
+Task targets focus policy activation and are not file write permissions. The
+Host may change necessary adjacent implementation, tests, types, and
+documentation while the aligned semantic contract remains intact. Re-align
+only when the discovered work changes that contract.
 
 The normal code lifecycle is:
 
-1. `resonant-code change prepare --json` → compile compact task guidance
-2. host implements the change
-3. `resonant-code change complete --json` → collect actual change/check facts,
+1. Host aligns material design choices and encodes the semantic task contract
+2. `resonant-code change prepare --json` → compile compact task guidance
+3. Host implements the aligned change and challenges the complete actual diff
+4. `resonant-code change complete --json` → collect actual change/check facts,
    evaluate attestations, and complete the task run
 
 ## Data separation

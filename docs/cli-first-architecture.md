@@ -208,8 +208,15 @@ The Host may resolve repository-discoverable task details, choose optional
 guidance, use reviewed RCCL, implement within scope, run checks, and attest
 evidence without interrupting the user. It must pause before changing
 persistent team authority or trusted commands, approving observations or
-exceptions, resolving user-intent ambiguities or policy tensions, expanding
-scope, or accepting unresolved failures and high-risk unverified outcomes.
+exceptions, resolving materially different goals, public behavior,
+compatibility, architectural ownership, irreversible migration strategies, or
+accepting unresolved failures and design tradeoffs.
+
+Before prepare, the Host performs a transient semantic alignment. It asks one
+consolidated question only when a top-level choice is material; otherwise it
+resolves repository details and proceeds. The result is encoded in the
+existing task, constraint, avoid, target, and uncertainty inputs rather than a
+new persisted planning artifact.
 
 Before prepare, the Host may use ordinary read-only repository inspection.
 Targets are explicit intended scope roots: directory roots include descendants,
@@ -217,6 +224,11 @@ while final changed-file facts remain workflow-collected after implementation.
 Technology identifiers are canonical lowercase IDs. Runtime owns scope overlap,
 layer selection, verification activation, and the attention-only attestation
 plan; the adapter does not reproduce those decisions.
+
+Targets are not file write permissions. The Host may change directly coupled
+implementation, tests, types, and documentation while preserving the aligned
+semantic contract, and re-aligns only when discovered work changes that
+contract.
 
 Configured checks that Runtime did not request remain visible as
 `not-requested` and are not executed. The CLI does not infer that they should

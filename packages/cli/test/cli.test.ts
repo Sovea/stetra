@@ -325,6 +325,7 @@ test('change lifecycle creates one task-scoped run only after checks are configu
     assert.deepEqual(prepared.activation.targets, ['src/example.ts']);
     assert.deepEqual(prepared.activation.techStack, ['typescript']);
     assert.ok(prepared.attestationPlan.optionalConsiderIds.length > 0);
+    assert.match(prepared.nextStep, /compiled task contract/);
     assert.match(prepared.nextStep, /try to falsify each attentionItem/);
     const run = JSON.parse(readFileSync(prepared.runPath, 'utf8'));
     assert.equal(run.runId, prepared.runId);

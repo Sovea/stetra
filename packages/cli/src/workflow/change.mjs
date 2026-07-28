@@ -322,7 +322,7 @@ function compactDecision(decision, run, checkPlan, baseline) {
     runId: run.runId,
     runPath: run.runPath,
     evaluationInputPath: run.evaluationInputPath,
-    nextStep: `Implement using the delivered guidance, inspect the complete actual diff and try to falsify each attentionItem before attesting in ${run.evaluationInputPath}, then run change complete with --run ${run.runId}. Optional consider items may remain unverified.`,
+    nextStep: `The compiled task contract and worktree baseline are established. Implement the aligned change, inspect the complete actual diff and try to falsify each attentionItem before attesting in ${run.evaluationInputPath}, then run change complete with --run ${run.runId}. Optional consider items may remain unverified.`,
   };
 }
 

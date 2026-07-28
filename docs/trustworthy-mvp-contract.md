@@ -120,6 +120,12 @@ Host attestations cover semantic judgments:
 - behavior and compatibility preservation;
 - clarity, proportionality, and policy satisfaction.
 
+Before prepare, the Host resolves repository-discoverable details and performs
+a transient semantic alignment only for material choices about the goal,
+public behavior, compatibility, architectural ownership, irreversible
+migration strategy, or another long-lived tradeoff. Confirmed decisions are
+encoded in existing task inputs; there is no separate persisted design brief.
+
 `compileChange` returns an attention-only attestation plan for delivered
 required, avoid, and tension guidance, including the exact evidence field
 shapes. Passing command requirements come from workflow facts; the Host does
@@ -136,6 +142,10 @@ seeks counterevidence for every attention item. A `satisfied` verdict is invalid
 workflow behavior when any changed file contradicts the claim or the available
 evidence is insufficient. Runtime does not reproduce this semantic review with
 token matching or another heuristic policy engine.
+
+Task targets focus activation and review; they are not file permissions.
+Necessary adjacent implementation, test, type, and documentation changes are
+valid when they preserve the aligned semantic contract.
 
 ## Activation assurance
 
