@@ -59,6 +59,12 @@ Never claim that an agent-generated approval came from a human.
 
 ## Shared boundaries
 
+Keep run IDs, decision/evaluation IDs, fingerprints, artifact paths, and
+temporary configuration paths inside the Host-to-CLI workflow. Do not surface
+them in routine user updates. Present the semantic decision, its consequence,
+the verification outcome, and any remaining tradeoff. Show protocol details
+only when the user asks to inspect or debug the harness.
+
 - Use \`--json\` for every Host invocation.
 - Do not parse or merge Playbook policy outside Runtime.
 - Do not infer semantic relations from token overlap.

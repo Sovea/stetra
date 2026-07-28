@@ -38,7 +38,9 @@ Then use the coding agent normally:
 > Fix the parser boundary and add a regression test.
 
 You do not need to run `change prepare`, manage run files, or write
-evaluation JSON yourself. Those are Host-to-CLI protocol details.
+evaluation JSON yourself. Those are Host-to-CLI protocol details. Routine Host
+updates report the semantic design, any deviation, verification outcome, and
+remaining tradeoff—not run IDs, fingerprints, or temporary paths.
 
 ## What happens during a change
 

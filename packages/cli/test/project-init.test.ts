@@ -30,6 +30,8 @@ test('project init creates and safely upgrades only managed adapter artifacts', 
     const skill = readFileSync(join(skillRoot, 'SKILL.md'), 'utf8');
     assert.match(skill, /read `references\/change\.md` completely/);
     assert.doesNotMatch(skill, /^metadata:/m);
+    assert.match(skill, /Do not surface[\s\S]*routine user updates/);
+    assert.match(skill, /semantic decision[\s\S]*verification outcome/);
     const changeReference = readFileSync(
       join(skillRoot, 'references', 'change.md'),
       'utf8',

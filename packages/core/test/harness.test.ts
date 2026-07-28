@@ -1193,6 +1193,39 @@ test('postflight evaluation combines machine facts with attestations only for de
   }), /was not delivered/);
 });
 
+test('task targets activate policy without becoming changed-file permissions', () => {
+  const decision = minimalDecision();
+  const changes = machineChangeSet([
+    { path: 'packages/core/src/runtime/index.ts', status: 'modified' },
+    { path: 'packages/core/test/public-boundary.test.ts', status: 'modified' },
+  ]);
+  const evaluation = evaluateChange({
+    decision,
+    changes,
+    checks: [machineCheck(changes, 'typecheck', 'passed')],
+    attestations: [{
+      guidanceId: 'required-1',
+      verdict: 'satisfied',
+      evidenceRefs: [
+        {
+          kind: 'diff',
+          ref: 'diff:runtime-entrypoint',
+          file: 'packages/core/src/runtime/index.ts',
+        },
+        {
+          kind: 'diff',
+          ref: 'diff:adjacent-test',
+          file: 'packages/core/test/public-boundary.test.ts',
+        },
+      ],
+      explanation: 'The owner entrypoint remains narrow and the adjacent test verifies that contract.',
+    }],
+  });
+  assert.equal(evaluation.status, 'accepted');
+  assert.equal(evaluation.changes.files.length, 2);
+  assert.deepEqual(evaluation.actionRequired, []);
+});
+
 test('unverified optional consider guidance remains informational', () => {
   const decision = minimalDecision();
   decision.guidance.consider.push({
