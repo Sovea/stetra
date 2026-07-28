@@ -12,15 +12,14 @@ import { collectOption } from './shared.ts';
 
 interface ChangePrepareOptions {
   avoid: string[];
-  changeType?: string;
+  changeType: string;
   checkConfig?: string;
   constraint: string[];
   guidanceByteLimit?: string;
-  mode?: string;
   personalOverlay?: string;
   relationFile?: string;
-  risk?: string;
-  scope?: string;
+  risk: string;
+  scope: string;
   selectionFile?: string;
   target: string[];
   task: string;
@@ -50,12 +49,11 @@ export function registerChangeCommands(
     .description('Compile compact task guidance and snapshot the worktree')
     .argument('[project-root]', 'project root', '.')
     .requiredOption('--task <description>', 'concrete coding task')
-    .option('--mode <standard|strict>', 'guidance mode')
-    .option('--change-type <type>', 'bugfix, feature, refactor, migration, maintenance, docs, test, or unknown')
-    .option('--target <path>', 'task target (repeatable)', collectOption, [])
+    .requiredOption('--change-type <type>', 'bugfix, feature, refactor, migration, maintenance, docs, test, or unknown')
+    .requiredOption('--target <path>', 'task target (repeatable)', collectOption, [])
     .option('--tech <name>', 'technology in scope (repeatable)', collectOption, [])
-    .option('--risk <level>', 'low, medium, or high')
-    .option('--scope <level>', 'local, module, cross-module, or repository')
+    .requiredOption('--risk <level>', 'low, medium, or high')
+    .requiredOption('--scope <level>', 'local, module, cross-module, or repository')
     .option('--constraint <text>', 'task constraint (repeatable)', collectOption, [])
     .option('--uncertainty <text>', 'task uncertainty (repeatable)', collectOption, [])
     .option('--avoid <text>', 'task-specific avoid guidance (repeatable)', collectOption, [])
@@ -72,7 +70,6 @@ export function registerChangeCommands(
       const prepareOptions = {
         projectRoot,
         taskDescription: options.task,
-        guidanceMode: options.mode,
         changeType: options.changeType,
         targets: options.target,
         techStack: options.tech,

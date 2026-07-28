@@ -24,18 +24,34 @@ import { scopeOverlapsPath } from '../src/runtime/utils/paths.ts';
 const projectRoot = resolve(import.meta.dirname, '../../..');
 const builtinRoot = resolve(import.meta.dirname, '../assets/playbook');
 
-test('canonical task context treats bugfix as change type and infers mechanical context separately', () => {
+test('canonical task context requires host-owned semantics and infers only mechanical context', () => {
   const task = normalizeTaskContext({
     description: 'Fix a cache inspection bug',
     changeType: 'bugfix',
     targets: ['packages/core/src/runtime/decision/compile-change.ts'],
+    risk: 'medium',
+    scope: 'module',
   });
   assert.equal(task.changeType, 'bugfix');
-  assert.equal(task.scope, 'local');
-  assert.equal(task.risk, 'low');
+  assert.equal(task.scope, 'module');
+  assert.equal(task.risk, 'medium');
   assert.deepEqual(task.techStack, ['typescript']);
+  assert.equal(
+    task.provenance.find((item) => item.field === 'changeType')?.source,
+    'host-provided',
+  );
+  assert.equal(
+    task.provenance.find((item) => item.field === 'techStack')?.source,
+    'deterministic',
+  );
   assert.equal('operation' in task, false);
   assert.ok(task.provenance.every((item) => !('confidence' in item)));
+  assert.throws(() => normalizeTaskContext({
+    description: 'Fix a cache inspection bug',
+    targets: ['packages/core/src/runtime/decision/compile-change.ts'],
+    risk: 'medium',
+    scope: 'module',
+  } as never), /task\.changeType/);
 });
 
 test('canonical technology IDs and symmetric scope overlap activate directory policy deterministically', async () => {
@@ -44,6 +60,8 @@ test('canonical technology IDs and symmetric scope overlap activate directory po
     changeType: 'feature',
     targets: ['src\\nested'],
     techStack: [' TypeScript ', 'typescript'],
+    risk: 'low',
+    scope: 'module',
   });
   assert.deepEqual(task.targets, ['src/nested']);
   assert.deepEqual(task.techStack, ['typescript']);
@@ -114,6 +132,8 @@ test('canonical technology IDs and symmetric scope overlap activate directory po
         changeType: 'feature',
         targets: ['src\\nested'],
         techStack: ['TypeScript'],
+        risk: 'low',
+        scope: 'module',
         avoid: ['Do not modify unrelated test fixtures.'],
       },
     });
@@ -153,6 +173,8 @@ test('canonical technology IDs and symmetric scope overlap activate directory po
         description: 'Clarify an unrelated document',
         changeType: 'docs',
         targets: ['docs'],
+        risk: 'low',
+        scope: 'local',
       },
     });
     assert.equal(unrelated.status, 'compiled');
@@ -166,7 +188,7 @@ test('canonical technology IDs and symmetric scope overlap activate directory po
   }
 });
 
-test('standard compile directly delivers compact agent-facing guidance', async () => {
+test('compile directly delivers compact agent-facing guidance', async () => {
   const input = {
     projectRoot,
     builtinRoot,
@@ -736,8 +758,8 @@ test('local suppressions remain visible in Decision Trace', async () => {
         scope: 'local',
       },
     });
-    assert.notEqual(output.status, 'needs-interpretation');
-    if (output.status === 'needs-interpretation') return;
+    assert.notEqual(output.status, 'needs-alignment');
+    if (output.status === 'needs-alignment') return;
     assert.ok(output.trace.suppressedDirectiveIds.includes('core-clarity-and-legibility-01'));
     assert.ok(!output.trace.activatedDirectiveIds.includes('core-clarity-and-legibility-01'));
     assert.ok(!output.trace.deliveredGuidanceIds.includes('core-clarity-and-legibility-01'));
@@ -859,8 +881,8 @@ test('invalid and irrelevant relation proposals cannot affect execution', async 
     evidenceRefs: ['README.md:1-1'],
   }]);
   assert.notEqual(invalid.status, 'guidance-overflow');
-  assert.notEqual(invalid.status, 'needs-interpretation');
-  if (invalid.status === 'guidance-overflow' || invalid.status === 'needs-interpretation') return;
+  assert.notEqual(invalid.status, 'needs-alignment');
+  if (invalid.status === 'guidance-overflow' || invalid.status === 'needs-alignment') return;
   assert.equal(invalid.status, 'needs-attention');
   assert.equal(invalid.guidance.tensions.length, 0);
   assert.ok(invalid.trace.diagnostics.some((item) => item.code === 'RELATION_PROPOSAL_REJECTED'));
@@ -873,8 +895,8 @@ test('invalid and irrelevant relation proposals cannot affect execution', async 
     evidenceRefs: ['packages/core/src/index.ts:1-7'],
   }]);
   assert.notEqual(immune.status, 'guidance-overflow');
-  assert.notEqual(immune.status, 'needs-interpretation');
-  if (immune.status === 'guidance-overflow' || immune.status === 'needs-interpretation') return;
+  assert.notEqual(immune.status, 'needs-alignment');
+  if (immune.status === 'guidance-overflow' || immune.status === 'needs-alignment') return;
   assert.equal(immune.status, 'needs-attention');
   assert.ok(immune.trace.diagnostics.some((item) => item.message.includes('RCCL-immune')));
 
@@ -891,8 +913,8 @@ test('invalid and irrelevant relation proposals cannot affect execution', async 
       scope: 'local',
     },
   });
-  assert.notEqual(irrelevant.status, 'needs-interpretation');
-  if (irrelevant.status === 'needs-interpretation') return;
+  assert.notEqual(irrelevant.status, 'needs-alignment');
+  if (irrelevant.status === 'needs-alignment') return;
   assert.deepEqual(irrelevant.trace.relevantObservationIds, []);
   assert.deepEqual(irrelevant.trace.observationEvidence, []);
 });
@@ -992,20 +1014,26 @@ test('current evidence does not turn an unreviewed low-confidence observation in
   }
 });
 
-test('strict ambiguous tasks request only the missing interpretation fields', async () => {
+test('unresolved host semantics request alignment without a mode switch', async () => {
   const output = await compileChange({
     projectRoot,
     builtinRoot,
-    mode: 'strict',
-    task: { description: 'Change the implementation' },
+    task: {
+      description: 'Change the implementation',
+      changeType: 'unknown',
+      targets: ['packages/core/src/runtime'],
+      risk: 'medium',
+      scope: 'module',
+      uncertainties: ['Whether the public Runtime boundary should change.'],
+    },
   });
-  assert.equal(output.status, 'needs-interpretation');
-  if (output.status !== 'needs-interpretation') return;
-  assert.deepEqual(output.requiredFields, ['changeType', 'targets']);
+  assert.equal(output.status, 'needs-alignment');
+  if (output.status !== 'needs-alignment') return;
+  assert.deepEqual(output.requiredFields, ['changeType', 'uncertainties']);
 });
 
 test('postflight evaluation rejects a failed required command', () => {
-  const decision = minimalDecision('standard');
+  const decision = minimalDecision();
   const changes = machineChangeSet([
     { path: 'packages/core/src/runtime/index.ts', status: 'modified' },
   ]);
@@ -1018,7 +1046,6 @@ test('postflight evaluation rejects a failed required command', () => {
       verdict: 'satisfied',
       evidenceRefs: [{ kind: 'diff', ref: 'diff:index', file: 'packages/core/src/runtime/index.ts' }],
       explanation: 'The entrypoint diff preserves the narrow public surface.',
-      attestedBy: 'test-host',
     }],
   });
   assert.equal(evaluation.status, 'rejected');
@@ -1028,7 +1055,7 @@ test('postflight evaluation rejects a failed required command', () => {
 });
 
 test('a missing configured command cannot produce an accepted result', () => {
-  const decision = minimalDecision('standard');
+  const decision = minimalDecision();
   const changes = machineChangeSet([
     { path: 'packages/core/src/runtime/index.ts', status: 'modified' },
   ]);
@@ -1052,16 +1079,15 @@ test('a missing configured command cannot produce an accepted result', () => {
       verdict: 'satisfied',
       evidenceRefs: [{ kind: 'diff', ref: 'diff:index', file: 'packages/core/src/runtime/index.ts' }],
       explanation: 'The entrypoint diff looks correct, but the command fact is unavailable.',
-      attestedBy: 'test-host',
     }],
   });
-  assert.equal(evaluation.status, 'warning');
+  assert.equal(evaluation.status, 'needs-attention');
   assert.equal(evaluation.results[0].verdict, 'partial');
   assert.match(evaluation.results[0].reasons[0], /command:typecheck/);
 });
 
 test('postflight evaluation combines machine facts with attestations only for delivered guidance', () => {
-  const decision = minimalDecision('standard');
+  const decision = minimalDecision();
   const changes = machineChangeSet([
     { path: 'packages/core/src/runtime/index.ts', status: 'modified' },
   ]);
@@ -1081,7 +1107,6 @@ test('postflight evaluation combines machine facts with attestations only for de
         { kind: 'check', ref: 'check:typecheck', checkId: 'typecheck' },
       ],
       explanation: 'The changed entrypoint still exports only the intended Runtime operations.',
-      attestedBy: 'test-host',
     }],
   });
   assert.equal(evaluation.status, 'accepted');
@@ -1106,13 +1131,12 @@ test('postflight evaluation combines machine facts with attestations only for de
       verdict: 'satisfied',
       evidenceRefs: [],
       explanation: 'This ID was not part of the decision.',
-      attestedBy: 'test-host',
     }],
   }), /was not delivered/);
 });
 
 test('unverified optional consider guidance remains informational', () => {
-  const decision = minimalDecision('standard');
+  const decision = minimalDecision();
   decision.guidance.consider.push({
     id: 'consider-1',
     instruction: 'Prefer a direct implementation when it remains clear.',
@@ -1139,11 +1163,10 @@ test('unverified optional consider guidance remains informational', () => {
         { kind: 'diff', ref: 'diff:index', file: 'packages/core/src/runtime/index.ts' },
       ],
       explanation: 'The entrypoint still exposes the same narrow boundary.',
-      attestedBy: 'test-host',
     }],
   });
   assert.equal(evaluation.status, 'accepted');
-  assert.equal(evaluation.summary.warningCount, 0);
+  assert.equal(evaluation.summary.attentionCount, 0);
   assert.equal(evaluation.summary.informationalCount, 1);
   assert.deepEqual(evaluation.actionRequired, []);
   assert.deepEqual(
@@ -1153,7 +1176,7 @@ test('unverified optional consider guidance remains informational', () => {
 });
 
 test('a failed Runtime-requested check remains actionable when its guidance is optional', () => {
-  const decision = minimalDecision('standard');
+  const decision = minimalDecision();
   decision.guidance.required[0].verification = [{ kind: 'diff' }];
   decision.guidance.consider.push({
     id: 'consider-checked',
@@ -1181,7 +1204,6 @@ test('a failed Runtime-requested check remains actionable when its guidance is o
         { kind: 'diff', ref: 'diff:index', file: 'packages/core/src/runtime/index.ts' },
       ],
       explanation: 'The required entrypoint boundary is preserved.',
-      attestedBy: 'test-host',
     }],
   });
   assert.equal(evaluation.status, 'rejected');
@@ -1195,22 +1217,40 @@ test('a failed Runtime-requested check remains actionable when its guidance is o
   );
 });
 
-test('strict mode requires an exception for unverified required guidance', () => {
+test('unverified required guidance needs attention until an exception is requested', () => {
+  const changes = machineChangeSet([
+    { path: 'packages/core/src/runtime/index.ts', status: 'modified' },
+  ]);
   const evaluation = evaluateChange({
-    decision: minimalDecision('strict'),
-    changes: machineChangeSet([
-      { path: 'packages/core/src/runtime/index.ts', status: 'modified' },
-    ]),
+    decision: minimalDecision(),
+    changes,
   });
-  assert.equal(evaluation.status, 'exception-required');
+  assert.equal(evaluation.status, 'needs-attention');
   assert.equal(evaluation.results[0].verdict, 'unverified');
+
+  const pendingException = evaluateChange({
+    decision: minimalDecision(),
+    changes,
+    exceptions: [{
+      guidanceId: 'required-1',
+      reason: 'The required check is temporarily unavailable.',
+    }],
+  });
+  assert.equal(pendingException.status, 'exception-required');
+  assert.equal(pendingException.results[0].verdict, 'unverified');
 });
 
 test('public boundaries reject malformed host artifacts without type errors', async () => {
   await assert.rejects(() => compileChange({
     projectRoot,
     builtinRoot,
-    task: { description: 'Fix one bug', changeType: 'bugfix', targets: ['packages/core/src/runtime/index.ts'] },
+    task: {
+      description: 'Fix one bug',
+      changeType: 'bugfix',
+      targets: ['packages/core/src/runtime/index.ts'],
+      risk: 'low',
+      scope: 'local',
+    },
     relationProposals: 'not-an-array' as never,
   }), /relationProposals must be an array/);
 
@@ -1221,6 +1261,8 @@ test('public boundaries reject malformed host artifacts without type errors', as
       description: 'Fix one bug',
       changeType: 'bugfix',
       targets: ['packages/core/src/runtime/index.ts'],
+      risk: 'low',
+      scope: 'local',
     },
     deliverySelection: {
       considerIds: ['not-active'],
@@ -1236,35 +1278,38 @@ test('public boundaries reject malformed host artifacts without type errors', as
       description: 'Fix one bug',
       changeType: 'bugfix',
       targets: ['packages/core/src/runtime/index.ts'],
+      risk: 'low',
+      scope: 'local',
     },
   }), /positive integer/);
 
   assert.throws(() => evaluateChange({
-    decision: minimalDecision('standard'),
-    changes: machineChangeSet([]),
+    decision: minimalDecision(),
+    changes: machineChangeSet([
+      { path: 'packages/core/src/runtime/index.ts', status: 'modified' },
+    ]),
     attestations: [{
       guidanceId: 'required-1',
       verdict: 'satisfied',
       evidenceRefs: {} as never,
       explanation: 'Malformed evidence reference collection.',
-      attestedBy: 'test-host',
     }],
   }), /attestation evidenceRefs must be an array/);
 
   assert.throws(() => evaluateChange({
-    decision: minimalDecision('standard'),
+    decision: minimalDecision(),
     changes: { files: [] } as never,
   }), /workflow machine provenance/);
 
   const inconsistent = machineChangeSet([]);
   inconsistent.changeFingerprint = 'host-declared-clean';
   assert.throws(() => evaluateChange({
-    decision: minimalDecision('standard'),
+    decision: minimalDecision(),
     changes: inconsistent,
   }), /changeFingerprint does not match/);
 });
 
-function minimalDecision(mode: 'standard' | 'strict'): ChangeDecisionPacket {
+function minimalDecision(): ChangeDecisionPacket {
   const guidance: ChangeDecisionPacket['guidance'] = {
     required: [{
       id: 'required-1',
@@ -1283,9 +1328,8 @@ function minimalDecision(mode: 'standard' | 'strict'): ChangeDecisionPacket {
   };
   return {
     schemaVersion: '1.0',
-    decisionId: `decision-${mode}`,
+    decisionId: 'decision-test',
     status: 'compiled',
-    mode,
     task: normalizeTaskContext({
       description: 'Modify the Runtime entrypoint',
       changeType: 'refactor',

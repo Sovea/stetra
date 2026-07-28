@@ -149,11 +149,16 @@ valid when they preserve the aligned semantic contract.
 
 ## Activation assurance
 
+The Host explicitly supplies change type, risk, scope, and at least one target
+after semantic alignment. Runtime validates these fields but does not infer
+them from task keywords, path counts, or filenames.
+
 Task targets are normalized repository-relative scope roots. Directive
 activation uses deterministic scope overlap, so a directory target activates
 applicable glob and exact descendant scopes without requiring the Host to guess
-the final changed files. Technology IDs are canonicalized by casing only; no
-dependency, filename-ranking, or token-overlap heuristic activates policy.
+the final changed files. Technology IDs are canonicalized by casing and may be
+derived mechanically from an exact file extension; no dependency,
+filename-ranking, or token-overlap heuristic activates policy.
 
 Decision Trace records normalized targets and technology provenance, active
 built-in/team/personal contributors, and team/personal directives that were
@@ -165,7 +170,7 @@ but not requested. Only Runtime-requested checks execute.
 
 Runtime state is task-scoped, not a repository-global history database.
 
-- Interpretation, guidance-overflow, and missing-check outcomes write nothing.
+- Alignment, guidance-overflow, and missing-check outcomes write nothing.
 - A runnable prepare creates one `.resonant-code/runs/<runId>/` directory with
   the decision, worktree baseline, and an empty Host evaluation input.
 - Completion stores check logs and the resulting evaluation in that same run.

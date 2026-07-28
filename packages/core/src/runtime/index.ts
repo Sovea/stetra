@@ -3,6 +3,7 @@ export { compileChange } from './decision/compile-change.ts';
 export { evaluateChange } from './evaluation/evaluate-change.ts';
 
 export type {
+  AlignmentRequest,
   AttestationPlan,
   ChangeDecisionPacket,
   CompileChangeInput,
@@ -18,7 +19,6 @@ export type {
   GuidanceDetail,
   GuidanceItem,
   GuidanceOverflow,
-  InterpretationRequest,
   RelationProposal,
   VerificationPlan,
   VerificationRequirement,
@@ -39,7 +39,6 @@ export type {
   MachineFactProvenance,
 } from './evaluation/types.ts';
 export type {
-  GuidanceMode,
   NormalizedTaskContext,
   RiskLevel as TaskRiskLevel,
   ScopeLevel,

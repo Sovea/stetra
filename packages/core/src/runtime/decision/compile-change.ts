@@ -11,7 +11,7 @@ import {
   validatePersonalReferences,
 } from '../load/load-playbook.ts';
 import { loadRccl } from '../load/load-rccl.ts';
-import { normalizeTaskContext, taskNeedsInterpretation } from '../task/normalize.ts';
+import { normalizeTaskContext, taskNeedsAlignment } from '../task/normalize.ts';
 import type { NormalizedTaskContext } from '../task/types.ts';
 import type {
   Directive,
@@ -90,18 +90,16 @@ export async function compileChange(input: CompileChangeInput): Promise<CompileC
   if (typeof input.projectRoot !== 'string' || !input.projectRoot.trim()) throw new Error('compileChange projectRoot must be non-empty.');
   if (typeof input.builtinRoot !== 'string' || !input.builtinRoot.trim()) throw new Error('compileChange builtinRoot must be non-empty.');
   if (!input.task || typeof input.task !== 'object') throw new Error('compileChange task must be an object.');
-  const mode = input.mode ?? 'standard';
-  if (mode !== 'standard' && mode !== 'strict') throw new Error('compileChange mode must be standard or strict.');
   const relationProposals = validateRelationProposals(input.relationProposals);
   const task = normalizeTaskContext(input.task);
-  const interpretationReasons = taskNeedsInterpretation(task, mode);
-  if (interpretationReasons.length) {
+  const alignmentReasons = taskNeedsAlignment(task);
+  if (alignmentReasons.length) {
     return {
       schemaVersion: DECISION_SCHEMA_VERSION,
-      status: 'needs-interpretation',
+      status: 'needs-alignment',
       task,
-      reasons: interpretationReasons,
-      requiredFields: requiredInterpretationFields(task),
+      reasons: alignmentReasons,
+      requiredFields: requiredAlignmentFields(task),
     };
   }
 
@@ -148,7 +146,6 @@ export async function compileChange(input: CompileChangeInput): Promise<CompileC
     return {
       schemaVersion: DECISION_SCHEMA_VERSION,
       status: 'guidance-overflow',
-      mode,
       task,
       ...delivery.overflow,
       candidateDetails: builtGuidance.details.filter((item) => item.section === 'consider'),
@@ -194,7 +191,6 @@ export async function compileChange(input: CompileChangeInput): Promise<CompileC
   };
   const decisionId = stableHash([
     DECISION_SCHEMA_VERSION,
-    mode,
     task,
     deliveredGuidanceIds,
     fingerprints,
@@ -205,7 +201,6 @@ export async function compileChange(input: CompileChangeInput): Promise<CompileC
     schemaVersion: DECISION_SCHEMA_VERSION,
     decisionId,
     status: rejectedProposal ? 'needs-attention' : 'compiled',
-    mode,
     task,
     guidance: delivery.guidance,
     executionGuidance: delivery.executionGuidance,
@@ -897,10 +892,9 @@ function directiveDeliveryGroup(directive: EffectiveDirective): number {
   return 5;
 }
 
-function requiredInterpretationFields(task: NormalizedTaskContext): Array<'changeType' | 'targets' | 'uncertainties'> {
-  const result: Array<'changeType' | 'targets' | 'uncertainties'> = [];
+function requiredAlignmentFields(task: NormalizedTaskContext): Array<'changeType' | 'uncertainties'> {
+  const result: Array<'changeType' | 'uncertainties'> = [];
   if (task.changeType === 'unknown') result.push('changeType');
-  if (!task.targets.length) result.push('targets');
   if (task.uncertainties.length) result.push('uncertainties');
   return result;
 }

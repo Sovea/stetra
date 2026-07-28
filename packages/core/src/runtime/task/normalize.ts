@@ -3,31 +3,26 @@ import {
   CHANGE_TYPES,
   RISK_LEVELS,
   SCOPE_LEVELS,
-  type ChangeType,
   type NormalizedTaskContext,
-  type RiskLevel,
-  type ScopeLevel,
   type TaskContextInput,
   type TaskFieldProvenance,
 } from './types.ts';
 
 export function normalizeTaskContext(input: TaskContextInput): NormalizedTaskContext {
   const description = requiredString(input.description, 'task.description');
-  const targets = uniqueStrings(input.targets?.map(normalizePath) ?? []);
-  const explicitSource = input.interpretationSource === 'host-provided' ? 'host-provided' : 'explicit';
+  const changeType = requiredEnum(input.changeType, CHANGE_TYPES, 'task.changeType');
+  const targets = normalizeTargets(input.targets);
+  const risk = requiredEnum(input.risk, RISK_LEVELS, 'task.risk');
+  const scope = requiredEnum(input.scope, SCOPE_LEVELS, 'task.scope');
   const provenance: TaskFieldProvenance[] = [];
 
-  const explicitChangeType = enumValue(input.changeType, CHANGE_TYPES);
-  const inferredChangeType = inferChangeType(description);
-  const changeType = explicitChangeType ?? inferredChangeType ?? 'unknown';
   provenance.push({
     field: 'changeType',
-    source: explicitChangeType ? explicitSource : inferredChangeType ? 'deterministic' : 'defaulted',
+    source: 'host-provided',
   });
-
   provenance.push({
     field: 'targets',
-    source: targets.length ? explicitSource : 'defaulted',
+    source: 'host-provided',
   });
 
   const explicitStack = uniqueStrings((input.techStack ?? []).map(normalizeTechnologyId));
@@ -35,21 +30,16 @@ export function normalizeTaskContext(input: TaskContextInput): NormalizedTaskCon
   const techStack = uniqueStrings([...explicitStack, ...inferredStack]);
   provenance.push({
     field: 'techStack',
-    source: explicitStack.length ? explicitSource : inferredStack.length ? 'deterministic' : 'defaulted',
+    source: explicitStack.length ? 'host-provided' : 'deterministic',
   });
 
-  const explicitRisk = enumValue(input.risk, RISK_LEVELS);
-  const risk = explicitRisk ?? inferRisk(changeType, targets, description);
   provenance.push({
     field: 'risk',
-    source: explicitRisk ? explicitSource : 'deterministic',
+    source: 'host-provided',
   });
-
-  const explicitScope = enumValue(input.scope, SCOPE_LEVELS);
-  const scope = explicitScope ?? inferScope(targets);
   provenance.push({
     field: 'scope',
-    source: explicitScope ? explicitSource : targets.length ? 'deterministic' : 'defaulted',
+    source: 'host-provided',
   });
 
   return {
@@ -66,30 +56,15 @@ export function normalizeTaskContext(input: TaskContextInput): NormalizedTaskCon
   };
 }
 
-export function taskNeedsInterpretation(task: NormalizedTaskContext, mode: 'standard' | 'strict'): string[] {
+export function taskNeedsAlignment(task: NormalizedTaskContext): string[] {
   const reasons: string[] = [];
-  if (task.changeType === 'unknown' && (mode === 'strict' || task.risk === 'high')) {
-    reasons.push('change type is unknown for a strict or high-risk task');
+  if (task.changeType === 'unknown') {
+    reasons.push('change type remains unknown, so task-type policy cannot be activated reliably');
   }
-  if (task.targets.length === 0 && (mode === 'strict' || task.risk === 'high')) {
-    reasons.push('no target path was supplied for a strict or high-risk task');
-  }
-  if (task.uncertainties.length && mode === 'strict') {
-    reasons.push('strict mode requires explicit resolution of declared uncertainties');
+  if (task.uncertainties.length) {
+    reasons.push('declared semantic uncertainties require a human decision before implementation');
   }
   return reasons;
-}
-
-function inferChangeType(description: string): Exclude<ChangeType, 'unknown'> | undefined {
-  const value = description.toLowerCase();
-  if (/\b(fix|bug|defect|regression|repair)\b|修复|缺陷|回归/.test(value)) return 'bugfix';
-  if (/\b(refactor|restructure|cleanup)\b|重构|整理/.test(value)) return 'refactor';
-  if (/\b(migrate|migration|cutover)\b|迁移|切换/.test(value)) return 'migration';
-  if (/\b(document|docs?|readme)\b|文档/.test(value)) return 'docs';
-  if (/\b(test|spec|coverage)\b|测试|覆盖率/.test(value)) return 'test';
-  if (/\b(add|create|implement|feature)\b|新增|实现|功能/.test(value)) return 'feature';
-  if (/\b(maintain|upgrade|update|chore)\b|维护|升级|更新/.test(value)) return 'maintenance';
-  return undefined;
 }
 
 function inferTechStack(targets: string[]): string[] {
@@ -104,22 +79,15 @@ function inferTechStack(targets: string[]): string[] {
   return uniqueStrings(result);
 }
 
-function inferRisk(changeType: ChangeType, targets: string[], description: string): RiskLevel {
-  if (changeType === 'migration' || /security|auth|payment|database|安全|认证|支付|数据库/i.test(description)) return 'high';
-  if (changeType === 'docs' || changeType === 'test') return 'low';
-  if (targets.length === 1) return 'low';
-  return 'medium';
-}
-
-function inferScope(targets: string[]): ScopeLevel {
-  if (targets.length <= 1) return targets.length ? 'local' : 'module';
-  const roots = new Set(targets.map((target) => target.split('/').slice(0, 2).join('/')));
-  if (roots.size === 1) return 'module';
-  return roots.size <= 3 ? 'cross-module' : 'repository';
-}
-
-function enumValue<T extends string>(value: unknown, allowed: readonly T[]): T | undefined {
-  return typeof value === 'string' && allowed.includes(value as T) ? value as T : undefined;
+function requiredEnum<T extends string>(
+  value: unknown,
+  allowed: readonly T[],
+  field: string,
+): T {
+  if (typeof value !== 'string' || !allowed.includes(value as T)) {
+    throw new Error(`${field} must be one of: ${allowed.join(', ')}.`);
+  }
+  return value as T;
 }
 
 function requiredString(value: unknown, field: string): string {
@@ -129,6 +97,16 @@ function requiredString(value: unknown, field: string): string {
 
 function normalizeTechnologyId(value: string): string {
   return value.trim().toLowerCase();
+}
+
+function normalizeTargets(value: unknown): string[] {
+  if (!Array.isArray(value)) throw new Error('task.targets must be an array.');
+  const targets = uniqueStrings(value.map((target) => {
+    if (typeof target !== 'string') throw new Error('task.targets entries must be strings.');
+    return normalizePath(target);
+  }));
+  if (!targets.length) throw new Error('task.targets must contain at least one repository-relative path.');
+  return targets;
 }
 
 function uniqueStrings(values: string[]): string[] {

@@ -491,6 +491,7 @@ test('Commander exposes nested help and classifies usage errors', async () => {
   assert.equal(help.exitCode, 0);
   assert.equal(help.json, false);
   assert.match(String(help.output), /--guidance-byte-limit/);
+  assert.doesNotMatch(String(help.output), /--mode/);
 
   await assert.rejects(
     () => runCli(['change', 'prepare']),
@@ -508,9 +509,30 @@ test('Commander exposes nested help and classifies usage errors', async () => {
       'change',
       'prepare',
       '--task',
+      'Missing semantic fields fixture',
+    ]),
+    (error: unknown) => {
+      assert.ok(error instanceof CliError);
+      assert.equal(error.code, 'USAGE_ERROR');
+      assert.match(error.message, /required option '--change-type/);
+      return true;
+    },
+  );
+
+  await assert.rejects(
+    () => runCli([
+      'change',
+      'prepare',
+      '--task',
       'Invalid option fixture',
+      '--change-type',
+      'bugfix',
+      '--target',
+      'src/example.ts',
       '--risk',
       'critical',
+      '--scope',
+      'local',
     ]),
     (error: unknown) => {
       assert.ok(error instanceof CliError);
@@ -633,6 +655,10 @@ test('interactive guidance overflow returns an explicit selection to Runtime', a
         'example.ts',
         '--tech',
         'typescript',
+        '--risk',
+        'low',
+        '--scope',
+        'local',
         '--guidance-byte-limit',
         '3000',
       ],
@@ -712,6 +738,10 @@ test('CLI returns business guidance overflow as a successful machine result', as
       'example.ts',
       '--tech',
       'typescript',
+      '--risk',
+      'low',
+      '--scope',
+      'local',
       '--guidance-byte-limit',
       '3000',
       '--json',

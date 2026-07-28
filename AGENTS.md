@@ -62,7 +62,8 @@ functions or CLI workflow APIs from
 optional personal overlay, and optional bounded directive/observation relation
 proposals. It owns:
 
-- deterministic task normalization and strict-mode interpretation gates
+- structural task validation, mechanical path/technology normalization, and
+  explicit semantic-alignment gates
 - Playbook loading, validation, local override, scope selection, and explicit
   authority ordering
 - symmetric target/directive scope overlap and canonical lowercase technology
@@ -142,16 +143,18 @@ diff and try to falsify each required, avoid, and tension claim. Contradictory
 or insufficient evidence must produce a repair, `violated`, `partial`, or
 `unverified`, never a confirmatory `satisfied` assertion.
 
-Strict mode requires an exception for unverified required guidance or unresolved tensions. Hard required/avoid violations reject the evaluation.
+Unverified required, avoid, or tension guidance produces
+`needs-attention`; a requested but unapproved exception produces
+`exception-required`. Hard required/avoid violations reject the evaluation.
 Unverified optional `consider` guidance remains informational and must not
-force a warning or completion retry. Runtime, not the adapter, identifies the
+force an attention state or completion retry. Runtime, not the adapter, identifies the
 required/avoid/tension items that need attestations.
 
 Runtime persistence is task-scoped. A runnable prepare creates exactly one
 `.resonant-code/runs/<runId>/` directory containing `run.json` and the Host
 evaluation input. Completion stores its check logs and evaluation inside that
 same run and must not duplicate the full current worktree snapshot.
-Interpretation, guidance-overflow, and checks-required outcomes create no run.
+Alignment, guidance-overflow, and checks-required outcomes create no run.
 Cleanup may remove only whole completed runs; prepared runs remain untouched.
 Persisted check stdout/stderr is capped at 1 MiB per stream; the digest covers
 the complete stream and truncation remains explicit in the collected facts. An
@@ -261,7 +264,7 @@ Tests must cover the behavior that justifies the harness:
 - current versus stale RCCL evidence
 - exact RCCL prepare-contract evidence and independent approval provenance
 - accepted, rejected, and downgraded semantic relations
-- strict interpretation and exception gates
+- Host-owned task semantics, alignment gates, and unified exception behavior
 - evaluation against actual diff/check evidence
 - attention-only attestations and optional informational guidance
 - checks-required no-write behavior and task-run isolation

@@ -22,7 +22,7 @@
 - Verifies the real Core and CLI npm tarballs through isolated API and
   binary-driven bootstrap, RCCL, status, and complete-change flows.
 - Provides the current two-operation change harness: `compileChange` and `evaluateChange`.
-- Makes ordinary coding tasks a compact preflight and evidence-backed postflight; strict mode asks only for missing interpretation.
+- Makes ordinary coding tasks a compact preflight and evidence-backed postflight; Host-owned semantics expose only material unresolved alignment.
 - Defines decision-relevant RCCL observations with separate evidence currency, semantic confidence, and human review signals.
 - Bounds guidance with one configurable UTF-8 byte ceiling, requires an
   explicit host selection when optional items overflow, never silently removes

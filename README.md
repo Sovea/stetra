@@ -138,7 +138,7 @@ of the final changed-file list.
 Runtime also returns an `attestationPlan`. Required, avoid, and unresolved
 tension items are the attention checklist. Unverified optional `consider`
 guidance remains visible as information but does not turn an otherwise accepted
-change into a warning or require another completion run. Before declaring an
+change into `needs-attention` or require another completion run. Before declaring an
 attention item satisfied, the Host reviews every changed file for contradictory
 evidence; Runtime continues to validate narrow evidence bindings rather than
 guessing semantic truth.

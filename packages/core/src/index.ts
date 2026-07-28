@@ -7,6 +7,7 @@
 export { compileChange, evaluateChange } from './runtime/index.ts';
 
 export type {
+  AlignmentRequest,
   AttestationPlan,
   ChangeDecisionPacket,
   ChangeEvaluation,
@@ -33,9 +34,7 @@ export type {
   GuidanceDetail,
   GuidanceEvaluation,
   GuidanceItem,
-  GuidanceMode,
   GuidanceOverflow,
-  InterpretationRequest,
   MachineFactProvenance,
   NormalizedTaskContext,
   RelationProposal,

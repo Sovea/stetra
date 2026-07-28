@@ -136,7 +136,7 @@ export function formatChangeComplete(
     lines.push(`${colors.bold('Run file:')} ${output.runPath}`);
   }
 
-  if (status === 'warning') {
+  if (status === 'needs-attention') {
     lines.push('', `${colors.bold('Next:')} Review unresolved evidence before accepting the change.`);
   } else if (status === 'exception-required') {
     lines.push(

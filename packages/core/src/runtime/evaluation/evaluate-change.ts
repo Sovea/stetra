@@ -92,14 +92,14 @@ export function evaluateChange(input: EvaluateChangeInput): ChangeEvaluation {
     }));
   }
 
-  const status = resolveEvaluationStatus(results, checks, input.decision.mode);
+  const status = resolveEvaluationStatus(results, checks);
   const actionRequired = buildActionRequired(results, checks);
   const informational = buildInformational(results);
   const summary = {
     requiredSatisfied: results.filter((result) => result.section === 'required' && (result.verdict === 'satisfied' || result.verdict === 'excepted')).length,
     requiredViolated: results.filter((result) => result.section === 'required' && result.verdict === 'violated').length,
     requiredUnverified: results.filter((result) => result.section === 'required' && (result.verdict === 'unverified' || result.verdict === 'partial')).length,
-    warningCount: countWarnings(results, checks),
+    attentionCount: countAttentionItems(results, checks),
     informationalCount: informational.length,
   };
   const operation = inferOperation(changes.files);
@@ -238,9 +238,6 @@ function assertEvaluateShape(input: EvaluateChangeInput): void {
     if (!attestation || typeof attestation.guidanceId !== 'string' || !['satisfied', 'violated', 'partial', 'unverified'].includes(attestation.verdict)) {
       throw new Error('evaluateChange guidance attestations require guidanceId and a valid verdict.');
     }
-    if (typeof attestation.attestedBy !== 'string' || !attestation.attestedBy.trim()) {
-      throw new Error('evaluateChange guidance attestations require attestedBy.');
-    }
     if (typeof attestation.explanation !== 'string' || !attestation.explanation.trim()) {
       throw new Error('evaluateChange guidance attestations require a concrete explanation.');
     }
@@ -352,7 +349,6 @@ function evaluateGuidanceItem(input: EvaluateItemInput): GuidanceEvaluation {
     ...(attestation
       ? {
           attestation: {
-            attestedBy: attestation.attestedBy.trim(),
             explanation: attestation.explanation.trim(),
           },
         }
@@ -407,7 +403,6 @@ function uncoveredRequirements(
 function resolveEvaluationStatus(
   results: GuidanceEvaluation[],
   checks: CheckResult[],
-  mode: 'standard' | 'strict',
 ): ChangeEvaluation['status'] {
   const hardViolation = results.some((result) =>
     (result.section === 'required' || result.section === 'avoid')
@@ -416,22 +411,17 @@ function resolveEvaluationStatus(
   if (hardViolation || checks.some((check) => check.status === 'failed')) return 'rejected';
 
   const pendingException = results.some((result) => result.exception && result.exception.status !== 'approved');
-  const hardUnverified = results.some((result) =>
-    (result.section === 'required' || result.section === 'tension')
-    && result.verdict !== 'satisfied'
-    && result.verdict !== 'excepted');
-  if (pendingException || (mode === 'strict' && hardUnverified)) return 'exception-required';
+  if (pendingException) return 'exception-required';
 
-  const warning = hardUnverified
-    || checks.some((check) => check.status === 'skipped')
-    || results.some((result) =>
-      result.section === 'avoid'
-      && result.verdict !== 'satisfied'
-      && result.verdict !== 'excepted');
-  return warning ? 'warning' : 'accepted';
+  const needsAttention = results.some((result) =>
+    result.section !== 'consider'
+    && result.verdict !== 'satisfied'
+    && result.verdict !== 'excepted')
+    || checks.some((check) => check.status === 'skipped');
+  return needsAttention ? 'needs-attention' : 'accepted';
 }
 
-function countWarnings(results: GuidanceEvaluation[], checks: CheckResult[]): number {
+function countAttentionItems(results: GuidanceEvaluation[], checks: CheckResult[]): number {
   return results.filter((result) =>
     result.section !== 'consider'
     && result.verdict !== 'satisfied'

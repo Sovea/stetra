@@ -230,7 +230,6 @@ function attestationsForDecision(decision) {
       verdict: 'satisfied',
       evidenceRefs: refs,
       explanation: `Inspected ${item.id} against the isolated machine-collected change.`,
-      attestedBy: 'release-smoke-host',
     };
   });
   for (const tension of decision.guidance.tensions) {
@@ -239,7 +238,6 @@ function attestationsForDecision(decision) {
       verdict: 'satisfied',
       evidenceRefs: [{ kind: 'semantic', ref: `semantic:${tension.id}`, description: tension.resolution }],
       explanation: `Applied the compiled resolution for ${tension.id}.`,
-      attestedBy: 'release-smoke-host',
     });
   }
   return attestations;

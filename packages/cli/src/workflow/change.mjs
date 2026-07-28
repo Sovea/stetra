@@ -52,21 +52,20 @@ export async function prepareCodeTask(options) {
     ...(existsSync(paths.localAugmentPath) ? { localAugmentPath: paths.localAugmentPath } : {}),
     ...(existsSync(paths.personalOverlayPath) ? { personalOverlayPath: paths.personalOverlayPath } : {}),
     ...(existsSync(paths.rcclPath) ? { rcclPath: paths.rcclPath } : {}),
-    mode: normalizeEnum(options.guidanceMode, ['standard', 'strict'], 'mode') ?? 'standard',
     task: buildTaskInput(options),
     ...(relationProposals.length ? { relationProposals } : {}),
     ...(guidanceByteLimit ? { guidanceByteLimit } : {}),
     ...(deliverySelection ? { deliverySelection } : {}),
   });
 
-  if (output.status === 'needs-interpretation') {
+  if (output.status === 'needs-alignment') {
     return {
-      status: 'needs-interpretation',
+      status: 'needs-alignment',
       schemaVersion: RUN_SCHEMA_VERSION,
       task: output.task,
       reasons: output.reasons,
       requiredFields: output.requiredFields,
-      nextStep: 'Provide the missing task fields and run prepare again. No task-model artifact is required.',
+      nextStep: 'Resolve the material semantic decision with the user, update the task contract, and run prepare again. No separate design artifact is required.',
     };
   }
   if (output.status === 'guidance-overflow') {
@@ -289,15 +288,16 @@ function buildTaskInput(options) {
     ...(options.targetFile ? [options.targetFile] : []),
     ...(options.changedFiles ?? []),
   ]);
+  if (!targets.length) throw usageError('Missing task target.');
   return {
     description: requiredString(options.taskDescription, 'task description'),
-    changeType: normalizeEnum(options.changeType, [
+    changeType: requiredEnum(options.changeType, [
       'bugfix', 'feature', 'refactor', 'migration', 'maintenance', 'docs', 'test', 'unknown',
     ], 'change-type'),
     targets,
     techStack: unique(options.techStack ?? []),
-    risk: normalizeEnum(options.risk, ['low', 'medium', 'high'], 'risk'),
-    scope: normalizeEnum(options.scope, ['local', 'module', 'cross-module', 'repository'], 'scope'),
+    risk: requiredEnum(options.risk, ['low', 'medium', 'high'], 'risk'),
+    scope: requiredEnum(options.scope, ['local', 'module', 'cross-module', 'repository'], 'scope'),
     constraints: unique(options.constraints ?? []),
     avoid: unique(options.avoid ?? []),
     uncertainties: unique(options.uncertainties ?? []),
@@ -308,7 +308,6 @@ function compactDecision(decision, run, checkPlan, baseline) {
   return {
     status: decision.status,
     schemaVersion: decision.schemaVersion,
-    guidanceMode: decision.mode,
     decisionId: decision.decisionId,
     task: decision.task,
     guidance: decision.executionGuidance,
@@ -480,6 +479,12 @@ function normalizeEnum(value, allowed, label) {
     throw usageError(`Invalid ${label}: expected one of ${allowed.join(', ')}.`);
   }
   return value;
+}
+
+function requiredEnum(value, allowed, label) {
+  const normalized = normalizeEnum(value, allowed, label);
+  if (normalized === undefined) throw usageError(`Missing ${label}.`);
+  return normalized;
 }
 
 function normalizePositiveInteger(value, label) {

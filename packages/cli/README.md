@@ -32,7 +32,7 @@ intended file or directory scope roots and canonical technology IDs; Runtime
 then reports exactly which Team Playbook guidance and checks activated.
 Completion asks for attestations only for required, avoid, and tension
 attention items. Optional `consider` guidance may remain unverified without
-creating a warning or retry loop. Before attesting satisfaction, the Host
+creating an attention state or retry loop. Before attesting satisfaction, the Host
 reviews the complete actual diff for contradictory evidence. Check stdout and
 stderr logs are created only for streams that produced output.
 

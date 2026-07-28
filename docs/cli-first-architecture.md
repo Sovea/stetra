@@ -144,7 +144,7 @@ fingerprints needed for a meaningful review.
 
 Host adapters use `--json`. JSON mode never prompts, never emits ANSI, and
 writes only the machine-readable result to stdout. Actionable business states
-such as `needs-interpretation` and `guidance-overflow` are successful machine
+such as `needs-alignment` and `guidance-overflow` are successful machine
 responses. Invalid input, infrastructure failures, changed generated artifacts
 during init, and strict doctor failures use non-zero exit codes.
 
@@ -179,7 +179,7 @@ The CLI never claims ownership of:
 The CLI owns ignored task runtime state under
 `.resonant-code/runs/<runId>/`. A successful prepare writes one `run.json` and
 one empty `evaluation.json`; completion writes check logs inside that run and
-adds the evaluation to `run.json`. Results that still need interpretation,
+adds the evaluation to `run.json`. Results that still need semantic alignment,
 guidance selection, or check configuration create no run. Completed-run
 cleanup removes whole run directories, while prepared runs are retained.
 Persisted stdout and stderr are capped independently while their digests cover
@@ -221,9 +221,12 @@ new persisted planning artifact.
 Before prepare, the Host may use ordinary read-only repository inspection.
 Targets are explicit intended scope roots: directory roots include descendants,
 while final changed-file facts remain workflow-collected after implementation.
-Technology identifiers are canonical lowercase IDs. Runtime owns scope overlap,
-layer selection, verification activation, and the attention-only attestation
-plan; the adapter does not reproduce those decisions.
+The Host explicitly supplies change type, risk, scope, and targets; Runtime
+does not infer semantic task fields from prose keywords or path counts.
+Technology identifiers are canonical lowercase IDs and exact file extensions
+may add mechanical language context. Runtime owns scope overlap, layer
+selection, verification activation, and the attention-only attestation plan;
+the adapter does not reproduce those decisions.
 
 Targets are not file write permissions. The Host may change directly coupled
 implementation, tests, types, and documentation while preserving the aligned

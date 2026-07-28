@@ -46,7 +46,6 @@ const GuidanceAttestationSchema = z.strictObject({
   verdict: z.enum(['satisfied', 'violated', 'partial', 'unverified']),
   evidenceRefs: z.array(EvaluationEvidenceSchema),
   explanation: NonEmptyStringSchema,
-  attestedBy: NonEmptyStringSchema,
 });
 
 const ChangeExceptionSchema = z.strictObject({

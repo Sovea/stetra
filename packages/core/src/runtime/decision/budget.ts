@@ -25,7 +25,7 @@ export type GuidanceDeliveryResult =
       status: 'overflow';
       overflow: Omit<
         GuidanceOverflow,
-        'schemaVersion' | 'mode' | 'task' | 'status' | 'candidateDetails' | 'diagnostics'
+        'schemaVersion' | 'task' | 'status' | 'candidateDetails' | 'diagnostics'
       >;
     };
 

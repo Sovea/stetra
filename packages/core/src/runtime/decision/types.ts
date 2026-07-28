@@ -1,6 +1,5 @@
 import type { DirectiveExample, ExecutionMode } from '../types.ts';
 import type {
-  GuidanceMode,
   NormalizedTaskContext,
   TaskContextInput,
   TaskFieldSource,
@@ -25,7 +24,6 @@ export interface CompileChangeInput {
   personalOverlayPath?: string;
   rcclPath?: string;
   task: TaskContextInput;
-  mode?: GuidanceMode;
   relationProposals?: RelationProposal[];
   guidanceByteLimit?: number;
   deliverySelection?: GuidanceDeliverySelection;
@@ -36,12 +34,12 @@ export interface GuidanceDeliverySelection {
   rationale: string;
 }
 
-export interface InterpretationRequest {
+export interface AlignmentRequest {
   schemaVersion: typeof DECISION_SCHEMA_VERSION;
-  status: 'needs-interpretation';
+  status: 'needs-alignment';
   task: NormalizedTaskContext;
   reasons: string[];
-  requiredFields: Array<'changeType' | 'targets' | 'uncertainties'>;
+  requiredFields: Array<'changeType' | 'uncertainties'>;
 }
 
 export type VerificationKind = 'command' | 'diff' | 'semantic';
@@ -252,7 +250,6 @@ export interface ChangeDecisionPacket {
   schemaVersion: typeof DECISION_SCHEMA_VERSION;
   decisionId: string;
   status: 'compiled' | 'needs-attention';
-  mode: GuidanceMode;
   task: NormalizedTaskContext;
   guidance: EffectiveGuidance;
   executionGuidance: ExecutionGuidance;
@@ -271,7 +268,6 @@ export interface ChangeDecisionPacket {
 export interface GuidanceOverflow {
   schemaVersion: typeof DECISION_SCHEMA_VERSION;
   status: 'guidance-overflow';
-  mode: GuidanceMode;
   task: NormalizedTaskContext;
   byteLimit: number;
   totalBytes: number;
@@ -298,4 +294,4 @@ export interface GuidanceOverflow {
   reasons: string[];
 }
 
-export type CompileChangeOutput = ChangeDecisionPacket | InterpretationRequest | GuidanceOverflow;
+export type CompileChangeOutput = ChangeDecisionPacket | AlignmentRequest | GuidanceOverflow;

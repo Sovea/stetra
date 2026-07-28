@@ -65,7 +65,7 @@ export function buildActivationSummary(input: {
     targets: [...input.task.targets],
     techStack: [...input.task.techStack],
     techStackSource: input.task.provenance
-      .find((item) => item.field === 'techStack')?.source ?? 'defaulted',
+      .find((item) => item.field === 'techStack')?.source ?? 'deterministic',
     activeBySource: {
       builtin: sortedUnique(activeBySource.builtin),
       team: sortedUnique(activeBySource.team),

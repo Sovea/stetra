@@ -13,7 +13,6 @@ test('evaluation input reports the exact path for malformed semantic evidence', 
         attestations: [{
           guidanceId: 'required-1',
           verdict: 'satisfied',
-          attestedBy: 'coding-agent',
           explanation: 'The implementation preserves the required boundary.',
           evidenceRefs: [{
             kind: 'semantic',
@@ -41,7 +40,6 @@ test('evaluation input accepts only canonical evidence shapes', () => {
       attestations: [{
         guidanceId: 'required-1',
         verdict: 'satisfied',
-        attestedBy: 'coding-agent',
         explanation: 'The changed file and semantic boundary were inspected.',
         evidenceRefs: [
           {

@@ -285,7 +285,6 @@ function attestationsForDecision(decision) {
       verdict: 'satisfied',
       evidenceRefs,
       explanation: `Inspected ${item.id} against the packed-CLI change.`,
-      attestedBy: 'cli-release-smoke-host',
     };
   });
   for (const tension of decision.guidance.tensions) {
@@ -298,7 +297,6 @@ function attestationsForDecision(decision) {
         description: tension.resolution,
       }],
       explanation: `Applied the compiled resolution for ${tension.id}.`,
-      attestedBy: 'cli-release-smoke-host',
     });
   }
   return attestations;

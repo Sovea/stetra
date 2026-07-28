@@ -67,7 +67,6 @@ export interface GuidanceAttestation {
   verdict: 'satisfied' | 'violated' | 'partial' | 'unverified';
   evidenceRefs: EvaluationEvidenceRef[];
   explanation: string;
-  attestedBy: string;
 }
 
 export interface ChangeException {
@@ -95,7 +94,6 @@ export interface GuidanceEvaluation {
   acceptedEvidence: EvaluationEvidenceRef[];
   rejectedEvidence: Array<{ ref: EvaluationEvidenceRef; reason: string }>;
   attestation?: {
-    attestedBy: string;
     explanation: string;
   };
   exception?: ChangeException;
@@ -122,7 +120,7 @@ export interface ChangeEvaluation {
   schemaVersion: typeof EVALUATION_SCHEMA_VERSION;
   evaluationId: string;
   decisionId: string;
-  status: 'accepted' | 'warning' | 'exception-required' | 'rejected';
+  status: 'accepted' | 'needs-attention' | 'exception-required' | 'rejected';
   operation: 'none' | 'create' | 'modify' | 'delete' | 'mixed';
   changes: ChangeSet;
   results: GuidanceEvaluation[];
@@ -141,7 +139,7 @@ export interface ChangeEvaluation {
     requiredSatisfied: number;
     requiredViolated: number;
     requiredUnverified: number;
-    warningCount: number;
+    attentionCount: number;
     informationalCount: number;
   };
 }

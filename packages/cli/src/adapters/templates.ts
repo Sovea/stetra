@@ -126,15 +126,17 @@ resonant-code change prepare . \\
   --task "<concrete task>" \\
   --change-type <bugfix|feature|refactor|migration|maintenance|docs|test|unknown> \\
   --target <repository-path> \\
+  --risk <low|medium|high> \\
+  --scope <local|module|cross-module|repository> \\
   --json
 \`\`\`
 
 Add repeatable \`--target\`, \`--tech\`, \`--constraint\`, \`--avoid\`, or
-\`--uncertainty\` only when they are material. When explicit, \`--risk\`
-accepts \`low|medium|high\` and \`--scope\` accepts
-\`local|module|cross-module|repository\`. Otherwise omit them instead of
-inventing a synonym. Use \`--mode strict\` when the request or repository makes
-it meaningful.
+\`--uncertainty\` only when they are material. Supply \`change-type\`, \`risk\`,
+and \`scope\` from your semantic understanding of the request and repository;
+Runtime does not guess them from task wording or path counts. Use
+\`change-type unknown\` or \`--uncertainty\` only to expose a material human
+decision that still needs alignment.
 
 \`--target\` is an intended change-scope root, not a prediction of the final
 changed-file list. Supply the smallest justified repository-relative file or
@@ -145,8 +147,8 @@ normalizes casing and may also infer a language from exact file extensions.
 
 Handle results as follows:
 
-- \`needs-interpretation\`: resolve repository-discoverable fields yourself;
-  pause only when the missing information is a user-intent decision.
+- \`needs-alignment\`: ask one consolidated question for the reported semantic
+  decision, update the task contract, and rerun prepare.
 - \`guidance-overflow\` with mandatory guidance within budget: select only
   task-relevant optional IDs, write
   \`{ "considerIds": [...], "rationale": "..." }\`, and rerun with
@@ -226,7 +228,6 @@ actual diff:
     {
       "guidanceId": "delivered-guidance-id",
       "verdict": "satisfied",
-      "attestedBy": "coding-agent",
       "explanation": "Concrete explanation tied to the actual change.",
       "evidenceRefs": [
         {

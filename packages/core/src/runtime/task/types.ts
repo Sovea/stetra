@@ -15,20 +15,18 @@ export const SCOPE_LEVELS = ['local', 'module', 'cross-module', 'repository'] as
 export type ChangeType = typeof CHANGE_TYPES[number];
 export type RiskLevel = typeof RISK_LEVELS[number];
 export type ScopeLevel = typeof SCOPE_LEVELS[number];
-export type GuidanceMode = 'standard' | 'strict';
-export type TaskFieldSource = 'explicit' | 'deterministic' | 'host-provided' | 'defaulted';
+export type TaskFieldSource = 'host-provided' | 'deterministic';
 
 export interface TaskContextInput {
   description: string;
-  changeType?: ChangeType;
-  targets?: string[];
+  changeType: ChangeType;
+  targets: string[];
   techStack?: string[];
-  risk?: RiskLevel;
-  scope?: ScopeLevel;
+  risk: RiskLevel;
+  scope: ScopeLevel;
   constraints?: string[];
   avoid?: string[];
   uncertainties?: string[];
-  interpretationSource?: 'explicit' | 'host-provided';
 }
 
 export interface TaskFieldProvenance {

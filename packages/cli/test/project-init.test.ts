@@ -39,6 +39,9 @@ test('project init creates and safely upgrades only managed adapter artifacts', 
       changeReference,
       /--scope[\s\S]*local\|module\|cross-module\|repository/,
     );
+    assert.doesNotMatch(changeReference, /--mode/);
+    assert.match(changeReference, /Runtime does not guess them/);
+    assert.doesNotMatch(changeReference, /attestedBy/);
     assert.match(changeReference, /## Align/);
     assert.match(changeReference, /ask one consolidated\s+question/);
     assert.match(changeReference, /not a file write allowlist/);
