@@ -25,6 +25,7 @@ export interface CompileChangeInput {
   rcclPath?: string;
   task: TaskContextInput;
   relationProposals?: RelationProposal[];
+  verificationProposals?: VerificationProposal[];
   guidanceByteLimit?: number;
   deliverySelection?: GuidanceDeliverySelection;
 }
@@ -43,6 +44,16 @@ export interface AlignmentRequest {
 }
 
 export type VerificationKind = 'command' | 'diff' | 'semantic';
+export type VerificationSource =
+  | 'delivered-guidance'
+  | 'team-default'
+  | 'host-task';
+
+export interface VerificationProposal {
+  id: string;
+  rationale: string;
+  source: Exclude<VerificationSource, 'delivered-guidance'>;
+}
 
 export interface VerificationRequirement {
   kind: VerificationKind;
@@ -111,7 +122,11 @@ export interface ExecutionGuidance {
 }
 
 export interface VerificationPlan {
-  commands: Array<{ id: string; reason: string }>;
+  commands: Array<{
+    id: string;
+    reasons: string[];
+    sources: VerificationSource[];
+  }>;
   semanticChecks: Array<{ guidanceId: string; description: string }>;
 }
 
@@ -262,6 +277,7 @@ export interface ChangeDecisionPacket {
     observations: string;
     relations: string;
     delivery: string;
+    verification: string;
   };
 }
 

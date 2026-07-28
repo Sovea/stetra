@@ -21,7 +21,9 @@ export type {
   GuidanceOverflow,
   RelationProposal,
   VerificationPlan,
+  VerificationProposal,
   VerificationRequirement,
+  VerificationSource,
 } from './decision/types.ts';
 export type {
   ChangeEvaluation,

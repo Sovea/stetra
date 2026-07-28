@@ -21,6 +21,9 @@ test('project init creates and safely upgrades only managed adapter artifacts', 
     assert.equal(initialized.status, 'initialized');
     assert.deepEqual(initialized.adapters, ['codex']);
     assert.equal(initialized.counts.create, 6);
+    assert.deepEqual(initialized.readiness.required, []);
+    assert.ok(initialized.readiness.optional.some((item) =>
+      item.code === 'team-checks-absent'));
     assert.match(readFileSync(join(root, 'AGENTS.md'), 'utf8'), /# Owner instructions/);
     assert.match(readFileSync(join(root, 'AGENTS.md'), 'utf8'), /resonant-code:begin/);
     const skillRoot = join(root, '.agents', 'skills', 'resonant-code');
@@ -42,6 +45,9 @@ test('project init creates and safely upgrades only managed adapter artifacts', 
     assert.doesNotMatch(changeReference, /--mode/);
     assert.match(changeReference, /Runtime does not guess them/);
     assert.doesNotMatch(changeReference, /attestedBy/);
+    assert.match(changeReference, /verification-required/);
+    assert.match(changeReference, /transient check configuration outside the repository/);
+    assert.doesNotMatch(changeReference, /not-requested/);
     assert.match(changeReference, /## Align/);
     assert.match(changeReference, /ask one consolidated\s+question/);
     assert.match(changeReference, /not a file write allowlist/);
@@ -53,6 +59,8 @@ test('project init creates and safely upgrades only managed adapter artifacts', 
       'utf8',
     );
     assert.match(setupReference, /semantic team policy/);
+    assert.match(setupReference, /absent .*checks\.json.*not a readiness failure/s);
+    assert.match(setupReference, /"rationale"/);
     const contextReference = readFileSync(
       join(skillRoot, 'references', 'context.md'),
       'utf8',

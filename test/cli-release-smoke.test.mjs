@@ -82,6 +82,7 @@ try {
     version: '1.0',
     checks: ['typecheck', 'test'].map((id) => ({
       id,
+      rationale: `Verify ${id} in the packed CLI workflow.`,
       command: [process.execPath, '-e', 'process.exit(0)'],
       timeoutMs: 10_000,
     })),

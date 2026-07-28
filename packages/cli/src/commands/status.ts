@@ -35,7 +35,7 @@ function registerStatusCommand(
       : 'Inspect harness installation and source readiness')
     .argument('[project-root]', 'project root', '.')
     .option('--personal-overlay <path>', 'personal should-level overlay')
-    .option('--check-config <path>', 'explicit check command configuration');
+    .option('--check-config <path>', 'exact check configuration to inspect');
   if (name === 'doctor') {
     command.option('--strict', 'fail when any required readiness condition is unresolved');
   }

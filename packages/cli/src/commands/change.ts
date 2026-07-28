@@ -61,7 +61,7 @@ export function registerChangeCommands(
     .option('--selection-file <path>', 'explicit optional-guidance selection')
     .option('--guidance-byte-limit <bytes>', 'positive UTF-8 delivery ceiling')
     .option('--personal-overlay <path>', 'personal should-level overlay')
-    .option('--check-config <path>', 'explicit check command configuration')
+    .option('--check-config <path>', 'task-specific exact check configuration')
     .action(async (
       projectRoot: string,
       options: ChangePrepareOptions,

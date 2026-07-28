@@ -220,6 +220,61 @@ test('compile directly delivers compact agent-facing guidance', async () => {
   assert.ok(!('verification' in output.executionGuidance.consider[0]));
 });
 
+test('explicit verification proposals merge with policy requirements deterministically', async () => {
+  const input = {
+    projectRoot,
+    builtinRoot,
+    task: {
+      description: 'Fix a TypeScript boundary',
+      changeType: 'bugfix' as const,
+      targets: ['packages/core/src/runtime/index.ts'],
+      risk: 'medium' as const,
+      scope: 'module' as const,
+    },
+    verificationProposals: [
+      {
+        id: 'smoke',
+        rationale: 'Exercise the public package entrypoint.',
+        source: 'team-default' as const,
+      },
+      {
+        id: 'typecheck',
+        rationale: 'Validate the changed public TypeScript contract.',
+        source: 'host-task' as const,
+      },
+    ],
+  };
+  const first = await compileChange(input);
+  assert.equal(first.status, 'compiled');
+  if (first.status !== 'compiled') return;
+  const typecheck = first.verificationPlan.commands.find((item) =>
+    item.id === 'typecheck');
+  assert.deepEqual(typecheck?.sources, ['delivered-guidance', 'host-task']);
+  assert.ok(typecheck?.reasons.includes(
+    'Validate the changed public TypeScript contract.',
+  ));
+  assert.deepEqual(
+    first.verificationPlan.commands.find((item) => item.id === 'smoke'),
+    {
+      id: 'smoke',
+      reasons: ['Exercise the public package entrypoint.'],
+      sources: ['team-default'],
+    },
+  );
+
+  const reordered = await compileChange({
+    ...input,
+    verificationProposals: [...input.verificationProposals].reverse(),
+  });
+  assert.equal(reordered.status, 'compiled');
+  if (reordered.status !== 'compiled') return;
+  assert.equal(reordered.decisionId, first.decisionId);
+  assert.equal(
+    reordered.fingerprints.verification,
+    first.fingerprints.verification,
+  );
+});
+
 test('ordinary TypeScript change types compile directly under the default ceiling', async () => {
   const cases = [
     {
@@ -1054,7 +1109,7 @@ test('postflight evaluation rejects a failed required command', () => {
   assert.equal(evaluation.assurance.machineFacts.changedFileCount, 1);
 });
 
-test('a missing configured command cannot produce an accepted result', () => {
+test('an unavailable configured command cannot produce an accepted result', () => {
   const decision = minimalDecision();
   const changes = machineChangeSet([
     { path: 'packages/core/src/runtime/index.ts', status: 'modified' },
@@ -1064,11 +1119,12 @@ test('a missing configured command cannot produce an accepted result', () => {
     changes,
     checks: [{
       id: 'typecheck',
-      status: 'skipped',
-      command: [],
+      status: 'unavailable',
+      command: ['corepack', 'pnpm', 'typecheck'],
       exitCode: null,
-      outputDigest: stableHash(['typecheck', 'not-configured']),
-      reason: 'No explicit command is configured for verification check "typecheck".',
+      outputDigest: stableHash(['typecheck', 'unavailable']),
+      definitionFingerprint: stableHash(['typecheck', 'definition']),
+      reason: 'The configured typecheck command could not start.',
       provenance: {
         source: 'resonant-code-workflow',
         collectionId: changes.provenance.collectionId,
@@ -1084,6 +1140,8 @@ test('a missing configured command cannot produce an accepted result', () => {
   assert.equal(evaluation.status, 'needs-attention');
   assert.equal(evaluation.results[0].verdict, 'partial');
   assert.match(evaluation.results[0].reasons[0], /command:typecheck/);
+  assert.ok(evaluation.actionRequired.some((item) =>
+    item.kind === 'check-unavailable' && item.id === 'typecheck'));
 });
 
 test('postflight evaluation combines machine facts with attestations only for delivered guidance', () => {
@@ -1283,6 +1341,23 @@ test('public boundaries reject malformed host artifacts without type errors', as
     },
   }), /positive integer/);
 
+  await assert.rejects(() => compileChange({
+    projectRoot,
+    builtinRoot,
+    task: {
+      description: 'Fix one bug',
+      changeType: 'bugfix',
+      targets: ['packages/core/src/runtime/index.ts'],
+      risk: 'low',
+      scope: 'local',
+    },
+    verificationProposals: [{
+      id: 'test',
+      rationale: '',
+      source: 'host-task',
+    }],
+  }), /requires a rationale/);
+
   assert.throws(() => evaluateChange({
     decision: minimalDecision(),
     changes: machineChangeSet([
@@ -1339,7 +1414,14 @@ function minimalDecision(): ChangeDecisionPacket {
     }),
     guidance,
     executionGuidance: toExecutionGuidance(guidance),
-    verificationPlan: { commands: [{ id: 'typecheck', reason: 'Run typecheck.' }], semanticChecks: [] },
+    verificationPlan: {
+      commands: [{
+        id: 'typecheck',
+        reasons: ['Run typecheck.'],
+        sources: ['delivered-guidance'],
+      }],
+      semanticChecks: [],
+    },
     attestationPlan: {
       attentionItems: [{
         guidanceId: 'required-1',
@@ -1409,6 +1491,7 @@ function minimalDecision(): ChangeDecisionPacket {
       observations: 'observations',
       relations: 'relations',
       delivery: 'delivery',
+      verification: 'verification',
     },
   };
 }

@@ -21,23 +21,17 @@ resonant-code init .
 
 `init` asks which Host Adapters to install and generates one logical
 `resonant-code` skill for each selected host. It does not overwrite project
-policy or trusted check configuration.
-
-For trusted completion, ask the newly configured Host Agent:
-
-> Set up resonant-code checks for this repository. Inspect the project-owned
-> scripts and CI, show me the exact command argv and timeouts, and wait for my
-> approval before writing the configuration.
-
-The Host writes the approved commands to `.resonant-code/checks.json`. Confirm
-installation and configured-source readiness:
+policy or team verification defaults. Confirm installation integrity:
 
 ```sh
 resonant-code doctor . --strict
 ```
 
-Each later `change prepare` reports requested checks that are not mapped and
-configured checks that Runtime did not request for the delivered guidance.
+No repository-wide check setup is required. For each change, the Host selects
+the smallest relevant verification plan from authoritative project scripts,
+CI, and documentation. It passes a transient exact configuration to the CLI;
+the task run freezes those definitions before implementation. A team may
+optionally commit `.resonant-code/checks.json` as its shared default plan.
 
 Then use the coding agent normally:
 
@@ -59,15 +53,16 @@ Host Agent + generated resonant-code skill
       |
       +--> change prepare --json
       |      Runtime normalizes targets/technology, activates overlapping policy,
-      |      verifies relevant RCCL evidence, and budgets delivered guidance
-      |      CLI maps requested checks and snapshots the worktree
+      |      verifies relevant RCCL evidence, merges explicit verification
+      |      proposals, and budgets delivered guidance
+      |      CLI freezes selected commands and snapshots the worktree
       |
       +--> Host implements the requested change
       |
       +--> Host challenges attestations against the complete actual diff
       |
       `--> change complete --json
-             CLI collects the actual diff and runs approved checks
+             CLI collects the actual diff and runs every selected check
              Runtime evaluates only delivered guidance
              Host reports a human-readable result
 ```
@@ -87,12 +82,12 @@ The Host may automatically:
 - use already-reviewed RCCL observations
 - implement and repair necessary adjacent files while preserving the aligned
   semantic contract
-- run configured checks and provide evidence-backed attestations for required,
-  avoid, and tension guidance
+- select and run a task-scoped exact check plan and provide evidence-backed
+  attestations for required, avoid, and tension guidance
 
 The Host must pause before:
 
-- changing Team Playbook, RCCL, or trusted check configuration
+- changing Team Playbook, RCCL, or persistent team verification defaults
 - approving an RCCL observation or policy exception
 - choosing between materially different goals, public behavior, compatibility,
   ownership, migration, or other long-lived tradeoffs
@@ -102,15 +97,16 @@ The Host must pause before:
 
 `status` and `doctor` separate setup by consequence:
 
-- **Required** — Core/Adapter integrity, valid checks, and valid configured
-  sources. `doctor --strict` fails while any required item is unresolved.
+- **Required** — Core/Adapter integrity and validity of sources that are
+  present. `doctor --strict` fails while any required item is unresolved.
 - **Recommended** — repository-specific Team Playbook guidance.
-- **Optional** — RCCL and personal preferences.
+- **Optional** — team check defaults, RCCL, and personal preferences.
 
-Built-in guidance works without a Team Playbook or RCCL. Their absence is not a
-blocker.
+Built-in guidance works without a Team Playbook, team check defaults, or RCCL.
+Their absence is not a blocker.
 
-Trusted checks use explicit non-shell argv:
+Task and team check definitions use explicit non-shell argv and an inspectable
+rationale:
 
 ```json
 {
@@ -118,6 +114,7 @@ Trusted checks use explicit non-shell argv:
   "checks": [
     {
       "id": "typecheck",
+      "rationale": "Validate workspace types and public TypeScript contracts.",
       "command": ["corepack", "pnpm", "typecheck"],
       "timeoutMs": 120000
     }
@@ -125,23 +122,28 @@ Trusted checks use explicit non-shell argv:
 }
 ```
 
-The CLI never guesses commands from filenames or dependencies. The Host
-inspects project-owned sources, the user approves the commands, and the CLI
-validates and executes the exact definitions.
+The CLI never guesses commands from filenames or dependencies. The Host uses
+project-owned sources to select a task plan autonomously, while Runtime records
+why each check was selected and whether it came from delivered guidance, a
+team default, or the Host task plan. Every definition in the selected
+configuration executes. Creating persistent team defaults is a separate,
+user-confirmed semantic decision about future verification—not a prerequisite
+for normal tasks.
 
 `prepare` makes activation inspectable: it returns normalized targets and
 technology IDs, active built-in/team/personal contributors, local directives
-whose scopes did not overlap, requested checks, and configured-but-not-requested
-check IDs. A directory target includes its descendants; it is not a prediction
-of the final changed-file list.
+whose scopes did not overlap, selected check sources and rationales, and any
+policy-required check IDs missing from the selected configuration. A directory
+target includes its descendants; it is not a prediction of the final
+changed-file list.
 
 Runtime also returns an `attestationPlan`. Required, avoid, and unresolved
 tension items are the attention checklist. Unverified optional `consider`
-guidance remains visible as information but does not turn an otherwise accepted
-change into `needs-attention` or require another completion run. Before declaring an
-attention item satisfied, the Host reviews every changed file for contradictory
-evidence; Runtime continues to validate narrow evidence bindings rather than
-guessing semantic truth.
+guidance remains visible as information but does not turn an otherwise
+accepted change into `needs-attention` or require another completion run.
+Before declaring an attention item satisfied, the Host reviews every changed
+file for contradictory evidence; Runtime continues to validate narrow
+evidence bindings rather than guessing semantic truth.
 
 ## Optional team capabilities
 
@@ -245,8 +247,9 @@ Task runtime state is isolated and ignored:
 └── checks/           # bounded stdout/stderr from the exact prepared checks
 ```
 
-A run is created only after every task check is configured. Interpretation,
-guidance-overflow, and checks-required results do not write runtime state.
+A run is created only after every selected or policy-required task check has an
+exact definition. Alignment, guidance-overflow, and `verification-required`
+results do not write runtime state.
 Prepared runs are never pruned automatically; completion removes only
 completed runs older than the most recent 50. Each persisted check stream is
 capped at 1 MiB, with an explicit truncation marker while its digest still

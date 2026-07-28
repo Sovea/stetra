@@ -34,7 +34,7 @@
   add/modify/delete/unique-rename facts at complete, runs explicit check
   commands, and separates those machine facts from host semantic attestations.
 - Isolates runtime state under `.resonant-code/runs/<runId>/`, creates no run
-  until checks are configured, bounds persisted check streams, and avoids a
-  repository-global feedback ledger without a demonstrated initial-release
-  consumer.
+  until task verification is executable, bounds persisted check streams, and
+  avoids a repository-global feedback ledger without a demonstrated
+  initial-release consumer.
 - Keeps task understanding and semantic relations as bounded host inputs rather than mandatory multi-stage artifacts.

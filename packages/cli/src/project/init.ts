@@ -121,6 +121,7 @@ export function initializeProject(options: InitializeProjectOptions = {}) {
   const counts = countActions(plan);
   const required: Array<{ code: string; message: string }> = [];
   const recommended: Array<{ code: string; message: string }> = [];
+  const optional: Array<{ code: string; message: string }> = [];
   if (!existsSync(join(projectRoot, '.resonant-code', 'playbook', 'local-augment.yaml'))) {
     recommended.push({
       code: 'bootstrap-team-playbook',
@@ -128,9 +129,9 @@ export function initializeProject(options: InitializeProjectOptions = {}) {
     });
   }
   if (!existsSync(join(projectRoot, '.resonant-code', 'checks.json'))) {
-    required.push({
-      code: 'configure-checks',
-      message: 'Ask the Host Agent to inspect project-owned checks, show exact argv and timeouts for approval, then configure .resonant-code/checks.json.',
+    optional.push({
+      code: 'team-checks-absent',
+      message: 'Persistent team check defaults are optional; task workflows can use an explicit transient --check-config.',
     });
   }
   return {
@@ -153,7 +154,7 @@ export function initializeProject(options: InitializeProjectOptions = {}) {
     readiness: {
       required,
       recommended,
-      optional: [],
+      optional,
     },
   };
 }

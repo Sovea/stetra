@@ -35,7 +35,7 @@ export interface ChangeSet {
 
 export interface CheckResult {
   id: string;
-  status: 'passed' | 'failed' | 'skipped';
+  status: 'passed' | 'failed' | 'unavailable';
   command: string[];
   exitCode: number | null;
   outputDigest: string;

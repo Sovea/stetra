@@ -16,7 +16,11 @@ import { dirname, join, resolve } from 'node:path';
 import { compileChange, evaluateChange } from '@sovea/resonant-code-core';
 import { validateContext } from '@sovea/resonant-code-core/rccl';
 import { inputError, usageError } from '../errors.ts';
-import { loadCheckPlan, runCheckPlan } from '../facts/checks.mjs';
+import {
+  buildCheckPlan,
+  loadCheckConfiguration,
+  runCheckPlan,
+} from '../facts/checks.mjs';
 import {
   captureGitWorktree,
   compareGitWorktrees,
@@ -36,6 +40,14 @@ const MAX_COMPLETED_RUNS = 50;
 
 export async function prepareCodeTask(options) {
   const paths = resolvePaths(options);
+  const checkDefinitions = loadCheckConfiguration(paths.checkConfigPath, {
+    required: paths.checkConfigSource === 'host-task',
+  });
+  const verificationProposals = checkDefinitions.map((definition) => ({
+    id: definition.id,
+    rationale: definition.rationale,
+    source: paths.checkConfigSource,
+  }));
   const relationProposals = options.relationFile
     ? readRelationProposals(options.relationFile)
     : [];
@@ -54,6 +66,7 @@ export async function prepareCodeTask(options) {
     ...(existsSync(paths.rcclPath) ? { rcclPath: paths.rcclPath } : {}),
     task: buildTaskInput(options),
     ...(relationProposals.length ? { relationProposals } : {}),
+    ...(verificationProposals.length ? { verificationProposals } : {}),
     ...(guidanceByteLimit ? { guidanceByteLimit } : {}),
     ...(deliverySelection ? { deliverySelection } : {}),
   });
@@ -77,10 +90,10 @@ export async function prepareCodeTask(options) {
     };
   }
 
-  const checkPlan = loadCheckPlan(paths.checkConfigPath, output.verificationPlan);
+  const checkPlan = buildCheckPlan(checkDefinitions, output.verificationPlan);
   if (checkPlan.some((item) => item.status === 'missing')) {
     return {
-      status: 'checks-required',
+      status: 'verification-required',
       schemaVersion: RUN_SCHEMA_VERSION,
       decisionStatus: output.status,
       decisionId: output.decisionId,
@@ -92,7 +105,7 @@ export async function prepareCodeTask(options) {
       delivery: output.trace.delivery,
       checkPlan,
       diagnostics: output.trace.diagnostics,
-      nextStep: 'Configure every missing check and rerun prepare. No run or worktree baseline was created.',
+      nextStep: 'Add every missing check to a task-specific --check-config and rerun prepare. No run or worktree baseline was created.',
     };
   }
 
@@ -229,10 +242,17 @@ export async function getCodeStatus(options) {
     });
   }
   if (checks === 'absent') {
-    required.push({
-      code: 'checks-absent',
-      message: 'Ask the Host Agent to inspect project-owned checks, show exact argv and timeouts for approval, then configure .resonant-code/checks.json.',
-    });
+    if (paths.checkConfigSource === 'host-task') {
+      required.push({
+        code: 'task-check-config-absent',
+        message: 'The explicitly selected --check-config path does not exist.',
+      });
+    } else {
+      optional.push({
+        code: 'team-checks-absent',
+        message: 'Persistent team check defaults are optional; the Host can provide a task-specific verification plan with --check-config.',
+      });
+    }
   } else if (checks !== 'present') {
     required.push({
       code: 'checks-invalid',
@@ -327,6 +347,8 @@ function compactDecision(decision, run, checkPlan, baseline) {
 
 function resolvePaths(options) {
   const projectRoot = resolve(requiredString(options.projectRoot, 'project root'));
+  const explicitCheckConfig = typeof options.checkConfigPath === 'string'
+    && Boolean(options.checkConfigPath.trim());
   return {
     projectRoot,
     builtinRoot: resolve(requiredString(options.builtinRoot, 'built-in Playbook root')),
@@ -337,9 +359,11 @@ function resolvePaths(options) {
     ),
     rcclPath: join(projectRoot, '.resonant-code', 'rccl.yaml'),
     checkConfigPath: resolve(
-      options.checkConfigPath
-        ?? join(projectRoot, '.resonant-code', 'checks.json'),
+      explicitCheckConfig
+        ? options.checkConfigPath
+        : join(projectRoot, '.resonant-code', 'checks.json'),
     ),
+    checkConfigSource: explicitCheckConfig ? 'host-task' : 'team-default',
   };
 }
 
@@ -448,7 +472,7 @@ function rcclStatus(projectRoot, rcclPath) {
 function checkConfigStatus(path) {
   if (!existsSync(path)) return 'absent';
   try {
-    loadCheckPlan(path, { commands: [] });
+    loadCheckConfiguration(path);
     return 'present';
   } catch {
     return 'invalid';

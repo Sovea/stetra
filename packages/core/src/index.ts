@@ -42,5 +42,7 @@ export type {
   TaskContextInput,
   TaskRiskLevel,
   VerificationPlan,
+  VerificationProposal,
   VerificationRequirement,
+  VerificationSource,
 } from './runtime/index.ts';

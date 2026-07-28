@@ -41,9 +41,17 @@ export function formatChangePrepare(
     return lines.join('\n');
   }
 
-  const checksRequired = output.status === 'checks-required';
+  const needsAlignment = output.status === 'needs-alignment';
+  const verificationRequired = output.status === 'verification-required';
   const lines = [
-    heading(checksRequired ? 'Checks required before run' : 'Change guidance prepared', colors),
+    heading(
+      needsAlignment
+        ? 'Semantic alignment required'
+        : verificationRequired
+          ? 'Verification required before run'
+          : 'Change guidance prepared',
+      colors,
+    ),
     statusLine(String(output.status ?? 'unknown'), colors),
   ];
   if (typeof output.decisionId === 'string') {
@@ -283,11 +291,12 @@ function appendCheckPlan(
   if (!checks.length) return;
   const counts = countValues(checks.map((check) => String(check.status ?? 'unknown')));
   lines.push(`${colors.bold('Check plan:')} ${formatCounts(counts, false)}`);
-  for (const check of checks.filter((item) =>
-    item.status === 'missing' || item.status === 'not-requested')) {
-    const marker = check.status === 'missing' ? colors.yellow('!') : colors.dim('•');
+  for (const check of checks.filter((item) => item.status === 'missing')) {
+    const reasons = Array.isArray(check.reasons)
+      ? check.reasons.map(String).join('; ')
+      : '';
     lines.push(
-      `${marker} ${String(check.id ?? 'check')} [${String(check.status)}] — ${String(check.reason ?? '')}`,
+      `${colors.yellow('!')} ${String(check.id ?? 'check')} [missing] — ${reasons}`,
     );
   }
 }

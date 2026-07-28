@@ -52,7 +52,9 @@ personal overlay.
 Pause for user direction when materially different choices would change the
 goal, public behavior, compatibility promise, architectural ownership,
 irreversible migration strategy, persistent team authority, or acceptance of
-an unresolved failure, policy exception, or design tradeoff.
+an unresolved failure, policy exception, or design tradeoff. A transient
+task-check plan is ordinary Host execution planning; a persistent team default
+is a shared standard and requires semantic confirmation.
 Never claim that an agent-generated approval came from a human.
 
 ## Shared boundaries
@@ -119,7 +121,32 @@ details yourself.
 
 ## Prepare
 
-After alignment, run prepare before editing:
+After alignment, choose the smallest verification plan that can test the
+requested behavior and likely regression boundary. If
+\`.resonant-code/checks.json\` exists and is suitable, use it as the team
+default. Otherwise inspect authoritative repository scripts, CI, and
+documentation, write a transient check configuration outside the repository,
+and pass it with \`--check-config\`. Every selected definition will run, so do
+not add generic commands merely because they exist. This transient plan does
+not require user approval.
+
+Use schema version \`1.0\` and one explicit rationale per definition:
+
+\`\`\`json
+{
+  "version": "1.0",
+  "checks": [
+    {
+      "id": "test",
+      "rationale": "Exercise the changed behavior and its regression boundary.",
+      "command": ["corepack", "pnpm", "test"],
+      "timeoutMs": 180000
+    }
+  ]
+}
+\`\`\`
+
+Then run prepare before editing:
 
 \`\`\`sh
 resonant-code change prepare . \\
@@ -130,6 +157,9 @@ resonant-code change prepare . \\
   --scope <local|module|cross-module|repository> \\
   --json
 \`\`\`
+
+Append \`--check-config <temporary-task-checks.json>\` when using a transient
+Host task plan; otherwise the repository team default is selected when present.
 
 Add repeatable \`--target\`, \`--tech\`, \`--constraint\`, \`--avoid\`, or
 \`--uncertainty\` only when they are material. Supply \`change-type\`, \`risk\`,
@@ -155,12 +185,15 @@ Handle results as follows:
   \`--selection-file\`. Do not ask the user merely to rank optional advice.
 - \`guidance-overflow\` with mandatory guidance over budget: pause for a scope,
   policy, or explicitly larger-budget decision.
-- \`checks-required\`: read \`setup.md\`, propose exact commands, obtain
-  approval, configure them, and rerun prepare before editing. This result does
-  not create a run or baseline.
+- \`verification-required\`: the selected plan does not define every check
+  required by delivered guidance. Inspect authoritative repository commands,
+  add the missing definitions to the transient task configuration, and rerun
+  prepare. Do not ask the user merely to approve command argv. This result
+  creates no run or baseline.
 - A returned \`runId\` establishes the compiled task contract and worktree
   baseline. Inspect \`activation\` to confirm expected Team Playbook
-  contributors and checks were activated before editing.
+  contributors and checks were activated before editing. The run now owns the
+  exact definitions, so delete a transient task configuration after prepare.
 
 The workflow automatically loads existing Team Playbook, personal overlay, and
 RCCL sources. Do not recalibrate RCCL for every task.
@@ -304,17 +337,24 @@ Treat readiness levels differently:
 - Optional items such as RCCL and personal preferences are not setup
   requirements.
 
-## Configure checks
+## Optional team verification defaults
 
-When \`.resonant-code/checks.json\` is absent or invalid:
+An absent \`.resonant-code/checks.json\` is not a readiness failure. Normal
+changes may use a transient \`--check-config\` selected by the Host. If the
+file exists but is invalid, repair or remove it before relying on team
+defaults.
+
+Create or change persistent defaults only when the user or team explicitly
+wants a shared future verification standard:
 
 1. Inspect repository-owned scripts, CI definitions, and developer
    documentation with normal Host tools.
-2. Propose the smallest explicit set of trusted commands. Do not guess from
-   filenames or dependency presence alone.
-3. Show the user every command argv and timeout. Pause for approval because
-   this file defines commands the harness will execute.
-4. After approval, write:
+2. Propose the semantic verification purpose, expected future impact, and
+   execution cost of each default. Do not guess from filenames or dependency
+   presence alone.
+3. Ask the user to confirm that shared standard. Keep exact argv and timeout
+   visible as implementation details, not as the core approval question.
+4. After semantic confirmation, write:
 
 \`\`\`json
 {
@@ -322,6 +362,7 @@ When \`.resonant-code/checks.json\` is absent or invalid:
   "checks": [
     {
       "id": "typecheck",
+      "rationale": "Validate workspace types and public TypeScript contracts.",
       "command": ["corepack", "pnpm", "typecheck"],
       "timeoutMs": 120000
     }
@@ -329,8 +370,9 @@ When \`.resonant-code/checks.json\` is absent or invalid:
 }
 \`\`\`
 
-Commands are argv arrays and never shell strings. Run \`doctor --strict --json\`
-after writing the file. Do not claim readiness while a required issue remains.
+Commands are argv arrays and never shell strings. Every definition in the
+selected default or task configuration executes. Run
+\`doctor --strict --json\` after writing a persistent file.
 
 ## Optional Team Playbook
 

@@ -41,7 +41,9 @@ import {
   type GuidanceItem,
   type RelationProposal,
   type VerificationPlan,
+  type VerificationProposal,
   type VerificationRequirement,
+  type VerificationSource,
 } from './types.ts';
 import {
   buildActivationSummary,
@@ -91,6 +93,9 @@ export async function compileChange(input: CompileChangeInput): Promise<CompileC
   if (typeof input.builtinRoot !== 'string' || !input.builtinRoot.trim()) throw new Error('compileChange builtinRoot must be non-empty.');
   if (!input.task || typeof input.task !== 'object') throw new Error('compileChange task must be an object.');
   const relationProposals = validateRelationProposals(input.relationProposals);
+  const verificationProposals = validateVerificationProposals(
+    input.verificationProposals,
+  );
   const task = normalizeTaskContext(input.task);
   const alignmentReasons = taskNeedsAlignment(task);
   if (alignmentReasons.length) {
@@ -161,7 +166,10 @@ export async function compileChange(input: CompileChangeInput): Promise<CompileC
   }
 
   const deliveredGuidanceIds = guidanceIds(delivery.guidance);
-  const verificationPlan = buildVerificationPlan(delivery.guidance);
+  const verificationPlan = buildVerificationPlan(
+    delivery.guidance,
+    verificationProposals,
+  );
   const attestationPlan = buildAttestationPlan(delivery.guidance);
   const relationTrace = relationDecisions.map((relation) => ({
     directiveId: relation.directiveId,
@@ -188,6 +196,7 @@ export async function compileChange(input: CompileChangeInput): Promise<CompileC
       delivery.guidance,
       delivery.executionGuidance,
     ]),
+    verification: stableHash([verificationPlan]),
   };
   const decisionId = stableHash([
     DECISION_SCHEMA_VERSION,
@@ -837,15 +846,27 @@ function verificationForDirective(directive: EffectiveDirective, task: Normalize
   return result;
 }
 
-function buildVerificationPlan(guidance: EffectiveGuidance): VerificationPlan {
-  const commands = new Map<string, string>();
+function buildVerificationPlan(
+  guidance: EffectiveGuidance,
+  proposals: VerificationProposal[],
+): VerificationPlan {
+  const commands = new Map<string, {
+    reasons: Set<string>;
+    sources: Set<VerificationSource>;
+  }>();
   const semanticChecks: VerificationPlan['semanticChecks'] = [];
-  for (const item of [...guidance.required, ...guidance.consider]) {
+  for (const item of [
+    ...guidance.required,
+    ...guidance.consider,
+    ...guidance.avoid,
+  ]) {
     for (const requirement of item.verification) {
       if (requirement.kind === 'command' && requirement.commandId) {
-        commands.set(
+        addVerificationCommand(
+          commands,
           requirement.commandId,
           requirement.description ?? `Run ${requirement.commandId} for delivered guidance.`,
+          'delivered-guidance',
         );
       }
       if (requirement.kind === 'semantic') {
@@ -856,7 +877,48 @@ function buildVerificationPlan(guidance: EffectiveGuidance): VerificationPlan {
       }
     }
   }
-  return { commands: [...commands.entries()].map(([id, reason]) => ({ id, reason })), semanticChecks };
+  for (const proposal of proposals) {
+    addVerificationCommand(
+      commands,
+      proposal.id,
+      proposal.rationale,
+      proposal.source,
+    );
+  }
+  const sourceOrder: VerificationSource[] = [
+    'delivered-guidance',
+    'team-default',
+    'host-task',
+  ];
+  return {
+    commands: [...commands.entries()]
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([id, command]) => ({
+        id,
+        reasons: [...command.reasons].sort((left, right) =>
+          left.localeCompare(right)),
+        sources: sourceOrder.filter((source) => command.sources.has(source)),
+      })),
+    semanticChecks,
+  };
+}
+
+function addVerificationCommand(
+  commands: Map<string, {
+    reasons: Set<string>;
+    sources: Set<VerificationSource>;
+  }>,
+  id: string,
+  reason: string,
+  source: VerificationSource,
+): void {
+  const command = commands.get(id) ?? {
+    reasons: new Set<string>(),
+    sources: new Set<VerificationSource>(),
+  };
+  command.reasons.add(reason);
+  command.sources.add(source);
+  commands.set(id, command);
 }
 
 function directiveRelevance(directive: EffectiveDirective, mode: ExecutionMode, relations: RelationDecision[]): string {
@@ -1005,4 +1067,39 @@ function validateRelationProposals(value: unknown): RelationProposal[] {
     throw new Error('compileChange relationProposals entries must be objects.');
   }
   return value as RelationProposal[];
+}
+
+function validateVerificationProposals(value: unknown): VerificationProposal[] {
+  if (value === undefined) return [];
+  if (!Array.isArray(value)) {
+    throw new Error('compileChange verificationProposals must be an array.');
+  }
+  const result: VerificationProposal[] = [];
+  const ids = new Set<string>();
+  for (const item of value) {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) {
+      throw new Error('compileChange verificationProposals entries must be objects.');
+    }
+    const proposal = item as Record<string, unknown>;
+    if (typeof proposal.id !== 'string'
+      || !/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(proposal.id)) {
+      throw new Error('compileChange verification proposal id is invalid.');
+    }
+    if (ids.has(proposal.id)) {
+      throw new Error(`compileChange verification proposal id "${proposal.id}" is duplicated.`);
+    }
+    if (typeof proposal.rationale !== 'string' || !proposal.rationale.trim()) {
+      throw new Error(`compileChange verification proposal "${proposal.id}" requires a rationale.`);
+    }
+    if (proposal.source !== 'team-default' && proposal.source !== 'host-task') {
+      throw new Error(`compileChange verification proposal "${proposal.id}" source must be team-default or host-task.`);
+    }
+    ids.add(proposal.id);
+    result.push({
+      id: proposal.id,
+      rationale: proposal.rationale.trim(),
+      source: proposal.source,
+    });
+  }
+  return result.sort((left, right) => left.id.localeCompare(right.id));
 }

@@ -13,7 +13,8 @@ import test from 'node:test';
 
 import { CliError } from '../src/errors.ts';
 import {
-  loadCheckPlan,
+  buildCheckPlan,
+  loadCheckConfiguration,
   runCheckPlan,
 } from '../src/facts/checks.mjs';
 
@@ -26,39 +27,49 @@ test('Execa-backed checks preserve success, failure, timeout, and spawn facts', 
       checks: [
         {
           id: 'success',
+          rationale: 'Exercise successful command collection.',
           command: [process.execPath, '-e', 'process.stdout.write("ok")'],
           timeoutMs: 2_000,
         },
         {
           id: 'failure',
+          rationale: 'Exercise non-zero exit collection.',
           command: [process.execPath, '-e', 'process.stderr.write("bad"); process.exit(3)'],
           timeoutMs: 2_000,
         },
         {
           id: 'timeout',
+          rationale: 'Exercise timeout collection.',
           command: [process.execPath, '-e', 'setTimeout(() => {}, 10_000)'],
           timeoutMs: 50,
         },
         {
           id: 'missing-command',
+          rationale: 'Exercise spawn failure collection.',
           command: ['resonant-code-definitely-missing-executable'],
           timeoutMs: 2_000,
         },
         {
           id: 'large-output',
+          rationale: 'Exercise bounded output collection.',
           command: [process.execPath, '-e', 'process.stdout.write("x".repeat(1100000))'],
           timeoutMs: 2_000,
         },
       ],
     }, null, 2)}\n`, 'utf8');
-    const plan = loadCheckPlan(configPath, {
+    const definitions = loadCheckConfiguration(configPath, { required: true });
+    const plan = buildCheckPlan(definitions, {
       commands: [
-        { id: 'success', reason: 'fixture' },
-        { id: 'failure', reason: 'fixture' },
-        { id: 'timeout', reason: 'fixture' },
-        { id: 'missing-command', reason: 'fixture' },
-        { id: 'large-output', reason: 'fixture' },
-      ],
+        'success',
+        'failure',
+        'timeout',
+        'missing-command',
+        'large-output',
+      ].map((id) => ({
+        id,
+        reasons: ['Exercise the check runner fixture.'],
+        sources: ['host-task'],
+      })),
     });
     const outputDirectory = join(root, 'check-output');
     const results = await runCheckPlan({
@@ -90,10 +101,10 @@ test('Execa-backed checks preserve success, failure, timeout, and spawn facts', 
       existsSync(join(outputDirectory, 'failure.stdout.log')),
       false,
     );
-    assert.equal(results[2].status, 'failed');
+    assert.equal(results[2].status, 'unavailable');
     assert.match(results[2].reason ?? '', /timed out/);
-    assert.equal(results[3].status, 'failed');
-    assert.notEqual(results[3].exitCode, 0);
+    assert.equal(results[3].status, 'unavailable');
+    assert.equal(results[3].exitCode, null);
     assert.match(results[3].reason ?? '', /could not start|exited with/i);
     assert.equal(results[4].status, 'passed');
     assert.ok('outputTruncated' in results[4]);
@@ -110,7 +121,7 @@ test('Execa-backed checks preserve success, failure, timeout, and spawn facts', 
       plan: [plan[0]],
       outputDirectory: join(root, 'spawn-failure-output'),
     });
-    assert.equal(spawnFailure[0].status, 'failed');
+    assert.equal(spawnFailure[0].status, 'unavailable');
     assert.equal(spawnFailure[0].exitCode, null);
     assert.match(spawnFailure[0].reason ?? '', /could not start/i);
   } finally {
@@ -122,17 +133,23 @@ test('Zod rejects unsupported check fields and duplicate IDs with paths', () => 
   const root = mkdtempSync(join(tmpdir(), 'resonant-check-schema-'));
   try {
     const configPath = join(root, 'checks.json');
+    assert.deepEqual(loadCheckConfiguration(configPath), []);
+    assert.throws(
+      () => loadCheckConfiguration(configPath, { required: true }),
+      /does not exist/,
+    );
     writeFileSync(configPath, JSON.stringify({
       version: '1.0',
       checks: [{
         id: 'test',
+        rationale: 'Run the test fixture.',
         command: [process.execPath, '--version'],
         timeoutMs: 1_000,
         shell: true,
       }],
     }), 'utf8');
     assert.throws(
-      () => loadCheckPlan(configPath, { commands: [] }),
+      () => loadCheckConfiguration(configPath),
       (error: unknown) => {
         assert.ok(error instanceof CliError);
         assert.equal(error.code, 'INVALID_INPUT');
@@ -144,20 +161,43 @@ test('Zod rejects unsupported check fields and duplicate IDs with paths', () => 
     writeFileSync(configPath, JSON.stringify({
       version: '1.0',
       checks: [
-        { id: 'test', command: [process.execPath], timeoutMs: 1_000 },
-        { id: 'test', command: [process.execPath], timeoutMs: 1_000 },
+        {
+          id: 'test',
+          rationale: 'Run the first test fixture.',
+          command: [process.execPath],
+          timeoutMs: 1_000,
+        },
+        {
+          id: 'test',
+          rationale: 'Run the duplicate test fixture.',
+          command: [process.execPath],
+          timeoutMs: 1_000,
+        },
       ],
     }), 'utf8');
     assert.throws(
-      () => loadCheckPlan(configPath, { commands: [] }),
+      () => loadCheckConfiguration(configPath),
       /duplicate check id test/,
+    );
+
+    writeFileSync(configPath, JSON.stringify({
+      version: '1.0',
+      checks: [{
+        id: 'test',
+        command: [process.execPath],
+        timeoutMs: 1_000,
+      }],
+    }), 'utf8');
+    assert.throws(
+      () => loadCheckConfiguration(configPath),
+      /checks\[0\]\.rationale/,
     );
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
 });
 
-test('check plans expose configured commands that Runtime did not request without executing them', async () => {
+test('selected check definitions cannot be silently omitted and all execute', async () => {
   const root = mkdtempSync(join(tmpdir(), 'resonant-check-activation-'));
   try {
     const configPath = join(root, 'checks.json');
@@ -166,27 +206,51 @@ test('check plans expose configured commands that Runtime did not request withou
       checks: [
         {
           id: 'typecheck',
+          rationale: 'Validate the TypeScript contract.',
           command: [process.execPath, '-e', 'process.exit(0)'],
           timeoutMs: 2_000,
         },
         {
           id: 'smoke',
+          rationale: 'Exercise the public entrypoint.',
           command: [process.execPath, '-e', 'process.exit(9)'],
           timeoutMs: 2_000,
         },
       ],
     }), 'utf8');
-    const plan = loadCheckPlan(configPath, {
-      commands: [{ id: 'typecheck', reason: 'TypeScript guidance requires it.' }],
+    const definitions = loadCheckConfiguration(configPath, { required: true });
+    assert.throws(() => buildCheckPlan(definitions, {
+      commands: [{
+        id: 'typecheck',
+        reasons: ['TypeScript guidance requires it.'],
+        sources: ['delivered-guidance'],
+      }],
+    }), /omitted selected check definition.*smoke/);
+
+    const plan = buildCheckPlan(definitions, {
+      commands: [
+        {
+          id: 'typecheck',
+          reasons: ['TypeScript guidance requires it.'],
+          sources: ['delivered-guidance', 'host-task'],
+        },
+        {
+          id: 'smoke',
+          reasons: ['Exercise the changed public entrypoint.'],
+          sources: ['host-task'],
+        },
+      ],
     });
     assert.deepEqual(
-      plan.map((item) => ({ id: item.id, status: item.status })),
+      plan.map((item: { id: string; status: string }) => ({
+        id: item.id,
+        status: item.status,
+      })),
       [
         { id: 'typecheck', status: 'configured' },
-        { id: 'smoke', status: 'not-requested' },
+        { id: 'smoke', status: 'configured' },
       ],
     );
-    assert.match(plan[1].reason, /Runtime did not request/);
 
     const outputDirectory = join(root, 'check-output');
     const results = await runCheckPlan({
@@ -194,8 +258,9 @@ test('check plans expose configured commands that Runtime did not request withou
       plan,
       outputDirectory,
     });
-    assert.deepEqual(results.map((item) => item.id), ['typecheck']);
+    assert.deepEqual(results.map((item) => item.id), ['typecheck', 'smoke']);
     assert.equal(results[0].status, 'passed');
+    assert.equal(results[1].status, 'failed');
     assert.equal('outputRefs' in results[0], false);
     assert.equal(existsSync(outputDirectory), false);
   } finally {

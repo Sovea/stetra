@@ -50,8 +50,8 @@ and a rationale; Runtime validates it but does not invent it.
 Host relation proposals contain an explicit relation, rationale, and exact
 evidence references. Numeric self-confidence is not accepted: an arbitrary
 score neither proves the relation nor adds an independent assurance source.
-Task-field provenance records whether a value was explicit, host-provided,
-deterministic, or defaulted without decorative confidence decimals.
+Task-field provenance records whether a value was Host-provided or derived by
+mechanical normalization without decorative confidence decimals.
 
 ## Guidance budget
 
@@ -114,6 +114,11 @@ Machine facts are collected by the workflow:
 - patch or patch digest where available;
 - configured check command, exit code, and output digest.
 
+A selected command that cannot start or finish is an `unavailable` machine
+fact and yields `needs-attention`; a completed non-zero command is `failed` and
+rejects evaluation. This distinction comes from process facts, not task text or
+a risk heuristic.
+
 Host attestations cover semantic judgments:
 
 - repository fit;
@@ -162,15 +167,21 @@ filename-ranking, or token-overlap heuristic activates policy.
 
 Decision Trace records normalized targets and technology provenance, active
 built-in/team/personal contributors, and team/personal directives that were
-inactive because their scopes did not overlap. The CLI separately reports
-whether each approved check definition was requested, missing, or configured
-but not requested. Only Runtime-requested checks execute.
+inactive because their scopes did not overlap.
+
+Selected verification is explicit rather than inferred. Each team-default or
+Host-task definition supplies an ID and rationale to Runtime, which merges it
+with delivered-guidance requirements. The CLI executes every definition in the
+selected configuration. A missing policy-required definition returns
+`verification-required`; no configured-but-unused state or filename heuristic
+decides execution.
 
 ## Runtime persistence
 
 Runtime state is task-scoped, not a repository-global history database.
 
-- Alignment, guidance-overflow, and missing-check outcomes write nothing.
+- Alignment, guidance-overflow, and verification-required outcomes write
+  nothing.
 - A runnable prepare creates one `.resonant-code/runs/<runId>/` directory with
   the decision, worktree baseline, and an empty Host evaluation input.
 - Completion stores check logs and the resulting evaluation in that same run.
@@ -194,7 +205,7 @@ The release gate includes:
   tests;
 - RCCL evidence-contract and approval tests;
 - dirty-worktree and machine-fact completion tests;
-- checks-required no-write and task-run isolation tests;
+- verification-required no-write and task-run isolation tests;
 - attention-only attestation and optional-information tests;
 - isolated built-package smoke behavior;
 - a paired agent-evaluation protocol and machine-validated result ledger.

@@ -59,8 +59,8 @@ functions or CLI workflow APIs from
 ### Compile boundary
 
 `compileChange` accepts a canonical task context, the team Playbook, an
-optional personal overlay, and optional bounded directive/observation relation
-proposals. It owns:
+optional personal overlay, optional bounded directive/observation relation
+proposals, and optional task/team verification proposals. It owns:
 
 - structural task validation, mechanical path/technology normalization, and
   explicit semantic-alignment gates
@@ -87,6 +87,12 @@ Guidance budgeting is hard product behavior:
 - overflow returns an actionable result instead of truncating guidance
 
 Only delivered guidance IDs may be evaluated later.
+
+Verification proposals contain an explicit check ID, rationale, and source
+(`team-default` or `host-task`). Runtime merges them with checks required by
+delivered guidance. It does not discover commands or silently discard a
+selected definition; the CLI freezes and executes every definition in the
+selected team-default or task configuration.
 
 The team Playbook is the shared authority. A personal overlay may add only
 `should`-level preferences, conventions, architecture guidance, and examples.
@@ -146,6 +152,8 @@ or insufficient evidence must produce a repair, `violated`, `partial`, or
 Unverified required, avoid, or tension guidance produces
 `needs-attention`; a requested but unapproved exception produces
 `exception-required`. Hard required/avoid violations reject the evaluation.
+An exact check that cannot start or finish is `unavailable` and needs
+attention; a completed non-zero check is `failed` and rejects the evaluation.
 Unverified optional `consider` guidance remains informational and must not
 force an attention state or completion retry. Runtime, not the adapter, identifies the
 required/avoid/tension items that need attestations.
@@ -154,7 +162,7 @@ Runtime persistence is task-scoped. A runnable prepare creates exactly one
 `.resonant-code/runs/<runId>/` directory containing `run.json` and the Host
 evaluation input. Completion stores its check logs and evaluation inside that
 same run and must not duplicate the full current worktree snapshot.
-Alignment, guidance-overflow, and checks-required outcomes create no run.
+Alignment, guidance-overflow, and verification-required outcomes create no run.
 Cleanup may remove only whole completed runs; prepared runs remain untouched.
 Persisted check stdout/stderr is capped at 1 MiB per stream; the digest covers
 the complete stream and truncation remains explicit in the collected facts. An
@@ -198,7 +206,8 @@ only when the discovered work changes that contract.
 
 The normal code lifecycle is:
 
-1. Host aligns material design choices and encodes the semantic task contract
+1. Host aligns material design choices, encodes the semantic task contract,
+   and selects an explicit task verification configuration
 2. `resonant-code change prepare --json` → compile compact task guidance
 3. Host implements the aligned change and challenges the complete actual diff
 4. `resonant-code change complete --json` → collect actual change/check facts,
@@ -267,7 +276,7 @@ Tests must cover the behavior that justifies the harness:
 - Host-owned task semantics, alignment gates, and unified exception behavior
 - evaluation against actual diff/check evidence
 - attention-only attestations and optional informational guidance
-- checks-required no-write behavior and task-run isolation
+- verification-required no-write behavior and task-run isolation
 - isolated Core npm-tarball API smoke behavior
 - paired Core/CLI npm-tarball installation and binary smoke behavior
 - paired-evaluation protocol and claim/ledger consistency

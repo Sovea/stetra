@@ -137,7 +137,7 @@ Human output is a decision surface, not a lossy echo of JSON. Completion
 summarizes changed-file operations, check outcomes, guidance verdicts,
 exceptions, required actions, and optional information separately. Prepare
 shows normalized targets and technology, active policy contributors,
-scope-inactive local policy, and every configured check's requested state.
+scope-inactive local policy, and each selected check's source and rationale.
 Bootstrap exposes a bounded
 layer-selection contract; RCCL output shows the persistent evidence and content
 fingerprints needed for a meaningful review.
@@ -180,8 +180,9 @@ The CLI owns ignored task runtime state under
 `.resonant-code/runs/<runId>/`. A successful prepare writes one `run.json` and
 one empty `evaluation.json`; completion writes check logs inside that run and
 adds the evaluation to `run.json`. Results that still need semantic alignment,
-guidance selection, or check configuration create no run. Completed-run
-cleanup removes whole run directories, while prepared runs are retained.
+guidance selection, or missing verification definitions create no run.
+Completed-run cleanup removes whole run directories, while prepared runs are
+retained.
 Persisted stdout and stderr are capped independently while their digests cover
 the complete streams. There is no global feedback ledger or aggregate store in
 the initial release.
@@ -199,15 +200,16 @@ explicitly.
 
 Readiness is consequence-based:
 
-- required issues cover Core/Adapter integrity, checks, and invalid configured
-  sources; `doctor --strict` fails on these
+- required issues cover Core/Adapter integrity and invalid configured sources;
+  `doctor --strict` fails on these
 - recommended items cover repository-specific Team Playbook guidance
-- optional items cover absent RCCL and personal preferences
+- optional items cover absent team check defaults, RCCL, and personal
+  preferences
 
 The Host may resolve repository-discoverable task details, choose optional
 guidance, use reviewed RCCL, implement within scope, run checks, and attest
 evidence without interrupting the user. It must pause before changing
-persistent team authority or trusted commands, approving observations or
+the persistent Team Playbook or team verification defaults, approving observations or
 exceptions, resolving materially different goals, public behavior,
 compatibility, architectural ownership, irreversible migration strategies, or
 accepting unresolved failures and design tradeoffs.
@@ -233,10 +235,20 @@ implementation, tests, types, and documentation while preserving the aligned
 semantic contract, and re-aligns only when discovered work changes that
 contract.
 
-Configured checks that Runtime did not request remain visible as
-`not-requested` and are not executed. The CLI does not infer that they should
-run. Optional `consider` guidance may be attested, but an unverified optional
-item is informational and cannot by itself change completion status.
+Before prepare, the Host selects the smallest task-relevant check
+configuration from authoritative repository scripts, CI, and documentation.
+Every selected definition becomes a bounded verification proposal with an ID,
+rationale, and `host-task` or `team-default` source. Runtime merges those
+proposals with delivered-guidance requirements; the CLI freezes and executes
+every selected definition. Missing policy-required IDs return
+`verification-required` without creating a run. No filename, dependency, or
+configured-but-unused heuristic activates checks.
+
+Transient task configuration is autonomous Host execution planning.
+Creating or changing `.resonant-code/checks.json` is an optional persistent
+team-standard decision and requires semantic confirmation. Optional `consider`
+guidance may be attested, but an unverified optional item is informational and
+cannot by itself change completion status.
 
 Before creating attestations, the Host performs a contradiction review over
 the complete actual diff. It attempts to falsify every required, avoid, and

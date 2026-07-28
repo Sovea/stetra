@@ -178,7 +178,7 @@ function assertEvaluateShape(input: EvaluateChangeInput): void {
   }
   if (input.checks !== undefined && !Array.isArray(input.checks)) throw new Error('evaluateChange checks must be an array.');
   for (const check of input.checks ?? []) {
-    if (!check || typeof check.id !== 'string' || !['passed', 'failed', 'skipped'].includes(check.status)) {
+    if (!check || typeof check.id !== 'string' || !['passed', 'failed', 'unavailable'].includes(check.status)) {
       throw new Error('evaluateChange checks require id and a valid status.');
     }
     if (!Array.isArray(check.command) || check.command.some((part) => typeof part !== 'string' || !part)) {
@@ -213,21 +213,20 @@ function assertEvaluateShape(input: EvaluateChangeInput): void {
         || typeof check.outputTruncated.stderr !== 'boolean')) {
       throw new Error('evaluateChange check outputTruncated requires stdout and stderr booleans.');
     }
-    if (check.status === 'skipped' && (typeof check.reason !== 'string' || !check.reason.trim())) {
-      throw new Error('evaluateChange skipped checks require a reason.');
+    if (check.status === 'unavailable'
+      && (typeof check.reason !== 'string' || !check.reason.trim())) {
+      throw new Error('evaluateChange unavailable checks require a reason.');
     }
-    if (check.status !== 'skipped') {
-      if (!check.command.length
-        || typeof check.definitionFingerprint !== 'string'
-        || !check.definitionFingerprint.trim()) {
-        throw new Error('evaluateChange executed checks require command and definitionFingerprint.');
-      }
-      if (check.status === 'passed' && check.exitCode !== 0) {
-        throw new Error('evaluateChange passed checks require exitCode 0.');
-      }
-      if (check.status === 'failed' && check.exitCode === 0) {
-        throw new Error('evaluateChange failed checks cannot have exitCode 0.');
-      }
+    if (!check.command.length
+      || typeof check.definitionFingerprint !== 'string'
+      || !check.definitionFingerprint.trim()) {
+      throw new Error('evaluateChange collected checks require command and definitionFingerprint.');
+    }
+    if (check.status === 'passed' && check.exitCode !== 0) {
+      throw new Error('evaluateChange passed checks require exitCode 0.');
+    }
+    if (check.status === 'failed' && check.exitCode === 0) {
+      throw new Error('evaluateChange failed checks cannot have exitCode 0.');
     }
     assertMachineProvenance(check.provenance, `check ${check.id}`);
   }
@@ -417,7 +416,7 @@ function resolveEvaluationStatus(
     result.section !== 'consider'
     && result.verdict !== 'satisfied'
     && result.verdict !== 'excepted')
-    || checks.some((check) => check.status === 'skipped');
+    || checks.some((check) => check.status === 'unavailable');
   return needsAttention ? 'needs-attention' : 'accepted';
 }
 

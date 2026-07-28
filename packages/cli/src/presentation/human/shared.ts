@@ -82,7 +82,9 @@ export function statusValue(status: string, colors: Colors): string {
       'blocked',
       'exception-required',
       'guidance-overflow',
+      'needs-alignment',
       'needs-attention',
+      'verification-required',
     ].includes(status)
   ) {
     return colors.yellow(status);

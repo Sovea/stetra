@@ -25,6 +25,7 @@ const TRUNCATION_MARKER = Buffer.from(
 );
 const CheckDefinitionSchema = z.strictObject({
   id: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._-]*$/),
+  rationale: z.string().trim().min(1),
   command: z.array(z.string().min(1)).min(1),
   timeoutMs: z.number().int().positive(),
 });
@@ -45,17 +46,38 @@ const CheckConfigurationSchema = z.strictObject({
   }
 });
 
-export function loadCheckPlan(configPath, verificationPlan) {
+export function loadCheckConfiguration(
+  configPath,
+  { required = false } = {},
+) {
+  if (!existsSync(configPath)) {
+    if (required) {
+      throw inputError(`Check configuration does not exist at ${configPath}.`);
+    }
+    return [];
+  }
+  return [...readCheckDefinitions(configPath).values()];
+}
+
+export function buildCheckPlan(definitions, verificationPlan) {
+  if (!Array.isArray(definitions)) {
+    throw new Error('Check definitions must be an array.');
+  }
+  if (!verificationPlan || !Array.isArray(verificationPlan.commands)) {
+    throw new Error('Verification plan commands must be an array.');
+  }
   const requested = verificationPlan.commands.map((item) => ({
-    id: validateCheckId(item.id, 'verification plan'),
-    reason: item.reason,
+    id: validateCheckId(item?.id, 'verification plan'),
+    reasons: validateNonEmptyStrings(item.reasons, `verification plan ${item.id} reasons`),
+    sources: validateVerificationSources(item.sources, `verification plan ${item.id} sources`),
   }));
   const requestedIds = new Set(requested.map((item) => item.id));
-  const definitions = existsSync(configPath)
-    ? readCheckDefinitions(configPath)
-    : new Map();
+  const definitionById = new Map(definitions.map((definition) => [
+    validateCheckId(definition?.id, 'check definition'),
+    definition,
+  ]));
   const active = requested.map((request) => {
-    const definition = definitions.get(request.id);
+    const definition = definitionById.get(request.id);
     if (!definition) {
       return {
         ...request,
@@ -71,17 +93,19 @@ export function loadCheckPlan(configPath, verificationPlan) {
         definition.id,
         definition.command,
         definition.timeoutMs,
+        request.reasons,
+        request.sources,
       ]),
     };
   });
-  const notRequested = [...definitions.values()]
-    .filter((definition) => !requestedIds.has(definition.id))
-    .map((definition) => ({
-      id: definition.id,
-      status: 'not-requested',
-      reason: 'Runtime did not request this configured check for the delivered guidance.',
-    }));
-  return [...active, ...notRequested];
+  const omitted = [...definitionById.keys()]
+    .filter((id) => !requestedIds.has(id));
+  if (omitted.length) {
+    throw new Error(
+      `Runtime verification plan omitted selected check definition(s): ${omitted.join(', ')}.`,
+    );
+  }
+  return active;
 }
 
 export async function runCheckPlan({
@@ -92,22 +116,10 @@ export async function runCheckPlan({
   const results = [];
   for (const item of plan) {
     validateCheckId(item?.id, 'prepared check plan');
-    if (item.status === 'not-requested') continue;
     if (item.status === 'missing') {
-      const reason = `No explicit command is configured for verification check "${item.id}".`;
-      results.push({
-        id: item.id,
-        status: 'skipped',
-        command: [],
-        exitCode: null,
-        outputDigest: stableFactHash([item.id, 'skipped', reason]),
-        reason,
-        provenance: {
-          source: 'resonant-code-workflow',
-          collectionId: 'pending',
-        },
-      });
-      continue;
+      throw new Error(
+        `Prepared check "${item.id}" has no executable definition; rerun prepare.`,
+      );
     }
     if (item.status !== 'configured'
       || !Array.isArray(item.command)
@@ -118,6 +130,8 @@ export async function runCheckPlan({
         item.id,
         item.command,
         item.timeoutMs,
+        item.reasons,
+        item.sources,
       ])) {
       throw new Error(`Prepared check "${item.id}" is invalid or was modified; rerun prepare.`);
     }
@@ -155,6 +169,7 @@ function readCheckDefinitions(configPath) {
   for (const value of configuration.checks) {
     definitions.set(value.id, {
       id: value.id,
+      rationale: value.rationale,
       command: [...value.command],
       timeoutMs: value.timeoutMs,
     });
@@ -197,14 +212,20 @@ async function runConfiguredCheck({
       signal: result.signal,
     }))
     .digest('hex');
-  const status = !result.failed && result.exitCode === 0 ? 'passed' : 'failed';
+  const status = result.exitCode === null
+    ? 'unavailable'
+    : !result.failed && result.exitCode === 0
+      ? 'passed'
+      : 'failed';
   const reason = result.timedOut
     ? `Check timed out after ${item.timeoutMs} ms.`
     : result.code && result.exitCode === null
       ? `Check could not start: ${result.message ?? result.code}`
-      : status === 'failed'
-        ? `Check exited with ${result.exitCode ?? result.signal ?? 'unknown status'}.`
-        : undefined;
+      : status === 'unavailable'
+        ? `Check became unavailable before producing an exit code${result.signal ? ` (${result.signal})` : ''}.`
+        : status === 'failed'
+          ? `Check exited with ${result.exitCode ?? result.signal ?? 'unknown status'}.`
+          : undefined;
   const outputRefs = {
     ...(stdoutStream.persisted
       ? { stdout: relative(projectRoot, stdoutPath).replace(/\\/g, '/') }
@@ -242,6 +263,24 @@ function validateCheckId(value, location) {
     throw new Error(`Invalid check id at ${location}.`);
   }
   return value;
+}
+
+function validateNonEmptyStrings(value, location) {
+  if (!Array.isArray(value)
+    || !value.length
+    || value.some((item) => typeof item !== 'string' || !item.trim())) {
+    throw new Error(`${location} must be a non-empty string array.`);
+  }
+  return value.map((item) => item.trim());
+}
+
+function validateVerificationSources(value, location) {
+  const sources = validateNonEmptyStrings(value, location);
+  if (sources.some((source) =>
+    !['delivered-guidance', 'team-default', 'host-task'].includes(source))) {
+    throw new Error(`${location} contains an unsupported source.`);
+  }
+  return sources;
 }
 
 class BoundedLogWriter extends Writable {

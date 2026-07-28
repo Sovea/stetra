@@ -219,7 +219,7 @@ test('CLI owns init, bootstrap, RCCL, and change prepare without installation pa
       runId?: string;
       runPath?: string;
     };
-    assert.equal(decision.status, 'checks-required');
+    assert.equal(decision.status, 'verification-required');
     assert.equal(decision.runId, undefined);
     assert.equal(decision.runPath, undefined);
     assert.equal(existsSync(join(root, '.resonant-code', 'runs')), false);
@@ -233,8 +233,8 @@ test('CLI owns init, bootstrap, RCCL, and change prepare without installation pa
       installation: { status: string };
     }).installation.status, 'current');
     const doctor = await runCli(['doctor', root, '--strict', '--json']);
-    assert.equal((doctor.output as { status: string }).status, 'blocked');
-    assert.equal(doctor.exitCode, 2);
+    assert.equal((doctor.output as { status: string }).status, 'ok');
+    assert.equal(doctor.exitCode, 0);
     const doctorReadiness = (doctor.output as {
       readiness: {
         required: Array<{ code: string }>;
@@ -242,7 +242,7 @@ test('CLI owns init, bootstrap, RCCL, and change prepare without installation pa
         optional: Array<{ code: string }>;
       };
     }).readiness;
-    assert.ok(doctorReadiness.required.some((action) => action.code === 'checks-absent'));
+    assert.deepEqual(doctorReadiness.required, []);
     assert.equal(
       doctorReadiness.recommended.some((action) => action.code === 'local-augment-absent'),
       false,
@@ -251,13 +251,21 @@ test('CLI owns init, bootstrap, RCCL, and change prepare without installation pa
       doctorReadiness.optional.some((action) => action.code === 'rccl-absent'),
       false,
     );
+    assert.ok(
+      doctorReadiness.optional.some((action) =>
+        action.code === 'team-checks-absent'),
+    );
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
 });
 
-test('change lifecycle creates one task-scoped run only after checks are configured', async () => {
+test('change lifecycle freezes and executes an ephemeral Host task verification plan', async () => {
   const root = mkdtempSync(join(tmpdir(), 'resonant-cli-run-'));
+  const taskCheckConfig = join(
+    tmpdir(),
+    `resonant-task-checks-${randomUUID()}.json`,
+  );
   try {
     mkdirSync(join(root, 'src'), { recursive: true });
     writeFileSync(join(root, 'package.json'), '{"name":"run-fixture","type":"module"}\n', 'utf8');
@@ -291,21 +299,34 @@ test('change lifecycle creates one task-scoped run only after checks are configu
       checkPlan: Array<{ id: string }>;
       runId?: string;
     };
-    assert.equal(blocked.status, 'checks-required');
+    assert.equal(blocked.status, 'verification-required');
     assert.equal(blocked.runId, undefined);
     assert.equal(existsSync(join(root, '.resonant-code', 'runs')), false);
 
-    mkdirSync(join(root, '.resonant-code'), { recursive: true });
-    writeFileSync(join(root, '.resonant-code', 'checks.json'), JSON.stringify({
+    writeFileSync(taskCheckConfig, JSON.stringify({
       version: '1.0',
-      checks: blocked.checkPlan.map((check) => ({
-        id: check.id,
-        command: [process.execPath, '-e', 'process.exit(0)'],
-        timeoutMs: 10_000,
-      })),
+      checks: [
+        ...blocked.checkPlan.map((check) => ({
+          id: check.id,
+          rationale: `Verify ${check.id} for the task fixture.`,
+          command: [process.execPath, '-e', 'process.exit(0)'],
+          timeoutMs: 10_000,
+        })),
+        {
+          id: 'smoke',
+          rationale: 'Exercise the changed public entrypoint.',
+          command: [process.execPath, '-e', 'process.exit(0)'],
+          timeoutMs: 10_000,
+        },
+      ],
     }, null, 2), 'utf8');
 
-    const prepared = (await runCli(prepareArgs)).output as {
+    const prepared = (await runCli([
+      ...prepareArgs.slice(0, -1),
+      '--check-config',
+      taskCheckConfig,
+      '--json',
+    ])).output as {
       status: string;
       runId: string;
       runPath: string;
@@ -318,6 +339,10 @@ test('change lifecycle creates one task-scoped run only after checks are configu
         attentionItems: unknown[];
         optionalConsiderIds: string[];
       };
+      verificationPlan: {
+        commands: Array<{ id: string; sources: string[] }>;
+      };
+      checkPlan: Array<{ id: string; status: string }>;
       nextStep: string;
     };
     assert.ok(prepared.status === 'compiled' || prepared.status === 'needs-attention');
@@ -325,6 +350,13 @@ test('change lifecycle creates one task-scoped run only after checks are configu
     assert.deepEqual(prepared.activation.targets, ['src/example.ts']);
     assert.deepEqual(prepared.activation.techStack, ['typescript']);
     assert.ok(prepared.attestationPlan.optionalConsiderIds.length > 0);
+    assert.deepEqual(
+      prepared.verificationPlan.commands
+        .find((check) => check.id === 'smoke')?.sources,
+      ['host-task'],
+    );
+    assert.ok(prepared.checkPlan.every((check) => check.status === 'configured'));
+    assert.ok(prepared.checkPlan.some((check) => check.id === 'smoke'));
     assert.match(prepared.nextStep, /compiled task contract/);
     assert.match(prepared.nextStep, /try to falsify each attentionItem/);
     const run = JSON.parse(readFileSync(prepared.runPath, 'utf8'));
@@ -337,6 +369,7 @@ test('change lifecycle creates one task-scoped run only after checks are configu
     );
     assert.ok(run.worktreeBaseline.entries.every((entry: { path: string }) =>
       !entry.path.startsWith('.resonant-code/runs/')));
+    rmSync(taskCheckConfig, { force: true });
 
     const runsDirectory = join(root, '.resonant-code', 'runs');
     const oldCompletedRuns = Array.from({ length: 51 }, () => {
@@ -371,7 +404,10 @@ test('change lifecycle creates one task-scoped run only after checks are configu
       status: string;
       runId: string;
       runPath: string;
-      checks: Array<{ outputRefs?: { stdout?: string; stderr?: string } }>;
+      checks: Array<{
+        id: string;
+        outputRefs?: { stdout?: string; stderr?: string };
+      }>;
       actionRequired: unknown[];
       informational: unknown[];
     };
@@ -381,6 +417,7 @@ test('change lifecycle creates one task-scoped run only after checks are configu
     assert.equal(completed.runId, prepared.runId);
     assert.equal(completed.runPath, prepared.runPath);
     assert.ok(completed.checks.every((check) => check.outputRefs === undefined));
+    assert.ok(completed.checks.some((check) => check.id === 'smoke'));
     assert.equal(
       existsSync(join(dirname(prepared.runPath), 'checks')),
       false,
@@ -417,6 +454,7 @@ test('change lifecycle creates one task-scoped run only after checks are configu
     );
   } finally {
     rmSync(root, { recursive: true, force: true });
+    rmSync(taskCheckConfig, { force: true });
   }
 });
 
@@ -446,19 +484,10 @@ test('CLI rejects removed change aliases and validates RCCL through Core', async
   }
 });
 
-test('strict doctor blocks only required readiness issues', async () => {
+test('strict doctor does not require persistent team check defaults', async () => {
   const root = mkdtempSync(join(tmpdir(), 'resonant-cli-readiness-levels-'));
   try {
     await runCli(['init', root, '--adapter', 'codex', '--json']);
-    mkdirSync(join(root, '.resonant-code'), { recursive: true });
-    writeFileSync(join(root, '.resonant-code', 'checks.json'), JSON.stringify({
-      version: '1.0',
-      checks: [{
-        id: 'test',
-        command: [process.execPath, '-e', 'process.exit(0)'],
-        timeoutMs: 10_000,
-      }],
-    }), 'utf8');
 
     const doctor = await runCli(['doctor', root, '--strict', '--json']);
     const output = doctor.output as {
@@ -481,6 +510,33 @@ test('strict doctor blocks only required readiness issues', async () => {
     assert.ok(
       output.readiness.optional.some((action) => action.code === 'rccl-absent'),
     );
+    assert.ok(
+      output.readiness.optional.some((action) =>
+        action.code === 'team-checks-absent'),
+    );
+
+    writeFileSync(join(root, '.resonant-code', 'checks.json'), JSON.stringify({
+      version: '1.0',
+      checks: [{
+        id: 'test',
+        command: [process.execPath, '-e', 'process.exit(0)'],
+        timeoutMs: 10_000,
+      }],
+    }), 'utf8');
+    const invalidDoctor = await runCli([
+      'doctor',
+      root,
+      '--strict',
+      '--json',
+    ]);
+    assert.equal(invalidDoctor.exitCode, 2);
+    assert.equal(
+      (invalidDoctor.output as { status: string }).status,
+      'blocked',
+    );
+    assert.ok((invalidDoctor.output as {
+      readiness: { required: Array<{ code: string }> };
+    }).readiness.required.some((item) => item.code === 'checks-invalid'));
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
