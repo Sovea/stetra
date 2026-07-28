@@ -36,8 +36,8 @@ installation and configured-source readiness:
 resonant-code doctor . --strict
 ```
 
-Each later `change prepare` also reports any task-specific logical check ID
-that is not mapped by the approved configuration.
+Each later `change prepare` reports requested checks that are not mapped and
+configured checks that Runtime did not request for the delivered guidance.
 
 Then use the coding agent normally:
 
@@ -55,10 +55,13 @@ Developer request
 Host Agent + generated resonant-code skill
       |
       +--> change prepare --json
-      |      Runtime activates policy, verifies relevant RCCL evidence,
-      |      budgets delivered guidance, and snapshots the worktree
+      |      Runtime normalizes targets/technology, activates overlapping policy,
+      |      verifies relevant RCCL evidence, and budgets delivered guidance
+      |      CLI maps requested checks and snapshots the worktree
       |
       +--> Host implements the requested change
+      |
+      +--> Host challenges attestations against the complete actual diff
       |
       `--> change complete --json
              CLI collects the actual diff and runs approved checks
@@ -73,10 +76,13 @@ trusted commands, policy exceptions, or acceptance of an unresolved risk.
 The Host may automatically:
 
 - fill task fields supported by the request and repository
+- inspect the repository read-only before prepare and supply the smallest
+  justified file or directory scope roots
 - select task-relevant optional guidance when it exceeds the attention budget
 - use already-reviewed RCCL observations
 - implement and repair work inside the requested scope
-- run configured checks and provide evidence-backed semantic attestations
+- run configured checks and provide evidence-backed attestations for required,
+  avoid, and tension guidance
 
 The Host must pause before:
 
@@ -116,6 +122,20 @@ Trusted checks use explicit non-shell argv:
 The CLI never guesses commands from filenames or dependencies. The Host
 inspects project-owned sources, the user approves the commands, and the CLI
 validates and executes the exact definitions.
+
+`prepare` makes activation inspectable: it returns normalized targets and
+technology IDs, active built-in/team/personal contributors, local directives
+whose scopes did not overlap, requested checks, and configured-but-not-requested
+check IDs. A directory target includes its descendants; it is not a prediction
+of the final changed-file list.
+
+Runtime also returns an `attestationPlan`. Required, avoid, and unresolved
+tension items are the attention checklist. Unverified optional `consider`
+guidance remains visible as information but does not turn an otherwise accepted
+change into a warning or require another completion run. Before declaring an
+attention item satisfied, the Host reviews every changed file for contradictory
+evidence; Runtime continues to validate narrow evidence bindings rather than
+guessing semantic truth.
 
 ## Optional team capabilities
 

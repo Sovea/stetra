@@ -1,4 +1,4 @@
-import { minimatch } from './glob.ts';
+import { globCanMatchDescendant, minimatch } from './glob.ts';
 
 export function normalizePath(value: string): string {
   return value.replace(/\\/g, '/').replace(/^\.\//, '');
@@ -19,7 +19,9 @@ export function scopeOverlapsPath(scope: string, path: string): boolean {
   const normalizedScope = normalizePath(scope);
   const normalizedPath = normalizePath(path);
   return pathMatchesScope(normalizedPath, normalizedScope)
-    || pathMatchesScope(normalizedScope, normalizedPath);
+    || pathMatchesScope(normalizedScope, normalizedPath)
+    || (hasGlobSyntax(normalizedScope)
+      && globCanMatchDescendant(normalizedScope, normalizedPath));
 }
 
 export function fileOverlapsTarget(file: string, target: string): boolean {
@@ -28,4 +30,8 @@ export function fileOverlapsTarget(file: string, target: string): boolean {
   return normalizedFile === normalizedTarget
     || pathMatchesScope(normalizedFile, normalizedTarget)
     || pathMatchesScope(normalizedTarget, normalizedFile);
+}
+
+function hasGlobSyntax(value: string): boolean {
+  return value.includes('*') || value.includes('?') || value.includes('{');
 }

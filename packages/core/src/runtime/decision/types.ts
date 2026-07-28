@@ -1,5 +1,10 @@
 import type { DirectiveExample, ExecutionMode } from '../types.ts';
-import type { GuidanceMode, NormalizedTaskContext, TaskContextInput } from '../task/types.ts';
+import type {
+  GuidanceMode,
+  NormalizedTaskContext,
+  TaskContextInput,
+  TaskFieldSource,
+} from '../task/types.ts';
 
 export const DECISION_SCHEMA_VERSION = '1.0' as const;
 
@@ -112,13 +117,67 @@ export interface VerificationPlan {
   semanticChecks: Array<{ guidanceId: string; description: string }>;
 }
 
+export interface DirectiveActivationSummary {
+  targets: string[];
+  techStack: string[];
+  techStackSource: TaskFieldSource;
+  activeBySource: {
+    builtin: string[];
+    team: string[];
+    personal: string[];
+  };
+  configuredBySource: {
+    team: string[];
+    personal: string[];
+  };
+  inactive: Array<{
+    id: string;
+    scope: string;
+    sources: Array<'team' | 'personal'>;
+    reason: 'scope-no-overlap';
+  }>;
+}
+
+export interface AttestationPlan {
+  attentionItems: Array<{
+    guidanceId: string;
+    section: 'required' | 'avoid' | 'tension';
+    requirements: VerificationRequirement[];
+  }>;
+  optionalConsiderIds: string[];
+  optionalConsiderPolicy: 'unverified-is-informational';
+  evidenceExamples: {
+    diff: {
+      kind: 'diff';
+      ref: 'diff:<repository-path>';
+      file: '<changed-file>';
+    };
+    file: {
+      kind: 'file';
+      ref: 'file:<repository-path>';
+      file: '<changed-file>';
+    };
+    check: {
+      kind: 'check';
+      ref: 'check:<check-id>';
+      checkId: '<passing-check-id>';
+    };
+    semantic: {
+      kind: 'semantic';
+      ref: 'semantic:<claim-id>';
+      description: '<concrete semantic explanation>';
+    };
+  };
+}
+
 export interface DecisionDiagnostic {
   code:
     | 'GUIDANCE_SELECTION_APPLIED'
     | 'RELATION_PROPOSAL_REJECTED'
     | 'RELATION_PROPOSAL_DOWNGRADED'
     | 'RCCL_NOT_LOADED'
-    | 'RCCL_NO_DECISION_IMPACT';
+    | 'RCCL_NO_DECISION_IMPACT'
+    | 'TEAM_PLAYBOOK_NO_ACTIVE_DIRECTIVES';
   message: string;
   ids?: string[];
 }
@@ -148,6 +207,7 @@ export interface DecisionTrace {
     team: 'present' | 'absent';
     personal: 'present' | 'absent';
   };
+  activation: DirectiveActivationSummary;
   activatedDirectiveIds: string[];
   deliveredGuidanceIds: string[];
   suppressedDirectiveIds: string[];
@@ -197,6 +257,7 @@ export interface ChangeDecisionPacket {
   guidance: EffectiveGuidance;
   executionGuidance: ExecutionGuidance;
   verificationPlan: VerificationPlan;
+  attestationPlan: AttestationPlan;
   trace: DecisionTrace;
   fingerprints: {
     task: string;

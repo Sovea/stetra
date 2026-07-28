@@ -3,11 +3,13 @@ export { compileChange } from './decision/compile-change.ts';
 export { evaluateChange } from './evaluation/evaluate-change.ts';
 
 export type {
+  AttestationPlan,
   ChangeDecisionPacket,
   CompileChangeInput,
   CompileChangeOutput,
   DecisionDiagnostic,
   DecisionTension,
+  DirectiveActivationSummary,
   EffectiveGuidance,
   ExecutionAvoidGuidanceItem,
   ExecutionGuidance,
@@ -28,7 +30,9 @@ export type {
   ChangeSet,
   CheckResult,
   EvaluateChangeInput,
+  EvaluationActionRequired,
   EvaluationEvidenceRef,
+  EvaluationInformation,
   FileFact,
   GuidanceAttestation,
   GuidanceEvaluation,

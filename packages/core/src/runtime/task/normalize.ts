@@ -30,7 +30,7 @@ export function normalizeTaskContext(input: TaskContextInput): NormalizedTaskCon
     source: targets.length ? explicitSource : 'defaulted',
   });
 
-  const explicitStack = uniqueStrings(input.techStack ?? []);
+  const explicitStack = uniqueStrings((input.techStack ?? []).map(normalizeTechnologyId));
   const inferredStack = inferTechStack(targets);
   const techStack = uniqueStrings([...explicitStack, ...inferredStack]);
   provenance.push({
@@ -125,6 +125,10 @@ function enumValue<T extends string>(value: unknown, allowed: readonly T[]): T |
 function requiredString(value: unknown, field: string): string {
   if (typeof value !== 'string' || !value.trim()) throw new Error(`${field} must be a non-empty string.`);
   return value.trim();
+}
+
+function normalizeTechnologyId(value: string): string {
+  return value.trim().toLowerCase();
 }
 
 function uniqueStrings(values: string[]): string[] {

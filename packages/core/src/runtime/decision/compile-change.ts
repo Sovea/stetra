@@ -21,7 +21,7 @@ import type {
   PersonalPlaybook,
 } from '../types.ts';
 import { stableHash } from '../utils/hash.ts';
-import { pathMatchesScope, scopeOverlapsPath } from '../utils/paths.ts';
+import { scopeOverlapsPath } from '../utils/paths.ts';
 import {
   applyGuidanceDelivery,
   DEFAULT_GUIDANCE_BYTE_LIMIT,
@@ -36,12 +36,18 @@ import {
   type DecisionDiagnostic,
   type DecisionTension,
   type DecisionTrace,
+  type DirectiveActivationSummary,
   type EffectiveGuidance,
   type GuidanceItem,
   type RelationProposal,
   type VerificationPlan,
   type VerificationRequirement,
 } from './types.ts';
+import {
+  buildActivationSummary,
+  directiveMatchesTask,
+} from './activation.ts';
+import { buildAttestationPlan } from './attestation.ts';
 
 interface EffectiveDirective extends Directive {
   effectivePrescription: Directive['prescription'];
@@ -102,6 +108,14 @@ export async function compileChange(input: CompileChangeInput): Promise<CompileC
   const loaded = await loadGovernanceSources(input, task);
   const diagnostics: DecisionDiagnostic[] = [];
   if (!loaded.rccl) diagnostics.push({ code: 'RCCL_NOT_LOADED', message: 'No RCCL source was supplied for this task.' });
+  if (loaded.activation.configuredBySource.team.length
+    && !loaded.activation.activeBySource.team.length) {
+    diagnostics.push({
+      code: 'TEAM_PLAYBOOK_NO_ACTIVE_DIRECTIVES',
+      message: 'The Team Playbook is present, but no team-authored directive is active for the normalized task targets and selected layers.',
+      ids: loaded.activation.configuredBySource.team,
+    });
+  }
   const relationDecisions = buildRelationDecisions(
     loaded.directives,
     loaded.relevantObservations,
@@ -151,6 +165,7 @@ export async function compileChange(input: CompileChangeInput): Promise<CompileC
 
   const deliveredGuidanceIds = guidanceIds(delivery.guidance);
   const verificationPlan = buildVerificationPlan(delivery.guidance);
+  const attestationPlan = buildAttestationPlan(delivery.guidance);
   const relationTrace = relationDecisions.map((relation) => ({
     directiveId: relation.directiveId,
     observationId: relation.observationId,
@@ -195,9 +210,11 @@ export async function compileChange(input: CompileChangeInput): Promise<CompileC
     guidance: delivery.guidance,
     executionGuidance: delivery.executionGuidance,
     verificationPlan,
+    attestationPlan,
     trace: {
       selectedLayers: loaded.selectedLayers,
       playbookSources: loaded.playbookSources,
+      activation: loaded.activation,
       activatedDirectiveIds: loaded.directives.map((directive) => directive.id),
       deliveredGuidanceIds,
       suppressedDirectiveIds: loaded.suppressedDirectiveIds,
@@ -238,6 +255,7 @@ async function loadGovernanceSources(input: CompileChangeInput, task: Normalized
     personal: 'present' | 'absent';
   };
   directives: EffectiveDirective[];
+  activation: DirectiveActivationSummary;
   rccl: RcclDocument | null;
   relevantObservations: RcclObservation[];
   observationVerification: ObservationVerificationRecord[];
@@ -273,12 +291,20 @@ async function loadGovernanceSources(input: CompileChangeInput, task: Normalized
     local,
   );
   const personalDirectives = (personal?.additions ?? []).map(personalDirective);
-  const directives = applyPersonalPlaybook(
+  const candidateDirectives = applyPersonalPlaybook(
     [...teamDirectives, ...personalDirectives],
     personal,
-  )
+  );
+  const directives = candidateDirectives
     .filter((directive) => directiveMatchesTask(directive, task))
     .sort(compareDirectives);
+  const activation = buildActivationSummary({
+    task,
+    activeDirectives: directives,
+    candidateDirectives,
+    local,
+    personal,
+  });
 
   const loadedRccl = await loadRccl(input.rcclPath);
   if (!loadedRccl) {
@@ -289,6 +315,7 @@ async function loadGovernanceSources(input: CompileChangeInput, task: Normalized
         personal: personal ? 'present' : 'absent',
       },
       directives,
+      activation,
       rccl: null,
       relevantObservations: [],
       observationVerification: [],
@@ -325,6 +352,7 @@ async function loadGovernanceSources(input: CompileChangeInput, task: Normalized
       personal: personal ? 'present' : 'absent',
     },
     directives,
+    activation,
     rccl,
     relevantObservations,
     observationVerification,
@@ -411,15 +439,6 @@ function applyPersonalPlaybook(
       personalAugmentApplied: true,
     };
   });
-}
-
-function directiveMatchesTask(directive: Directive, task: NormalizedTaskContext): boolean {
-  const layer = directive.source.layerId;
-  if (layer.startsWith('builtin/task-types/') && !layer.endsWith(`/${task.changeType}`)) return false;
-  if (layer.startsWith('builtin/languages/') && !task.techStack.some((tech) => layer.endsWith(`/${tech}`))) return false;
-  if (layer.startsWith('builtin/frameworks/') && !task.techStack.some((tech) => layer.endsWith(`/${tech}`))) return false;
-  if (!task.targets.length) return true;
-  return task.targets.some((target) => pathMatchesScope(target, directive.scope.path));
 }
 
 function observationMatchesTask(observation: RcclObservation, task: NormalizedTaskContext): boolean {

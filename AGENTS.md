@@ -65,10 +65,13 @@ proposals. It owns:
 - deterministic task normalization and strict-mode interpretation gates
 - Playbook loading, validation, local override, scope selection, and explicit
   authority ordering
+- symmetric target/directive scope overlap and canonical lowercase technology
+  IDs; directory targets are intended scope roots, not predicted changed files
 - task-relevant RCCL evidence re-verification
 - semantic relation validation and execution-mode adjudication
 - compact EGO budgets and Decision Trace
 - verification-plan generation
+- inspectable activation and attention-only attestation plans
 
 Standard tasks compile directly. Do not reintroduce mandatory task-model, semantic-graph, capability-profile, cache, or evolution-proposal round trips.
 
@@ -134,7 +137,15 @@ Attestation evidence must be structurally tied to collected facts:
 - check evidence names a supplied passing check
 - semantic evidence contains a concrete explanation
 
+Before writing attestations, the Host workflow must inspect the complete actual
+diff and try to falsify each required, avoid, and tension claim. Contradictory
+or insufficient evidence must produce a repair, `violated`, `partial`, or
+`unverified`, never a confirmatory `satisfied` assertion.
+
 Strict mode requires an exception for unverified required guidance or unresolved tensions. Hard required/avoid violations reject the evaluation.
+Unverified optional `consider` guidance remains informational and must not
+force a warning or completion retry. Runtime, not the adapter, identifies the
+required/avoid/tension items that need attestations.
 
 Runtime persistence is task-scoped. A runnable prepare creates exactly one
 `.resonant-code/runs/<runId>/` directory containing `run.json` and the Host
@@ -143,7 +154,8 @@ same run and must not duplicate the full current worktree snapshot.
 Interpretation, guidance-overflow, and checks-required outcomes create no run.
 Cleanup may remove only whole completed runs; prepared runs remain untouched.
 Persisted check stdout/stderr is capped at 1 MiB per stream; the digest covers
-the complete stream and truncation remains explicit in the collected facts.
+the complete stream and truncation remains explicit in the collected facts. An
+empty stream creates neither a log file nor an output reference.
 Do not add a global feedback ledger, aggregate store, or policy-proposal
 lifecycle until it has a concrete compile/evaluation consumer and measurable
 benefit over inspecting task runs.
@@ -168,6 +180,9 @@ parse Playbook data to make policy decisions, rank directives, adjudicate
 relations, decide execution modes, or invent evaluation facts. The source
 repository does not ship `.claude-plugin`,
 `.codex-plugin`, `.codex`, or repository-native `skills/` entrypoints.
+The host may inspect the repository read-only before prepare. CLI exposes
+configured-but-not-requested checks without executing them; it must not infer
+additional check activation.
 
 The normal code lifecycle is:
 
@@ -228,6 +243,8 @@ corepack pnpm verify
 Tests must cover the behavior that justifies the harness:
 
 - task and scope activation
+- canonical technology IDs, directory/exact scope overlap, and activation
+  diagnostics
 - local directive precedence
 - byte-ceiling overflow, explicit delivery selection, and delivered-ID
   boundaries
@@ -236,6 +253,7 @@ Tests must cover the behavior that justifies the harness:
 - accepted, rejected, and downgraded semantic relations
 - strict interpretation and exception gates
 - evaluation against actual diff/check evidence
+- attention-only attestations and optional informational guidance
 - checks-required no-write behavior and task-run isolation
 - isolated Core npm-tarball API smoke behavior
 - paired Core/CLI npm-tarball installation and binary smoke behavior

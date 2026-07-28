@@ -58,17 +58,9 @@ export function formatChangePrepare(
   if (typeof output.evaluationInputPath === 'string') {
     lines.push(`${colors.bold('Evaluation input:')} ${output.evaluationInputPath}`);
   }
-  if (checksRequired && Array.isArray(output.checkPlan)) {
-    const missing = output.checkPlan
-      .filter(isRecord)
-      .filter((check) => check.status === 'missing');
-    if (missing.length) {
-      lines.push('', colors.bold('Missing checks'));
-      for (const check of missing) {
-        lines.push(`${colors.yellow('•')} ${String(check.id ?? 'check')}`);
-      }
-    }
-  }
+  appendActivation(lines, output.activation, colors);
+  appendCheckPlan(lines, output.checkPlan, colors);
+  appendAttestationPlan(lines, output.attestationPlan, colors);
   appendGuidance(lines, output.guidance, colors);
   appendReasons(lines, output.reasons, colors);
   if (typeof output.nextStep === 'string') {
@@ -134,7 +126,8 @@ export function formatChangeComplete(
   }
 
   appendExceptions(lines, results, colors);
-  appendAttention(lines, results, colors);
+  appendActions(lines, output.actionRequired, colors);
+  appendInformational(lines, output.informational, colors);
 
   if (typeof output.runId === 'string') {
     lines.push(`${colors.bold('Run:')} ${output.runId}`);
@@ -159,21 +152,34 @@ export function formatChangeComplete(
   return lines.join('\n');
 }
 
-function appendAttention(
+function appendActions(
   lines: string[],
-  results: JsonObject[],
+  value: unknown,
   colors: Colors,
 ): void {
-  const attention = results.filter((result) =>
-    ['violated', 'partial', 'unverified'].includes(String(result.verdict)));
-  if (!attention.length) return;
-  lines.push('', colors.bold('Review needed'));
-  for (const result of attention) {
-    const reasons = Array.isArray(result.reasons) ? result.reasons : [];
+  if (!Array.isArray(value)) return;
+  const actions = value.filter(isRecord);
+  if (!actions.length) return;
+  lines.push('', colors.bold('Action required'));
+  for (const action of actions) {
     lines.push(
-      `${colors.yellow('•')} ${String(result.guidanceId)} (${String(result.verdict)})`,
+      `${colors.yellow('•')} ${String(action.id ?? 'item')} [${String(action.kind ?? 'review')}]`,
     );
-    if (reasons.length) lines.push(`  ${String(reasons[0])}`);
+    if (typeof action.message === 'string') lines.push(`  ${action.message}`);
+  }
+}
+
+function appendInformational(
+  lines: string[],
+  value: unknown,
+  colors: Colors,
+): void {
+  if (!Array.isArray(value)) return;
+  const items = value.filter(isRecord);
+  if (!items.length) return;
+  lines.push('', colors.bold('Optional information'));
+  for (const item of items) {
+    lines.push(`${colors.dim('•')} ${String(item.id ?? 'optional-guidance')}`);
   }
 }
 
@@ -222,4 +228,80 @@ function appendGuidance(
       lines.push(`${colors.cyan('•')} [${String(item.id ?? section)}] ${String(text)}`);
     }
   }
+}
+
+function appendActivation(
+  lines: string[],
+  value: unknown,
+  colors: Colors,
+): void {
+  if (!isRecord(value)) return;
+  const targets = Array.isArray(value.targets) ? value.targets.map(String) : [];
+  const techStack = Array.isArray(value.techStack) ? value.techStack.map(String) : [];
+  if (targets.length) {
+    lines.push(`${colors.bold('Targets:')} ${targets.join(', ')}`);
+  }
+  if (techStack.length) {
+    lines.push(
+      `${colors.bold('Technology:')} ${techStack.join(', ')} (${String(value.techStackSource ?? 'unknown')})`,
+    );
+  }
+  if (isRecord(value.activeBySource)) {
+    const counts = new Map<string, number>();
+    for (const source of ['builtin', 'team', 'personal']) {
+      const ids = value.activeBySource[source];
+      counts.set(source, Array.isArray(ids) ? ids.length : 0);
+    }
+    lines.push(`${colors.bold('Policy activation:')} ${formatCounts(counts, false)}`);
+  }
+  if (isRecord(value.configuredBySource)) {
+    const counts = new Map<string, number>();
+    for (const source of ['team', 'personal']) {
+      const ids = value.configuredBySource[source];
+      counts.set(source, Array.isArray(ids) ? ids.length : 0);
+    }
+    lines.push(`${colors.bold('Configured policy:')} ${formatCounts(counts, false)}`);
+  }
+  if (Array.isArray(value.inactive) && value.inactive.length) {
+    lines.push('', colors.bold('Inactive scoped policy'));
+    for (const item of value.inactive) {
+      if (!isRecord(item)) continue;
+      lines.push(
+        `${colors.yellow('•')} ${String(item.id ?? 'directive')} — no overlap with ${String(item.scope ?? 'declared scope')}`,
+      );
+    }
+  }
+}
+
+function appendCheckPlan(
+  lines: string[],
+  value: unknown,
+  colors: Colors,
+): void {
+  if (!Array.isArray(value)) return;
+  const checks = value.filter(isRecord);
+  if (!checks.length) return;
+  const counts = countValues(checks.map((check) => String(check.status ?? 'unknown')));
+  lines.push(`${colors.bold('Check plan:')} ${formatCounts(counts, false)}`);
+  for (const check of checks.filter((item) =>
+    item.status === 'missing' || item.status === 'not-requested')) {
+    const marker = check.status === 'missing' ? colors.yellow('!') : colors.dim('•');
+    lines.push(
+      `${marker} ${String(check.id ?? 'check')} [${String(check.status)}] — ${String(check.reason ?? '')}`,
+    );
+  }
+}
+
+function appendAttestationPlan(
+  lines: string[],
+  value: unknown,
+  colors: Colors,
+): void {
+  if (!isRecord(value) || !Array.isArray(value.attentionItems)) return;
+  const optionalCount = Array.isArray(value.optionalConsiderIds)
+    ? value.optionalConsiderIds.length
+    : 0;
+  lines.push(
+    `${colors.bold('Attestations:')} required=${String(value.attentionItems.length)}, optional=${String(optionalCount)}`,
+  );
 }

@@ -9,7 +9,9 @@ import {
   type CheckResult,
   type ChangedFile,
   type EvaluateChangeInput,
+  type EvaluationActionRequired,
   type EvaluationEvidenceRef,
+  type EvaluationInformation,
   type EvaluationVerdict,
   type GuidanceAttestation,
   type GuidanceEvaluation,
@@ -90,12 +92,15 @@ export function evaluateChange(input: EvaluateChangeInput): ChangeEvaluation {
     }));
   }
 
-  const status = resolveEvaluationStatus(results, input.decision.mode);
+  const status = resolveEvaluationStatus(results, checks, input.decision.mode);
+  const actionRequired = buildActionRequired(results, checks);
+  const informational = buildInformational(results);
   const summary = {
     requiredSatisfied: results.filter((result) => result.section === 'required' && (result.verdict === 'satisfied' || result.verdict === 'excepted')).length,
     requiredViolated: results.filter((result) => result.section === 'required' && result.verdict === 'violated').length,
     requiredUnverified: results.filter((result) => result.section === 'required' && (result.verdict === 'unverified' || result.verdict === 'partial')).length,
-    warningCount: countWarnings(results),
+    warningCount: countWarnings(results, checks),
+    informationalCount: informational.length,
   };
   const operation = inferOperation(changes.files);
   return {
@@ -113,6 +118,8 @@ export function evaluateChange(input: EvaluateChangeInput): ChangeEvaluation {
     changes,
     results,
     checks,
+    actionRequired,
+    informational,
     assurance: {
       machineFacts: {
         changeSet: true,
@@ -184,13 +191,21 @@ function assertEvaluateShape(input: EvaluateChangeInput): void {
       throw new Error('evaluateChange checks require outputDigest.');
     }
     if (check.outputRefs !== undefined) {
-      if (!isRecord(check.outputRefs)
-        || typeof check.outputRefs.stdout !== 'string'
-        || typeof check.outputRefs.stderr !== 'string') {
-        throw new Error('evaluateChange check outputRefs require stdout and stderr paths.');
+      if (!isRecord(check.outputRefs)) {
+        throw new Error('evaluateChange check outputRefs must be an object.');
       }
-      assertSafeRelativePath(normalizePath(check.outputRefs.stdout), 'check stdout outputRef');
-      assertSafeRelativePath(normalizePath(check.outputRefs.stderr), 'check stderr outputRef');
+      const { stdout, stderr } = check.outputRefs;
+      if ((stdout === undefined && stderr === undefined)
+        || (stdout !== undefined && typeof stdout !== 'string')
+        || (stderr !== undefined && typeof stderr !== 'string')) {
+        throw new Error('evaluateChange check outputRefs require at least one stdout or stderr path.');
+      }
+      if (stdout !== undefined) {
+        assertSafeRelativePath(normalizePath(stdout), 'check stdout outputRef');
+      }
+      if (stderr !== undefined) {
+        assertSafeRelativePath(normalizePath(stderr), 'check stderr outputRef');
+      }
     }
     if (check.outputTruncated !== undefined
       && (!isRecord(check.outputTruncated)
@@ -391,29 +406,85 @@ function uncoveredRequirements(
 
 function resolveEvaluationStatus(
   results: GuidanceEvaluation[],
+  checks: CheckResult[],
   mode: 'standard' | 'strict',
 ): ChangeEvaluation['status'] {
   const hardViolation = results.some((result) =>
     (result.section === 'required' || result.section === 'avoid')
     && result.verdict === 'violated'
     && result.exception?.status !== 'approved');
-  if (hardViolation) return 'rejected';
+  if (hardViolation || checks.some((check) => check.status === 'failed')) return 'rejected';
 
   const pendingException = results.some((result) => result.exception && result.exception.status !== 'approved');
   const hardUnverified = results.some((result) =>
     (result.section === 'required' || result.section === 'tension')
-    && (result.verdict === 'unverified' || result.verdict === 'partial'));
-  if (pendingException || (mode === 'strict' && hardUnverified)) return 'exception-required';
-
-  const warning = hardUnverified || results.some((result) =>
-    (result.section === 'consider' || result.section === 'avoid')
     && result.verdict !== 'satisfied'
     && result.verdict !== 'excepted');
+  if (pendingException || (mode === 'strict' && hardUnverified)) return 'exception-required';
+
+  const warning = hardUnverified
+    || checks.some((check) => check.status === 'skipped')
+    || results.some((result) =>
+      result.section === 'avoid'
+      && result.verdict !== 'satisfied'
+      && result.verdict !== 'excepted');
   return warning ? 'warning' : 'accepted';
 }
 
-function countWarnings(results: GuidanceEvaluation[]): number {
-  return results.filter((result) => result.verdict === 'violated' || result.verdict === 'partial' || result.verdict === 'unverified').length;
+function countWarnings(results: GuidanceEvaluation[], checks: CheckResult[]): number {
+  return results.filter((result) =>
+    result.section !== 'consider'
+    && result.verdict !== 'satisfied'
+    && result.verdict !== 'excepted').length
+    + checks.filter((check) => check.status !== 'passed').length;
+}
+
+function buildActionRequired(
+  results: GuidanceEvaluation[],
+  checks: CheckResult[],
+): EvaluationActionRequired[] {
+  const actions: EvaluationActionRequired[] = checks.flatMap((check) => {
+    if (check.status === 'passed') return [];
+    return [{
+      kind: check.status === 'failed' ? 'check-failure' as const : 'check-unavailable' as const,
+      id: check.id,
+      message: check.reason ?? `Verification check ${check.id} did not pass.`,
+    }];
+  });
+  for (const result of results) {
+    if (result.exception && result.exception.status !== 'approved') {
+      actions.push({
+        kind: 'exception-approval',
+        id: result.guidanceId,
+        message: `The requested exception for ${result.guidanceId} requires explicit approval.`,
+      });
+      continue;
+    }
+    if (result.section === 'consider'
+      || result.verdict === 'satisfied'
+      || result.verdict === 'excepted') {
+      continue;
+    }
+    actions.push({
+      kind: result.verdict === 'violated' ? 'guidance-violation' : 'guidance-evidence',
+      id: result.guidanceId,
+      message: result.reasons[0] ?? `Guidance ${result.guidanceId} requires review.`,
+    });
+  }
+  return actions;
+}
+
+function buildInformational(results: GuidanceEvaluation[]): EvaluationInformation[] {
+  return results
+    .filter((result) =>
+      result.section === 'consider'
+      && result.verdict !== 'satisfied'
+      && result.verdict !== 'excepted')
+    .map((result) => ({
+      kind: 'optional-guidance',
+      id: result.guidanceId,
+      message: result.reasons[0] ?? `Optional guidance ${result.guidanceId} was not verified.`,
+    }));
 }
 
 function normalizeChangeSet(changes: ChangeSet): ChangeSet {

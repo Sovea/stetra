@@ -88,6 +88,8 @@ export async function prepareCodeTask(options) {
       task: output.task,
       guidance: output.executionGuidance,
       verificationPlan: output.verificationPlan,
+      attestationPlan: output.attestationPlan,
+      activation: output.trace.activation,
       delivery: output.trace.delivery,
       checkPlan,
       diagnostics: output.trace.diagnostics,
@@ -173,6 +175,8 @@ export async function completeCodeTask(options) {
     assurance: evaluation.assurance,
     results: evaluation.results,
     checks: evaluation.checks,
+    actionRequired: evaluation.actionRequired,
+    informational: evaluation.informational,
     runId: run.runId,
     runPath,
     evaluationInputPath,
@@ -309,6 +313,8 @@ function compactDecision(decision, run, checkPlan, baseline) {
     task: decision.task,
     guidance: decision.executionGuidance,
     verificationPlan: decision.verificationPlan,
+    attestationPlan: decision.attestationPlan,
+    activation: decision.trace.activation,
     delivery: decision.trace.delivery,
     checkPlan,
     baseline,
@@ -316,7 +322,7 @@ function compactDecision(decision, run, checkPlan, baseline) {
     runId: run.runId,
     runPath: run.runPath,
     evaluationInputPath: run.evaluationInputPath,
-    nextStep: `Implement using the delivered guidance, write semantic attestations to ${run.evaluationInputPath}, then run change complete with --run ${run.runId}.`,
+    nextStep: `Implement using the delivered guidance, inspect the complete actual diff and try to falsify each attentionItem before attesting in ${run.evaluationInputPath}, then run change complete with --run ${run.runId}. Optional consider items may remain unverified.`,
   };
 }
 

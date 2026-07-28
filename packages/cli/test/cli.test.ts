@@ -11,7 +11,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { PassThrough } from 'node:stream';
 import test from 'node:test';
 
@@ -310,9 +310,22 @@ test('change lifecycle creates one task-scoped run only after checks are configu
       runId: string;
       runPath: string;
       evaluationInputPath: string;
+      activation: {
+        targets: string[];
+        techStack: string[];
+      };
+      attestationPlan: {
+        attentionItems: unknown[];
+        optionalConsiderIds: string[];
+      };
+      nextStep: string;
     };
     assert.ok(prepared.status === 'compiled' || prepared.status === 'needs-attention');
     assert.match(prepared.runId, /^[0-9a-f-]{36}$/);
+    assert.deepEqual(prepared.activation.targets, ['src/example.ts']);
+    assert.deepEqual(prepared.activation.techStack, ['typescript']);
+    assert.ok(prepared.attestationPlan.optionalConsiderIds.length > 0);
+    assert.match(prepared.nextStep, /try to falsify each attentionItem/);
     const run = JSON.parse(readFileSync(prepared.runPath, 'utf8'));
     assert.equal(run.runId, prepared.runId);
     assert.equal(run.workflow, 'change');
@@ -357,14 +370,20 @@ test('change lifecycle creates one task-scoped run only after checks are configu
       status: string;
       runId: string;
       runPath: string;
-      checks: Array<{ outputRefs?: { stdout: string; stderr: string } }>;
+      checks: Array<{ outputRefs?: { stdout?: string; stderr?: string } }>;
+      actionRequired: unknown[];
+      informational: unknown[];
     };
+    assert.equal(completed.status, 'accepted');
+    assert.deepEqual(completed.actionRequired, []);
+    assert.ok(completed.informational.length > 0);
     assert.equal(completed.runId, prepared.runId);
     assert.equal(completed.runPath, prepared.runPath);
-    assert.ok(completed.checks.every((check) =>
-      check.outputRefs?.stdout.startsWith(
-        `.resonant-code/runs/${prepared.runId}/checks/`,
-      )));
+    assert.ok(completed.checks.every((check) => check.outputRefs === undefined));
+    assert.equal(
+      existsSync(join(dirname(prepared.runPath), 'checks')),
+      false,
+    );
     const completedRun = JSON.parse(readFileSync(prepared.runPath, 'utf8'));
     assert.equal(completedRun.state, 'completed');
     assert.equal(Object.hasOwn(completedRun, 'completionFacts'), false);
@@ -703,14 +722,14 @@ test('CLI returns business guidance overflow as a successful machine result', as
   }
 });
 
-test('human completion output presents facts, guidance, and review needs', () => {
+test('human completion output separates actions from optional information', () => {
   const rendered = formatCliOutput({
     command: 'change complete',
     json: false,
     color: false,
     exitCode: 0,
     output: {
-      status: 'warning',
+      status: 'rejected',
       evaluationId: 'evaluation-id',
       changes: {
         files: [
@@ -730,10 +749,35 @@ test('human completion output presents facts, guidance, and review needs', () =>
           reasons: ['Evidence covered the requirement.'],
         },
         {
+          guidanceId: 'required-2',
+          section: 'required',
+          verdict: 'partial',
+          reasons: ['Missing evidence for: semantic.'],
+        },
+        {
           guidanceId: 'consider-1',
           section: 'consider',
           verdict: 'unverified',
           reasons: ['No evidence-backed verdict was provided.'],
+        },
+      ],
+      actionRequired: [
+        {
+          kind: 'check-failure',
+          id: 'test',
+          message: 'Check exited with 1.',
+        },
+        {
+          kind: 'guidance-evidence',
+          id: 'required-2',
+          message: 'Missing evidence for: semantic.',
+        },
+      ],
+      informational: [
+        {
+          kind: 'optional-guidance',
+          id: 'consider-1',
+          message: 'No evidence-backed verdict was provided.',
         },
       ],
       runId: 'f61d2968-155a-4249-a72e-4789001bb515',
@@ -743,10 +787,12 @@ test('human completion output presents facts, guidance, and review needs', () =>
   assert.match(rendered, /Changed files: 2/);
   assert.match(rendered, /Checks: 2/);
   assert.match(rendered, /test: Check exited with 1/);
-  assert.match(rendered, /required: satisfied=1/);
-  assert.match(rendered, /consider-1 \(unverified\)/);
+  assert.match(rendered, /required: partial=1, satisfied=1/);
+  assert.match(rendered, /required-2 \[guidance-evidence\]/);
+  assert.match(rendered, /Optional information/);
+  assert.match(rendered, /consider-1/);
   assert.match(rendered, /Run: f61d2968-155a-4249-a72e-4789001bb515/);
-  assert.match(rendered, /Review unresolved evidence/);
+  assert.match(rendered, /Fix hard violations or failed required checks/);
 });
 
 function writeJsonFixture(root: string, name: string, value: unknown): string {

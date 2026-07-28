@@ -135,7 +135,10 @@ only for a real TTY and can be disabled with `--no-interactive`.
 
 Human output is a decision surface, not a lossy echo of JSON. Completion
 summarizes changed-file operations, check outcomes, guidance verdicts,
-exceptions, and unresolved review needs. Bootstrap exposes a bounded
+exceptions, required actions, and optional information separately. Prepare
+shows normalized targets and technology, active policy contributors,
+scope-inactive local policy, and every configured check's requested state.
+Bootstrap exposes a bounded
 layer-selection contract; RCCL output shows the persistent evidence and content
 fingerprints needed for a meaningful review.
 
@@ -207,6 +210,24 @@ evidence without interrupting the user. It must pause before changing
 persistent team authority or trusted commands, approving observations or
 exceptions, resolving user-intent ambiguities or policy tensions, expanding
 scope, or accepting unresolved failures and high-risk unverified outcomes.
+
+Before prepare, the Host may use ordinary read-only repository inspection.
+Targets are explicit intended scope roots: directory roots include descendants,
+while final changed-file facts remain workflow-collected after implementation.
+Technology identifiers are canonical lowercase IDs. Runtime owns scope overlap,
+layer selection, verification activation, and the attention-only attestation
+plan; the adapter does not reproduce those decisions.
+
+Configured checks that Runtime did not request remain visible as
+`not-requested` and are not executed. The CLI does not infer that they should
+run. Optional `consider` guidance may be attested, but an unverified optional
+item is informational and cannot by itself change completion status.
+
+Before creating attestations, the Host performs a contradiction review over
+the complete actual diff. It attempts to falsify every required, avoid, and
+tension claim and reports a non-satisfied verdict when the diff contradicts
+the claim or does not establish it. This keeps semantic judgment in the Host
+while Runtime continues to validate only narrow evidence bindings.
 
 When optional guidance overflows the byte ceiling, an interactive human may
 select IDs and supply a rationale in-place. The CLI sends that exact bounded

@@ -22,6 +22,15 @@ The generated adapter runs `change prepare` before implementation and
 `change complete` afterward. Human users do not need to manage task runs,
 selection, relation, or evaluation artifacts.
 
+The Host may inspect the repository read-only before prepare. It supplies
+intended file or directory scope roots and canonical technology IDs; Runtime
+then reports exactly which Team Playbook guidance and checks activated.
+Completion asks for attestations only for required, avoid, and tension
+attention items. Optional `consider` guidance may remain unverified without
+creating a warning or retry loop. Before attesting satisfaction, the Host
+reviews the complete actual diff for contradictory evidence. Check stdout and
+stderr logs are created only for streams that produced output.
+
 Human-readable output is the default. Host Adapters use `--json`; JSON mode
 never prompts or emits ANSI. Required readiness issues block
 `doctor --strict`, while absent Team Playbook and RCCL sources remain

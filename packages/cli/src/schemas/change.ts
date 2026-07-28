@@ -18,9 +18,55 @@ export const RelationProposalDocumentSchema = z.union([
   }).transform((value) => value.relations),
 ]);
 
+const EvaluationEvidenceSchema = z.discriminatedUnion('kind', [
+  z.strictObject({
+    kind: z.literal('diff'),
+    ref: NonEmptyStringSchema,
+    file: NonEmptyStringSchema,
+  }),
+  z.strictObject({
+    kind: z.literal('file'),
+    ref: NonEmptyStringSchema,
+    file: NonEmptyStringSchema,
+  }),
+  z.strictObject({
+    kind: z.literal('check'),
+    ref: NonEmptyStringSchema,
+    checkId: NonEmptyStringSchema,
+  }),
+  z.strictObject({
+    kind: z.literal('semantic'),
+    ref: NonEmptyStringSchema,
+    description: NonEmptyStringSchema,
+  }),
+]);
+
+const GuidanceAttestationSchema = z.strictObject({
+  guidanceId: NonEmptyStringSchema,
+  verdict: z.enum(['satisfied', 'violated', 'partial', 'unverified']),
+  evidenceRefs: z.array(EvaluationEvidenceSchema),
+  explanation: NonEmptyStringSchema,
+  attestedBy: NonEmptyStringSchema,
+});
+
+const ChangeExceptionSchema = z.strictObject({
+  guidanceId: NonEmptyStringSchema,
+  reason: NonEmptyStringSchema,
+  status: z.enum(['requested', 'approved']).optional(),
+  approvedBy: NonEmptyStringSchema.optional(),
+}).superRefine((exception, context) => {
+  if (exception.status === 'approved' && !exception.approvedBy) {
+    context.addIssue({
+      code: 'custom',
+      path: ['approvedBy'],
+      message: 'is required when status is approved',
+    });
+  }
+});
+
 export const EvaluationInputSchema = z.strictObject({
-  attestations: z.array(z.unknown()).default([]),
-  exceptions: z.array(z.unknown()).default([]),
+  attestations: z.array(GuidanceAttestationSchema).default([]),
+  exceptions: z.array(ChangeExceptionSchema).default([]),
 });
 
 export const RuntimeRunSchema = z.looseObject({

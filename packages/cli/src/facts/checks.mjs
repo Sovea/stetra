@@ -50,10 +50,11 @@ export function loadCheckPlan(configPath, verificationPlan) {
     id: validateCheckId(item.id, 'verification plan'),
     reason: item.reason,
   }));
+  const requestedIds = new Set(requested.map((item) => item.id));
   const definitions = existsSync(configPath)
     ? readCheckDefinitions(configPath)
     : new Map();
-  return requested.map((request) => {
+  const active = requested.map((request) => {
     const definition = definitions.get(request.id);
     if (!definition) {
       return {
@@ -73,6 +74,14 @@ export function loadCheckPlan(configPath, verificationPlan) {
       ]),
     };
   });
+  const notRequested = [...definitions.values()]
+    .filter((definition) => !requestedIds.has(definition.id))
+    .map((definition) => ({
+      id: definition.id,
+      status: 'not-requested',
+      reason: 'Runtime did not request this configured check for the delivered guidance.',
+    }));
+  return [...active, ...notRequested];
 }
 
 export async function runCheckPlan({
@@ -83,6 +92,7 @@ export async function runCheckPlan({
   const results = [];
   for (const item of plan) {
     validateCheckId(item?.id, 'prepared check plan');
+    if (item.status === 'not-requested') continue;
     if (item.status === 'missing') {
       const reason = `No explicit command is configured for verification check "${item.id}".`;
       results.push({
@@ -157,10 +167,8 @@ async function runConfiguredCheck({
   outputDirectory,
   item,
 }) {
-  mkdirSync(outputDirectory, { recursive: true });
   const stdoutPath = resolve(outputDirectory, `${item.id}.stdout.log`);
   const stderrPath = resolve(outputDirectory, `${item.id}.stderr.log`);
-  mkdirSync(dirname(stdoutPath), { recursive: true });
   const stdoutStream = new BoundedLogWriter(stdoutPath, MAX_CHECK_LOG_BYTES);
   const stderrStream = new BoundedLogWriter(stderrPath, MAX_CHECK_LOG_BYTES);
   const stdoutHash = createHash('sha256');
@@ -197,16 +205,21 @@ async function runConfiguredCheck({
       : status === 'failed'
         ? `Check exited with ${result.exitCode ?? result.signal ?? 'unknown status'}.`
         : undefined;
+  const outputRefs = {
+    ...(stdoutStream.persisted
+      ? { stdout: relative(projectRoot, stdoutPath).replace(/\\/g, '/') }
+      : {}),
+    ...(stderrStream.persisted
+      ? { stderr: relative(projectRoot, stderrPath).replace(/\\/g, '/') }
+      : {}),
+  };
   return {
     id: item.id,
     status,
     command: item.command,
     exitCode: Number.isInteger(result.exitCode) ? result.exitCode : null,
     outputDigest,
-    outputRefs: {
-      stdout: relative(projectRoot, stdoutPath).replace(/\\/g, '/'),
-      stderr: relative(projectRoot, stderrPath).replace(/\\/g, '/'),
-    },
+    ...(Object.keys(outputRefs).length ? { outputRefs } : {}),
     ...(stdoutStream.truncated || stderrStream.truncated
       ? {
           outputTruncated: {
@@ -234,10 +247,16 @@ function validateCheckId(value, location) {
 class BoundedLogWriter extends Writable {
   constructor(path, maxBytes) {
     super();
-    this.descriptor = openSync(path, 'w');
+    this.path = path;
+    this.descriptor = null;
+    this.created = false;
     this.contentLimit = maxBytes - TRUNCATION_MARKER.length;
     this.contentBytes = 0;
     this.truncated = false;
+  }
+
+  get persisted() {
+    return this.created;
   }
 
   _write(chunk, encoding, callback) {
@@ -246,6 +265,7 @@ class BoundedLogWriter extends Writable {
       const remaining = Math.max(0, this.contentLimit - this.contentBytes);
       const persisted = value.subarray(0, remaining);
       if (persisted.length) {
+        this.open();
         writeBuffer(this.descriptor, persisted);
         this.contentBytes += persisted.length;
       }
@@ -258,7 +278,10 @@ class BoundedLogWriter extends Writable {
 
   _final(callback) {
     try {
-      if (this.truncated) writeBuffer(this.descriptor, TRUNCATION_MARKER);
+      if (this.truncated) {
+        this.open();
+        writeBuffer(this.descriptor, TRUNCATION_MARKER);
+      }
       this.close();
       callback();
     } catch (error) {
@@ -279,6 +302,13 @@ class BoundedLogWriter extends Writable {
     if (this.descriptor === null) return;
     closeSync(this.descriptor);
     this.descriptor = null;
+  }
+
+  open() {
+    if (this.descriptor !== null) return;
+    mkdirSync(dirname(this.path), { recursive: true });
+    this.descriptor = openSync(this.path, 'w');
+    this.created = true;
   }
 }
 

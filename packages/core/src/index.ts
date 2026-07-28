@@ -7,6 +7,7 @@
 export { compileChange, evaluateChange } from './runtime/index.ts';
 
 export type {
+  AttestationPlan,
   ChangeDecisionPacket,
   ChangeEvaluation,
   ChangeException,
@@ -17,9 +18,12 @@ export type {
   CompileChangeOutput,
   DecisionDiagnostic,
   DecisionTension,
+  DirectiveActivationSummary,
   EffectiveGuidance,
   EvaluateChangeInput,
+  EvaluationActionRequired,
   EvaluationEvidenceRef,
+  EvaluationInformation,
   ExecutionAvoidGuidanceItem,
   ExecutionGuidance,
   ExecutionGuidanceItem,

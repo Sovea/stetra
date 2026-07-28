@@ -24,3 +24,9 @@ import {
 ```
 
 Normal host-agent usage should use the `@sovea/resonant-code` CLI.
+
+`compileChange` returns compact execution guidance together with an inspectable
+activation trace, Runtime-owned verification plan, and an attention-only
+attestation plan. `evaluateChange` keeps unverified optional `consider`
+guidance informational while preserving hard required/avoid violations,
+strict-mode evidence gates, and actual diff/check ownership.

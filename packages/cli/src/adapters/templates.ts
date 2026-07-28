@@ -40,7 +40,7 @@ Read only the workflow reference needed for the current request.
 Proceed without interrupting the user for repository-discoverable task fields,
 optional-guidance selection, use of already-approved RCCL, implementation
 inside the requested scope, configured checks, and evidence-backed
-attestations.
+attestations for attention-required guidance.
 
 Inform the user without blocking for absent optional Team Playbook, RCCL, or
 personal overlay.
@@ -96,7 +96,8 @@ evaluation facts.
 
 ## Prepare
 
-Run before editing:
+Use normal read-only repository inspection to understand the task before
+prepare. Run prepare before editing:
 
 \`\`\`sh
 resonant-code change prepare . \\
@@ -107,8 +108,18 @@ resonant-code change prepare . \\
 \`\`\`
 
 Add repeatable \`--target\`, \`--tech\`, \`--constraint\`, \`--avoid\`, or
-\`--uncertainty\` only when they are material. Use \`--risk\`, \`--scope\`, or
-\`--mode strict\` when the request or repository makes them meaningful.
+\`--uncertainty\` only when they are material. When explicit, \`--risk\`
+accepts \`low|medium|high\` and \`--scope\` accepts
+\`local|module|cross-module|repository\`. Otherwise omit them instead of
+inventing a synonym. Use \`--mode strict\` when the request or repository makes
+it meaningful.
+
+\`--target\` is an intended change-scope root, not a prediction of the final
+changed-file list. Supply the smallest justified repository-relative file or
+directory roots; a directory includes its descendants. Do not guess exact
+future files merely to make policy activate. Supply observed, decision-relevant
+technology IDs in canonical lowercase form, such as \`typescript\`; Runtime
+normalizes casing and may also infer a language from exact file extensions.
 
 Handle results as follows:
 
@@ -124,7 +135,9 @@ Handle results as follows:
   approval, configure them, and rerun prepare before editing. This result does
   not create a run or baseline.
 - A returned \`runId\` authorizes implementation under the delivered
-  required, avoid, tension, and consider sections.
+  required, avoid, tension, and consider sections. Inspect \`activation\` to
+  confirm expected Team Playbook contributors and checks were activated before
+  editing.
 
 The workflow automatically loads existing Team Playbook, personal overlay, and
 RCCL sources. Do not recalibrate RCCL for every task.
@@ -160,7 +173,24 @@ boundary makes the current work unsafe; suggest context calibration separately.
 ## Complete
 
 Open the exact \`evaluationInputPath\` returned by prepare and replace its empty
-arrays with semantic attestations and user-approved exceptions only:
+arrays with semantic attestations and user-approved exceptions only. Treat the
+Runtime-returned \`attestationPlan.attentionItems\` as the evidence checklist.
+Attest required, avoid, and tension items. Optional consider items may be
+attested when materially useful, but leaving them unverified is informational
+and does not require another completion run:
+
+Before writing an attestation, perform a contradiction review over the complete
+actual diff:
+
+1. For each attention item, first try to falsify satisfaction using every
+   changed file, including changes outside the supporting evidence you expect
+   to cite.
+2. If any changed behavior contradicts the item, or the available evidence
+   does not establish it, repair the change or use \`violated\`, \`partial\`, or
+   \`unverified\`. Never use \`satisfied\` merely because supporting evidence
+   exists.
+3. Make the explanation describe the concrete conclusion from that review,
+   rather than restating the guidance.
 
 \`\`\`json
 {
@@ -186,6 +216,10 @@ arrays with semantic attestations and user-approved exceptions only:
 Evidence kinds are \`diff\`, \`file\`, \`check\`, and \`semantic\`. Diff/file
 evidence must name a collected changed file, check evidence must name a
 collected passing check, and semantic evidence needs a concrete description.
+Use the exact field names in \`attestationPlan.evidenceExamples\`; in
+particular, semantic evidence requires both \`ref\` and \`description\`.
+Workflow-collected passing commands satisfy command requirements without a
+Host-declared check outcome.
 Never add \`changes\`, \`checks\`, or declared pass/fail outcomes to this file.
 
 An exception may be marked \`approved\` only after the user reviews its exact
@@ -200,6 +234,8 @@ resonant-code change complete . \\
 Report changed-file counts, check outcomes, guidance verdicts, exceptions, and
 remaining review needs. Fix in-scope failures and rerun completion when safe;
 pause for unresolved failures, hard violations, exceptions, or scope changes.
+Do not rerun completion solely to turn optional consider information into a
+satisfied verdict.
 `;
 }
 

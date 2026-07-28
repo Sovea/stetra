@@ -27,10 +27,20 @@ test('project init creates and safely upgrades only managed adapter artifacts', 
     const skill = readFileSync(join(skillRoot, 'SKILL.md'), 'utf8');
     assert.match(skill, /read `references\/change\.md` completely/);
     assert.doesNotMatch(skill, /^metadata:/m);
-    assert.match(
-      readFileSync(join(skillRoot, 'references', 'change.md'), 'utf8'),
-      /change complete/,
+    const changeReference = readFileSync(
+      join(skillRoot, 'references', 'change.md'),
+      'utf8',
     );
+    assert.match(changeReference, /change complete/);
+    assert.match(changeReference, /intended change-scope root/);
+    assert.match(changeReference, /attestationPlan\.attentionItems/);
+    assert.match(changeReference, /canonical lowercase form/);
+    assert.match(
+      changeReference,
+      /--scope[\s\S]*local\|module\|cross-module\|repository/,
+    );
+    assert.match(changeReference, /perform a contradiction review/);
+    assert.match(changeReference, /first try to falsify satisfaction/);
     assert.match(
       readFileSync(join(skillRoot, 'references', 'setup.md'), 'utf8'),
       /Configure checks/,

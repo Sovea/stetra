@@ -19,6 +19,7 @@ import {
 } from '../src/runtime/decision/budget.ts';
 import { normalizeTaskContext } from '../src/runtime/task/normalize.ts';
 import { stableHash } from '../src/runtime/utils/hash.ts';
+import { scopeOverlapsPath } from '../src/runtime/utils/paths.ts';
 
 const projectRoot = resolve(import.meta.dirname, '../../..');
 const builtinRoot = resolve(import.meta.dirname, '../assets/playbook');
@@ -35,6 +36,134 @@ test('canonical task context treats bugfix as change type and infers mechanical 
   assert.deepEqual(task.techStack, ['typescript']);
   assert.equal('operation' in task, false);
   assert.ok(task.provenance.every((item) => !('confidence' in item)));
+});
+
+test('canonical technology IDs and symmetric scope overlap activate directory policy deterministically', async () => {
+  const task = normalizeTaskContext({
+    description: 'Add a nested TypeScript feature',
+    changeType: 'feature',
+    targets: ['src\\nested'],
+    techStack: [' TypeScript ', 'typescript'],
+  });
+  assert.deepEqual(task.targets, ['src/nested']);
+  assert.deepEqual(task.techStack, ['typescript']);
+  assert.equal(scopeOverlapsPath('src/**', 'src'), true);
+  assert.equal(scopeOverlapsPath('src/nested/example.ts', 'src\\nested'), true);
+  assert.equal(scopeOverlapsPath('**/*.{ts,tsx}', 'src/nested'), true);
+  assert.equal(scopeOverlapsPath('src/*/example.ts', 'src/deep/nested'), false);
+  assert.equal(scopeOverlapsPath('src/**', 'test/example.ts'), false);
+
+  const directory = mkdtempSync(join(tmpdir(), 'resonant-runtime-scope-overlap-'));
+  const localPath = join(directory, 'local-augment.yaml');
+  try {
+    writeFileSync(localPath, [
+      'version: "1.0"',
+      'meta:',
+      '  name: scope-overlap',
+      '  extends: [builtin/core]',
+      'overrides: []',
+      'augments: []',
+      'suppresses: []',
+      'additions:',
+      '  - id: local-nested-glob-01',
+      '    type: constraint',
+      '    layer: local',
+      '    scope: { path: "src/**" }',
+      '    prescription: must',
+      '    weight: critical',
+      '    description: Preserve the nested source boundary.',
+      '    rationale: The source tree has an explicit ownership boundary.',
+      '    exceptions: []',
+      '    examples:',
+      '      - good: { code: "src/nested/example.ts" }',
+      '        note: Keep the change inside the nested source tree.',
+      '  - id: local-exact-descendant-01',
+      '    type: architecture',
+      '    layer: local',
+      '    scope: { path: "src/nested/example.ts" }',
+      '    prescription: must',
+      '    weight: critical',
+      '    description: Preserve the exact nested module contract.',
+      '    rationale: This module owns the relevant public boundary.',
+      '    exceptions: []',
+      '    examples:',
+      '      - good: { code: "updateNestedContract();" }',
+      '        note: Keep the contract change at its owner.',
+      '  - id: local-unrelated-sibling-01',
+      '    type: constraint',
+      '    layer: local',
+      '    scope: { path: "test/**" }',
+      '    prescription: must',
+      '    weight: critical',
+      '    description: Preserve the test fixture boundary.',
+      '    rationale: Test fixtures have separate ownership.',
+      '    exceptions: []',
+      '    examples:',
+      '      - good: { code: "test/example.ts" }',
+      '        note: Apply only to test fixtures.',
+      '',
+    ].join('\n'), 'utf8');
+
+    const output = await compileChange({
+      projectRoot: directory,
+      builtinRoot,
+      localAugmentPath: localPath,
+      guidanceByteLimit: 100_000,
+      task: {
+        description: 'Add a nested TypeScript feature',
+        changeType: 'feature',
+        targets: ['src\\nested'],
+        techStack: ['TypeScript'],
+        avoid: ['Do not modify unrelated test fixtures.'],
+      },
+    });
+    assert.equal(output.status, 'compiled');
+    if (output.status !== 'compiled') return;
+    assert.deepEqual(output.task.techStack, ['typescript']);
+    assert.ok(output.trace.activatedDirectiveIds.includes('local-nested-glob-01'));
+    assert.ok(output.trace.activatedDirectiveIds.includes('local-exact-descendant-01'));
+    assert.ok(!output.trace.activatedDirectiveIds.includes('local-unrelated-sibling-01'));
+    assert.deepEqual(
+      output.trace.activation.inactive.map((item) => item.id),
+      ['local-unrelated-sibling-01'],
+    );
+    assert.ok(output.trace.activation.activeBySource.team.includes('local-nested-glob-01'));
+    assert.ok(output.trace.activation.activeBySource.builtin.some((id) => id.startsWith('ts-')));
+    assert.ok(output.verificationPlan.commands.some((item) => item.id === 'typecheck'));
+    assert.ok(output.attestationPlan.attentionItems.some((item) =>
+      item.guidanceId === 'local-exact-descendant-01'
+      && item.section === 'required'
+      && item.requirements.some((requirement) => requirement.kind === 'semantic')));
+    assert.ok(output.attestationPlan.attentionItems.some((item) => item.section === 'avoid'));
+    assert.deepEqual(
+      output.attestationPlan.optionalConsiderIds,
+      output.guidance.consider.map((item) => item.id),
+    );
+    assert.equal(
+      output.attestationPlan.evidenceExamples.semantic.description,
+      '<concrete semantic explanation>',
+    );
+
+    const unrelated = await compileChange({
+      projectRoot: directory,
+      builtinRoot,
+      localAugmentPath: localPath,
+      guidanceByteLimit: 100_000,
+      task: {
+        description: 'Clarify an unrelated document',
+        changeType: 'docs',
+        targets: ['docs'],
+      },
+    });
+    assert.equal(unrelated.status, 'compiled');
+    if (unrelated.status === 'compiled') {
+      assert.deepEqual(unrelated.trace.activation.activeBySource.team, []);
+      assert.ok(unrelated.trace.diagnostics.some((item) =>
+        item.code === 'TEAM_PLAYBOOK_NO_ACTIVE_DIRECTIVES'));
+    }
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
 });
 
 test('standard compile directly delivers compact agent-facing guidance', async () => {
@@ -936,10 +1065,14 @@ test('postflight evaluation combines machine facts with attestations only for de
   const changes = machineChangeSet([
     { path: 'packages/core/src/runtime/index.ts', status: 'modified' },
   ]);
+  const stdoutOnlyCheck = machineCheck(changes, 'typecheck', 'passed');
+  stdoutOnlyCheck.outputRefs = {
+    stdout: 'check-output/typecheck.stdout.log',
+  };
   const evaluation = evaluateChange({
     decision,
     changes,
-    checks: [machineCheck(changes, 'typecheck', 'passed')],
+    checks: [stdoutOnlyCheck],
     attestations: [{
       guidanceId: 'required-1',
       verdict: 'satisfied',
@@ -957,6 +1090,14 @@ test('postflight evaluation combines machine facts with attestations only for de
   assert.equal(evaluation.assurance.hostAttestationCount, 1);
   assert.deepEqual(evaluation.changes.files, changes.files);
 
+  const emptyOutputRefs = machineCheck(changes, 'typecheck', 'passed');
+  emptyOutputRefs.outputRefs = {};
+  assert.throws(() => evaluateChange({
+    decision,
+    changes,
+    checks: [emptyOutputRefs],
+  }), /require at least one stdout or stderr path/);
+
   assert.throws(() => evaluateChange({
     decision,
     changes: machineChangeSet([]),
@@ -968,6 +1109,90 @@ test('postflight evaluation combines machine facts with attestations only for de
       attestedBy: 'test-host',
     }],
   }), /was not delivered/);
+});
+
+test('unverified optional consider guidance remains informational', () => {
+  const decision = minimalDecision('standard');
+  decision.guidance.consider.push({
+    id: 'consider-1',
+    instruction: 'Prefer a direct implementation when it remains clear.',
+    exceptions: [],
+    source: { kind: 'builtin-playbook', id: 'test' },
+    executionMode: 'ambient',
+    verification: [{ kind: 'diff' }],
+  });
+  decision.executionGuidance = toExecutionGuidance(decision.guidance);
+  decision.trace.activatedDirectiveIds.push('consider-1');
+  decision.trace.deliveredGuidanceIds.push('consider-1');
+  decision.attestationPlan.optionalConsiderIds.push('consider-1');
+  const changes = machineChangeSet([
+    { path: 'packages/core/src/runtime/index.ts', status: 'modified' },
+  ]);
+  const evaluation = evaluateChange({
+    decision,
+    changes,
+    checks: [machineCheck(changes, 'typecheck', 'passed')],
+    attestations: [{
+      guidanceId: 'required-1',
+      verdict: 'satisfied',
+      evidenceRefs: [
+        { kind: 'diff', ref: 'diff:index', file: 'packages/core/src/runtime/index.ts' },
+      ],
+      explanation: 'The entrypoint still exposes the same narrow boundary.',
+      attestedBy: 'test-host',
+    }],
+  });
+  assert.equal(evaluation.status, 'accepted');
+  assert.equal(evaluation.summary.warningCount, 0);
+  assert.equal(evaluation.summary.informationalCount, 1);
+  assert.deepEqual(evaluation.actionRequired, []);
+  assert.deepEqual(
+    evaluation.informational.map((item) => item.id),
+    ['consider-1'],
+  );
+});
+
+test('a failed Runtime-requested check remains actionable when its guidance is optional', () => {
+  const decision = minimalDecision('standard');
+  decision.guidance.required[0].verification = [{ kind: 'diff' }];
+  decision.guidance.consider.push({
+    id: 'consider-checked',
+    instruction: 'Keep the implementation type-safe.',
+    exceptions: [],
+    source: { kind: 'builtin-playbook', id: 'test' },
+    executionMode: 'ambient',
+    verification: [{ kind: 'command', commandId: 'typecheck' }],
+  });
+  decision.executionGuidance = toExecutionGuidance(decision.guidance);
+  decision.trace.activatedDirectiveIds.push('consider-checked');
+  decision.trace.deliveredGuidanceIds.push('consider-checked');
+  decision.attestationPlan.optionalConsiderIds.push('consider-checked');
+  const changes = machineChangeSet([
+    { path: 'packages/core/src/runtime/index.ts', status: 'modified' },
+  ]);
+  const evaluation = evaluateChange({
+    decision,
+    changes,
+    checks: [machineCheck(changes, 'typecheck', 'failed')],
+    attestations: [{
+      guidanceId: 'required-1',
+      verdict: 'satisfied',
+      evidenceRefs: [
+        { kind: 'diff', ref: 'diff:index', file: 'packages/core/src/runtime/index.ts' },
+      ],
+      explanation: 'The required entrypoint boundary is preserved.',
+      attestedBy: 'test-host',
+    }],
+  });
+  assert.equal(evaluation.status, 'rejected');
+  assert.deepEqual(
+    evaluation.actionRequired.map((item) => item.kind),
+    ['check-failure'],
+  );
+  assert.deepEqual(
+    evaluation.informational.map((item) => item.id),
+    ['consider-checked'],
+  );
 });
 
 test('strict mode requires an exception for unverified required guidance', () => {
@@ -1071,9 +1296,43 @@ function minimalDecision(mode: 'standard' | 'strict'): ChangeDecisionPacket {
     guidance,
     executionGuidance: toExecutionGuidance(guidance),
     verificationPlan: { commands: [{ id: 'typecheck', reason: 'Run typecheck.' }], semanticChecks: [] },
+    attestationPlan: {
+      attentionItems: [{
+        guidanceId: 'required-1',
+        section: 'required',
+        requirements: guidance.required[0].verification,
+      }],
+      optionalConsiderIds: [],
+      optionalConsiderPolicy: 'unverified-is-informational',
+      evidenceExamples: {
+        diff: { kind: 'diff', ref: 'diff:<repository-path>', file: '<changed-file>' },
+        file: { kind: 'file', ref: 'file:<repository-path>', file: '<changed-file>' },
+        check: { kind: 'check', ref: 'check:<check-id>', checkId: '<passing-check-id>' },
+        semantic: {
+          kind: 'semantic',
+          ref: 'semantic:<claim-id>',
+          description: '<concrete semantic explanation>',
+        },
+      },
+    },
     trace: {
       selectedLayers: ['builtin/core'],
       playbookSources: { team: 'absent', personal: 'absent' },
+      activation: {
+        targets: ['packages/core/src/runtime/index.ts'],
+        techStack: ['typescript'],
+        techStackSource: 'deterministic',
+        activeBySource: {
+          builtin: ['required-1'],
+          team: [],
+          personal: [],
+        },
+        configuredBySource: {
+          team: [],
+          personal: [],
+        },
+        inactive: [],
+      },
       activatedDirectiveIds: ['required-1'],
       deliveredGuidanceIds: ['required-1'],
       suppressedDirectiveIds: [],

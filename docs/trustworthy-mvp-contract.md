@@ -120,9 +120,36 @@ Host attestations cover semantic judgments:
 - behavior and compatibility preservation;
 - clarity, proportionality, and policy satisfaction.
 
+`compileChange` returns an attention-only attestation plan for delivered
+required, avoid, and tension guidance, including the exact evidence field
+shapes. Passing command requirements come from workflow facts; the Host does
+not declare check outcomes. Optional `consider` guidance may be attested when
+material, but an unverified optional item is recorded as information rather
+than unresolved acceptance work.
+
 Runtime validates that attestations reference collected facts. It does not call
 host prose independently verified. A result cannot be accepted when machine
 facts are absent or merely host-declared.
+
+Immediately before attestation, the Host inspects the complete actual diff and
+seeks counterevidence for every attention item. A `satisfied` verdict is invalid
+workflow behavior when any changed file contradicts the claim or the available
+evidence is insufficient. Runtime does not reproduce this semantic review with
+token matching or another heuristic policy engine.
+
+## Activation assurance
+
+Task targets are normalized repository-relative scope roots. Directive
+activation uses deterministic scope overlap, so a directory target activates
+applicable glob and exact descendant scopes without requiring the Host to guess
+the final changed files. Technology IDs are canonicalized by casing only; no
+dependency, filename-ranking, or token-overlap heuristic activates policy.
+
+Decision Trace records normalized targets and technology provenance, active
+built-in/team/personal contributors, and team/personal directives that were
+inactive because their scopes did not overlap. The CLI separately reports
+whether each approved check definition was requested, missing, or configured
+but not requested. Only Runtime-requested checks execute.
 
 ## Runtime persistence
 
@@ -134,7 +161,8 @@ Runtime state is task-scoped, not a repository-global history database.
 - Completion stores check logs and the resulting evaluation in that same run.
   It does not duplicate the full current worktree snapshot. Each persisted
   check stream is capped at 1 MiB; the output digest still covers the complete
-  stream and the result records whether either log was truncated.
+  stream and the result records whether either log was truncated. An empty
+  stream creates neither a placeholder log nor an output reference.
 - Prepared runs are never removed automatically. Retention cleanup applies
   only to whole completed-run directories, so logs cannot become orphaned.
 - The initial release does not persist cross-task feedback events, aggregates,
@@ -147,9 +175,12 @@ The release gate includes:
 
 - deterministic identity tests;
 - authority, overlay, overflow, and no-silent-omission tests;
+- directory/exact scope overlap, canonical technology, and activation-trace
+  tests;
 - RCCL evidence-contract and approval tests;
 - dirty-worktree and machine-fact completion tests;
 - checks-required no-write and task-run isolation tests;
+- attention-only attestation and optional-information tests;
 - isolated built-package smoke behavior;
 - a paired agent-evaluation protocol and machine-validated result ledger.
 

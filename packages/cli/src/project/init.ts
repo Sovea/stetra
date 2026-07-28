@@ -64,7 +64,7 @@ export interface InitializeProjectOptions {
 }
 
 const MANIFEST_PATH = '.resonant-code/manifest.json';
-const TEMPLATE_REVISION = 3;
+const TEMPLATE_REVISION = 1;
 const DOC_MARKERS = {
   start: '<!-- resonant-code:begin -->',
   end: '<!-- resonant-code:end -->',

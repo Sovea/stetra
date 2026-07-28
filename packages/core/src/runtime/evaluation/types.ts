@@ -40,8 +40,8 @@ export interface CheckResult {
   exitCode: number | null;
   outputDigest: string;
   outputRefs?: {
-    stdout: string;
-    stderr: string;
+    stdout?: string;
+    stderr?: string;
   };
   outputTruncated?: {
     stdout: boolean;
@@ -101,6 +101,23 @@ export interface GuidanceEvaluation {
   exception?: ChangeException;
 }
 
+export interface EvaluationActionRequired {
+  kind:
+    | 'check-failure'
+    | 'check-unavailable'
+    | 'guidance-violation'
+    | 'guidance-evidence'
+    | 'exception-approval';
+  id: string;
+  message: string;
+}
+
+export interface EvaluationInformation {
+  kind: 'optional-guidance';
+  id: string;
+  message: string;
+}
+
 export interface ChangeEvaluation {
   schemaVersion: typeof EVALUATION_SCHEMA_VERSION;
   evaluationId: string;
@@ -110,6 +127,8 @@ export interface ChangeEvaluation {
   changes: ChangeSet;
   results: GuidanceEvaluation[];
   checks: CheckResult[];
+  actionRequired: EvaluationActionRequired[];
+  informational: EvaluationInformation[];
   assurance: {
     machineFacts: {
       changeSet: true;
@@ -123,5 +142,6 @@ export interface ChangeEvaluation {
     requiredViolated: number;
     requiredUnverified: number;
     warningCount: number;
+    informationalCount: number;
   };
 }
