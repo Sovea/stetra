@@ -1,6 +1,7 @@
 import type { DirectiveExample, ExecutionMode } from '../types.ts';
 import type {
   NormalizedTaskContext,
+  TaskAlignmentReason,
   TaskContextInput,
   TaskFieldSource,
 } from '../task/types.ts';
@@ -39,7 +40,7 @@ export interface AlignmentRequest {
   schemaVersion: typeof DECISION_SCHEMA_VERSION;
   status: 'needs-alignment';
   task: NormalizedTaskContext;
-  reasons: string[];
+  reasons: TaskAlignmentReason[];
   requiredFields: Array<'changeType' | 'uncertainties'>;
 }
 
@@ -133,7 +134,10 @@ export interface VerificationPlan {
 export interface DirectiveActivationSummary {
   targets: string[];
   techStack: string[];
-  techStackSource: TaskFieldSource;
+  techStackProvenance: Array<{
+    technology: string;
+    source: TaskFieldSource;
+  }>;
   activeBySource: {
     builtin: string[];
     team: string[];

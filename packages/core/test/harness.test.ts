@@ -24,21 +24,46 @@ import { scopeOverlapsPath } from '../src/runtime/utils/paths.ts';
 const projectRoot = resolve(import.meta.dirname, '../../..');
 const builtinRoot = resolve(import.meta.dirname, '../assets/playbook');
 
-test('canonical task context requires host-owned semantics and infers only mechanical context', () => {
+test('canonical task context preserves semantic authority and infers only mechanical context', () => {
   const task = normalizeTaskContext({
     description: 'Fix a cache inspection bug',
     changeType: 'bugfix',
     targets: ['packages/core/src/runtime/decision/compile-change.ts'],
     risk: 'medium',
     scope: 'module',
+    constraints: ['Preserve the public API.'],
+    provenance: {
+      description: 'human-stated',
+      changeType: 'agent-inferred',
+      targets: {
+        'packages/core/src/runtime/decision/compile-change.ts': 'repository-derived',
+      },
+      risk: 'agent-inferred',
+      scope: 'agent-inferred',
+      constraints: {
+        'Preserve the public API.': 'human-confirmed',
+      },
+    },
   });
   assert.equal(task.changeType, 'bugfix');
   assert.equal(task.scope, 'module');
   assert.equal(task.risk, 'medium');
   assert.deepEqual(task.techStack, ['typescript']);
   assert.equal(
+    task.provenance.find((item) => item.field === 'description')?.source,
+    'human-stated',
+  );
+  assert.equal(
     task.provenance.find((item) => item.field === 'changeType')?.source,
-    'host-provided',
+    'agent-inferred',
+  );
+  assert.equal(
+    task.provenance.find((item) => item.field === 'targets')?.source,
+    'repository-derived',
+  );
+  assert.equal(
+    task.provenance.find((item) => item.field === 'constraints')?.source,
+    'human-confirmed',
   );
   assert.equal(
     task.provenance.find((item) => item.field === 'techStack')?.source,
@@ -46,6 +71,16 @@ test('canonical task context requires host-owned semantics and infers only mecha
   );
   assert.equal('operation' in task, false);
   assert.ok(task.provenance.every((item) => !('confidence' in item)));
+  assert.throws(() => normalizeTaskContext({
+    description: 'Fix a cache inspection bug',
+    changeType: 'bugfix',
+    targets: ['packages/core/src/runtime/decision/compile-change.ts'],
+    risk: 'medium',
+    scope: 'module',
+    provenance: {
+      changeType: 'deterministic',
+    },
+  } as never), /task\.provenance\.changeType/);
   assert.throws(() => normalizeTaskContext({
     description: 'Fix a cache inspection bug',
     targets: ['packages/core/src/runtime/decision/compile-change.ts'],
@@ -1085,6 +1120,17 @@ test('unresolved host semantics request alignment without a mode switch', async 
   assert.equal(output.status, 'needs-alignment');
   if (output.status !== 'needs-alignment') return;
   assert.deepEqual(output.requiredFields, ['changeType', 'uncertainties']);
+  assert.deepEqual(
+    output.reasons.map((reason) => [reason.kind, reason.field]),
+    [
+      ['clarification', 'changeType'],
+      ['decision', 'uncertainties'],
+    ],
+  );
+  assert.equal(
+    output.task.provenance.find((item) => item.field === 'description')?.source,
+    'agent-inferred',
+  );
 });
 
 test('postflight evaluation rejects a failed required command', () => {
@@ -1106,10 +1152,12 @@ test('postflight evaluation rejects a failed required command', () => {
   assert.equal(evaluation.status, 'rejected');
   assert.equal(evaluation.operation, 'modify');
   assert.equal(evaluation.results[0].verdict, 'violated');
+  assert.equal(evaluation.results[0].basis, 'runtime-fact');
   assert.equal(evaluation.assurance.machineFacts.changedFileCount, 1);
+  assert.equal(evaluation.assurance.authority.runtimeFactResults, 1);
 });
 
-test('an unavailable configured command cannot produce an accepted result', () => {
+test('an unavailable configured command cannot produce a ready-for-adoption result', () => {
   const decision = minimalDecision();
   const changes = machineChangeSet([
     { path: 'packages/core/src/runtime/index.ts', status: 'modified' },
@@ -1167,10 +1215,12 @@ test('postflight evaluation combines machine facts with attestations only for de
       explanation: 'The changed entrypoint still exports only the intended Runtime operations.',
     }],
   });
-  assert.equal(evaluation.status, 'accepted');
+  assert.equal(evaluation.status, 'ready-for-adoption');
   assert.equal(evaluation.results[0].verdict, 'satisfied');
+  assert.equal(evaluation.results[0].basis, 'agent-attested');
   assert.equal(evaluation.summary.requiredSatisfied, 1);
-  assert.equal(evaluation.assurance.hostAttestationCount, 1);
+  assert.equal(evaluation.assurance.agentAttestationCount, 1);
+  assert.equal(evaluation.assurance.authority.agentAttestedResults, 1);
   assert.deepEqual(evaluation.changes.files, changes.files);
 
   const emptyOutputRefs = machineCheck(changes, 'typecheck', 'passed');
@@ -1221,8 +1271,14 @@ test('task targets activate policy without becoming changed-file permissions', (
       explanation: 'The owner entrypoint remains narrow and the adjacent test verifies that contract.',
     }],
   });
-  assert.equal(evaluation.status, 'accepted');
+  assert.equal(evaluation.status, 'ready-for-adoption');
   assert.equal(evaluation.changes.files.length, 2);
+  assert.deepEqual(evaluation.scopeDelta.withinTarget, [
+    'packages/core/src/runtime/index.ts',
+  ]);
+  assert.deepEqual(evaluation.scopeDelta.outsideTarget, [
+    'packages/core/test/public-boundary.test.ts',
+  ]);
   assert.deepEqual(evaluation.actionRequired, []);
 });
 
@@ -1256,7 +1312,7 @@ test('unverified optional consider guidance remains informational', () => {
       explanation: 'The entrypoint still exposes the same narrow boundary.',
     }],
   });
-  assert.equal(evaluation.status, 'accepted');
+  assert.equal(evaluation.status, 'ready-for-adoption');
   assert.equal(evaluation.summary.attentionCount, 0);
   assert.equal(evaluation.summary.informationalCount, 1);
   assert.deepEqual(evaluation.actionRequired, []);
@@ -1318,6 +1374,7 @@ test('unverified required guidance needs attention until an exception is request
   });
   assert.equal(evaluation.status, 'needs-attention');
   assert.equal(evaluation.results[0].verdict, 'unverified');
+  assert.equal(evaluation.results[0].basis, 'unverified');
 
   const pendingException = evaluateChange({
     decision: minimalDecision(),
@@ -1329,6 +1386,21 @@ test('unverified required guidance needs attention until an exception is request
   });
   assert.equal(pendingException.status, 'exception-required');
   assert.equal(pendingException.results[0].verdict, 'unverified');
+
+  const approvedException = evaluateChange({
+    decision: minimalDecision(),
+    changes,
+    exceptions: [{
+      guidanceId: 'required-1',
+      reason: 'The user accepts the exact temporary verification gap.',
+      status: 'approved',
+      approvedBy: 'maintainer',
+    }],
+  });
+  assert.equal(approvedException.status, 'ready-for-adoption');
+  assert.equal(approvedException.results[0].verdict, 'excepted');
+  assert.equal(approvedException.results[0].basis, 'human-approved');
+  assert.equal(approvedException.assurance.authority.humanApprovedResults, 1);
 });
 
 test('public boundaries reject malformed host artifacts without type errors', async () => {
@@ -1480,7 +1552,10 @@ function minimalDecision(): ChangeDecisionPacket {
       activation: {
         targets: ['packages/core/src/runtime/index.ts'],
         techStack: ['typescript'],
-        techStackSource: 'deterministic',
+        techStackProvenance: [{
+          technology: 'typescript',
+          source: 'deterministic',
+        }],
         activeBySource: {
           builtin: ['required-1'],
           team: [],

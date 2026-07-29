@@ -85,11 +85,17 @@ export interface EvaluateChangeInput {
 }
 
 export type EvaluationVerdict = 'satisfied' | 'violated' | 'partial' | 'unverified' | 'excepted';
+export type EvaluationBasis =
+  | 'runtime-fact'
+  | 'agent-attested'
+  | 'human-approved'
+  | 'unverified';
 
 export interface GuidanceEvaluation {
   guidanceId: string;
   section: 'required' | 'consider' | 'avoid' | 'tension';
   verdict: EvaluationVerdict;
+  basis: EvaluationBasis;
   reasons: string[];
   acceptedEvidence: EvaluationEvidenceRef[];
   rejectedEvidence: Array<{ ref: EvaluationEvidenceRef; reason: string }>;
@@ -120,9 +126,16 @@ export interface ChangeEvaluation {
   schemaVersion: typeof EVALUATION_SCHEMA_VERSION;
   evaluationId: string;
   decisionId: string;
-  status: 'accepted' | 'needs-attention' | 'exception-required' | 'rejected';
+  status: 'ready-for-adoption' | 'needs-attention' | 'exception-required' | 'rejected';
   operation: 'none' | 'create' | 'modify' | 'delete' | 'mixed';
   changes: ChangeSet;
+  scopeDelta: {
+    targets: string[];
+    withinTarget: string[];
+    outsideTarget: string[];
+    renamed: Array<{ from: string; to: string }>;
+    deleted: string[];
+  };
   results: GuidanceEvaluation[];
   checks: CheckResult[];
   actionRequired: EvaluationActionRequired[];
@@ -133,7 +146,13 @@ export interface ChangeEvaluation {
       changedFileCount: number;
       collectedCheckCount: number;
     };
-    hostAttestationCount: number;
+    agentAttestationCount: number;
+    authority: {
+      runtimeFactResults: number;
+      agentAttestedResults: number;
+      humanApprovedResults: number;
+      unverifiedResults: number;
+    };
   };
   summary: {
     requiredSatisfied: number;

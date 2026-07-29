@@ -1,6 +1,6 @@
 import { DECISION_SCHEMA_VERSION, type VerificationRequirement } from '../decision/types.ts';
 import { stableHash } from '../utils/hash.ts';
-import { normalizePath } from '../utils/paths.ts';
+import { normalizePath, scopeOverlapsPath } from '../utils/paths.ts';
 import {
   EVALUATION_SCHEMA_VERSION,
   type ChangeEvaluation,
@@ -10,6 +10,7 @@ import {
   type ChangedFile,
   type EvaluateChangeInput,
   type EvaluationActionRequired,
+  type EvaluationBasis,
   type EvaluationEvidenceRef,
   type EvaluationInformation,
   type EvaluationVerdict,
@@ -103,6 +104,10 @@ export function evaluateChange(input: EvaluateChangeInput): ChangeEvaluation {
     informationalCount: informational.length,
   };
   const operation = inferOperation(changes.files);
+  const scopeDelta = buildScopeDelta(
+    input.decision.task.targets,
+    changes.files,
+  );
   return {
     schemaVersion: EVALUATION_SCHEMA_VERSION,
     evaluationId: stableHash([
@@ -116,6 +121,7 @@ export function evaluateChange(input: EvaluateChangeInput): ChangeEvaluation {
     status,
     operation,
     changes,
+    scopeDelta,
     results,
     checks,
     actionRequired,
@@ -126,7 +132,13 @@ export function evaluateChange(input: EvaluateChangeInput): ChangeEvaluation {
         changedFileCount: changes.files.length,
         collectedCheckCount: checks.length,
       },
-      hostAttestationCount: attestationById.size,
+      agentAttestationCount: attestationById.size,
+      authority: {
+        runtimeFactResults: results.filter((result) => result.basis === 'runtime-fact').length,
+        agentAttestedResults: results.filter((result) => result.basis === 'agent-attested').length,
+        humanApprovedResults: results.filter((result) => result.basis === 'human-approved').length,
+        unverifiedResults: results.filter((result) => result.basis === 'unverified').length,
+      },
     },
     summary,
   };
@@ -294,6 +306,7 @@ function evaluateGuidanceItem(input: EvaluateItemInput): GuidanceEvaluation {
   }
 
   let verdict: EvaluationVerdict = 'unverified';
+  let basis: EvaluationBasis = 'unverified';
   if (failedRequiredChecks.length) {
     for (const checkId of failedRequiredChecks) {
       const check = input.checkById.get(checkId)!;
@@ -307,20 +320,25 @@ function evaluateGuidanceItem(input: EvaluateItemInput): GuidanceEvaluation {
       }
     }
     verdict = 'violated';
+    basis = 'runtime-fact';
     reasons.push(`Required check(s) failed: ${failedRequiredChecks.join(', ')}.`);
   } else if (attestation?.verdict === 'violated') {
     verdict = acceptedEvidence.length ? 'violated' : 'unverified';
+    basis = acceptedEvidence.length ? 'agent-attested' : 'unverified';
     reasons.push(acceptedEvidence.length ? 'Evidence reports a concrete violation.' : 'Violation verdict lacked valid evidence.');
   } else if (attestation?.verdict === 'partial') {
     verdict = acceptedEvidence.length ? 'partial' : 'unverified';
+    basis = acceptedEvidence.length ? 'agent-attested' : 'unverified';
     reasons.push(acceptedEvidence.length ? 'Evidence only partially covers the guidance.' : 'Partial verdict lacked valid evidence.');
   } else if (attestation?.verdict === 'satisfied') {
     const uncovered = uncoveredRequirements(input.requirements, acceptedEvidence, input.checkById);
     if (uncovered.length) {
       verdict = 'partial';
+      basis = acceptedEvidence.length ? 'agent-attested' : 'unverified';
       reasons.push(`Missing evidence for: ${uncovered.join(', ')}.`);
     } else {
       verdict = 'satisfied';
+      basis = 'agent-attested';
       reasons.push(input.invertSatisfiedMeaning
         ? 'Evidence confirms the prohibited pattern is absent.'
         : 'All declared verification requirements have valid evidence.');
@@ -332,6 +350,7 @@ function evaluateGuidanceItem(input: EvaluateItemInput): GuidanceEvaluation {
   if (input.exception) {
     if (input.exception.status === 'approved' && input.exception.approvedBy?.trim() && input.exception.reason.trim()) {
       verdict = 'excepted';
+      basis = 'human-approved';
       reasons.push(`Approved exception recorded by ${input.exception.approvedBy}.`);
     } else {
       reasons.push('Exception is requested but not approved.');
@@ -342,6 +361,7 @@ function evaluateGuidanceItem(input: EvaluateItemInput): GuidanceEvaluation {
     guidanceId: input.guidanceId,
     section: input.section,
     verdict,
+    basis,
     reasons,
     acceptedEvidence,
     rejectedEvidence,
@@ -417,7 +437,35 @@ function resolveEvaluationStatus(
     && result.verdict !== 'satisfied'
     && result.verdict !== 'excepted')
     || checks.some((check) => check.status === 'unavailable');
-  return needsAttention ? 'needs-attention' : 'accepted';
+  return needsAttention ? 'needs-attention' : 'ready-for-adoption';
+}
+
+function buildScopeDelta(
+  targets: string[],
+  changes: ChangedFile[],
+): ChangeEvaluation['scopeDelta'] {
+  const withinTarget: string[] = [];
+  const outsideTarget: string[] = [];
+  const renamed: Array<{ from: string; to: string }> = [];
+  const deleted: string[] = [];
+  for (const change of changes) {
+    const candidates = [change.path, change.previousPath]
+      .filter((path): path is string => Boolean(path));
+    const within = candidates.some((path) =>
+      targets.some((target) => scopeOverlapsPath(target, path)));
+    (within ? withinTarget : outsideTarget).push(change.path);
+    if (change.status === 'renamed' && change.previousPath) {
+      renamed.push({ from: change.previousPath, to: change.path });
+    }
+    if (change.status === 'deleted') deleted.push(change.path);
+  }
+  return {
+    targets: [...targets],
+    withinTarget,
+    outsideTarget,
+    renamed,
+    deleted,
+  };
 }
 
 function countAttentionItems(results: GuidanceEvaluation[], checks: CheckResult[]): number {
