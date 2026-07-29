@@ -6,6 +6,11 @@ parts that should not depend on model improvisation: project policy, current
 repository evidence, delivered-guidance budgets, actual diff/check facts, and
 task-scoped evaluation records.
 
+Its goal is to expand the work developers can safely delegate while preserving
+their understanding, participation, and control. Human intent is the semantic
+authority, Runtime evidence is the factual authority, and Agent interpretation
+remains explicitly identifiable judgment.
+
 The normal user experience is still a natural-language coding request. The
 generated Host Adapter runs the lifecycle in the background.
 
@@ -52,6 +57,8 @@ Host Agent + generated resonant-code skill
       |
       +--> Host aligns only material design choices
       |      Goal, non-goals, ownership, compatibility, and lasting tradeoffs
+      |      Human statements, Agent inferences, and repository facts remain
+      |      distinguishable in the task contract
       |
       +--> change prepare --json
       |      Runtime normalizes targets/technology, activates overlapping policy,
@@ -65,15 +72,20 @@ Host Agent + generated resonant-code skill
       |
       `--> change complete --json
              CLI collects the actual diff and runs every selected check
-             Runtime evaluates only delivered guidance
-             Host reports a human-readable result
+             Runtime evaluates only delivered guidance and attributes each
+             conclusion to machine fact, Agent attestation, human exception,
+             or an unverified state
+             Host reports a ready-for-adoption handoff
 ```
 
 Ordinary repository-discoverable and implementation decisions stay with the
 Host Agent. The user is interrupted only when materially different choices
 change the goal, public behavior, compatibility, architectural ownership,
 irreversible migration strategy, persistent team authority, or acceptance of
-an unresolved tradeoff.
+an unresolved tradeoff. A concrete coding request is standing authorization
+for necessary local, reversible inspection, implementation, verification, and
+repair within that aligned contract; it is not a reason to request permission
+for each action.
 
 The Host may automatically:
 
@@ -82,8 +94,8 @@ The Host may automatically:
   justified file or directory scope roots
 - select task-relevant optional guidance when it exceeds the attention budget
 - use already-reviewed RCCL observations
-- implement and repair necessary adjacent files while preserving the aligned
-  semantic contract
+- edit necessary adjacent implementation, tests, types, configuration, and
+  documentation without per-file approval
 - select and run a task-scoped exact check plan and provide evidence-backed
   attestations for required, avoid, and tension guidance
 
@@ -94,6 +106,10 @@ The Host must pause before:
 - choosing between materially different goals, public behavior, compatibility,
   ownership, migration, or other long-lived tradeoffs
 - accepting a failed check, hard violation, exception, or unresolved outcome
+
+These pauses request missing information, clarification, a semantic decision,
+or an exact exception. They are not generic requests for permission to
+continue.
 
 ## Readiness levels
 
@@ -139,13 +155,24 @@ policy-required check IDs missing from the selected configuration. A directory
 target includes its descendants; it is not a prediction of the final
 changed-file list.
 
+The task contract also records each supplied value as `human-stated`,
+`human-confirmed`, `agent-inferred`, or `repository-derived`; mechanical
+normalization is `deterministic`. This provenance has no numeric confidence
+score. Being Agent-inferred does not itself trigger a question: only a
+remaining material uncertainty does.
+
 Runtime also returns an `attestationPlan`. Required, avoid, and unresolved
 tension items are the attention checklist. Unverified optional `consider`
 guidance remains visible as information but does not turn an otherwise
-accepted change into `needs-attention` or require another completion run.
+`ready-for-adoption` change into `needs-attention` or require another
+completion run.
 Before declaring an attention item satisfied, the Host reviews every changed
 file for contradictory evidence; Runtime continues to validate narrow
 evidence bindings rather than guessing semantic truth.
+
+`ready-for-adoption` means the selected checks and evidence are ready for human
+review. It does not mean Runtime or the Agent accepted the change for the
+developer. Normal review, commit, or merge remains the human adoption point.
 
 ## Optional team capabilities
 

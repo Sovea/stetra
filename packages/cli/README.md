@@ -25,18 +25,27 @@ selection, relation, or evaluation artifacts.
 Before prepare, the Host aligns only material choices about goals, public
 behavior, compatibility, architectural ownership, migrations, or other
 long-lived tradeoffs. Repository-discoverable details and necessary adjacent
-file changes remain autonomous. No separate design artifact is created.
+file changes remain autonomous. A concrete task authorizes necessary local,
+reversible inspection, edits, checks, and repair without per-action approval.
+No separate design artifact is created.
 
 The Host may inspect the repository read-only before prepare. It supplies
-intended file or directory scope roots and canonical technology IDs; Runtime
-then reports exactly which Team Playbook guidance activated and why each
-selected check belongs to the task. Every definition in the selected transient
-or team-default configuration executes.
+intended file or directory scope roots, canonical technology IDs, and
+per-value provenance that distinguishes human statements, Agent inference,
+repository facts, and deterministic normalization. Runtime then reports
+exactly which Team Playbook guidance activated and why each selected check
+belongs to the task. Every definition in the selected transient or
+team-default configuration executes.
 Completion asks for attestations only for required, avoid, and tension
 attention items. Optional `consider` guidance may remain unverified without
 creating an attention state or retry loop. Before attesting satisfaction, the Host
 reviews the complete actual diff for contradictory evidence. Check stdout and
 stderr logs are created only for streams that produced output.
+
+Completion labels conclusions as Runtime facts, Agent attestations,
+human-approved exceptions, or unverified. `ready-for-adoption` returns the
+change to human review; it does not claim that the system accepted it for the
+developer.
 
 Human-readable output is the default. Host Adapters use `--json`; JSON mode
 never prompts or emits ANSI. Required readiness issues block

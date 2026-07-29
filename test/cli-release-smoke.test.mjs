@@ -201,6 +201,16 @@ try {
   git(project, ['config', 'user.name', 'CLI Release Smoke']);
   git(project, ['add', '.']);
   git(project, ['commit', '-qm', 'initial']);
+  const taskProvenance = join(temporary, 'task-provenance.json');
+  writeFileSync(taskProvenance, JSON.stringify({
+    description: 'human-stated',
+    changeType: 'agent-inferred',
+    targets: {
+      'src/example.ts': 'repository-derived',
+    },
+    risk: 'agent-inferred',
+    scope: 'agent-inferred',
+  }, null, 2), 'utf8');
 
   const prepared = runInstalledCli([
     'change',
@@ -216,11 +226,17 @@ try {
     'low',
     '--scope',
     'local',
+    '--provenance-file',
+    taskProvenance,
     '--guidance-byte-limit',
     '20000',
     '--json',
   ]);
   assert.ok(prepared.status === 'compiled' || prepared.status === 'needs-attention');
+  assert.equal(
+    prepared.task.provenance.find((item) => item.field === 'description')?.source,
+    'human-stated',
+  );
   const preparedRun = JSON.parse(readFileSync(prepared.runPath, 'utf8'));
   assert.equal(preparedRun.runId, prepared.runId);
   assert.equal(preparedRun.workflow, 'change');
@@ -243,7 +259,7 @@ try {
     prepared.runId,
     '--json',
   ]);
-  assert.equal(completed.status, 'accepted');
+  assert.equal(completed.status, 'ready-for-adoption');
   assert.deepEqual(
     completed.changes.files.map((file) => [file.path, file.status]),
     [['src/example.ts', 'modified']],

@@ -6,17 +6,19 @@
 adapters. It does not invoke an LLM and it does not become a general agent
 framework.
 
-The host agent remains responsible for semantic work: understanding the
-request, inspecting the repository, selecting exact evidence, proposing
-relations, implementing the change, and explaining outcomes. Resonant owns the
-deterministic boundaries that should not vary by host.
+The human remains the semantic authority over goals and long-lived tradeoffs.
+The host agent interprets and encodes that intent, inspects the repository,
+selects exact evidence, proposes relations, implements the change, and explains
+its own judgments. Resonant owns deterministic boundaries and collected facts
+that should not vary by host.
 
 ```text
 Developer
    |
    v
 Host agent (Codex / Claude / future host)
-   |  task semantics, evidence windows, relations, code, attestations
+   |  sourced task interpretation, evidence windows, relations, code,
+   |  explicitly Agent-authored attestations
    v
 Generated thin adapter
    |  one router skill + task-specific references
@@ -133,11 +135,13 @@ Human-readable output is the default. Commander owns command syntax and help;
 command-specific presenters use picocolors. Interactive prompts are enabled
 only for a real TTY and can be disabled with `--no-interactive`.
 
-Human output is a decision surface, not a lossy echo of JSON. Completion
-summarizes changed-file operations, check outcomes, guidance verdicts,
-exceptions, required actions, and optional information separately. Prepare
-shows normalized targets and technology, active policy contributors,
-scope-inactive local policy, and each selected check's source and rationale.
+Human output is a decision surface, not a lossy echo of JSON. Prepare groups
+human semantic statements, Agent interpretations, and repository/Runtime facts,
+then shows active policy and whether checks are team, Agent-task, or
+policy-required. Completion separates Runtime conclusions, Agent attestations,
+human-approved exceptions, and unverified claims; it shows files outside task
+targets without treating targets as permissions. Internal IDs and run paths
+remain in JSON and `change explain`, not the default human summary.
 Bootstrap exposes a bounded
 layer-selection contract; RCCL output shows the persistent evidence and content
 fingerprints needed for a meaningful review.
@@ -208,7 +212,10 @@ Readiness is consequence-based:
 
 The Host may resolve repository-discoverable task details, choose optional
 guidance, use reviewed RCCL, implement within scope, run checks, and attest
-evidence without interrupting the user. It must pause before changing
+evidence without interrupting the user. The concrete task is standing
+authorization for necessary local, reversible work within the aligned
+contract, so the Host does not ask for per-file, per-command, or repair
+approval. It must pause before changing
 the persistent Team Playbook or team verification defaults, approving observations or
 exceptions, resolving materially different goals, public behavior,
 compatibility, architectural ownership, irreversible migration strategies, or
@@ -218,7 +225,10 @@ Before prepare, the Host performs a transient semantic alignment. It asks one
 consolidated question only when a top-level choice is material; otherwise it
 resolves repository details and proceeds. The result is encoded in the
 existing task, constraint, avoid, target, and uncertainty inputs rather than a
-new persisted planning artifact.
+new persisted planning artifact. A transient provenance input declares every
+supplied value as human-stated, human-confirmed, agent-inferred, or
+repository-derived; Runtime alone adds deterministic provenance. Provenance has
+no confidence score and Agent inference alone is not an alignment gate.
 
 Before prepare, the Host may use ordinary read-only repository inspection.
 Targets are explicit intended scope roots: directory roots include descendants,
@@ -233,7 +243,8 @@ the adapter does not reproduce those decisions.
 Targets are not file write permissions. The Host may change directly coupled
 implementation, tests, types, and documentation while preserving the aligned
 semantic contract, and re-aligns only when discovered work changes that
-contract.
+contract. Completion derives an inspectable inside/outside-target view from the
+actual changed-file facts.
 
 Before prepare, the Host selects the smallest task-relevant check
 configuration from authoritative repository scripts, CI, and documentation.
@@ -255,6 +266,10 @@ the complete actual diff. It attempts to falsify every required, avoid, and
 tension claim and reports a non-satisfied verdict when the diff contradicts
 the claim or does not establish it. This keeps semantic judgment in the Host
 while Runtime continues to validate only narrow evidence bindings.
+
+The successful completion state is `ready-for-adoption`. It states that
+machine facts and evidence are ready for human review, not that Runtime or the
+Host accepted the change for the human.
 
 When optional guidance overflows the byte ceiling, an interactive human may
 select IDs and supply a rationale in-place. The CLI sends that exact bounded

@@ -118,6 +118,18 @@ additions:
       techStack: ['typescript'],
       risk: 'low',
       scope: 'local',
+      provenance: {
+        description: 'human-stated',
+        changeType: 'agent-inferred',
+        targets: {
+          'example.ts': 'repository-derived',
+        },
+        techStack: {
+          typescript: 'repository-derived',
+        },
+        risk: 'agent-inferred',
+        scope: 'agent-inferred',
+      },
     },
     relationProposals: [{
       directiveId: 'feature-fit-existing-system-01',
@@ -157,6 +169,10 @@ additions:
   assert.equal(decision.schemaVersion, '1.0');
   assert.equal(decision.status, 'compiled');
   assert.equal(decision.task.changeType, 'feature');
+  assert.equal(
+    decision.task.provenance.find((item) => item.field === 'description')?.source,
+    'human-stated',
+  );
   assert.ok(decision.trace.selectedLayers.includes('builtin/task-types/feature'));
   assert.deepEqual(decision.trace.relevantObservationIds, ['obs-export-boundary']);
   assert.ok(decision.trace.relationDecisions.some((item) => item.status === 'accepted' && item.relation === 'reinforce'));
@@ -205,8 +221,9 @@ additions:
   };
   const evaluation = core.evaluateChange(evaluationInput);
   assert.equal(evaluation.schemaVersion, '1.0');
-  assert.equal(evaluation.status, 'accepted');
+  assert.equal(evaluation.status, 'ready-for-adoption');
   assert.equal(evaluation.operation, 'modify');
+  assert.equal(evaluation.results[0].basis, 'agent-attested');
   assert.equal(core.evaluateChange(evaluationInput).evaluationId, evaluation.evaluationId);
 } finally {
   rmSync(temporary, { recursive: true, force: true });

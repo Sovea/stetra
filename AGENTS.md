@@ -10,6 +10,23 @@ It is not a repository wiki, a general agent framework, or a collection of stati
 
 The target is code a developer or team wants to adopt and keep, not merely plausible output. The primary failure modes are disproportionate changes, generic advice, poor repository fit, weak compatibility judgment, noisy review, and unverifiable claims that guidance was followed.
 
+The collaboration contract has three distinct authorities:
+
+- Humans own semantic authority over goals, constraints, and long-lived
+  tradeoffs, but do not overrule contradictory repository or check facts.
+- Runtime owns factual authority over collected changes and checks, but does
+  not decide product intent or adoption.
+- Host agents own interpretation, judgment, and execution, but must not present
+  their inference as a human decision or a machine fact.
+
+Full-access operation means low-interruption execution inside the aligned
+semantic contract, not broader semantic authority. A concrete user task is
+standing authorization for necessary local, reversible inspection, edits,
+verification, and repair. Ask only for necessary missing information, material
+clarification or decision, an exact exception or verification relaxation, or
+an external/irreversible effect outside that authority; consolidate questions
+and never turn them into generic permission prompts.
+
 Use host-agent judgment for task understanding and semantic relations. Admit that judgment through narrow structured inputs. Do not create multi-stage artifacts merely because a typed contract can be defined.
 
 Every persistent field or lifecycle stage must answer at least one of these questions:
@@ -64,6 +81,8 @@ proposals, and optional task/team verification proposals. It owns:
 
 - structural task validation, mechanical path/technology normalization, and
   explicit semantic-alignment gates
+- per-value task provenance for human statements and confirmations, Agent
+  inference, repository-derived facts, and deterministic normalization
 - Playbook loading, validation, local override, scope selection, and explicit
   authority ordering
 - symmetric target/directive scope overlap and canonical lowercase technology
@@ -124,7 +143,9 @@ Only a task-relevant observation with current fully matched evidence, high seman
 Relation proposals use explicit IDs, relation kind, rationale, and exact
 evidence references. Do not accept numeric host self-confidence or use a
 numeric threshold to adjudicate semantic relations. Task provenance records
-source categories without decorative confidence scores.
+source categories without decorative confidence scores. Agent-inferred values
+do not require alignment merely because they are inferred; only an explicitly
+remaining material uncertainty does.
 
 ### Evaluation boundary
 
@@ -158,6 +179,15 @@ Unverified optional `consider` guidance remains informational and must not
 force an attention state or completion retry. Runtime, not the adapter, identifies the
 required/avoid/tension items that need attestations.
 
+Each guidance conclusion exposes its basis as `runtime-fact`,
+`agent-attested`, `human-approved`, or `unverified`. Runtime may validate the
+structure and factual references of an Agent attestation without claiming its
+semantic conclusion as machine-proven truth. The successful terminal status is
+`ready-for-adoption`: evidence is ready for human review, but the change has
+not been accepted on the human's behalf. Actual changed files are classified
+against task targets for inspection; outside-target work is not automatically
+rejected because targets are activation scopes, not permissions.
+
 Runtime persistence is task-scoped. A runnable prepare creates exactly one
 `.resonant-code/runs/<runId>/` directory containing `run.json` and the Host
 evaluation input. Completion stores its check logs and evaluation inside that
@@ -185,24 +215,29 @@ Core version. Core ships the built-in Playbook assets, so installed workflows
 never depend on a source-checkout path.
 
 Generated host adapters contain workflow instructions only. They invoke CLI
-JSON commands and use host judgment for task semantics, exact evidence-window
-selection, relation proposals, implementation, and attestations. They must not
+JSON commands and use host judgment to interpret and encode human task
+semantics, select exact evidence windows, propose relations, implement, and
+attest. They must not
 parse Playbook data to make policy decisions, rank directives, adjudicate
 relations, decide execution modes, or invent evaluation facts. The source
 repository does not ship `.claude-plugin`,
 `.codex-plugin`, `.codex`, or repository-native `skills/` entrypoints.
-Before prepare, the Host owns a transient semantic alignment step. It resolves
+Before prepare, the Host performs a transient semantic alignment step. It resolves
 repository-discoverable details itself and asks one consolidated question only
 when materially different choices change the goal, public behavior,
 compatibility, architectural ownership, irreversible migration strategy, or
 another long-lived tradeoff. Confirmed decisions use the existing task,
 constraint, avoid, target, and uncertainty inputs; do not persist a separate
-design artifact.
+design artifact. The same prepare protocol declares whether each semantic
+value is human-stated, human-confirmed, agent-inferred, or
+repository-derived; Runtime alone assigns deterministic provenance.
 
 Task targets focus policy activation and are not file write permissions. The
 Host may change necessary adjacent implementation, tests, types, and
 documentation while the aligned semantic contract remains intact. Re-align
 only when the discovered work changes that contract.
+Do not request approval for necessary local files, commands, checks, transient
+inputs, or safe repairs within that contract.
 
 The normal code lifecycle is:
 
@@ -211,7 +246,7 @@ The normal code lifecycle is:
 2. `resonant-code change prepare --json` → compile compact task guidance
 3. Host implements the aligned change and challenges the complete actual diff
 4. `resonant-code change complete --json` → collect actual change/check facts,
-   evaluate attestations, and complete the task run
+   attribute evaluation conclusions, and return a ready-for-adoption handoff
 
 ## Data separation
 
@@ -221,7 +256,10 @@ Keep these concepts distinct:
 - RCCL says what repository reality appears to be.
 - Host relation proposals say how a specific observation relates to an active directive.
 - Runtime decides what is delivered and how it executes.
-- Evaluation says what the actual change evidence supports.
+- Task provenance says whose statement, inference, or fact each semantic value
+  represents.
+- Evaluation says what the actual change evidence supports and identifies the
+  authority behind each conclusion.
 
 Do not collapse them into one score, one prose prompt, or one “verified truth” flag.
 
@@ -273,8 +311,10 @@ Tests must cover the behavior that justifies the harness:
 - current versus stale RCCL evidence
 - exact RCCL prepare-contract evidence and independent approval provenance
 - accepted, rejected, and downgraded semantic relations
-- Host-owned task semantics, alignment gates, and unified exception behavior
+- human semantic authority, per-value task provenance, alignment gates, and
+  unified exception behavior
 - evaluation against actual diff/check evidence
+- Runtime/Agent/human evaluation basis and ready-for-adoption semantics
 - attention-only attestations and optional informational guidance
 - verification-required no-write behavior and task-run isolation
 - isolated Core npm-tarball API smoke behavior

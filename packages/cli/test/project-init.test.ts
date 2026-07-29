@@ -52,6 +52,11 @@ test('project init creates and safely upgrades only managed adapter artifacts', 
     assert.doesNotMatch(changeReference, /not-requested/);
     assert.match(changeReference, /## Align/);
     assert.match(changeReference, /ask one consolidated\s+question/);
+    assert.match(changeReference, /human owns semantic authority/i);
+    assert.match(changeReference, /standing authorization/);
+    assert.match(changeReference, /without requesting per-action\s+approval/);
+    assert.match(changeReference, /--provenance-file/);
+    assert.match(changeReference, /ready-for-adoption/);
     assert.match(changeReference, /not a file write allowlist/);
     assert.match(changeReference, /at most one durable learning/);
     assert.match(changeReference, /perform a contradiction review/);
@@ -69,6 +74,12 @@ test('project init creates and safely upgrades only managed adapter artifacts', 
     );
     assert.match(contextReference, /--fingerprint/);
     assert.match(contextReference, /Host handles[\s\S]*fingerprint binding/);
+    const manifest = JSON.parse(
+      readFileSync(join(root, '.resonant-code', 'manifest.json'), 'utf8'),
+    );
+    assert.ok(manifest.artifacts.every(
+      (artifact: { templateRevision: number }) => artifact.templateRevision === 1,
+    ));
     assert.equal(inspectProjectInstallation(root).status, 'current');
 
     const unchanged = initializeProject({ projectRoot: root });

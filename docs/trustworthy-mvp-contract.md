@@ -16,6 +16,11 @@ likely to be adopted without correction:
 - the final report distinguishes machine-collected facts from host semantic
   attestations.
 
+The intended outcome is broader safe delegation without surrendering human
+understanding or control. Humans remain the semantic authority, Runtime is the
+authority for collected machine facts, and the Host Agent's interpretation and
+attestations remain explicitly labeled judgment.
+
 Product effectiveness is evaluated against the same coding agent working from
 repository instructions alone. The paired evaluation records blind preference,
 correction rounds, out-of-scope files, unnecessary abstraction, task duration,
@@ -50,8 +55,10 @@ and a rationale; Runtime validates it but does not invent it.
 Host relation proposals contain an explicit relation, rationale, and exact
 evidence references. Numeric self-confidence is not accepted: an arbitrary
 score neither proves the relation nor adds an independent assurance source.
-Task-field provenance records whether a value was Host-provided or derived by
-mechanical normalization without decorative confidence decimals.
+Task-field provenance records each value as human-stated, human-confirmed,
+agent-inferred, repository-derived, or mechanically deterministic, without
+decorative confidence decimals. Agent inference is not itself a reason to
+interrupt; an explicitly unresolved material decision is.
 
 ## Guidance budget
 
@@ -106,7 +113,7 @@ Decision identity is content-derived and environment-independent.
 
 ## Completion assurance
 
-Completion has two explicit assurance sources.
+Completion keeps three authorities distinct.
 
 Machine facts are collected by the workflow:
 
@@ -125,11 +132,17 @@ Host attestations cover semantic judgments:
 - behavior and compatibility preservation;
 - clarity, proportionality, and policy satisfaction.
 
+Approved exceptions record a human decision about an exact guidance ID and
+reason. They do not turn the underlying rule into a machine-proven success.
+
 Before prepare, the Host resolves repository-discoverable details and performs
 a transient semantic alignment only for material choices about the goal,
 public behavior, compatibility, architectural ownership, irreversible
 migration strategy, or another long-lived tradeoff. Confirmed decisions are
-encoded in existing task inputs; there is no separate persisted design brief.
+encoded in existing task inputs with their provenance; there is no separate
+persisted design brief. A concrete task authorizes local, reversible
+inspection, implementation, checks, and repair inside that contract without
+per-action permission prompts.
 
 `compileChange` returns an attention-only attestation plan for delivered
 required, avoid, and tension guidance, including the exact evidence field
@@ -139,8 +152,10 @@ material, but an unverified optional item is recorded as information rather
 than unresolved acceptance work.
 
 Runtime validates that attestations reference collected facts. It does not call
-host prose independently verified. A result cannot be accepted when machine
-facts are absent or merely host-declared.
+host prose independently verified. Every guidance result identifies its basis
+as `runtime-fact`, `agent-attested`, `human-approved`, or `unverified`.
+Machine facts that are absent or merely host-declared cannot support a
+`ready-for-adoption` result.
 
 Immediately before attestation, the Host inspects the complete actual diff and
 seeks counterevidence for every attention item. A `satisfied` verdict is invalid
@@ -150,7 +165,13 @@ token matching or another heuristic policy engine.
 
 Task targets focus activation and review; they are not file permissions.
 Necessary adjacent implementation, test, type, and documentation changes are
-valid when they preserve the aligned semantic contract.
+valid when they preserve the aligned semantic contract. Completion separately
+shows files inside and outside declared targets; an outside-target file
+requires explanation, not automatic rejection.
+
+`ready-for-adoption` means the selected facts and evidence are ready for human
+review. Runtime and the Agent do not accept the change on the developer's
+behalf.
 
 ## Activation assurance
 
