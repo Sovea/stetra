@@ -219,7 +219,7 @@ async function runConfiguredCheck({
       : 'failed';
   const reason = result.timedOut
     ? `Check timed out after ${item.timeoutMs} ms.`
-    : result.code && result.exitCode === null
+    : result.executionError
       ? `Check could not start: ${result.message ?? result.code}`
       : status === 'unavailable'
         ? `Check became unavailable before producing an exit code${result.signal ? ` (${result.signal})` : ''}.`

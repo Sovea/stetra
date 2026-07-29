@@ -17,6 +17,7 @@ import {
   loadCheckConfiguration,
   runCheckPlan,
 } from '../src/facts/checks.mjs';
+import { runBufferedCommand } from '../src/infrastructure/process.ts';
 
 test('Execa-backed checks preserve success, failure, timeout, and spawn facts', async () => {
   const root = mkdtempSync(join(tmpdir(), 'resonant-check-runner-'));
@@ -105,7 +106,7 @@ test('Execa-backed checks preserve success, failure, timeout, and spawn facts', 
     assert.match(results[2].reason ?? '', /timed out/);
     assert.equal(results[3].status, 'unavailable');
     assert.equal(results[3].exitCode, null);
-    assert.match(results[3].reason ?? '', /could not start|exited with/i);
+    assert.match(results[3].reason ?? '', /could not start/i);
     assert.equal(results[4].status, 'passed');
     assert.ok('outputTruncated' in results[4]);
     assert.deepEqual(results[4].outputTruncated, {
@@ -124,6 +125,15 @@ test('Execa-backed checks preserve success, failure, timeout, and spawn facts', 
     assert.equal(spawnFailure[0].status, 'unavailable');
     assert.equal(spawnFailure[0].exitCode, null);
     assert.match(spawnFailure[0].reason ?? '', /could not start/i);
+
+    const bufferedSpawnFailure = await runBufferedCommand({
+      file: 'resonant-code-definitely-missing-executable',
+      args: [],
+      cwd: root,
+      maxBuffer: 1_024,
+    });
+    assert.equal(bufferedSpawnFailure.executionError, true);
+    assert.equal(bufferedSpawnFailure.exitCode, null);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

@@ -37,10 +37,12 @@
     "commander": "^15.0.0",
     "execa": "^9.6.0",
     "picocolors": "^1.1.1",
+    "which": "^6.0.0",
     "zod": "^4.0.0"
   },
   "devDependencies": {
     "@types/node": "^22.19.15",
+    "@types/which": "^3.0.4",
     "tsdown": "^0.21.8",
     "tsx": "^4.23.1",
     "typescript": "^6.0.2"

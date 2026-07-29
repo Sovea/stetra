@@ -3,8 +3,11 @@ import { finished } from 'node:stream/promises';
 
 import { execa } from 'execa';
 
+import { resolveExecutable } from './executable.ts';
+
 export interface CommandResult {
   code?: string;
+  executionError: boolean;
   exitCode: number | null;
   failed: boolean;
   message?: string;
@@ -23,7 +26,15 @@ export async function runBufferedCommand(input: {
   file: string;
   maxBuffer: number;
 }): Promise<BufferedCommandResult> {
-  const result = await execa(input.file, input.args, {
+  const resolution = resolveExecutable(input.file, input.cwd);
+  if (resolution.status === 'unavailable') {
+    return {
+      ...unavailableCommandResult(resolution.error),
+      stderr: Buffer.alloc(0),
+      stdout: Buffer.alloc(0),
+    };
+  }
+  const subprocess = execa(resolution.path, input.args, {
     cwd: input.cwd,
     encoding: 'buffer',
     maxBuffer: input.maxBuffer,
@@ -31,13 +42,13 @@ export async function runBufferedCommand(input: {
     stdin: 'ignore',
     stripFinalNewline: false,
   });
+  let executionError: NodeJS.ErrnoException | undefined;
+  subprocess.once('error', (error: NodeJS.ErrnoException) => {
+    executionError = error;
+  });
+  const result = await subprocess;
   return {
-    code: result.code,
-    exitCode: normalizeExitCode(result),
-    failed: result.failed,
-    message: result.shortMessage ?? result.message,
-    signal: result.signal ?? null,
-    timedOut: result.timedOut,
+    ...normalizeCommandResult(result, executionError),
     stdout: Buffer.from(result.stdout ?? []),
     stderr: Buffer.from(result.stderr ?? []),
   };
@@ -53,7 +64,18 @@ export async function runStreamingCommand(input: {
   stdout: Writable;
   timeoutMs: number;
 }): Promise<CommandResult> {
-  const subprocess = execa(input.file, input.args, {
+  const outputFinished = Promise.all([
+    finished(input.stdout),
+    finished(input.stderr),
+  ]);
+  const resolution = resolveExecutable(input.file, input.cwd);
+  if (resolution.status === 'unavailable') {
+    input.stdout.end();
+    input.stderr.end();
+    await outputFinished;
+    return unavailableCommandResult(resolution.error);
+  }
+  const subprocess = execa(resolution.path, input.args, {
     buffer: false,
     cwd: input.cwd,
     forceKillAfterDelay: 1_000,
@@ -63,6 +85,10 @@ export async function runStreamingCommand(input: {
     stdout: 'pipe',
     timeout: input.timeoutMs,
   });
+  let executionError: NodeJS.ErrnoException | undefined;
+  subprocess.once('error', (error: NodeJS.ErrnoException) => {
+    executionError = error;
+  });
   if (!subprocess.stdout || !subprocess.stderr) {
     throw new Error('Command runner failed to create stdout/stderr pipes.');
   }
@@ -70,28 +96,46 @@ export async function runStreamingCommand(input: {
   subprocess.stderr.on('data', (chunk: Buffer) => input.onStderr?.(chunk));
   subprocess.stdout.pipe(input.stdout);
   subprocess.stderr.pipe(input.stderr);
-  const outputFinished = Promise.all([
-    finished(input.stdout),
-    finished(input.stderr),
-  ]);
   const result = await subprocess;
   await outputFinished;
+  return normalizeCommandResult(result, executionError);
+}
+
+function unavailableCommandResult(
+  error: NodeJS.ErrnoException,
+): CommandResult {
   return {
-    code: result.code,
-    exitCode: normalizeExitCode(result),
-    failed: result.failed,
-    message: result.shortMessage ?? result.message,
-    signal: result.signal ?? null,
-    timedOut: result.timedOut,
+    ...(error.code === undefined ? {} : { code: error.code }),
+    executionError: true,
+    exitCode: null,
+    failed: true,
+    message: error.message,
+    signal: null,
+    timedOut: false,
   };
 }
 
-function normalizeExitCode(result: {
+function normalizeCommandResult(result: {
   code?: string;
   exitCode?: number;
-}): number | null {
-  // cross-spawn can surface ENOENT as exit code 1 on Windows even though the
-  // requested process never started. Execa's system error code is the stable
-  // signal that no meaningful subprocess exit code exists.
-  return result.code === undefined ? result.exitCode ?? null : null;
+  failed: boolean;
+  message?: string;
+  shortMessage?: string;
+  signal?: string;
+  timedOut: boolean;
+}, executionError: NodeJS.ErrnoException | undefined): CommandResult {
+  const code = executionError?.code ?? result.code;
+  const hasExecutionError = executionError !== undefined || code !== undefined;
+  return {
+    ...(code === undefined ? {} : { code }),
+    executionError: hasExecutionError,
+    // Some Windows spawn paths surface a synthetic numeric exit code alongside
+    // the ChildProcess error event. That code was not produced by the requested
+    // executable and therefore is not a meaningful command outcome.
+    exitCode: hasExecutionError ? null : result.exitCode ?? null,
+    failed: result.failed,
+    message: result.shortMessage ?? result.message ?? executionError?.message,
+    signal: result.signal ?? null,
+    timedOut: result.timedOut,
+  };
 }
