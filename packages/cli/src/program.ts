@@ -41,8 +41,9 @@ export function createProgram(
       writeErr: output.writeError,
     })
     .addHelpText('after', `
-The CLI never calls an LLM. Host agents own semantic judgment; Runtime and
-RCCL validate the bounded inputs that can affect deterministic decisions.
+The CLI never calls an LLM. Humans own semantic authority; Host agents
+interpret and execute it. Runtime and RCCL validate bounded inputs and machine
+facts without presenting Agent judgment as human intent or deterministic fact.
 
 Machine callers should always pass --json. JSON mode never prompts and never
 contains ANSI formatting.`);

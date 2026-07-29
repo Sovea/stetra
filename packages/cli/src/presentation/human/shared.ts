@@ -62,7 +62,6 @@ export function statusLine(status: string, colors: Colors): string {
 export function statusValue(status: string, colors: Colors): string {
   if (
     [
-      'accepted',
       'approved',
       'committed',
       'compiled',
@@ -71,6 +70,7 @@ export function statusValue(status: string, colors: Colors): string {
       'ok',
       'prepared',
       'ready',
+      'ready-for-adoption',
       'valid',
     ].includes(status)
   ) {

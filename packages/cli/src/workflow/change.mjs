@@ -31,6 +31,7 @@ import {
   GuidanceDeliverySelectionSchema,
   RelationProposalDocumentSchema,
   RuntimeRunSchema,
+  TaskProvenanceDocumentSchema,
 } from '../schemas/change.ts';
 import { parseArtifact } from '../validation.ts';
 
@@ -54,6 +55,9 @@ export async function prepareCodeTask(options) {
   const deliverySelection = options.selectionFile
     ? readDeliverySelection(options.selectionFile)
     : options.deliverySelection;
+  const taskProvenance = options.provenanceFile
+    ? readTaskProvenance(options.provenanceFile)
+    : undefined;
   const guidanceByteLimit = normalizePositiveInteger(
     options.guidanceByteLimit,
     'guidance byte limit',
@@ -64,7 +68,7 @@ export async function prepareCodeTask(options) {
     ...(existsSync(paths.localAugmentPath) ? { localAugmentPath: paths.localAugmentPath } : {}),
     ...(existsSync(paths.personalOverlayPath) ? { personalOverlayPath: paths.personalOverlayPath } : {}),
     ...(existsSync(paths.rcclPath) ? { rcclPath: paths.rcclPath } : {}),
-    task: buildTaskInput(options),
+    task: buildTaskInput(options, taskProvenance),
     ...(relationProposals.length ? { relationProposals } : {}),
     ...(verificationProposals.length ? { verificationProposals } : {}),
     ...(guidanceByteLimit ? { guidanceByteLimit } : {}),
@@ -183,6 +187,7 @@ export async function completeCodeTask(options) {
     evaluationId: evaluation.evaluationId,
     operation: evaluation.operation,
     changes: evaluation.changes,
+    scopeDelta: evaluation.scopeDelta,
     summary: evaluation.summary,
     assurance: evaluation.assurance,
     results: evaluation.results,
@@ -302,7 +307,7 @@ export async function getCodeStatus(options) {
   };
 }
 
-function buildTaskInput(options) {
+function buildTaskInput(options, provenance) {
   const targets = unique([
     ...(options.targets ?? []),
     ...(options.targetFile ? [options.targetFile] : []),
@@ -321,7 +326,17 @@ function buildTaskInput(options) {
     constraints: unique(options.constraints ?? []),
     avoid: unique(options.avoid ?? []),
     uncertainties: unique(options.uncertainties ?? []),
+    ...(provenance ? { provenance } : {}),
   };
+}
+
+function readTaskProvenance(filePath) {
+  const value = readJsonFile(filePath, 'task provenance');
+  return parseArtifact(
+    TaskProvenanceDocumentSchema,
+    value,
+    'task provenance file',
+  );
 }
 
 function compactDecision(decision, run, checkPlan, baseline) {

@@ -2,7 +2,10 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import { CliError } from '../src/errors.ts';
-import { EvaluationInputSchema } from '../src/schemas/change.ts';
+import {
+  EvaluationInputSchema,
+  TaskProvenanceDocumentSchema,
+} from '../src/schemas/change.ts';
 import { parseArtifact } from '../src/validation.ts';
 
 test('evaluation input reports the exact path for malformed semantic evidence', () => {
@@ -59,4 +62,31 @@ test('evaluation input accepts only canonical evidence shapes', () => {
     'evaluation input',
   );
   assert.equal(value.attestations[0].evidenceRefs[1].kind, 'semantic');
+});
+
+test('task provenance accepts semantic authority but rejects deterministic host claims', () => {
+  const value = parseArtifact(
+    TaskProvenanceDocumentSchema,
+    {
+      description: 'human-stated',
+      changeType: 'agent-inferred',
+      targets: {
+        'src/example.ts': 'repository-derived',
+      },
+      constraints: {
+        'Preserve the public API.': 'human-confirmed',
+      },
+    },
+    'task provenance',
+  );
+  assert.equal(value.description, 'human-stated');
+  assert.equal(value.targets?.['src/example.ts'], 'repository-derived');
+  assert.throws(
+    () => parseArtifact(
+      TaskProvenanceDocumentSchema,
+      { changeType: 'deterministic' },
+      'task provenance',
+    ),
+    /agent-inferred/,
+  );
 });

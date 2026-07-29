@@ -266,6 +266,10 @@ test('change lifecycle freezes and executes an ephemeral Host task verification 
     tmpdir(),
     `resonant-task-checks-${randomUUID()}.json`,
   );
+  const taskProvenance = join(
+    tmpdir(),
+    `resonant-task-provenance-${randomUUID()}.json`,
+  );
   try {
     mkdirSync(join(root, 'src'), { recursive: true });
     writeFileSync(join(root, 'package.json'), '{"name":"run-fixture","type":"module"}\n', 'utf8');
@@ -275,6 +279,15 @@ test('change lifecycle freezes and executes an ephemeral Host task verification 
     git(root, ['config', 'user.name', 'Run Test']);
     git(root, ['add', '.']);
     git(root, ['commit', '-qm', 'initial']);
+    writeFileSync(taskProvenance, JSON.stringify({
+      description: 'human-stated',
+      changeType: 'agent-inferred',
+      targets: {
+        'src/example.ts': 'repository-derived',
+      },
+      risk: 'agent-inferred',
+      scope: 'agent-inferred',
+    }), 'utf8');
 
     const prepareArgs = [
       'change',
@@ -292,6 +305,8 @@ test('change lifecycle freezes and executes an ephemeral Host task verification 
       'local',
       '--guidance-byte-limit',
       '20000',
+      '--provenance-file',
+      taskProvenance,
       '--json',
     ];
     const blocked = (await runCli(prepareArgs)).output as {
@@ -335,6 +350,9 @@ test('change lifecycle freezes and executes an ephemeral Host task verification 
         targets: string[];
         techStack: string[];
       };
+      task: {
+        provenance: Array<{ field: string; source: string; value: string }>;
+      };
       attestationPlan: {
         attentionItems: unknown[];
         optionalConsiderIds: string[];
@@ -349,6 +367,14 @@ test('change lifecycle freezes and executes an ephemeral Host task verification 
     assert.match(prepared.runId, /^[0-9a-f-]{36}$/);
     assert.deepEqual(prepared.activation.targets, ['src/example.ts']);
     assert.deepEqual(prepared.activation.techStack, ['typescript']);
+    assert.equal(
+      prepared.task.provenance.find((item) => item.field === 'description')?.source,
+      'human-stated',
+    );
+    assert.equal(
+      prepared.task.provenance.find((item) => item.field === 'targets')?.source,
+      'repository-derived',
+    );
     assert.ok(prepared.attestationPlan.optionalConsiderIds.length > 0);
     assert.deepEqual(
       prepared.verificationPlan.commands
@@ -359,6 +385,19 @@ test('change lifecycle freezes and executes an ephemeral Host task verification 
     assert.ok(prepared.checkPlan.some((check) => check.id === 'smoke'));
     assert.match(prepared.nextStep, /compiled task contract/);
     assert.match(prepared.nextStep, /try to falsify each attentionItem/);
+    const humanPrepared = formatCliOutput({
+      command: 'change prepare',
+      json: false,
+      color: false,
+      exitCode: 0,
+      output: prepared,
+    });
+    assert.match(humanPrepared, /Human semantic contract/);
+    assert.match(humanPrepared, /Agent interpretation/);
+    assert.match(humanPrepared, /Repository and Runtime facts/);
+    assert.match(humanPrepared, /Agent-selected task check/);
+    assert.doesNotMatch(humanPrepared, /Run file:/);
+    assert.doesNotMatch(humanPrepared, new RegExp(prepared.runId));
     const run = JSON.parse(readFileSync(prepared.runPath, 'utf8'));
     assert.equal(run.runId, prepared.runId);
     assert.equal(run.workflow, 'change');
@@ -411,13 +450,24 @@ test('change lifecycle freezes and executes an ephemeral Host task verification 
       actionRequired: unknown[];
       informational: unknown[];
     };
-    assert.equal(completed.status, 'accepted');
+    assert.equal(completed.status, 'ready-for-adoption');
     assert.deepEqual(completed.actionRequired, []);
     assert.ok(completed.informational.length > 0);
     assert.equal(completed.runId, prepared.runId);
     assert.equal(completed.runPath, prepared.runPath);
     assert.ok(completed.checks.every((check) => check.outputRefs === undefined));
     assert.ok(completed.checks.some((check) => check.id === 'smoke'));
+    const humanCompleted = formatCliOutput({
+      command: 'change complete',
+      json: false,
+      color: false,
+      exitCode: 0,
+      output: completed,
+    });
+    assert.match(humanCompleted, /Change ready for adoption/);
+    assert.match(humanCompleted, /decide whether to adopt it/);
+    assert.doesNotMatch(humanCompleted, /Run file:/);
+    assert.doesNotMatch(humanCompleted, new RegExp(prepared.runId));
     assert.equal(
       existsSync(join(dirname(prepared.runPath), 'checks')),
       false,
@@ -455,6 +505,7 @@ test('change lifecycle freezes and executes an ephemeral Host task verification 
   } finally {
     rmSync(root, { recursive: true, force: true });
     rmSync(taskCheckConfig, { force: true });
+    rmSync(taskProvenance, { force: true });
   }
 });
 
@@ -833,18 +884,21 @@ test('human completion output separates actions from optional information', () =
           guidanceId: 'required-1',
           section: 'required',
           verdict: 'satisfied',
+          basis: 'agent-attested',
           reasons: ['Evidence covered the requirement.'],
         },
         {
           guidanceId: 'required-2',
           section: 'required',
           verdict: 'partial',
+          basis: 'agent-attested',
           reasons: ['Missing evidence for: semantic.'],
         },
         {
           guidanceId: 'consider-1',
           section: 'consider',
           verdict: 'unverified',
+          basis: 'unverified',
           reasons: ['No evidence-backed verdict was provided.'],
         },
       ],
@@ -878,7 +932,9 @@ test('human completion output separates actions from optional information', () =
   assert.match(rendered, /required-2 \[guidance-evidence\]/);
   assert.match(rendered, /Optional information/);
   assert.match(rendered, /consider-1/);
-  assert.match(rendered, /Run: f61d2968-155a-4249-a72e-4789001bb515/);
+  assert.match(rendered, /Agent judgments/);
+  assert.match(rendered, /Unverified conclusions/);
+  assert.doesNotMatch(rendered, /Run: f61d2968-155a-4249-a72e-4789001bb515/);
   assert.match(rendered, /Fix hard violations or failed required checks/);
 });
 

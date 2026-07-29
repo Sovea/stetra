@@ -102,9 +102,12 @@ function renderChangeReference(adapter: HostAdapter): string {
   return `# Change workflow
 
 Use this workflow only for a concrete coding change authorized by the user.
-${hostName} owns task semantics, implementation, and semantic attestations.
+The human owns semantic authority over goals, constraints, and long-lived
+tradeoffs. ${hostName} interprets and encodes that authority, makes explicitly
+identified judgments, implements the change, and writes semantic attestations.
 The CLI owns policy compilation, the worktree baseline, check execution, and
-evaluation facts.
+machine facts. Never present Agent judgment as a human decision or Runtime
+fact.
 
 ## Align
 
@@ -124,6 +127,42 @@ change public behavior, compatibility, architectural ownership, an
 irreversible migration, or another long-lived tradeoff, ask one consolidated
 question before prepare. Resolve repository-discoverable implementation
 details yourself.
+
+Treat the concrete user task as standing authorization for necessary local,
+reversible execution within the aligned semantic contract. Inspect and edit
+the implementation and its adjacent tests, types, configuration, and
+documentation; run checks; create transient task inputs outside the
+repository; and repair mechanical failures without requesting per-action
+approval. Interrupt only for missing information that is necessary to proceed,
+a material clarification or semantic decision, an exact exception or
+verification relaxation, or an external/irreversible effect that exceeds the
+task's authority. Do not turn those decisions into generic permission prompts.
+
+Before prepare, write one transient provenance JSON file outside the
+repository. Declare the source of each supplied semantic value:
+
+\`\`\`json
+{
+  "description": "human-stated",
+  "changeType": "agent-inferred",
+  "targets": {
+    "src/example.ts": "repository-derived"
+  },
+  "risk": "agent-inferred",
+  "scope": "agent-inferred",
+  "constraints": {
+    "Preserve the public API.": "human-confirmed"
+  }
+}
+\`\`\`
+
+Allowed declared sources are \`human-stated\`, \`human-confirmed\`,
+\`agent-inferred\`, and \`repository-derived\`. Use \`human-stated\` only for a
+value the user actually supplied and \`human-confirmed\` only after an explicit
+decision. A faithful but materially expanded Agent restatement is
+\`agent-inferred\`. Runtime alone assigns \`deterministic\`. Omitted
+declarations conservatively default to \`agent-inferred\`; do not add numeric
+confidence.
 
 ## Prepare
 
@@ -161,6 +200,7 @@ resonant-code change prepare . \\
   --target <repository-path> \\
   --risk <low|medium|high> \\
   --scope <local|module|cross-module|repository> \\
+  --provenance-file <temporary-task-provenance.json> \\
   --json
 \`\`\`
 
@@ -184,7 +224,8 @@ normalizes casing and may also infer a language from exact file extensions.
 Handle results as follows:
 
 - \`needs-alignment\`: ask one consolidated question for the reported semantic
-  decision, update the task contract, and rerun prepare.
+  clarification or decision, update the task contract and provenance, and
+  rerun prepare. Never phrase this as permission to continue.
 - \`guidance-overflow\` with mandatory guidance within budget: select only
   task-relevant optional IDs, write
   \`{ "considerIds": [...], "rationale": "..." }\`, and rerun with
@@ -199,7 +240,8 @@ Handle results as follows:
 - A returned \`runId\` establishes the compiled task contract and worktree
   baseline. Inspect \`activation\` to confirm expected Team Playbook
   contributors and checks were activated before editing. The run now owns the
-  exact definitions, so delete a transient task configuration after prepare.
+  exact definitions, so delete transient task provenance and check
+  configurations after prepare.
 
 The workflow automatically loads existing Team Playbook, personal overlay, and
 RCCL sources. Do not recalibrate RCCL for every task.
@@ -234,6 +276,12 @@ complete the aligned change, and report the actual changed files afterward.
 Re-align with the user only when discovered work would change the agreed goal,
 public behavior, compatibility promise, architectural ownership, irreversible
 migration strategy, or another top-level tradeoff.
+
+Full-access execution means low interruption, not expanded semantic authority.
+Proceed through safe local investigation, edits, verification, and repair
+without asking for approval. Clearly label non-material assumptions as Agent
+judgment. If code or check facts conflict with the current human understanding,
+show the evidence; do not silently preserve either side's claim.
 
 If implementation reveals a durable missing repository boundary, finish the
 aligned change unless that boundary makes the current work unsafe; suggest
@@ -305,9 +353,14 @@ report the outcome in this order:
 
 1. result;
 2. core design choice implemented;
-3. any deviation from the aligned goal, non-goals, or ownership boundary;
-4. verification;
-5. remaining tradeoff that needs a human decision.
+3. Runtime facts, including changes outside declared targets;
+4. Agent semantic judgments, clearly identified as attestations;
+5. any deviation, approved exception, or remaining human decision.
+
+\`ready-for-adoption\` means the collected facts and evidence meet the harness
+requirements for human review. It does not mean the Runtime or Agent accepted
+the change on the human's behalf. Return control with a concise adoption
+handoff; do not add a redundant yes/no approval prompt.
 
 Fix safely repairable failures and rerun completion without asking. Pause only
 when resolution changes the semantic contract or requires the user to accept

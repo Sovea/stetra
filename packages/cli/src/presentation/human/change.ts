@@ -54,25 +54,19 @@ export function formatChangePrepare(
     ),
     statusLine(String(output.status ?? 'unknown'), colors),
   ];
-  if (typeof output.decisionId === 'string') {
-    lines.push(`${colors.bold('Decision:')} ${output.decisionId}`);
-  }
-  if (typeof output.runId === 'string') {
-    lines.push(`${colors.bold('Run:')} ${output.runId}`);
-  }
-  if (typeof output.runPath === 'string') {
-    lines.push(`${colors.bold('Run file:')} ${output.runPath}`);
-  }
-  if (typeof output.evaluationInputPath === 'string') {
-    lines.push(`${colors.bold('Evaluation input:')} ${output.evaluationInputPath}`);
-  }
+  appendTaskAuthority(lines, output.task, colors);
+  if (needsAlignment) appendAlignmentDecision(lines, output.reasons, colors);
   appendActivation(lines, output.activation, colors);
   appendCheckPlan(lines, output.checkPlan, colors);
   appendAttestationPlan(lines, output.attestationPlan, colors);
   appendGuidance(lines, output.guidance, colors);
-  appendReasons(lines, output.reasons, colors);
-  if (typeof output.nextStep === 'string') {
+  if ((needsAlignment || verificationRequired) && typeof output.nextStep === 'string') {
     lines.push('', `${colors.bold('Next:')} ${output.nextStep}`);
+  } else if (!needsAlignment && !verificationRequired) {
+    lines.push(
+      '',
+      `${colors.bold('Next:')} Implement the aligned change, challenge the complete diff, and complete the prepared run. Machine-readable run details remain available with --json.`,
+    );
   }
   return lines.join('\n');
 }
@@ -83,12 +77,14 @@ export function formatChangeComplete(
 ): string {
   const status = String(output.status ?? 'unknown');
   const lines = [
-    heading('Change evaluation', colors),
+    heading(
+      status === 'ready-for-adoption'
+        ? 'Change ready for adoption'
+        : 'Change evaluation',
+      colors,
+    ),
     statusLine(status, colors),
   ];
-  if (typeof output.evaluationId === 'string') {
-    lines.push(`${colors.bold('Evaluation:')} ${output.evaluationId}`);
-  }
 
   if (isRecord(output.changes) && Array.isArray(output.changes.files)) {
     const counts = countValues(
@@ -100,6 +96,7 @@ export function formatChangeComplete(
       `${colors.bold('Changed files:')} ${String(output.changes.files.length)}${formatCounts(counts)}`,
     );
   }
+  appendScopeDelta(lines, output.scopeDelta, colors);
 
   if (Array.isArray(output.checks)) {
     const checks = output.checks.filter(isRecord);
@@ -121,31 +118,20 @@ export function formatChangeComplete(
   const results = Array.isArray(output.results)
     ? output.results.filter(isRecord)
     : [];
-  if (results.length) {
-    lines.push('', colors.bold('Guidance'));
-    for (const section of ['required', 'avoid', 'tension', 'consider']) {
-      const sectionResults = results.filter((result) => result.section === section);
-      if (!sectionResults.length) continue;
-      const counts = countValues(
-        sectionResults.map((result) => String(result.verdict ?? 'unknown')),
-      );
-      lines.push(`${colors.cyan('•')} ${section}: ${formatCounts(counts, false)}`);
-    }
-  }
+  appendGuidanceSummary(lines, results, colors);
+  appendEvaluationAuthority(lines, results, colors);
 
   appendExceptions(lines, results, colors);
   appendActions(lines, output.actionRequired, colors);
   appendInformational(lines, output.informational, colors);
 
-  if (typeof output.runId === 'string') {
-    lines.push(`${colors.bold('Run:')} ${output.runId}`);
-  }
-  if (typeof output.runPath === 'string') {
-    lines.push(`${colors.bold('Run file:')} ${output.runPath}`);
-  }
-
-  if (status === 'needs-attention') {
-    lines.push('', `${colors.bold('Next:')} Review unresolved evidence before accepting the change.`);
+  if (status === 'ready-for-adoption') {
+    lines.push(
+      '',
+      `${colors.bold('Next:')} Review the actual change and decide whether to adopt it. This result is evidence readiness, not human acceptance.`,
+    );
+  } else if (status === 'needs-attention') {
+    lines.push('', `${colors.bold('Next:')} Review unresolved evidence before adopting the change.`);
   } else if (status === 'exception-required') {
     lines.push(
       '',
@@ -154,10 +140,144 @@ export function formatChangeComplete(
   } else if (status === 'rejected') {
     lines.push(
       '',
-      `${colors.bold('Next:')} Fix hard violations or failed required checks before accepting the change.`,
+      `${colors.bold('Next:')} Fix hard violations or failed required checks before adopting the change.`,
     );
   }
   return lines.join('\n');
+}
+
+function appendGuidanceSummary(
+  lines: string[],
+  results: JsonObject[],
+  colors: Colors,
+): void {
+  if (!results.length) return;
+  lines.push('', colors.bold('Guidance summary'));
+  for (const section of ['required', 'avoid', 'tension', 'consider']) {
+    const sectionResults = results.filter((result) => result.section === section);
+    if (!sectionResults.length) continue;
+    const counts = countValues(
+      sectionResults.map((result) => String(result.verdict ?? 'unknown')),
+    );
+    lines.push(`${colors.cyan('•')} ${section}: ${formatCounts(counts, false)}`);
+  }
+}
+
+function appendTaskAuthority(
+  lines: string[],
+  value: unknown,
+  colors: Colors,
+): void {
+  if (!isRecord(value) || !Array.isArray(value.provenance)) return;
+  const items = value.provenance.filter(isRecord);
+  const groups: Array<{
+    label: string;
+    sources: string[];
+  }> = [
+    {
+      label: 'Human semantic contract',
+      sources: ['human-stated', 'human-confirmed'],
+    },
+    {
+      label: 'Agent interpretation',
+      sources: ['agent-inferred'],
+    },
+    {
+      label: 'Repository and Runtime facts',
+      sources: ['repository-derived', 'deterministic'],
+    },
+  ];
+  for (const group of groups) {
+    const selected = items.filter((item) =>
+      group.sources.includes(String(item.source)));
+    if (!selected.length) continue;
+    lines.push('', colors.bold(group.label));
+    for (const item of selected) {
+      lines.push(
+        `${colors.cyan('•')} ${String(item.field)}: ${String(item.value)} `
+        + colors.dim(`[${String(item.source)}]`),
+      );
+    }
+  }
+}
+
+function appendAlignmentDecision(
+  lines: string[],
+  value: unknown,
+  colors: Colors,
+): void {
+  if (!Array.isArray(value) || !value.length) return;
+  lines.push('', colors.bold('Human decision needed'));
+  for (const item of value) {
+    if (!isRecord(item)) {
+      lines.push(`${colors.yellow('•')} ${String(item)}`);
+      continue;
+    }
+    const detail = typeof item.value === 'string' ? ` — ${item.value}` : '';
+    lines.push(
+      `${colors.yellow('•')} [${String(item.kind ?? 'decision')}] `
+      + `${String(item.message ?? item.field ?? 'Resolve the semantic choice.')}${detail}`,
+    );
+  }
+}
+
+function appendScopeDelta(
+  lines: string[],
+  value: unknown,
+  colors: Colors,
+): void {
+  if (!isRecord(value)) return;
+  const within = Array.isArray(value.withinTarget)
+    ? value.withinTarget.map(String)
+    : [];
+  const outside = Array.isArray(value.outsideTarget)
+    ? value.outsideTarget.map(String)
+    : [];
+  lines.push(
+    `${colors.bold('Target relation:')} within=${String(within.length)}, outside=${String(outside.length)}`,
+  );
+  if (outside.length) {
+    lines.push('', colors.bold('Outside declared targets'));
+    for (const path of outside) {
+      lines.push(
+        `${colors.yellow('•')} ${path} — inspect whether this is necessary adjacent work or a semantic scope change`,
+      );
+    }
+  }
+  if (Array.isArray(value.renamed) && value.renamed.length) {
+    lines.push('', colors.bold('Renamed files'));
+    for (const item of value.renamed) {
+      if (isRecord(item)) lines.push(`${colors.cyan('•')} ${String(item.from)} → ${String(item.to)}`);
+    }
+  }
+  if (Array.isArray(value.deleted) && value.deleted.length) {
+    lines.push('', colors.bold('Deleted files'));
+    for (const path of value.deleted) lines.push(`${colors.yellow('•')} ${String(path)}`);
+  }
+}
+
+function appendEvaluationAuthority(
+  lines: string[],
+  results: JsonObject[],
+  colors: Colors,
+): void {
+  const groups = [
+    { basis: 'runtime-fact', label: 'Runtime conclusions' },
+    { basis: 'agent-attested', label: 'Agent judgments' },
+    { basis: 'human-approved', label: 'Human-approved exceptions' },
+    { basis: 'unverified', label: 'Unverified conclusions' },
+  ];
+  for (const group of groups) {
+    const selected = results.filter((result) => result.basis === group.basis);
+    if (!selected.length) continue;
+    lines.push('', colors.bold(group.label));
+    for (const result of selected) {
+      lines.push(
+        `${colors.cyan('•')} ${String(result.guidanceId)}: `
+        + `${String(result.verdict ?? 'unknown')} [${String(result.section ?? 'guidance')}]`,
+      );
+    }
+  }
 }
 
 function appendActions(
@@ -197,6 +317,7 @@ function appendExceptions(
   colors: Colors,
 ): void {
   const exceptions = results.filter((result) => isRecord(result.exception));
+  if (!exceptions.length) return;
   const approvedExceptions = exceptions.filter((result) =>
     isRecord(result.exception) && result.exception.status === 'approved');
   const pendingExceptions = exceptions.length - approvedExceptions.length;
@@ -250,8 +371,14 @@ function appendActivation(
     lines.push(`${colors.bold('Targets:')} ${targets.join(', ')}`);
   }
   if (techStack.length) {
+    const provenance = Array.isArray(value.techStackProvenance)
+      ? value.techStackProvenance
+        .filter(isRecord)
+        .map((item) => `${String(item.technology)}:${String(item.source)}`)
+        .join(', ')
+      : 'unknown';
     lines.push(
-      `${colors.bold('Technology:')} ${techStack.join(', ')} (${String(value.techStackSource ?? 'unknown')})`,
+      `${colors.bold('Technology:')} ${techStack.join(', ')} (${provenance})`,
     );
   }
   if (isRecord(value.activeBySource)) {
@@ -291,14 +418,26 @@ function appendCheckPlan(
   if (!checks.length) return;
   const counts = countValues(checks.map((check) => String(check.status ?? 'unknown')));
   lines.push(`${colors.bold('Check plan:')} ${formatCounts(counts, false)}`);
-  for (const check of checks.filter((item) => item.status === 'missing')) {
+  for (const check of checks) {
     const reasons = Array.isArray(check.reasons)
       ? check.reasons.map(String).join('; ')
       : '';
-    lines.push(
-      `${colors.yellow('!')} ${String(check.id ?? 'check')} [missing] — ${reasons}`,
-    );
+    const sources = Array.isArray(check.sources)
+      ? check.sources.map(checkSourceLabel).join(', ')
+      : 'unknown owner';
+    const marker = check.status === 'missing'
+      ? colors.yellow('!')
+      : colors.cyan('•');
+    lines.push(`${marker} ${String(check.id ?? 'check')} — ${sources}`);
+    if (check.status === 'missing' && reasons) lines.push(`  ${reasons}`);
   }
+}
+
+function checkSourceLabel(value: unknown): string {
+  if (value === 'team-default') return 'team baseline';
+  if (value === 'host-task') return 'Agent-selected task check';
+  if (value === 'delivered-guidance') return 'policy-required';
+  return String(value);
 }
 
 function appendAttestationPlan(

@@ -17,6 +17,7 @@ interface ChangePrepareOptions {
   constraint: string[];
   guidanceByteLimit?: string;
   personalOverlay?: string;
+  provenanceFile?: string;
   relationFile?: string;
   risk: string;
   scope: string;
@@ -61,6 +62,7 @@ export function registerChangeCommands(
     .option('--selection-file <path>', 'explicit optional-guidance selection')
     .option('--guidance-byte-limit <bytes>', 'positive UTF-8 delivery ceiling')
     .option('--personal-overlay <path>', 'personal should-level overlay')
+    .option('--provenance-file <path>', 'bounded task semantic-source declarations')
     .option('--check-config <path>', 'task-specific exact check configuration')
     .action(async (
       projectRoot: string,
@@ -82,6 +84,7 @@ export function registerChangeCommands(
         selectionFile: options.selectionFile,
         guidanceByteLimit: options.guidanceByteLimit,
         personalOverlayPath: options.personalOverlay,
+        provenanceFile: options.provenanceFile,
         checkConfigPath: options.checkConfig,
         builtinRoot: resolveBuiltinRoot(),
         productVersion,

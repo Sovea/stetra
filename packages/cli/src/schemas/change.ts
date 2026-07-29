@@ -18,6 +18,29 @@ export const RelationProposalDocumentSchema = z.union([
   }).transform((value) => value.relations),
 ]);
 
+const TaskDeclaredSourceSchema = z.enum([
+  'human-stated',
+  'human-confirmed',
+  'agent-inferred',
+  'repository-derived',
+]);
+const TaskValueProvenanceSchema = z.record(
+  NonEmptyStringSchema,
+  TaskDeclaredSourceSchema,
+);
+
+export const TaskProvenanceDocumentSchema = z.strictObject({
+  description: TaskDeclaredSourceSchema.optional(),
+  changeType: TaskDeclaredSourceSchema.optional(),
+  targets: TaskValueProvenanceSchema.optional(),
+  techStack: TaskValueProvenanceSchema.optional(),
+  risk: TaskDeclaredSourceSchema.optional(),
+  scope: TaskDeclaredSourceSchema.optional(),
+  constraints: TaskValueProvenanceSchema.optional(),
+  avoid: TaskValueProvenanceSchema.optional(),
+  uncertainties: TaskValueProvenanceSchema.optional(),
+});
+
 const EvaluationEvidenceSchema = z.discriminatedUnion('kind', [
   z.strictObject({
     kind: z.literal('diff'),
