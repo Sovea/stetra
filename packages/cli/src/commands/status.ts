@@ -51,6 +51,7 @@ function registerStatusCommand(
       checkConfigPath: options.checkConfig,
       builtinRoot: resolveBuiltinRoot(),
       productVersion,
+      verifyWorktree: name === 'doctor',
     });
     const installation = inspectProjectInstallation(projectRoot);
     const required = [...harness.readiness.required];

@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
 import {
   existsSync,
   mkdtempSync,
@@ -17,6 +18,10 @@ import {
   loadCheckConfiguration,
   runCheckPlan,
 } from '../src/facts/checks.mjs';
+import {
+  captureGitWorktree,
+  compareGitWorktrees,
+} from '../src/facts/worktree.mjs';
 import { runBufferedCommand } from '../src/infrastructure/process.ts';
 
 test('Execa-backed checks preserve success, failure, timeout, and spawn facts', async () => {
@@ -277,3 +282,101 @@ test('selected check definitions cannot be silently omitted and all execute', as
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test('worktree facts treat initialized and uninitialized Git links as opaque object IDs', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'resonant-gitlink-root-'));
+  const dependency = mkdtempSync(join(tmpdir(), 'resonant-gitlink-source-'));
+  try {
+    initializeRepository(dependency, 'dependency@example.invalid');
+    writeFileSync(join(dependency, 'value.txt'), 'one\n', 'utf8');
+    git(dependency, ['add', '.']);
+    git(dependency, ['commit', '-qm', 'initial dependency']);
+    const firstDependencyHead = gitOutput(dependency, ['rev-parse', 'HEAD']);
+
+    initializeRepository(root, 'root@example.invalid');
+    writeFileSync(join(root, 'root.txt'), 'root\n', 'utf8');
+    git(root, ['add', '.']);
+    git(root, ['commit', '-qm', 'initial root']);
+    git(root, [
+      '-c',
+      'protocol.file.allow=always',
+      'submodule',
+      'add',
+      '-q',
+      dependency,
+      'vendor/dependency',
+    ]);
+    git(root, ['commit', '-qam', 'add dependency']);
+
+    const initialized = await captureGitWorktree(root);
+    const initializedEntry = initialized.entries.find(
+      (entry: { path: string }) => entry.path === 'vendor/dependency',
+    );
+    assert.deepEqual(initializedEntry, {
+      path: 'vendor/dependency',
+      kind: 'gitlink',
+      contentHash: firstDependencyHead,
+      mode: '160000',
+    });
+
+    git(root, ['submodule', 'deinit', '-f', '--', 'vendor/dependency']);
+    const uninitialized = await captureGitWorktree(root);
+    const uninitializedEntry = uninitialized.entries.find(
+      (entry: { path: string }) => entry.path === 'vendor/dependency',
+    );
+    assert.deepEqual(uninitializedEntry, initializedEntry);
+    assert.equal(uninitialized.fingerprint, initialized.fingerprint);
+
+    writeFileSync(join(dependency, 'value.txt'), 'two\n', 'utf8');
+    git(dependency, ['commit', '-qam', 'update dependency']);
+    const secondDependencyHead = gitOutput(dependency, ['rev-parse', 'HEAD']);
+    git(root, [
+      '-c',
+      'protocol.file.allow=always',
+      'submodule',
+      'update',
+      '--init',
+      '-q',
+      'vendor/dependency',
+    ]);
+    const checkout = join(root, 'vendor', 'dependency');
+    git(checkout, ['-c', 'protocol.file.allow=always', 'fetch', '-q', 'origin']);
+    git(checkout, ['checkout', '-q', secondDependencyHead]);
+
+    const changed = await captureGitWorktree(root);
+    const changes = compareGitWorktrees(uninitialized, changed);
+    assert.deepEqual(changes.files, [{
+      path: 'vendor/dependency',
+      status: 'modified',
+      before: {
+        kind: 'gitlink',
+        contentHash: firstDependencyHead,
+        mode: '160000',
+      },
+      after: {
+        kind: 'gitlink',
+        contentHash: secondDependencyHead,
+        mode: '160000',
+      },
+    }]);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+    rmSync(dependency, { recursive: true, force: true });
+  }
+});
+
+function initializeRepository(root: string, email: string): void {
+  git(root, ['init', '-q']);
+  git(root, ['config', 'user.email', email]);
+  git(root, ['config', 'user.name', 'Fact Test']);
+}
+
+function git(root: string, args: string[]): void {
+  execFileSync('git', ['-C', root, ...args], { stdio: 'ignore' });
+}
+
+function gitOutput(root: string, args: string[]): string {
+  return execFileSync('git', ['-C', root, ...args], {
+    encoding: 'utf8',
+  }).trim();
+}

@@ -535,14 +535,28 @@ test('CLI rejects removed change aliases and validates RCCL through Core', async
   }
 });
 
-test('strict doctor does not require persistent team check defaults', async () => {
+test('strict doctor accepts uninitialized Git links without persistent team check defaults', async () => {
   const root = mkdtempSync(join(tmpdir(), 'resonant-cli-readiness-levels-'));
   try {
     await runCli(['init', root, '--adapter', 'codex', '--json']);
+    git(root, ['init', '-q']);
+    git(root, ['config', 'user.email', 'readiness@example.invalid']);
+    git(root, ['config', 'user.name', 'Readiness Test']);
+    git(root, ['add', '.']);
+    git(root, ['commit', '-qm', 'initial']);
+    const head = gitOutput(root, ['rev-parse', 'HEAD']);
+    git(root, [
+      'update-index',
+      '--add',
+      '--cacheinfo',
+      `160000,${head},vendor/dependency`,
+    ]);
+    git(root, ['commit', '-qm', 'add uninitialized dependency']);
 
     const doctor = await runCli(['doctor', root, '--strict', '--json']);
     const output = doctor.output as {
       status: string;
+      sources: { worktree: string };
       readiness: {
         status: string;
         required: Array<{ code: string }>;
@@ -552,6 +566,7 @@ test('strict doctor does not require persistent team check defaults', async () =
     };
     assert.equal(doctor.exitCode, 0);
     assert.equal(output.status, 'ok');
+    assert.equal(output.sources.worktree, 'supported');
     assert.equal(output.readiness.status, 'ready');
     assert.deepEqual(output.readiness.required, []);
     assert.ok(
@@ -946,4 +961,10 @@ function writeJsonFixture(root: string, name: string, value: unknown): string {
 
 function git(root: string, args: string[]): void {
   execFileSync('git', ['-C', root, ...args], { stdio: 'ignore' });
+}
+
+function gitOutput(root: string, args: string[]): string {
+  return execFileSync('git', ['-C', root, ...args], {
+    encoding: 'utf8',
+  }).trim();
 }

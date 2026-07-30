@@ -1192,6 +1192,50 @@ test('an unavailable configured command cannot produce a ready-for-adoption resu
     item.kind === 'check-unavailable' && item.id === 'typecheck'));
 });
 
+test('postflight evaluation accepts opaque Git link facts and rejects mismatched modes', () => {
+  const decision = minimalDecision();
+  const changes = machineChangeSet([
+    { path: 'vendor/dependency', status: 'modified' },
+  ]);
+  changes.files[0].before = {
+    kind: 'gitlink',
+    contentHash: '1'.repeat(40),
+    mode: '160000',
+  };
+  changes.files[0].after = {
+    kind: 'gitlink',
+    contentHash: '2'.repeat(40),
+    mode: '160000',
+  };
+  refreshMachineChangeSetIdentity(changes);
+  const evaluation = evaluateChange({
+    decision,
+    changes,
+    checks: [machineCheck(changes, 'typecheck', 'passed')],
+    attestations: [{
+      guidanceId: 'required-1',
+      verdict: 'satisfied',
+      evidenceRefs: [{
+        kind: 'diff',
+        ref: 'diff:vendor/dependency',
+        file: 'vendor/dependency',
+      }],
+      explanation: 'The dependency pointer is represented as an opaque Git link fact.',
+    }],
+  });
+  assert.equal(evaluation.status, 'ready-for-adoption');
+  assert.equal(evaluation.changes.files[0].after?.kind, 'gitlink');
+
+  const malformed = structuredClone(changes);
+  if (!malformed.files[0].after) throw new Error('Expected an after fact.');
+  malformed.files[0].after.mode = '100644';
+  refreshMachineChangeSetIdentity(malformed);
+  assert.throws(() => evaluateChange({
+    decision,
+    changes: malformed,
+  }), /Git link facts require kind gitlink and mode 160000 together/);
+});
+
 test('postflight evaluation combines machine facts with attestations only for delivered guidance', () => {
   const decision = minimalDecision();
   const changes = machineChangeSet([
@@ -1795,6 +1839,15 @@ function machineCheck(
       collectionId: changes.provenance.collectionId,
     },
   };
+}
+
+function refreshMachineChangeSetIdentity(changes: ChangeSet): void {
+  changes.changeFingerprint = stableHash([changes.files]);
+  changes.provenance.collectionId = stableHash([
+    changes.baselineFingerprint,
+    changes.currentFingerprint,
+    changes.changeFingerprint,
+  ]);
 }
 
 function personalDirectiveYaml(options: {

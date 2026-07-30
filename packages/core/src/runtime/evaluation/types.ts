@@ -10,7 +10,7 @@ export interface MachineFactProvenance {
 }
 
 export interface FileFact {
-  kind: 'file' | 'symlink';
+  kind: 'file' | 'symlink' | 'gitlink';
   contentHash: string;
   mode: string;
 }

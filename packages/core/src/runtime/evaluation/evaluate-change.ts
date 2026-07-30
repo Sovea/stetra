@@ -642,12 +642,15 @@ function assertChangedFileShape(file: ChangedFile): void {
   }
   for (const fact of [file.before, file.after]) {
     if (!fact) continue;
-    if (!['file', 'symlink'].includes(fact.kind)
+    if (!['file', 'symlink', 'gitlink'].includes(fact.kind)
       || typeof fact.contentHash !== 'string'
       || !fact.contentHash.trim()
       || typeof fact.mode !== 'string'
       || !fact.mode.trim()) {
       throw new Error('evaluateChange file facts require kind, contentHash, and mode.');
+    }
+    if ((fact.kind === 'gitlink') !== (fact.mode === '160000')) {
+      throw new Error('evaluateChange Git link facts require kind gitlink and mode 160000 together.');
     }
   }
 }

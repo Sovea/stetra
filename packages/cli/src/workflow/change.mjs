@@ -229,6 +229,21 @@ export async function getCodeStatus(options) {
   const required = [];
   const recommended = [];
   const optional = [];
+  let worktree = 'not-checked';
+  if (options.verifyWorktree) {
+    try {
+      await captureGitWorktree(paths.projectRoot);
+      worktree = 'supported';
+    } catch (error) {
+      worktree = 'unsupported';
+      required.push({
+        code: 'worktree-facts-unavailable',
+        message: `Trusted worktree facts cannot be collected: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      });
+    }
+  }
   if (localAugment === 'absent') {
     recommended.push({
       code: 'local-augment-absent',
@@ -288,6 +303,7 @@ export async function getCodeStatus(options) {
       personalOverlay,
       rccl,
       checks,
+      worktree,
     },
     controlPlane: {
       kind: 'cli',

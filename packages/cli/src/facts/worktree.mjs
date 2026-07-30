@@ -14,6 +14,8 @@ const WORKFLOW_OUTPUT_PREFIXES = [
   '.resonant-code/runs/',
 ];
 const GIT_OUTPUT_LIMIT = 256 * 1024 * 1024;
+const GITLINK_MODE = '160000';
+const GIT_OBJECT_ID_PATTERN = /^[0-9a-f]{40}(?:[0-9a-f]{24})?$/;
 
 export async function captureGitWorktree(projectRoot) {
   const root = realpathSync(resolve(projectRoot));
@@ -25,25 +27,43 @@ export async function captureGitWorktree(projectRoot) {
     );
   }
 
-  const listed = await runGitBuffer(root, [
-    'ls-files',
-    '-z',
-    '--cached',
-    '--others',
-    '--exclude-standard',
+  const [listed, staged] = await Promise.all([
+    runGitBuffer(root, [
+      'ls-files',
+      '-z',
+      '--cached',
+      '--others',
+      '--exclude-standard',
+    ]),
+    runGitBuffer(root, ['ls-files', '-z', '--stage']),
   ]);
+  const indexEntries = parseIndexEntries(staged);
   const paths = parseNullSeparatedPaths(listed)
     .filter((path) => !WORKFLOW_OUTPUT_PREFIXES.some((prefix) =>
       path === prefix.slice(0, -1) || path.startsWith(prefix)))
     .sort((left, right) => left.localeCompare(right));
   const entries = [];
   for (const path of paths) {
+    const indexEntry = indexEntries.get(path);
+    if (indexEntry?.mode === GITLINK_MODE) {
+      entries.push({
+        path,
+        kind: 'gitlink',
+        contentHash: await readGitlinkObjectId(
+          root,
+          path,
+          indexEntry.objectId,
+        ),
+        mode: GITLINK_MODE,
+      });
+      continue;
+    }
     const absolutePath = resolve(root, path);
     const stat = lstatSync(absolutePath, { throwIfNoEntry: false });
     if (!stat) continue;
     if (stat.isDirectory()) {
       throw new Error(
-        `Trusted change collection does not support Git submodule/gitlink path "${path}" in the MVP.`,
+        `Trusted change collection encountered a directory that is not a stage-0 Git link: "${path}".`,
       );
     }
     if (stat.isSymbolicLink()) {
@@ -56,7 +76,7 @@ export async function captureGitWorktree(projectRoot) {
       continue;
     }
     if (!stat.isFile()) {
-      throw new Error(`Trusted change collection supports only files and symlinks: ${path}.`);
+      throw new Error(`Trusted change collection supports only files, symlinks, and Git links: ${path}.`);
     }
     entries.push({
       path,
@@ -214,6 +234,40 @@ function parseNullSeparatedPaths(value) {
   return [...new Set(paths)];
 }
 
+function parseIndexEntries(value) {
+  const entries = new Map();
+  let start = 0;
+  for (let index = 0; index < value.length; index += 1) {
+    if (value[index] !== 0) continue;
+    const record = value.subarray(start, index);
+    start = index + 1;
+    if (!record.length) continue;
+    const separator = record.indexOf(9);
+    if (separator < 0) {
+      throw new Error('Git returned a malformed stage entry without a path separator.');
+    }
+    const header = record.subarray(0, separator).toString('ascii');
+    const match = /^([0-7]{6}) ([0-9a-f]{40}(?:[0-9a-f]{24})?) ([0-3])$/.exec(header);
+    if (!match) throw new Error('Git returned a malformed stage entry header.');
+    if (match[3] !== '0') continue;
+    const pathBytes = record.subarray(separator + 1);
+    const path = pathBytes.toString('utf8');
+    if (!Buffer.from(path, 'utf8').equals(pathBytes)) {
+      throw new Error('Trusted change collection cannot represent a non-UTF-8 Git path.');
+    }
+    assertSafeGitPath(path);
+    if (entries.has(path)) {
+      throw new Error(`Git returned duplicate stage-0 entries for ${JSON.stringify(path)}.`);
+    }
+    entries.set(path, {
+      mode: match[1],
+      objectId: match[2],
+    });
+  }
+  if (start !== value.length) throw new Error('Git returned malformed NUL-separated stage entries.');
+  return entries;
+}
+
 function assertSafeGitPath(path) {
   if (!path
     || path.startsWith('/')
@@ -259,6 +313,26 @@ async function readHead(root) {
   } catch {
     return null;
   }
+}
+
+async function readGitlinkObjectId(root, path, indexObjectId) {
+  const absolutePath = resolve(root, path);
+  const stat = lstatSync(absolutePath, { throwIfNoEntry: false });
+  const gitDirectory = lstatSync(resolve(absolutePath, '.git'), {
+    throwIfNoEntry: false,
+  });
+  if (!stat?.isDirectory() || !gitDirectory) return indexObjectId;
+  const result = await runBufferedCommand({
+    file: 'git',
+    args: ['-C', absolutePath, 'rev-parse', '--verify', 'HEAD^{commit}'],
+    cwd: root,
+    maxBuffer: 1024,
+  });
+  if (result.failed) return indexObjectId;
+  const worktreeObjectId = result.stdout.toString('utf8').trim();
+  return GIT_OBJECT_ID_PATTERN.test(worktreeObjectId)
+    ? worktreeObjectId
+    : indexObjectId;
 }
 
 async function runGitText(root, args) {
