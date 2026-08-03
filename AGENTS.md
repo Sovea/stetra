@@ -37,6 +37,28 @@ Every persistent field or lifecycle stage must answer at least one of these ques
 
 If not, remove it.
 
+## Accepted product direction during upgrade
+
+The accepted target direction is
+`docs/cognitive-semantic-delegation.md`. The current migration sequence is
+tracked separately in `docs/semantic-delegation-upgrade-plan.md`.
+
+Before proposing or implementing a change to product architecture, lifecycle,
+persistence, authority, evaluation, or Host interaction:
+
+- read both documents;
+- distinguish current implementation behavior from accepted target behavior;
+- identify which accepted capability the change advances and what a developer
+  will observe differently;
+- do not silently contradict or amend an accepted principle;
+- surface contrary repository or Runtime evidence before proposing an
+  amendment.
+
+`docs/trustworthy-mvp-contract.md` continues to govern existing behavior until
+an individual boundary is explicitly superseded by an implemented, tested
+migration change. Target direction alone is not evidence that a capability is
+already implemented.
+
 ## Architecture
 
 The execution loop has five parts:

@@ -1,5 +1,17 @@
 # Trustworthy MVP Governance Contract
 
+- **Status:** Current implementation contract during migration
+- **Accepted target direction:**
+  [`cognitive-semantic-delegation.md`](./cognitive-semantic-delegation.md)
+- **Active migration plan:**
+  [`semantic-delegation-upgrade-plan.md`](./semantic-delegation-upgrade-plan.md)
+
+This document continues to govern behavior the repository currently
+implements. The target-direction document governs upgrade decisions but does
+not make an unimplemented capability a current Runtime fact. An existing
+boundary is superseded only by an explicit migration change with observable
+replacement behavior and proportional tests.
+
 This document fixes the product decisions for the trustworthy MVP. Runtime and
 RCCL behavior must be testable against these contracts; implementations must not
 replace them with relevance scores, layer weights, token-overlap decisions, or
