@@ -18,12 +18,18 @@ resonant-code change collect . --run <run-id> --json
 resonant-code change finalize . --run <run-id> --json
 ```
 
-- `prepare` compiles the task contract, captures the dirty/untracked worktree
-  baseline, and freezes explicit checks.
+- `prepare` compiles the task contract and proportional Assurance Plan,
+  captures the dirty/untracked worktree baseline, and freezes explicit checks.
 - `collect` executes those checks without a shell and records the complete
   actual change, patch, output integrity, and verifier-surface mutations.
 - `finalize` rejects stale facts and binds the agent's claims, unknowns,
   falsification, and Review Map to the current collection.
+
+The Assurance Plan is explicit and inspectable. Routine work can omit claims
+and Review Map entries when no semantic or factual escalation applies.
+Standard and critical work must cover declared material or adoption-critical
+dimensions, while failed checks, verifier mutations, unrepresentable changes,
+unknowns, and Host-disclosed critical claims can only add obligations.
 
 Exact canonical detail is available on demand:
 

@@ -34,6 +34,14 @@ decision records, preference learning, a delegation frontier, a global memory
 store, or another cross-task lifecycle without a concrete consumer and evidence
 that it improves a real decision over a simpler workflow.
 
+Proportional Assurance is the deterministic policy joining the three current
+cores. The lifecycle remains fixed while explicit handoff obligations vary by
+adoption consequence and assurance dimension. `routine`, `standard`, and
+`critical` are derived presentation labels, not trust or complexity scores.
+The executable policy is the exact basis-bearing requirements in the Semantic
+Contract plus fact-triggered and host-disclosed escalation. Do not add a fourth
+core, a general workflow engine, or repository heuristics for this behavior.
+
 Every persistent field or state must answer:
 
 1. Which compile, collection, review, recovery, adoption, or future activation
@@ -60,9 +68,10 @@ fact. A fact cannot decide product meaning. Agent prose cannot become a
 developer decision or machine fact through a label.
 
 Exact developer messages and decisions use `HumanEvent`. Structured outcomes,
-constraints, focus, consequence, and recommendations remain agent
-interpretations with exact event or evidence bases. The runtime validates identity
-and references, not whether the interpretation is semantically faithful.
+constraints, focus, consequence, assurance dimensions, and recommendations
+remain agent interpretations with exact event or evidence bases. The runtime
+validates identity and references, not whether the interpretation is
+semantically faithful.
 
 A concrete task authorizes necessary local, reversible inspection, edits,
 checks, documentation, and safe repair within the compiled task meaning. Ask
@@ -85,9 +94,18 @@ stage.
 ### Prepare
 
 The host supplies exact developer events, basis-bearing semantic values,
-optional exact repository evidence, and explicit verification commands or a
-concrete no-command rationale. It resolves repository-discoverable details
-before asking the developer.
+an explicit assurance-dimension list, optional exact repository evidence, and
+explicit verification commands or a concrete no-command rationale. Each
+declared dimension has material or adoption-critical criticality, an adoption
+rationale, and an exact event or evidence basis. The host resolves
+repository-discoverable details before asking the developer.
+
+Consequence means the adoption impact of a wrong change or explanation, not
+implementation effort. Low consequence with no dimension compiles to routine;
+medium requires at least one dimension; high requires at least one
+adoption-critical dimension. A critical dimension raises the profile. Runtime
+must reject missing or duplicate requirements and return the exact compiled
+Assurance Plan for inspection.
 
 Focus paths guide investigation and review; they are not write permissions or
 a prediction of final changed files. The runtime does not infer task meaning,
@@ -126,6 +144,16 @@ Claims use one basis: `repository-evidence`, `agent-judgment`,
 surface. Every adoption-critical agent, repository-evidence, or unverified
 claim includes a concrete failure hypothesis and falsification attempt.
 Contradicted, partial, and unverified conclusions remain visible.
+
+Routine work with no compiled requirement may use empty claim and Review Map
+arrays. Every compiled dimension requires a matching claim. Every
+adoption-critical requirement requires an adoption-critical claim, and every
+adoption-critical Agent, repository-evidence, or unverified claim requires
+falsification. Every adoption-critical claim requires must-read or unresolved
+Review Map coverage even when supported. Failed or unavailable checks, changed
+verifier surfaces, unrepresentable changes, and residual unknowns may only add
+obligations; they never lower the fixed contract, fact, currency, or authority
+invariants.
 
 Attention and the Review Map have different jobs. Attention states why evidence
 is insufficient, its adoption impact, exact references, and a concrete next
@@ -202,6 +230,8 @@ deletes, translates, or overwrites unknown owner data.
   shell.
 - Do not rank repository files or infer semantic meaning from token overlap,
   filenames, dependencies, or path counts.
+- Do not infer assurance from keywords, diff size, file count, dependency
+  count, or a scalar complexity, confidence, trust, or readiness score.
 - Do not call an LLM from Core or CLI. The host agent already owns semantic
   reasoning and repository tools.
 - Record package and protocol identity in runs, never absolute installation
@@ -231,6 +261,10 @@ Core and paired Core/CLI package archives. Architecture changes must report
 complexity removed and added, persistent-state movement, and user-visible
 behavior rather than only test results.
 
+Proportional-assurance changes must cover routine zero-claim handoff, explicit
+standard and critical dimension coverage, critical review, fact-triggered
+routine escalation, deterministic plan identity, and stale-fact priority.
+
 Passing deterministic tests establishes internal consistency and
 distributability, not product effectiveness. Claims about lower adoption cost
 or preserved developer cognition require paired results under
@@ -241,5 +275,5 @@ meet that contract.
 Do not regress to host-supplied machine facts, handoff claims written before
 actual fact collection, facts presented as semantic truth, checks presented as
 adoption, blanket review noise, focus paths treated as permissions, generated
-memory treated as developer decisions, or persistent state without a concrete
-decision-changing consumer.
+memory treated as developer decisions, heuristic assurance downgrade, or
+persistent state without a concrete decision-changing consumer.

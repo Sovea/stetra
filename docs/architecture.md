@@ -31,6 +31,8 @@ Developer request and long-lived decisions
                   v
           Semantic Contract
                   |
+       compiled Assurance Plan
+                  |
                   v
    agent investigation, implementation, repair
                   |
@@ -83,6 +85,9 @@ solution selection, execution authority, verification, or review. It contains:
 - exact developer messages or decisions relevant to the task;
 - basis-bearing agent interpretations for the desired outcome, constraints,
   non-goals, focus, and consequence;
+- an explicit assurance-dimension list; each declared material or
+  adoption-critical dimension has an adoption rationale and the same basis
+  discipline;
 - optional exact repository evidence used by a material interpretation;
 - explicit verification commands, or a concrete reason no command applies;
 - no unresolved material semantic fork.
@@ -95,6 +100,49 @@ while the contract meaning is unchanged.
 The runtime validates structure, event and evidence references, deterministic
 identity, and verification readiness. It does not judge whether the agent's
 interpretation is semantically wise or complete.
+
+## Proportional Assurance
+
+The lifecycle topology is fixed, but its semantic handoff obligations are
+proportional to the adoption decision. This is a policy joining the Semantic
+Contract, Fact Spine, and Cognitive Handoff, not a fourth core or an
+implementation workflow engine.
+
+The host uses repository judgment to propose a consequence and exact assurance
+dimensions. Consequence describes the impact of accepting a wrong change or
+explanation; it does not describe coding effort. A one-line authorization
+change can be high consequence, while a broad mechanical rename can be low
+consequence. Runtime does not infer either value from keywords, file counts,
+diff size, dependencies, or a numeric score.
+
+Core compiles an inspectable Assurance Plan:
+
+| Profile | Contract condition | Minimum semantic handoff |
+|---|---|---|
+| `routine` | Low consequence and no declared dimension | System-meaning update; claims and Review Map may be empty |
+| `standard` | Medium consequence or a material dimension | One matching claim for every declared dimension |
+| `critical` | High consequence or an adoption-critical dimension | Matching adoption-critical claims, applicable falsification, and must-read or unresolved review coverage |
+
+Medium-consequence work declares at least one assurance dimension.
+High-consequence work declares at least one adoption-critical dimension. A
+critical dimension raises the profile even when the task-level consequence is
+lower. The profile is a derived presentation label; the exact requirements and
+their bases remain the executable policy.
+
+Effective handoff obligations are the union of:
+
+- requirements compiled before implementation;
+- failed or unavailable checks, changed verifier surfaces, unrepresentable
+  changes, and other collected fact conditions;
+- adoption-critical claims and residual unknowns disclosed by the host after
+  inspecting the actual change.
+
+These sources may add obligations but cannot remove the baseline, frozen
+verification, complete change facts, fact currency, authority separation, or
+human adoption boundary. A newly discovered adoption-critical claim therefore
+escalates review even on a routine task. No second plan or effective-profile
+artifact is persisted; Core evaluates the union directly from the contract,
+facts, and handoff.
 
 ## Fact Spine
 
@@ -126,9 +174,10 @@ The handoff is written only after the agent has inspected the complete
 collected change. It contains:
 
 - a compact update to the system's behavior or structure;
-- only material claims about applicable behavior, invariants, ownership, data
-  and control flow, compatibility, migration, recovery, security, operations,
-  or maintenance consequences;
+- claims required by the Assurance Plan plus only newly discovered material
+  conclusions about applicable behavior, invariants, ownership, data and
+  control flow, compatibility, migration, recovery, security, operations, or
+  maintenance consequences;
 - an explicit basis for each claim;
 - residual unknowns and concrete validation or takeover paths;
 - attempts to disprove adoption-critical claims;
@@ -140,9 +189,9 @@ these semantic conclusions.
 
 An adoption-critical claim based on agent judgment, repository evidence, or an
 unverified premise includes a concrete failure hypothesis and falsification
-attempt. Contradicted, partial, and unverified results remain visible. The runtime
-checks their references and mechanical consistency; it does not reproduce the
-semantic investigation.
+attempt and a must-read or unresolved review surface. Contradicted, partial,
+and unverified results remain visible. The runtime checks their references and
+mechanical consistency; it does not reproduce the semantic investigation.
 
 Attention and review order are different outputs. An attention item explains
 why the evidence is insufficient, what adoption risk it creates, what exact
@@ -225,6 +274,8 @@ If it cannot, it does not belong in the kernel.
 11. Core and CLI never call an LLM; the host agent owns semantic judgment.
 12. Product effectiveness is established by adoption evidence, not protocol
     tests.
+13. Assurance requirements are explicit and may escalate; no heuristic or
+    profile label may silently lower the fixed fact and authority invariants.
 
 ## Evidence boundary
 

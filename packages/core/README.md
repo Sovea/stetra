@@ -10,14 +10,18 @@ import {
 ```
 
 `compileDelegation` validates one pre-change Semantic Contract. It keeps exact
-developer events separate from agent interpretations, validates their bases and
-repository evidence, and requires explicit verification commands or a concrete
-no-command rationale before returning a runnable contract.
+developer events separate from agent interpretations, compiles explicit
+adoption consequence and assurance dimensions into a routine, standard, or
+critical Assurance Plan, validates their bases and repository evidence, and
+requires explicit verification commands or a concrete no-command rationale
+before returning a runnable contract.
 
 `evaluateHandoff` binds a post-change Cognitive Handoff to one collected Fact
-Bundle. It validates evidence references, critical-claim falsification,
-residual-unknown coverage, actionable attention, and the Review Map. It does
-not turn agent judgment into a machine fact or record adoption.
+Bundle. It validates compiled dimension coverage, evidence references,
+critical-claim falsification and direct review, residual-unknown coverage,
+actionable attention, and the Review Map. A clean routine plan may use no
+claims; collected fact conditions can still escalate it. Evaluation does not
+turn agent judgment into a machine fact or record adoption.
 
 The package exports these two runtime values plus their public TypeScript types.
 It does not read repositories, execute commands, format CLI output, or call an

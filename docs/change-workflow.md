@@ -49,6 +49,9 @@ The input identifies the `semantic-delegation` protocol and supplies:
 - exact developer task or decision events;
 - basis-bearing values for outcome, constraints, non-goals, focus, and
   consequence;
+- an explicit assurance-dimension list whose declared entries have a basis,
+  material or adoption-critical criticality, and a concrete adoption
+  rationale;
 - optional exact repository evidence windows;
 - explicit argv check definitions, or a concrete no-command rationale;
 - an optional unresolved material fork.
@@ -58,6 +61,19 @@ files that define the command and files that define what passing means. The
 CLI resolves the top-level executable before creating a run. This preflight
 does not claim nested modules, services, or other runtime prerequisites are
 available.
+
+Consequence is adoption impact, not implementation complexity. The host does
+not derive it or assurance dimensions from file counts, diff size, dependency
+counts, or keywords. Core compiles the explicit input into an Assurance Plan:
+
+| Profile | Prepare requirement |
+|---|---|
+| `routine` | `low` consequence and an empty `assuranceDimensions` array |
+| `standard` | `medium` consequence with at least one dimension, or any material dimension |
+| `critical` | `high` consequence with at least one adoption-critical dimension, or any adoption-critical dimension |
+
+The compact prepare result exposes the profile and every exact requirement.
+Missing medium/high requirements make the contract invalid and create no run.
 
 Prepare compiles the Semantic Contract, captures the complete Git worktree
 baseline, and freezes the selected checks. Synthetic Git objects used for
@@ -71,7 +87,7 @@ Prepare can return:
 | `delegation-compiled` | Contract and verification are runnable | Yes |
 | `semantic-decision-required` | A material long-lived choice remains unresolved | No |
 | `verification-required` | Neither executable checks nor an adequate no-command rationale were supplied | No |
-| `authority-invalid` | Event, basis, or authority references are invalid | No |
+| `authority-invalid` | Event, semantic, assurance, basis, or authority structure is invalid | No |
 
 The compact result includes the compiled contract decision surface and the run
 ID. Full canonical state is stored in the run.
@@ -111,7 +127,8 @@ cover the complete streams, and empty streams create no log file.
 
 Collect writes or resets `handoff.json`. If the agent repairs the code after a
 collection, it runs collect again; the new Fact Bundle replaces the prior one
-for that run.
+for that run. The collect packet repeats the frozen Assurance Plan so the host
+does not reconstruct its obligations from the original input.
 
 ## 3. Write the handoff
 
@@ -123,6 +140,12 @@ The host reads the complete collected patch and check facts before filling
 - `residualUnknowns`;
 - a consequence-directed `reviewMap`;
 - optional material alternatives.
+
+For a routine plan with no declared requirement, `materialClaims` and
+`reviewMap` may both be empty. The system-meaning update and all Runtime facts
+remain mandatory presentation surfaces. Every compiled assurance dimension
+requires a claim with the same dimension. An adoption-critical requirement
+requires an adoption-critical claim.
 
 Claims select evidence using exact changed paths, check IDs, repository
 evidence IDs, developer event IDs, or the whole patch. They do not restate
@@ -143,11 +166,19 @@ Every adoption-critical claim based on agent judgment, repository evidence, or
 an unverified premise includes a falsification result. It records a concrete
 failure hypothesis, the attempt made to find that failure, supporting and
 counter evidence, and one of `supported`, `contradicted`, `partial`, or
-`unverified`.
+`unverified`. Every adoption-critical claim also appears in a `must-read` or
+`unresolved` Review Map entry, including a supported claim added by the host
+after implementation.
 
 Residual unknowns state why they matter and provide a concrete validation or
-takeover path. Contradicted, partial, or unverified critical claims and material
-unknowns must appear in `must-read` or `unresolved` Review Map entries.
+takeover path. Material unknowns must appear in `must-read` or `unresolved`
+Review Map entries.
+
+The effective obligations are the union of the compiled plan, collected fact
+conditions, and host-disclosed adoption-critical claims or unknowns. Failed or
+unavailable checks, changed verifier surfaces, and unrepresentable changes can
+therefore raise a routine task's review requirement. Nothing in the handoff can
+downgrade those facts or the fixed authority and currency checks.
 
 ## 4. Finalize
 
@@ -225,6 +256,7 @@ evaluateHandoff(input)
 
 Their public TypeScript contracts live in:
 
+- [`packages/core/src/assurance/types.ts`](../packages/core/src/assurance/types.ts)
 - [`packages/core/src/delegation/types.ts`](../packages/core/src/delegation/types.ts)
 - [`packages/core/src/facts/types.ts`](../packages/core/src/facts/types.ts)
 - [`packages/core/src/handoff/types.ts`](../packages/core/src/handoff/types.ts)

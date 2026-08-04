@@ -52,8 +52,8 @@ resonant-code change collect . --run <run-id> --json
 resonant-code change finalize . --run <run-id> --json
 ```
 
-- `prepare` compiles the task's Semantic Contract, freezes checks, and captures
-  the pre-change worktree.
+- `prepare` compiles the task's Semantic Contract and proportional Assurance
+  Plan, freezes checks, and captures the pre-change worktree.
 - `collect` runs those checks and records the complete actual change.
 - `finalize` binds the agent's explanation, counterevidence search, unknowns,
   and Review Map to the collected facts.
@@ -64,6 +64,20 @@ evidence remain visible and actionable.
 
 Exact contract, fact, handoff, evaluation, and presentation data is available
 on demand through `resonant-code change explain`.
+
+## Proportional assurance
+
+The lifecycle stays fixed, but handoff cost follows adoption consequence.
+Low-consequence routine work can finish with a concise system-meaning update
+and Runtime facts. Standard work must cover each declared material dimension.
+Critical work adds adoption-critical claims, applicable falsification, and
+direct-review surfaces. Failed or unavailable checks, verifier changes,
+unrepresentable changes, unknowns, and newly discovered critical claims can
+only raise those requirements.
+
+The plan is compiled from explicit, basis-bearing consequence and dimension
+interpretations. It is not inferred from diff size, file count, keywords, or a
+numeric complexity score.
 
 ## Architecture
 
@@ -77,8 +91,9 @@ The long-term design is three task cores and one loop:
    reduce repeated semantic work in later tasks.
 
 The current implementation closes one task-scoped loop across the first three
-cores. It does not yet store adoption outcomes, cross-task decisions, learned
-preferences, or a delegation frontier.
+cores and applies Proportional Assurance between them. It does not yet store
+adoption outcomes, cross-task decisions, learned preferences, or a delegation
+frontier.
 
 The workspace contains two lockstep packages:
 
