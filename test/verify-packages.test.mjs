@@ -5,10 +5,8 @@ import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 const root = resolve(import.meta.dirname, '..');
-const corePath = resolve(root, 'packages/core/package.json');
-const cliPath = resolve(root, 'packages/cli/package.json');
-const core = JSON.parse(readFileSync(corePath, 'utf8'));
-const cli = JSON.parse(readFileSync(cliPath, 'utf8'));
+const core = JSON.parse(readFileSync(resolve(root, 'packages/core/package.json'), 'utf8'));
+const cli = JSON.parse(readFileSync(resolve(root, 'packages/cli/package.json'), 'utf8'));
 
 assert.equal(core.name, '@sovea/resonant-code-core');
 assert.equal(cli.name, '@sovea/resonant-code');
@@ -20,7 +18,8 @@ assert.equal(core.publishConfig?.access, 'public');
 assert.equal(cli.publishConfig?.access, 'public');
 assert.equal(cli.dependencies?.[core.name], 'workspace:*');
 assert.deepEqual(cli.bin, { 'resonant-code': './dist/index.mjs' });
-assert.deepEqual(Object.keys(core.exports).sort(), ['.', './package.json', './rccl']);
+assert.deepEqual(Object.keys(core.exports).sort(), ['.', './package.json']);
+assert.deepEqual(core.files, ['dist', 'LICENSE', 'README.md']);
 
 const versionSource = readFileSync(resolve(root, 'packages/cli/src/version.ts'), 'utf8');
 assert.equal(
@@ -32,30 +31,31 @@ assert.equal(
 for (const file of [
   'packages/core/dist/index.mjs',
   'packages/core/dist/index.d.mts',
-  'packages/core/dist/rccl.mjs',
-  'packages/core/dist/rccl.d.mts',
-  'packages/core/assets/playbook/core.yaml',
   'packages/cli/dist/index.mjs',
 ]) {
   assert.ok(existsSync(resolve(root, file)), `Missing release file ${file}.`);
+}
+for (const file of [
+  'packages/core/dist/rccl.mjs',
+  'packages/core/dist/rccl.d.mts',
+  'packages/core/assets/playbook/core.yaml',
+  'packages/cli/src/workflow/change.mjs',
+  'packages/cli/src/workflow/bootstrap.mjs',
+  'packages/cli/src/commands/context.ts',
+  'packages/cli/src/commands/bootstrap.ts',
+]) {
+  assert.equal(existsSync(resolve(root, file)), false, `Legacy release path remains: ${file}.`);
 }
 
 const coreModule = await import(pathToFileURL(resolve(root, 'packages/core/dist/index.mjs')).href);
 assert.deepEqual(
   Object.keys(coreModule).sort(),
-  ['compileChange', 'evaluateChange'],
-  'Core root must expose exactly the two hard-kernel value operations.',
+  ['compileDelegation', 'evaluateHandoff'],
+  'Core root must expose exactly the two Semantic Handoff operations.',
 );
 
-for (const path of [
-  '.claude-plugin',
-  '.codex-plugin',
-  '.codex',
-  'skills',
-  'runtime',
-  'rccl',
-]) {
-  assert.equal(existsSync(resolve(root, path)), false, `Legacy path still exists: ${path}.`);
+for (const path of ['.claude-plugin', '.codex-plugin', '.codex', 'skills']) {
+  assert.equal(existsSync(resolve(root, path)), false, `Repository-native Host path still exists: ${path}.`);
 }
 
 const trackedDist = execFileSync(
@@ -68,10 +68,8 @@ assert.deepEqual(presentTrackedDist, [], 'Generated dist files must not remain t
 assert.match(readFileSync(resolve(root, '.gitignore'), 'utf8'), /^\*\*\/dist\/$/m);
 
 for (const file of [
-  'templates/checks.template.json',
-  'templates/personal-overlay.template.yaml',
   'evaluation/paired-agent/PROTOCOL.md',
   'evaluation/paired-agent/ledger.json',
 ]) {
-  assert.ok(existsSync(resolve(root, file)), `Missing MVP artifact ${file}.`);
+  assert.ok(existsSync(resolve(root, file)), `Missing project artifact ${file}.`);
 }

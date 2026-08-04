@@ -1,7 +1,7 @@
 {
   "name": "@sovea/resonant-code-core",
   "version": "0.0.1",
-  "description": "Deterministic Playbook, RCCL, compilation, and evaluation kernel for resonant-code.",
+  "description": "Deterministic Semantic Contract and Cognitive Handoff kernel for resonant-code.",
   "type": "module",
   "license": "MIT",
   "repository": {
@@ -16,14 +16,9 @@
     ".": {
       "types": "./dist/index.d.mts",
       "import": "./dist/index.mjs"
-    },
-    "./rccl": {
-      "types": "./dist/rccl.d.mts",
-      "import": "./dist/rccl.mjs"
     }
   },
   "files": [
-    "assets",
     "dist",
     "LICENSE",
     "README.md"
@@ -40,13 +35,12 @@
     "clean": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\"",
     "prepack": "pnpm run build",
     "typecheck": "tsc --noEmit",
-    "test": "tsx --test test/harness.test.ts test/context.test.ts"
+    "test": "tsx --test test/semantic-handoff.test.ts"
   },
   "devDependencies": {
     "@types/node": "^22.19.15",
     "tsdown": "^0.21.8",
     "tsx": "^4.23.1",
-    "typescript": "^6.0.2",
-    "yaml": "^2.9.0"
+    "typescript": "^6.0.2"
   }
 }

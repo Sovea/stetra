@@ -1,12 +1,12 @@
 import type { Colors } from 'picocolors/types';
 
 import {
-  formatChangeComplete,
+  formatChangeCollect,
+  formatChangeExplain,
+  formatChangeFinalize,
   formatChangePrepare,
 } from './human/change.ts';
 import {
-  formatBootstrap,
-  formatContext,
   formatInit,
   formatReadiness,
 } from './human/setup.ts';
@@ -27,10 +27,10 @@ export function formatHumanResult(
   if (command === 'status' || command === 'doctor') {
     return formatReadiness(output, colors);
   }
-  if (command.startsWith('bootstrap ')) return formatBootstrap(output, colors);
   if (command === 'change prepare') return formatChangePrepare(output, colors);
-  if (command === 'change complete') return formatChangeComplete(output, colors);
-  if (command.startsWith('context ')) return formatContext(output, colors);
+  if (command === 'change collect') return formatChangeCollect(output, colors);
+  if (command === 'change finalize') return formatChangeFinalize(output, colors);
+  if (command === 'change explain') return formatChangeExplain(output, colors);
   return formatStructured(output, colors);
 }
 

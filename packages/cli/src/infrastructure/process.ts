@@ -23,6 +23,7 @@ export interface BufferedCommandResult extends CommandResult {
 export async function runBufferedCommand(input: {
   args: string[];
   cwd: string;
+  env?: NodeJS.ProcessEnv;
   file: string;
   maxBuffer: number;
 }): Promise<BufferedCommandResult> {
@@ -37,6 +38,7 @@ export async function runBufferedCommand(input: {
   const subprocess = execa(resolution.path, input.args, {
     cwd: input.cwd,
     encoding: 'buffer',
+    env: input.env,
     maxBuffer: input.maxBuffer,
     reject: false,
     stdin: 'ignore',
@@ -57,6 +59,7 @@ export async function runBufferedCommand(input: {
 export async function runStreamingCommand(input: {
   args: string[];
   cwd: string;
+  env?: NodeJS.ProcessEnv;
   file: string;
   onStderr?: (chunk: Buffer) => void;
   onStdout?: (chunk: Buffer) => void;
@@ -78,6 +81,7 @@ export async function runStreamingCommand(input: {
   const subprocess = execa(resolution.path, input.args, {
     buffer: false,
     cwd: input.cwd,
+    env: input.env,
     forceKillAfterDelay: 1_000,
     reject: false,
     stderr: 'pipe',

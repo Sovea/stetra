@@ -1,8 +1,6 @@
 import { Command } from 'commander';
 
-import { registerBootstrapCommands } from './commands/bootstrap.ts';
 import { registerChangeCommands } from './commands/change.ts';
-import { registerContextCommands } from './commands/context.ts';
 import { registerInitCommand } from './commands/init.ts';
 import type { CommandEnvironment, GlobalCommandOptions } from './commands/shared.ts';
 import { globalOptions } from './commands/shared.ts';
@@ -41,9 +39,10 @@ export function createProgram(
       writeErr: output.writeError,
     })
     .addHelpText('after', `
-The CLI never calls an LLM. Humans own semantic authority; Host agents
-interpret and execute it. Runtime and RCCL validate bounded inputs and machine
-facts without presenting Agent judgment as human intent or deterministic fact.
+The CLI never calls an LLM. Humans own semantic and adoption authority; Host
+agents interpret and execute the contract. Runtime validates bounded authority
+inputs and machine facts without presenting Agent judgment as human intent or
+deterministic fact.
 
 Machine callers should always pass --json. JSON mode never prompts and never
 contains ANSI formatting.`);
@@ -71,16 +70,13 @@ contains ANSI formatting.`);
 
   registerInitCommand(program, environment);
   registerStatusCommands(program, environment, PRODUCT_VERSION);
-  registerBootstrapCommands(program, environment);
   registerChangeCommands(program, environment, PRODUCT_VERSION);
-  registerContextCommands(program, environment);
   return program;
 }
 
 function resultExitCode(command: string, output: unknown): number {
   if (!isRecord(output)) return 0;
   if (command === 'init' && output.status === 'blocked') return 2;
-  if (command === 'bootstrap commit' && output.status === 'exists') return 2;
   if (command === 'doctor' && output.status === 'blocked') return 2;
   return 0;
 }

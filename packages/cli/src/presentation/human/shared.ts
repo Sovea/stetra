@@ -62,15 +62,12 @@ export function statusLine(status: string, colors: Colors): string {
 export function statusValue(status: string, colors: Colors): string {
   if (
     [
-      'approved',
-      'committed',
-      'compiled',
       'created',
       'initialized',
       'ok',
       'prepared',
-      'ready',
-      'ready-for-adoption',
+      'facts-collected',
+      'handoff-ready',
       'valid',
     ].includes(status)
   ) {
@@ -80,10 +77,10 @@ export function statusValue(status: string, colors: Colors): string {
   if (
     [
       'blocked',
-      'exception-required',
-      'guidance-overflow',
-      'needs-alignment',
       'needs-attention',
+      'facts-stale',
+      'semantic-decision-required',
+      'authority-invalid',
       'verification-required',
     ].includes(status)
   ) {

@@ -7,8 +7,10 @@ export type CliErrorCode =
   | 'USAGE_ERROR';
 
 export interface CliIssue {
+  code?: string;
   path: string;
   message: string;
+  remediation?: string;
 }
 
 export class CliError extends Error {
@@ -34,8 +36,12 @@ export function usageError(message: string, cause?: unknown): CliError {
   return new CliError('USAGE_ERROR', message, 2, { cause });
 }
 
-export function inputError(message: string, cause?: unknown): CliError {
-  return new CliError('INVALID_INPUT', message, 2, { cause });
+export function inputError(
+  message: string,
+  cause?: unknown,
+  issues?: CliIssue[],
+): CliError {
+  return new CliError('INVALID_INPUT', message, 2, { cause, issues });
 }
 
 export function validationError(
@@ -43,8 +49,10 @@ export function validationError(
   error: z.ZodError,
 ): CliError {
   const issues = error.issues.map((issue) => ({
+    code: `schema-${issue.code}`,
     path: formatIssuePath(issue.path),
     message: issue.message,
+    remediation: 'Use the exact generated artifact shape and field names.',
   }));
   const details = issues
     .map((issue) => `${issue.path}: ${issue.message}`)

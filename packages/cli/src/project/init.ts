@@ -14,9 +14,9 @@ import {
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 
 import {
+  ADAPTER_PROTOCOL_VERSION,
   MANIFEST_SCHEMA_VERSION,
   PRODUCT_VERSION,
-  PROTOCOL_VERSION,
 } from '../version.ts';
 import {
   HOST_WORKFLOW_REFERENCES,
@@ -26,6 +26,10 @@ import {
   type HostAdapter,
 } from '../adapters/templates.ts';
 import { inputError } from '../errors.ts';
+import {
+  DELEGATION_PROTOCOL,
+} from '../protocol.ts';
+import { findLegacyArtifacts } from './legacy.ts';
 import {
   HostAdapterSchema,
   ProjectManifestSchema,
@@ -76,6 +80,36 @@ const GITIGNORE_MARKERS = {
 
 export function initializeProject(options: InitializeProjectOptions = {}) {
   const projectRoot = canonicalProjectRoot(options.projectRoot ?? '.');
+  const legacyArtifacts = findLegacyArtifacts(projectRoot);
+  if (legacyArtifacts.length) {
+    return {
+      status: 'blocked',
+      protocol: DELEGATION_PROTOCOL,
+      schemaVersion: MANIFEST_SCHEMA_VERSION,
+      projectRoot,
+      manifestPath: join(projectRoot, MANIFEST_PATH),
+      generatorVersion: PRODUCT_VERSION,
+      adapterProtocolVersion: ADAPTER_PROTOCOL_VERSION,
+      adapters: [],
+      dryRun: Boolean(options.dryRun),
+      force: Boolean(options.force),
+      counts: { create: 0, upgrade: 0, force: 0, unchanged: 0, blocked: legacyArtifacts.length },
+      artifacts: legacyArtifacts.map((path) => ({
+        path,
+        kind: 'legacy',
+        action: 'blocked',
+        reason: 'Archive or remove this legacy artifact explicitly; clean-break initialization never migrates or deletes it.',
+      })),
+      readiness: {
+        required: [{
+          code: 'legacy-artifacts-present',
+          message: `Archive or remove legacy artifacts explicitly: ${legacyArtifacts.join(', ')}.`,
+        }],
+        recommended: [],
+        optional: [],
+      },
+    };
+  }
   const existingManifest = readManifest(projectRoot);
   const requestedAdapters = options.adapters?.length
     ? normalizeAdapters(options.adapters)
@@ -122,25 +156,14 @@ export function initializeProject(options: InitializeProjectOptions = {}) {
   const required: Array<{ code: string; message: string }> = [];
   const recommended: Array<{ code: string; message: string }> = [];
   const optional: Array<{ code: string; message: string }> = [];
-  if (!existsSync(join(projectRoot, '.resonant-code', 'playbook', 'local-augment.yaml'))) {
-    recommended.push({
-      code: 'bootstrap-team-playbook',
-      message: 'Ask the Host Agent to bootstrap a Team Playbook only when repository-specific guidance is needed.',
-    });
-  }
-  if (!existsSync(join(projectRoot, '.resonant-code', 'checks.json'))) {
-    optional.push({
-      code: 'team-checks-absent',
-      message: 'Persistent team check defaults are optional; task workflows can use an explicit transient --check-config.',
-    });
-  }
   return {
     status: blocked.length ? 'blocked' : options.dryRun ? 'planned' : 'initialized',
+    protocol: DELEGATION_PROTOCOL,
     schemaVersion: MANIFEST_SCHEMA_VERSION,
     projectRoot,
     manifestPath: join(projectRoot, MANIFEST_PATH),
     generatorVersion: PRODUCT_VERSION,
-    protocolVersion: PROTOCOL_VERSION,
+    adapterProtocolVersion: ADAPTER_PROTOCOL_VERSION,
     adapters,
     dryRun: Boolean(options.dryRun),
     force: Boolean(options.force),
@@ -161,10 +184,24 @@ export function initializeProject(options: InitializeProjectOptions = {}) {
 
 export function inspectProjectInstallation(projectRootInput = '.') {
   const projectRoot = canonicalProjectRoot(projectRootInput);
+  const legacyArtifacts = findLegacyArtifacts(projectRoot);
+  if (legacyArtifacts.length) {
+    return {
+      status: 'legacy',
+      protocol: DELEGATION_PROTOCOL,
+      schemaVersion: MANIFEST_SCHEMA_VERSION,
+      projectRoot,
+      manifestPath: join(projectRoot, MANIFEST_PATH),
+      adapters: [],
+      artifacts: legacyArtifacts.map((path) => ({ path, status: 'legacy' as const })),
+      legacyArtifacts,
+    };
+  }
   const manifest = readManifest(projectRoot);
   if (!manifest) {
     return {
       status: 'absent',
+      protocol: DELEGATION_PROTOCOL,
       schemaVersion: MANIFEST_SCHEMA_VERSION,
       projectRoot,
       manifestPath: join(projectRoot, MANIFEST_PATH),
@@ -226,11 +263,12 @@ export function inspectProjectInstallation(projectRootInput = '.') {
 
   return {
     status: drifted ? 'drifted' : versionStatus === 'different' ? 'version-drift' : 'current',
+    protocol: DELEGATION_PROTOCOL,
     schemaVersion: MANIFEST_SCHEMA_VERSION,
     projectRoot,
     manifestPath: join(projectRoot, MANIFEST_PATH),
     generatorVersion: manifest.generatorVersion,
-    protocolVersion: manifest.protocolVersion,
+    adapterProtocolVersion: manifest.adapterProtocolVersion,
     versionStatus,
     adapters: manifest.adapters,
     artifacts,
@@ -357,9 +395,10 @@ function buildManifest(
   artifacts: DesiredArtifact[],
 ): ProjectManifest {
   return {
+    protocol: DELEGATION_PROTOCOL,
     schemaVersion: MANIFEST_SCHEMA_VERSION,
     generatorVersion: PRODUCT_VERSION,
-    protocolVersion: PROTOCOL_VERSION,
+    adapterProtocolVersion: ADAPTER_PROTOCOL_VERSION,
     adapters,
     artifacts: artifacts.map((artifact) => ({
       path: artifact.path,
@@ -384,6 +423,8 @@ function readManifest(projectRoot: string): ProjectManifest | null {
     );
   }
   if (!value || typeof value !== 'object' || Array.isArray(value)
+    || !('protocol' in value)
+    || value.protocol !== DELEGATION_PROTOCOL
     || !('schemaVersion' in value)
     || value.schemaVersion !== MANIFEST_SCHEMA_VERSION) {
     throw new Error(
@@ -395,9 +436,9 @@ function readManifest(projectRoot: string): ProjectManifest | null {
     value,
     MANIFEST_PATH,
   );
-  if (manifest.protocolVersion !== PROTOCOL_VERSION) {
+  if (manifest.adapterProtocolVersion !== ADAPTER_PROTOCOL_VERSION) {
     throw new Error(
-      `UNSUPPORTED_PROTOCOL_VERSION: ${MANIFEST_PATH} requires ${manifest.protocolVersion}; this CLI supports ${PROTOCOL_VERSION}.`,
+      `UNSUPPORTED_ADAPTER_PROTOCOL: ${MANIFEST_PATH} requires ${manifest.adapterProtocolVersion}; this CLI supports ${ADAPTER_PROTOCOL_VERSION}.`,
     );
   }
   if (compareVersions(manifest.generatorVersion, PRODUCT_VERSION) > 0) {
@@ -412,9 +453,10 @@ function readManifest(projectRoot: string): ProjectManifest | null {
     return artifact;
   });
   return {
+    protocol: manifest.protocol,
     schemaVersion: manifest.schemaVersion,
     generatorVersion: manifest.generatorVersion,
-    protocolVersion: manifest.protocolVersion,
+    adapterProtocolVersion: manifest.adapterProtocolVersion,
     adapters: manifest.adapters,
     artifacts,
   };

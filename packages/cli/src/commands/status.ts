@@ -1,15 +1,18 @@
-import { resolve } from 'node:path';
+import { existsSync, realpathSync, statSync } from 'node:fs';
+import { join, resolve } from 'node:path';
 
 import { Command } from 'commander';
 
-import { resolveBuiltinRoot } from '../paths.ts';
+import { captureGitWorktree } from '../facts/worktree.ts';
 import { inspectProjectInstallation } from '../project/init.ts';
-import { getCodeStatus } from '../workflow/change.mjs';
+import { findLegacyArtifacts } from '../project/legacy.ts';
+import {
+  DELEGATION_PROTOCOL,
+  DELEGATION_SCHEMA_VERSION,
+} from '../protocol.ts';
 import type { CommandEnvironment } from './shared.ts';
 
 interface StatusOptions {
-  checkConfig?: string;
-  personalOverlay?: string;
   strict?: boolean;
 }
 
@@ -31,67 +34,81 @@ function registerStatusCommand(
   const command = program
     .command(name)
     .description(name === 'doctor'
-      ? 'Check whether the harness is ready for trusted operation'
-      : 'Inspect harness installation and source readiness')
-    .argument('[project-root]', 'project root', '.')
-    .option('--personal-overlay <path>', 'personal should-level overlay')
-    .option('--check-config <path>', 'exact check configuration to inspect');
-  if (name === 'doctor') {
-    command.option('--strict', 'fail when any required readiness condition is unresolved');
-  }
+      ? 'Validate the local Semantic Handoff control plane'
+      : 'Inspect Semantic Handoff installation state')
+    .argument('[project-root]', 'project root', '.');
+  if (name === 'doctor') command.option('--strict', 'return blocked for unresolved required conditions');
   command.action(async (
     projectRootInput: string,
     options: StatusOptions,
     source: Command,
   ) => {
-    const projectRoot = resolve(projectRootInput);
-    const harness = await getCodeStatus({
-      projectRoot,
-      personalOverlayPath: options.personalOverlay,
-      checkConfigPath: options.checkConfig,
-      builtinRoot: resolveBuiltinRoot(),
-      productVersion,
-      verifyWorktree: name === 'doctor',
-    });
+    const projectRoot = canonicalProjectRoot(projectRootInput);
     const installation = inspectProjectInstallation(projectRoot);
-    const required = [...harness.readiness.required];
-    const recommended = [...harness.readiness.recommended];
-    const optional = [...harness.readiness.optional];
-    if (installation.status === 'absent') {
-      required.unshift({
-        code: 'cli-adapters-absent',
-        message: 'Run `resonant-code init .` to install project-local host adapters.',
+    const legacyArtifacts = findLegacyArtifacts(projectRoot);
+    const required: Array<{ code: string; message: string }> = [];
+    if (legacyArtifacts.length) {
+      required.push({
+        code: 'legacy-artifacts-present',
+        message: `Archive or remove legacy artifacts explicitly: ${legacyArtifacts.join(', ')}.`,
+      });
+    } else if (installation.status === 'absent') {
+      required.push({
+        code: 'host-adapter-absent',
+        message: 'Run `resonant-code init .` to install a generated Host adapter.',
       });
     } else if (installation.status !== 'current') {
-      required.unshift({
-        code: 'cli-installation-drifted',
-        message: 'Run `resonant-code init .` to refresh adapter/version drift; use --force only for managed artifacts you intend to replace.',
+      required.push({
+        code: 'host-adapter-drifted',
+        message: 'Run `resonant-code init .`; use --force only for owner-modified generated content you intend to replace.',
       });
     }
-    const readinessStatus = harness.status === 'blocked'
-      ? 'blocked'
-      : required.length
-        ? 'needs-attention'
-        : 'ready';
+    let worktree: 'not-checked' | 'supported' | 'unsupported' = 'not-checked';
+    if (name === 'doctor') {
+      try {
+        await captureGitWorktree(projectRoot);
+        worktree = 'supported';
+      } catch (error) {
+        worktree = 'unsupported';
+        required.push({
+          code: 'git-worktree-unsupported',
+          message: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
     const strict = name === 'doctor' && Boolean(options.strict);
-    const passed = harness.status !== 'blocked'
-      && (!strict || required.length === 0);
     environment.emit(name, {
-      status: passed ? 'ok' : 'blocked',
-      schemaVersion: harness.schemaVersion,
+      protocol: DELEGATION_PROTOCOL,
+      schemaVersion: DELEGATION_SCHEMA_VERSION,
+      status: strict && required.length ? 'blocked' : 'ok',
       command: name,
       strict,
       version: productVersion,
       readiness: {
-        status: readinessStatus,
+        status: required.length ? 'needs-attention' : 'ready',
         required,
-        recommended,
-        optional,
+        recommended: [],
+        optional: [],
       },
       installation,
-      sources: harness.sources,
-      controlPlane: harness.controlPlane,
-      paths: harness.paths,
+      worktree,
+      controlPlane: {
+        kind: 'cli',
+        protocol: DELEGATION_PROTOCOL,
+        schemaVersion: DELEGATION_SCHEMA_VERSION,
+      },
+      paths: {
+        manifest: join(projectRoot, '.resonant-code', 'manifest.json'),
+        runs: join(projectRoot, '.resonant-code', 'runs'),
+      },
     }, source);
   });
+}
+
+function canonicalProjectRoot(input: string): string {
+  const root = resolve(input);
+  if (!existsSync(root) || !statSync(root).isDirectory()) {
+    throw new Error(`Project root is not a directory: ${root}`);
+  }
+  return realpathSync(root);
 }

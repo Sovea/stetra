@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
 import {
+  existsSync,
   mkdtempSync,
   mkdirSync,
   readFileSync,
@@ -24,14 +25,8 @@ try {
   writeFileSync(join(project, 'package.json'), '{"name":"packed-cli-smoke","type":"module"}\n', 'utf8');
   writeFileSync(join(project, 'src', 'example.ts'), 'export const value = 1;\n', 'utf8');
 
-  const coreTarball = packPackage(
-    join(workspace, 'packages', 'core'),
-    packDirectory,
-  );
-  const cliTarball = packPackage(
-    join(workspace, 'packages', 'cli'),
-    packDirectory,
-  );
+  const coreTarball = packPackage(join(workspace, 'packages', 'core'), packDirectory);
+  const cliTarball = packPackage(join(workspace, 'packages', 'cli'), packDirectory);
   writeFileSync(join(consumer, 'package.json'), `${JSON.stringify({
     private: true,
     dependencies: {
@@ -49,12 +44,8 @@ try {
   assert.equal(cliManifest.version, '0.0.1');
   assert.equal(cliManifest.dependencies['@sovea/resonant-code-core'], '0.0.1');
   assert.equal(cliManifest.bin['resonant-code'], './dist/index.mjs');
-  const cliEntrypoint = resolve(
-    installedCli,
-    cliManifest.bin['resonant-code'],
-  );
-  assert.ok(readFileSync(join(installedCore, 'assets', 'playbook', 'core.yaml'), 'utf8'));
-  assert.ok(readFileSync(cliEntrypoint, 'utf8'));
+  assert.equal(existsSync(join(installedCore, 'assets')), false);
+  const cliEntrypoint = resolve(installedCli, cliManifest.bin['resonant-code']);
   const binary = join(
     consumer,
     'node_modules',
@@ -69,254 +60,147 @@ try {
     { shell: false },
   );
 
-  const initialized = runInstalledCli([
-    'init',
-    project,
-    '--adapter',
-    'codex',
-    '--json',
-  ]);
+  const initialized = runInstalledCli(['init', project, '--adapter', 'codex', '--json']);
   assert.equal(initialized.status, 'initialized');
+  assert.equal(initialized.protocol, 'semantic-delegation');
   assert.deepEqual(initialized.adapters, ['codex']);
-  writeFileSync(join(project, '.resonant-code', 'checks.json'), JSON.stringify({
-    version: '1.0',
-    checks: ['typecheck', 'test'].map((id) => ({
-      id,
-      rationale: `Verify ${id} in the packed CLI workflow.`,
-      command: [process.execPath, '-e', 'process.exit(0)'],
-      timeoutMs: 10_000,
-    })),
-  }, null, 2), 'utf8');
-
-  const bootstrap = runInstalledCli([
-    'bootstrap',
-    'prepare',
+  const changeReference = join(
     project,
-    '--json',
-  ]);
-  assert.equal(bootstrap.status, 'prepared');
-  assert.equal(Object.hasOwn(bootstrap, 'signals'), false);
-  assert.match(bootstrap.prompt, /Inspect the repository with your native tools/);
-  const bootstrapCandidate = join(project, 'bootstrap-candidate.json');
-  writeFileSync(bootstrapCandidate, JSON.stringify({
-    selectedLayers: ['builtin/languages/typescript'],
-    evidence: [{
-      layerId: 'builtin/languages/typescript',
-      paths: ['package.json'],
-      rationale: 'The inspected package manifest establishes the TypeScript project boundary.',
-    }],
-  }, null, 2), 'utf8');
-  const committedBootstrap = runInstalledCli([
-    'bootstrap',
-    'commit',
-    project,
-    '--input',
-    bootstrapCandidate,
-    '--json',
-  ]);
-  assert.equal(committedBootstrap.status, 'created');
-  const gitignore = readFileSync(join(project, '.gitignore'), 'utf8');
-  assert.equal(gitignore.match(/# resonant-code:begin/g)?.length, 1);
-  assert.equal(gitignore.match(/# resonant-code:end/g)?.length, 1);
-  assert.doesNotMatch(gitignore, /# resonant-code: generated runtime artifacts/);
-
-  const context = runInstalledCli([
-    'context',
-    'prepare',
-    project,
-    '--evidence',
-    'src/example.ts:1-1',
-    '--json',
-  ]);
-  assert.equal(context.status, 'ready');
-  const contextContractPath = join(
-    project,
-    '.resonant-code',
-    'context',
-    'rccl-prepare.json',
+    '.agents',
+    'skills',
+    'resonant-code',
+    'references',
+    'change.md',
   );
-  mkdirSync(join(project, '.resonant-code', 'context'), { recursive: true });
-  writeFileSync(
-    contextContractPath,
-    `${JSON.stringify(context, null, 2)}\n`,
-    'utf8',
-  );
-  const contextProposalPath = join(
-    project,
-    '.resonant-code',
-    'context',
-    'rccl-proposal.json',
-  );
-  writeFileSync(contextProposalPath, `${JSON.stringify({
-    schemaVersion: context.contract.schemaVersion,
-    requestId: context.contract.requestId,
-    contextFingerprint: context.contract.contextFingerprint,
-    replace: false,
-    observations: [{
-      id: 'obs-packed-example-boundary',
-      category: 'architecture',
-      scope: 'src/**',
-      statement: 'The packed smoke export is defined in src/example.ts.',
-      affects: ['api-shape'],
-      decisionImpact: 'Defining the export elsewhere would split the tested public shape.',
-      semanticConfidence: 'high',
-      evidence: [{
-        windowId: context.contract.evidenceWindows[0].windowId,
-      }],
-    }],
-  }, null, 2)}\n`, 'utf8');
-  const committedContext = runInstalledCli([
-    'context',
-    'commit',
-    project,
-    '--contract',
-    contextContractPath,
-    '--input',
-    contextProposalPath,
-    '--json',
-  ]);
-  assert.equal(committedContext.status, 'committed');
-  const observationFingerprint =
-    committedContext.document.observations[0].lifecycle.contentFingerprint;
-  const approvedContext = runInstalledCli([
-    'context',
-    'approve',
-    project,
-    '--id',
-    'obs-packed-example-boundary',
-    '--fingerprint',
-    `obs-packed-example-boundary=${observationFingerprint}`,
-    '--approved-by',
-    'release-smoke-reviewer',
-    '--json',
-  ]);
-  assert.equal(approvedContext.status, 'approved');
-  assert.deepEqual(
-    approvedContext.approvedObservationIds,
-    ['obs-packed-example-boundary'],
-  );
+  assert.match(readFileSync(changeReference, 'utf8'), /change collect/);
+  assert.match(readFileSync(changeReference, 'utf8'), /human review, not adopted/);
+  assert.equal(existsSync(join(project, '.agents', 'skills', 'resonant-code', 'references', 'bootstrap.md')), false);
 
   git(project, ['init', '-q']);
   git(project, ['config', 'user.email', 'release@example.invalid']);
   git(project, ['config', 'user.name', 'CLI Release Smoke']);
   git(project, ['add', '.']);
   git(project, ['commit', '-qm', 'initial']);
-  const taskProvenance = join(temporary, 'task-provenance.json');
-  writeFileSync(taskProvenance, JSON.stringify({
-    description: 'human-stated',
-    changeType: 'agent-inferred',
-    targets: {
-      'src/example.ts': 'repository-derived',
+  const task = 'Change the packed fixture behavior and preserve an inspectable handoff.';
+  const inputPath = join(temporary, 'semantic-contract.json');
+  writeFileSync(inputPath, `${JSON.stringify({
+    protocol: 'semantic-delegation',
+    schemaVersion: '1',
+    humanEvents: [{ id: 'event:task', kind: 'task', content: task }],
+    interpretations: [
+      {
+        id: 'meaning:outcome',
+        field: 'desired-outcome',
+        value: 'Change the exported fixture value with a fact-bound handoff.',
+        basis: { humanEventIds: ['event:task'], repositoryEvidenceIds: [] },
+      },
+      {
+        id: 'meaning:consequence',
+        field: 'consequence',
+        value: 'medium',
+        basis: { humanEventIds: ['event:task'], repositoryEvidenceIds: [] },
+      },
+    ],
+    semantic: {
+      desiredOutcomeId: 'meaning:outcome',
+      constraintIds: [],
+      nonGoalIds: [],
+      focusIds: [],
+      consequenceId: 'meaning:consequence',
     },
-    risk: 'agent-inferred',
-    scope: 'agent-inferred',
-  }, null, 2), 'utf8');
-
+    verification: {
+      checks: [{
+        id: 'fixture-check',
+        rationale: 'Exercise the packed CLI check runner.',
+        argv: [process.execPath, '-e', 'process.exit(0)'],
+        timeoutMs: 10_000,
+        source: 'host-task',
+        verifierRefs: [{ path: 'package.json', role: 'command-definition' }],
+      }],
+    },
+  }, null, 2)}\n`, 'utf8');
   const prepared = runInstalledCli([
-    'change',
-    'prepare',
-    project,
-    '--task',
-    'Document the exported example',
-    '--change-type',
-    'docs',
-    '--target',
-    'src/example.ts',
-    '--risk',
-    'low',
-    '--scope',
-    'local',
-    '--provenance-file',
-    taskProvenance,
-    '--guidance-byte-limit',
-    '20000',
-    '--json',
+    'change', 'prepare', project, '--input', inputPath, '--json',
   ]);
-  assert.ok(prepared.status === 'compiled' || prepared.status === 'needs-attention');
-  assert.equal(
-    prepared.task.provenance.find((item) => item.field === 'description')?.source,
-    'human-stated',
-  );
+  assert.equal(prepared.status, 'prepared');
+  assert.equal(prepared.contract.authority.humanEvents[0].content, task);
   const preparedRun = JSON.parse(readFileSync(prepared.runPath, 'utf8'));
-  assert.equal(preparedRun.runId, prepared.runId);
-  assert.equal(preparedRun.workflow, 'change');
+  assert.equal(preparedRun.workflow, 'semantic-handoff');
   assert.equal(preparedRun.state, 'prepared');
-  assert.equal(preparedRun.controlPlane.kind, 'cli');
-  assert.equal(preparedRun.controlPlane.corePackage, '@sovea/resonant-code-core');
-  assert.equal(preparedRun.controlPlane.coreVersion, '0.0.1');
+  assert.equal(preparedRun.packageIdentity.core.version, '0.0.1');
   assert.equal(Object.hasOwn(preparedRun, 'pluginRoot'), false);
 
   writeFileSync(join(project, 'src', 'example.ts'), 'export const value = 2;\n', 'utf8');
-  writeFileSync(prepared.evaluationInputPath, JSON.stringify({
-    attestations: attestationsForDecision(prepared),
-    exceptions: [],
-  }, null, 2), 'utf8');
-  const completed = runInstalledCli([
-    'change',
-    'complete',
-    project,
-    '--run',
-    prepared.runId,
-    '--json',
+  const collected = runInstalledCli([
+    'change', 'collect', project, '--run', prepared.runId, '--json',
   ]);
-  assert.equal(completed.status, 'ready-for-adoption');
+  assert.equal(collected.status, 'facts-collected');
   assert.deepEqual(
-    completed.changes.files.map((file) => [file.path, file.status]),
+    collected.changedFiles.map((file) => [file.path, file.operation]),
     [['src/example.ts', 'modified']],
   );
-  assert.ok(completed.checks.every((check) => check.status === 'passed'));
-  const completedRun = JSON.parse(readFileSync(prepared.runPath, 'utf8'));
-  assert.equal(completedRun.state, 'completed');
-  assert.equal(completedRun.completion.evaluation.evaluationId, completed.evaluationId);
-  assert.equal(Object.hasOwn(completedRun, 'completionFacts'), false);
+  assert.equal(collected.checks[0].status, 'passed');
+  assert.ok(readFileSync(join(resolve(prepared.runPath, '..'), 'change.patch'), 'utf8'));
+  const changedFile = collected.changedFiles[0].path;
+  writeFileSync(collected.handoffPath, `${JSON.stringify({
+    protocol: 'semantic-delegation',
+    schemaVersion: '1',
+    systemMeaningUpdate: 'The packed fixture now exports value 2 instead of value 1.',
+    materialClaims: [{
+      id: 'claim:behavior',
+      dimension: 'behavior',
+      statement: 'The fixture export changed from 1 to 2.',
+      adoptionConsequence: 'Consumers observe the new exported value.',
+      adoptionCritical: true,
+      basis: 'agent-judgment',
+      evidence: { changedFiles: [changedFile], checks: ['fixture-check'] },
+      falsification: {
+        failureHypothesis: 'The packed fixture could retain the prior exported value.',
+        attempt: 'Inspected the complete patch and ran the frozen fixture check.',
+        status: 'supported',
+        supportingEvidence: { changedFiles: [changedFile], checks: ['fixture-check'] },
+        counterEvidence: {},
+        conclusion: 'No conflicting export remained in the complete collected change.',
+      },
+    }],
+    residualUnknowns: [],
+    reviewMap: [{
+      id: 'review:export',
+      priority: 'must-read',
+      changedFiles: [changedFile],
+      checkIds: ['fixture-check'],
+      claimIds: ['claim:behavior'],
+      unknownIds: [],
+      rationale: 'The only changed file owns the public fixture behavior.',
+      prevents: 'Adopting an unintended exported value.',
+    }],
+  }, null, 2)}\n`, 'utf8');
+  const finalized = runInstalledCli([
+    'change', 'finalize', project, '--run', prepared.runId, '--json',
+  ]);
+  assert.equal(finalized.status, 'handoff-ready');
+  assert.equal(finalized.state, 'completed');
+  assert.match(finalized.humanAuthorityNotice, /human review only/);
+  const explained = runInstalledCli([
+    'change', 'explain', project, '--run', prepared.runId, '--json',
+  ]);
+  assert.equal(explained.state, 'completed');
+  assert.equal(explained.evaluation.status, 'handoff-ready');
 
   const status = runInstalledCli(['status', project, '--json']);
   assert.equal(status.controlPlane.kind, 'cli');
   assert.equal(status.installation.status, 'current');
+  const doctor = runInstalledCli(['doctor', project, '--strict', '--json']);
+  assert.equal(doctor.status, 'ok');
+  assert.equal(doctor.worktree, 'supported');
+
+  const legacy = run(process.execPath, [cliEntrypoint, 'change', 'complete'], consumer, {
+    shell: false,
+    expectStatus: 2,
+  });
+  assert.match(legacy.stderr, /unknown command 'complete'/i);
 } finally {
   rmSync(temporary, { recursive: true, force: true });
-}
-
-function attestationsForDecision(decision) {
-  const items = [
-    ...decision.guidance.required.map((item) => ({ ...item, section: 'required' })),
-    ...decision.guidance.consider.map((item) => ({ ...item, section: 'consider' })),
-    ...decision.guidance.avoid.map((item) => ({ ...item, section: 'avoid' })),
-  ];
-  const attestations = items.map((item) => {
-    const evidenceRefs = [{
-      kind: 'diff',
-      ref: `diff:${item.id}`,
-      file: 'src/example.ts',
-    }];
-    if (decision.verificationPlan.semanticChecks.some((check) =>
-      check.guidanceId === item.id)) {
-      evidenceRefs.push({
-        kind: 'semantic',
-        ref: `semantic:${item.id}`,
-        description: `Inspected ${item.id} against the exported module change.`,
-      });
-    }
-    return {
-      guidanceId: item.id,
-      verdict: 'satisfied',
-      evidenceRefs,
-      explanation: `Inspected ${item.id} against the packed-CLI change.`,
-    };
-  });
-  for (const tension of decision.guidance.tensions) {
-    attestations.push({
-      guidanceId: tension.id,
-      verdict: 'satisfied',
-      evidenceRefs: [{
-        kind: 'semantic',
-        ref: `semantic:${tension.id}`,
-        description: tension.resolution,
-      }],
-      explanation: `Applied the compiled resolution for ${tension.id}.`,
-    });
-  }
-  return attestations;
 }
 
 function runJson(command, args, cwd, options) {
@@ -327,7 +211,7 @@ function run(
   command,
   args,
   cwd,
-  { shell = process.platform === 'win32' } = {},
+  { shell = process.platform === 'win32', expectStatus = 0 } = {},
 ) {
   const result = spawnSync(command, args, {
     cwd,
@@ -335,15 +219,11 @@ function run(
     maxBuffer: 20 * 1024 * 1024,
     shell,
   });
-  assert.equal(
-    result.status,
-    0,
-    [
-      `Command failed: ${command} ${args.join(' ')}`,
-      result.stdout,
-      result.stderr,
-    ].join('\n'),
-  );
+  assert.equal(result.status, expectStatus, [
+    `Command returned unexpected status: ${command} ${args.join(' ')}`,
+    result.stdout,
+    result.stderr,
+  ].join('\n'));
   return result;
 }
 
@@ -357,11 +237,7 @@ function npmCommand() {
 
 function packPackage(packageDirectory, destination) {
   const before = new Set(readdirSync(destination));
-  run(
-    'corepack',
-    ['pnpm', 'pack', '--pack-destination', destination],
-    packageDirectory,
-  );
+  run('corepack', ['pnpm', 'pack', '--pack-destination', destination], packageDirectory);
   const created = readdirSync(destination)
     .filter((name) => name.endsWith('.tgz') && !before.has(name));
   assert.equal(created.length, 1, `Expected one tarball from ${packageDirectory}.`);

@@ -1,619 +1,300 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { randomUUID } from 'node:crypto';
 import {
   existsSync,
   mkdtempSync,
   mkdirSync,
   readFileSync,
-  readdirSync,
   rmSync,
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
-import { PassThrough } from 'node:stream';
+import { join } from 'node:path';
 import test from 'node:test';
 
-import { CliError } from '../src/errors.ts';
 import { formatCliOutput, runCli } from '../src/cli.ts';
-import type { PromptProvider } from '../src/runtime-context.ts';
+import { CliError } from '../src/errors.ts';
 
-test('CLI owns init, bootstrap, RCCL, and change prepare without installation paths', async () => {
-  const root = mkdtempSync(join(tmpdir(), 'resonant-cli-flow-'));
+test('CLI exposes the complete prepare, collect, finalize, and explain lifecycle', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'resonant-cli-lifecycle-'));
+  const inputRoot = mkdtempSync(join(tmpdir(), 'resonant-cli-input-'));
   try {
-    mkdirSync(join(root, 'src'), { recursive: true });
-    writeFileSync(join(root, 'package.json'), '{"name":"cli-fixture","type":"module"}\n', 'utf8');
-    writeFileSync(join(root, 'src', 'example.ts'), 'export const value = 1;\n', 'utf8');
-
-    const initialized = await runCli([
-      'init',
-      root,
-      '--adapter',
-      'codex',
-      '--json',
-    ]);
-    assert.equal((initialized.output as { status: string }).status, 'initialized');
-    assert.equal(initialized.json, true);
-
-    const bootstrap = await runCli(['bootstrap', 'prepare', root, '--json']);
-    assert.equal((bootstrap.output as { status: string }).status, 'prepared');
-    const bootstrapOutput = bootstrap.output as {
-      prompt: string;
-      signals?: unknown;
-    };
-    assert.match(bootstrapOutput.prompt, /Inspect the repository with your native tools/);
-    assert.equal(Object.hasOwn(bootstrapOutput, 'signals'), false);
-
-    const bootstrapCandidate = join(root, 'bootstrap-candidate.json');
-    writeFileSync(bootstrapCandidate, JSON.stringify({
-      selectedLayers: ['builtin/languages/typescript'],
-      evidence: [{
-        layerId: 'builtin/languages/typescript',
-        paths: ['missing-config.json'],
-      }],
-    }), 'utf8');
-    await assert.rejects(
-      () => runCli([
-        'bootstrap',
-        'commit',
-        root,
-        '--input',
-        bootstrapCandidate,
-        '--json',
-      ]),
-      /names a missing repository file/,
-    );
-
-    writeFileSync(bootstrapCandidate, JSON.stringify({
-      selectedLayers: ['builtin/languages/typescript'],
-      evidence: [{
-        layerId: 'builtin/languages/typescript',
-        paths: ['package.json'],
-        rationale: 'The package manifest declares the TypeScript project boundary.',
-      }],
-    }), 'utf8');
-    const committedBootstrap = await runCli([
-      'bootstrap',
-      'commit',
-      root,
-      '--input',
-      bootstrapCandidate,
-      '--json',
-    ]);
-    assert.equal((committedBootstrap.output as { status: string }).status, 'created');
-    const humanBootstrap = formatCliOutput({
-      ...committedBootstrap,
-      json: false,
-      color: false,
-    });
-    assert.match(humanBootstrap, /Selected layers/);
-    assert.match(humanBootstrap, /builtin\/languages\/typescript/);
-    assert.match(humanBootstrap, /package\.json/);
-    const gitignore = readFileSync(join(root, '.gitignore'), 'utf8');
-    assert.equal(gitignore.match(/# resonant-code:begin/g)?.length, 1);
-    assert.equal(gitignore.match(/# resonant-code:end/g)?.length, 1);
-    assert.doesNotMatch(gitignore, /# resonant-code: generated runtime artifacts/);
-
-    const context = await runCli([
-      'context',
-      'prepare',
-      root,
-      '--evidence',
-      'src/example.ts:1-1',
-      '--json',
-    ]);
-    assert.equal((context.output as { status: string }).status, 'ready');
-    const contextContract = (context.output as {
-      contract: {
-        schemaVersion: string;
-        requestId: string;
-        contextFingerprint: string;
-        evidenceWindows: Array<{ windowId: string }>;
-      };
-    }).contract;
-    const contextProposal = join(root, 'context-proposal.json');
-    writeFileSync(contextProposal, JSON.stringify({
-      schemaVersion: contextContract.schemaVersion,
-      requestId: contextContract.requestId,
-      contextFingerprint: contextContract.contextFingerprint,
-      replace: false,
-      observations: [{
-        id: 'obs-example-export-boundary',
-        category: 'architecture',
-        scope: 'src/**',
-        statement: 'The example export is defined in src/example.ts.',
-        affects: ['api-shape'],
-        decisionImpact: 'Changing the export elsewhere would split the public shape.',
-        semanticConfidence: 'high',
-        evidence: [{
-          windowId: contextContract.evidenceWindows[0].windowId,
-        }],
-      }],
-    }), 'utf8');
-    const contextContractPath = writeJsonFixture(
-      root,
-      'context-contract.json',
-      context.output,
-    );
-    const committedContext = await runCli([
-      'context',
-      'commit',
-      root,
-      '--contract',
-      contextContractPath,
-      '--input',
-      contextProposal,
-      '--json',
-    ]);
-    const contextFingerprint = (committedContext.output as {
-      document: {
-        observations: Array<{
-          lifecycle: { contentFingerprint: string };
-        }>;
-      };
-    }).document.observations[0].lifecycle.contentFingerprint;
-    const humanContext = formatCliOutput({
-      ...committedContext,
-      json: false,
-      color: false,
-    });
-    assert.match(humanContext, /obs-example-export-boundary/);
-    assert.match(humanContext, /Changing the export elsewhere/);
-    assert.match(humanContext, new RegExp(contextFingerprint));
-    await assert.rejects(
-      () => runCli([
-        'context',
-        'approve',
-        root,
-        '--id',
-        'obs-example-export-boundary',
-        '--fingerprint',
-        `obs-example-export-boundary=${'0'.repeat(64)}`,
-        '--approved-by',
-        'reviewer',
-        '--json',
-      ]),
-      /changed after review/,
-    );
-    const approvedContext = await runCli([
-      'context',
-      'approve',
-      root,
-      '--id',
-      'obs-example-export-boundary',
-      '--fingerprint',
-      `obs-example-export-boundary=${contextFingerprint}`,
-      '--approved-by',
-      'reviewer',
-      '--json',
-    ]);
-    assert.equal((approvedContext.output as { status: string }).status, 'approved');
-
-    git(root, ['init', '-q']);
-    git(root, ['config', 'user.email', 'cli@example.invalid']);
-    git(root, ['config', 'user.name', 'CLI Test']);
+    initializeRepository(root);
+    writeFileSync(join(root, 'source.txt'), 'before\n', 'utf8');
     git(root, ['add', '.']);
     git(root, ['commit', '-qm', 'initial']);
+    const inputPath = join(inputRoot, 'prepare.json');
+    writePrepareInput(inputPath, true);
 
-    const prepared = await runCli([
+    const prepareExecution = await runCli([
       'change',
       'prepare',
       root,
-      '--task',
-      'Document the exported example',
-      '--change-type',
-      'docs',
-      '--target',
-      'src/example.ts',
-      '--risk',
-      'low',
-      '--scope',
-      'local',
-      '--guidance-byte-limit',
-      '20000',
+      '--input',
+      inputPath,
       '--json',
     ]);
-    const decision = prepared.output as {
-      status: string;
-      runId?: string;
-      runPath?: string;
-    };
-    assert.equal(decision.status, 'verification-required');
-    assert.equal(decision.runId, undefined);
-    assert.equal(decision.runPath, undefined);
-    assert.equal(existsSync(join(root, '.resonant-code', 'runs')), false);
-
-    const status = await runCli(['status', root, '--json']);
-    assert.equal((status.output as {
-      controlPlane: { kind: string };
-      installation: { status: string };
-    }).controlPlane.kind, 'cli');
-    assert.equal((status.output as {
-      installation: { status: string };
-    }).installation.status, 'current');
-    const doctor = await runCli(['doctor', root, '--strict', '--json']);
-    assert.equal((doctor.output as { status: string }).status, 'ok');
-    assert.equal(doctor.exitCode, 0);
-    const doctorReadiness = (doctor.output as {
-      readiness: {
-        required: Array<{ code: string }>;
-        recommended: Array<{ code: string }>;
-        optional: Array<{ code: string }>;
-      };
-    }).readiness;
-    assert.deepEqual(doctorReadiness.required, []);
-    assert.equal(
-      doctorReadiness.recommended.some((action) => action.code === 'local-augment-absent'),
-      false,
-    );
-    assert.equal(
-      doctorReadiness.optional.some((action) => action.code === 'rccl-absent'),
-      false,
-    );
-    assert.ok(
-      doctorReadiness.optional.some((action) =>
-        action.code === 'team-checks-absent'),
-    );
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
-});
-
-test('change lifecycle freezes and executes an ephemeral Host task verification plan', async () => {
-  const root = mkdtempSync(join(tmpdir(), 'resonant-cli-run-'));
-  const taskCheckConfig = join(
-    tmpdir(),
-    `resonant-task-checks-${randomUUID()}.json`,
-  );
-  const taskProvenance = join(
-    tmpdir(),
-    `resonant-task-provenance-${randomUUID()}.json`,
-  );
-  try {
-    mkdirSync(join(root, 'src'), { recursive: true });
-    writeFileSync(join(root, 'package.json'), '{"name":"run-fixture","type":"module"}\n', 'utf8');
-    writeFileSync(join(root, 'src', 'example.ts'), 'export const value = 1;\n', 'utf8');
-    git(root, ['init', '-q']);
-    git(root, ['config', 'user.email', 'run@example.invalid']);
-    git(root, ['config', 'user.name', 'Run Test']);
-    git(root, ['add', '.']);
-    git(root, ['commit', '-qm', 'initial']);
-    writeFileSync(taskProvenance, JSON.stringify({
-      description: 'human-stated',
-      changeType: 'agent-inferred',
-      targets: {
-        'src/example.ts': 'repository-derived',
-      },
-      risk: 'agent-inferred',
-      scope: 'agent-inferred',
-    }), 'utf8');
-
-    const prepareArgs = [
-      'change',
-      'prepare',
-      root,
-      '--task',
-      'Document the exported example',
-      '--change-type',
-      'docs',
-      '--target',
-      'src/example.ts',
-      '--risk',
-      'low',
-      '--scope',
-      'local',
-      '--guidance-byte-limit',
-      '20000',
-      '--provenance-file',
-      taskProvenance,
-      '--json',
-    ];
-    const blocked = (await runCli(prepareArgs)).output as {
-      status: string;
-      checkPlan: Array<{ id: string }>;
-      runId?: string;
-    };
-    assert.equal(blocked.status, 'verification-required');
-    assert.equal(blocked.runId, undefined);
-    assert.equal(existsSync(join(root, '.resonant-code', 'runs')), false);
-
-    writeFileSync(taskCheckConfig, JSON.stringify({
-      version: '1.0',
-      checks: [
-        ...blocked.checkPlan.map((check) => ({
-          id: check.id,
-          rationale: `Verify ${check.id} for the task fixture.`,
-          command: [process.execPath, '-e', 'process.exit(0)'],
-          timeoutMs: 10_000,
-        })),
-        {
-          id: 'smoke',
-          rationale: 'Exercise the changed public entrypoint.',
-          command: [process.execPath, '-e', 'process.exit(0)'],
-          timeoutMs: 10_000,
-        },
-      ],
-    }, null, 2), 'utf8');
-
-    const prepared = (await runCli([
-      ...prepareArgs.slice(0, -1),
-      '--check-config',
-      taskCheckConfig,
-      '--json',
-    ])).output as {
+    const prepared = prepareExecution.output as {
       status: string;
       runId: string;
       runPath: string;
-      evaluationInputPath: string;
-      activation: {
-        targets: string[];
-        techStack: string[];
-      };
-      task: {
-        provenance: Array<{ field: string; source: string; value: string }>;
-      };
-      attestationPlan: {
-        attentionItems: unknown[];
-        optionalConsiderIds: string[];
-      };
-      verificationPlan: {
-        commands: Array<{ id: string; sources: string[] }>;
-      };
-      checkPlan: Array<{ id: string; status: string }>;
-      nextStep: string;
+      contract: { authority: { humanEvents: Array<{ content: string }> } };
     };
-    assert.ok(prepared.status === 'compiled' || prepared.status === 'needs-attention');
-    assert.match(prepared.runId, /^[0-9a-f-]{36}$/);
-    assert.deepEqual(prepared.activation.targets, ['src/example.ts']);
-    assert.deepEqual(prepared.activation.techStack, ['typescript']);
-    assert.equal(
-      prepared.task.provenance.find((item) => item.field === 'description')?.source,
-      'human-stated',
-    );
-    assert.equal(
-      prepared.task.provenance.find((item) => item.field === 'targets')?.source,
-      'repository-derived',
-    );
-    assert.ok(prepared.attestationPlan.optionalConsiderIds.length > 0);
-    assert.deepEqual(
-      prepared.verificationPlan.commands
-        .find((check) => check.id === 'smoke')?.sources,
-      ['host-task'],
-    );
-    assert.ok(prepared.checkPlan.every((check) => check.status === 'configured'));
-    assert.ok(prepared.checkPlan.some((check) => check.id === 'smoke'));
-    assert.match(prepared.nextStep, /compiled task contract/);
-    assert.match(prepared.nextStep, /try to falsify each attentionItem/);
-    const humanPrepared = formatCliOutput({
-      command: 'change prepare',
-      json: false,
-      color: false,
-      exitCode: 0,
-      output: prepared,
-    });
-    assert.match(humanPrepared, /Human semantic contract/);
-    assert.match(humanPrepared, /Agent interpretation/);
-    assert.match(humanPrepared, /Repository and Runtime facts/);
-    assert.match(humanPrepared, /Agent-selected task check/);
-    assert.doesNotMatch(humanPrepared, /Run file:/);
-    assert.doesNotMatch(humanPrepared, new RegExp(prepared.runId));
-    const run = JSON.parse(readFileSync(prepared.runPath, 'utf8'));
-    assert.equal(run.runId, prepared.runId);
-    assert.equal(run.workflow, 'change');
-    assert.equal(run.state, 'prepared');
-    assert.deepEqual(
-      JSON.parse(readFileSync(prepared.evaluationInputPath, 'utf8')),
-      { attestations: [], exceptions: [] },
-    );
-    assert.ok(run.worktreeBaseline.entries.every((entry: { path: string }) =>
-      !entry.path.startsWith('.resonant-code/runs/')));
-    rmSync(taskCheckConfig, { force: true });
+    assert.equal(prepared.status, 'prepared');
+    assert.equal(prepared.contract.authority.humanEvents[0].content, TASK);
+    assert.equal(existsSync(prepared.runPath), true);
+    const humanPrepare = formatCliOutput({ ...prepareExecution, json: false, color: false });
+    assert.match(humanPrepare, /Exact Human Events/);
+    assert.match(humanPrepare, /Agent interpretations/);
+    assert.match(humanPrepare, /Delegation boundary/);
+    assert.match(humanPrepare, /Frozen verification/);
 
-    const runsDirectory = join(root, '.resonant-code', 'runs');
-    const oldCompletedRuns = Array.from({ length: 51 }, () => {
-      const runId = randomUUID();
-      const runDirectory = join(runsDirectory, runId);
-      mkdirSync(join(runDirectory, 'checks'), { recursive: true });
-      writeFileSync(
-        join(runDirectory, 'run.json'),
-        `${JSON.stringify({ state: 'completed' })}\n`,
-        'utf8',
-      );
-      writeFileSync(join(runDirectory, 'checks', 'fixture.log'), 'old\n', 'utf8');
-      return runDirectory;
-    });
-    const retainedPreparedRun = join(runsDirectory, randomUUID());
-    mkdirSync(retainedPreparedRun);
-    writeFileSync(
-      join(retainedPreparedRun, 'run.json'),
-      `${JSON.stringify({ state: 'prepared' })}\n`,
-      'utf8',
-    );
-
-    writeFileSync(join(root, 'src', 'example.ts'), 'export const value = 2;\n', 'utf8');
-    const completed = (await runCli([
+    writeFileSync(join(root, 'source.txt'), 'after\n', 'utf8');
+    const collectExecution = await runCli([
       'change',
-      'complete',
+      'collect',
       root,
       '--run',
       prepared.runId,
       '--json',
-    ])).output as {
+    ]);
+    const collected = collectExecution.output as {
       status: string;
-      runId: string;
-      runPath: string;
-      checks: Array<{
-        id: string;
-        outputRefs?: { stdout?: string; stderr?: string };
-      }>;
-      actionRequired: unknown[];
-      informational: unknown[];
+      factCollectionId: string;
+      changedFiles: Array<{ id: string; path: string; operation: string }>;
+      checks: Array<{ id: string; status: string }>;
+      handoffPath: string;
     };
-    assert.equal(completed.status, 'ready-for-adoption');
-    assert.deepEqual(completed.actionRequired, []);
-    assert.ok(completed.informational.length > 0);
-    assert.equal(completed.runId, prepared.runId);
-    assert.equal(completed.runPath, prepared.runPath);
-    assert.ok(completed.checks.every((check) => check.outputRefs === undefined));
-    assert.ok(completed.checks.some((check) => check.id === 'smoke'));
-    const humanCompleted = formatCliOutput({
-      command: 'change complete',
-      json: false,
-      color: false,
-      exitCode: 0,
-      output: completed,
-    });
-    assert.match(humanCompleted, /Change ready for adoption/);
-    assert.match(humanCompleted, /decide whether to adopt it/);
-    assert.doesNotMatch(humanCompleted, /Run file:/);
-    assert.doesNotMatch(humanCompleted, new RegExp(prepared.runId));
-    assert.equal(
-      existsSync(join(dirname(prepared.runPath), 'checks')),
-      false,
+    assert.equal(collected.status, 'facts-collected');
+    assert.deepEqual(
+      collected.changedFiles.map((file) => [file.path, file.operation]),
+      [['source.txt', 'modified']],
     );
-    const completedRun = JSON.parse(readFileSync(prepared.runPath, 'utf8'));
-    assert.equal(completedRun.state, 'completed');
-    assert.equal(Object.hasOwn(completedRun, 'completionFacts'), false);
-    assert.equal(existsSync(join(root, '.resonant-code', 'feedback')), false);
-    const retainedRunStates = readdirSync(runsDirectory)
-      .map((runId) =>
-        JSON.parse(readFileSync(join(runsDirectory, runId, 'run.json'), 'utf8')).state);
-    assert.equal(retainedRunStates.filter((state) => state === 'completed').length, 50);
-    assert.equal(retainedRunStates.filter((state) => state === 'prepared').length, 1);
-    assert.ok(oldCompletedRuns.some((runDirectory) => !existsSync(runDirectory)));
-    assert.equal(existsSync(retainedPreparedRun), true);
+    assert.equal(collected.checks[0].status, 'passed');
+    const humanCollect = formatCliOutput({ ...collectExecution, json: false, color: false });
+    assert.match(humanCollect, /Actual change collected/);
+    assert.match(humanCollect, /Changed files: 1/);
+    assert.match(humanCollect, /Checks: 1/);
 
-    const explained = (await runCli([
+    writeHandoff(
+      collected.handoffPath,
+      collected.changedFiles[0].path,
+      'fixture-check',
+    );
+    const finalizeExecution = await runCli([
+      'change',
+      'finalize',
+      root,
+      '--run',
+      prepared.runId,
+      '--json',
+    ]);
+    const finalized = finalizeExecution.output as {
+      status: string;
+      state: string;
+      humanAuthorityNotice: string;
+      runtimeFacts: {
+        factCollectionId: string;
+        changedFiles: Array<{ path: string; operation: string }>;
+        checks: Array<{ id: string; status: string }>;
+      };
+    };
+    assert.equal(finalized.status, 'handoff-ready');
+    assert.equal(finalized.state, 'completed');
+    assert.match(finalized.humanAuthorityNotice, /human review only/);
+    assert.equal(finalized.runtimeFacts.factCollectionId, collected.factCollectionId);
+    assert.deepEqual(
+      finalized.runtimeFacts.changedFiles.map((file) => [file.path, file.operation]),
+      [['source.txt', 'modified']],
+    );
+    assert.deepEqual(
+      finalized.runtimeFacts.checks.map((check) => [check.id, check.status]),
+      [['fixture-check', 'passed']],
+    );
+    const humanFinalize = formatCliOutput({ ...finalizeExecution, json: false, color: false });
+    assert.match(humanFinalize, /System meaning update/);
+    assert.match(humanFinalize, /Runtime facts/);
+    assert.match(humanFinalize, /source\.txt — modified/);
+    assert.match(humanFinalize, /fixture-check — passed/);
+    assert.match(humanFinalize, /agent-judgment/);
+    assert.match(humanFinalize, /Review Map/);
+    assert.match(humanFinalize, /Adoption authority/);
+    assert.doesNotMatch(humanFinalize, /ready for adoption/i);
+
+    const explainExecution = await runCli([
       'change',
       'explain',
       root,
       '--run',
       prepared.runId,
       '--json',
-    ])).output as {
+    ]);
+    const explained = explainExecution.output as {
       state: string;
-      runId: string;
-      evaluation: { evaluationId: string };
+      contract: unknown;
+      factBundle: unknown;
+      handoff: unknown;
+      evaluation: { status: string };
     };
     assert.equal(explained.state, 'completed');
-    assert.equal(explained.runId, prepared.runId);
-    assert.equal(
-      explained.evaluation.evaluationId,
-      completedRun.completion.evaluation.evaluationId,
-    );
+    assert.ok(explained.contract);
+    assert.ok(explained.factBundle);
+    assert.ok(explained.handoff);
+    assert.equal(explained.evaluation.status, 'handoff-ready');
+    const humanExplain = formatCliOutput({ ...explainExecution, json: false, color: false });
+    assert.match(humanExplain, /Use --json for exact Human Events/);
   } finally {
     rmSync(root, { recursive: true, force: true });
-    rmSync(taskCheckConfig, { force: true });
-    rmSync(taskProvenance, { force: true });
+    rmSync(inputRoot, { recursive: true, force: true });
   }
 });
 
-test('CLI rejects removed change aliases and validates RCCL through Core', async () => {
-  const root = mkdtempSync(join(tmpdir(), 'resonant-cli-validation-'));
-  try {
-    await assert.rejects(
-      () => runCli(['change', 'auto']),
-      /unknown command 'auto'/i,
-    );
+test('human finalize keeps actionable attention distinct from the Review Map', () => {
+  const rendered = formatCliOutput({
+    command: 'change finalize',
+    json: false,
+    color: false,
+    exitCode: 0,
+    output: {
+      status: 'needs-attention',
+      systemMeaningUpdate: 'The implementation changed the verification boundary.',
+      runtimeFacts: {
+        factCollectionId: 'sha256:fixture',
+        changedFiles: [{ path: 'package.json', operation: 'modified', representation: 'text' }],
+        checks: [{ id: 'test', status: 'passed' }],
+        verifierMutations: [{
+          checkId: 'test',
+          path: 'package.json',
+          role: 'command-definition',
+        }],
+        patch: { byteLength: 42, digest: 'sha256:patch' },
+      },
+      materialClaims: [],
+      residualUnknowns: [],
+      attention: [{
+        code: 'verifier-surface-changed',
+        summary: 'Verification definition package.json changed for check test.',
+        adoptionImpact: 'The check is not independent of the implementation.',
+        references: { changedFiles: ['package.json'], checks: ['test'] },
+        resolution: {
+          kind: 'direct-review',
+          action: 'Review the verifier change and seek independent evidence.',
+        },
+      }],
+      reviewMap: [{
+        priority: 'must-read',
+        changedFiles: ['package.json'],
+        checkIds: ['test'],
+        claimIds: [],
+        unknownIds: [],
+        rationale: 'The acceptance surface changed.',
+        prevents: 'Trusting a self-modified verifier.',
+      }],
+      nextStep: 'Resolve the disclosed attention.',
+    },
+  });
 
-    mkdirSync(join(root, '.resonant-code'), { recursive: true });
-    writeFileSync(
-      join(root, '.resonant-code', 'rccl.yaml'),
-      'version: "1.0"\nobservations:\n  - id: incomplete\n',
-      'utf8',
-    );
-    const status = await runCli(['status', root, '--json']);
-    const output = status.output as {
-      sources: { rccl: string };
-      readiness: { required: Array<{ code: string }> };
-    };
-    assert.equal(output.sources.rccl, 'invalid');
-    assert.ok(output.readiness.required.some((action) => action.code === 'rccl-invalid'));
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
+  assert.match(rendered, /Runtime facts/);
+  assert.match(rendered, /Attention/);
+  assert.match(rendered, /Impact:.*not independent/);
+  assert.match(rendered, /Inspect:.*package\.json.*test/);
+  assert.match(rendered, /Action \(direct-review\):/);
+  assert.match(rendered, /Review Map/);
+  assert.ok(rendered.indexOf('Attention') < rendered.indexOf('Review Map'));
 });
 
-test('strict doctor accepts uninitialized Git links without persistent team check defaults', async () => {
-  const root = mkdtempSync(join(tmpdir(), 'resonant-cli-readiness-levels-'));
+test('human prepare presents executable preflight as an actionable preparation issue', () => {
+  const rendered = formatCliOutput({
+    command: 'change prepare',
+    json: false,
+    color: false,
+    exitCode: 0,
+    output: {
+      status: 'verification-required',
+      issues: [{
+        path: 'verification.checks[0].argv[0]',
+        message: 'Check test cannot resolve executable "missing".',
+        remediation: 'Restore the executable or select a runnable explicit check.',
+      }],
+      nextStep: 'Prepare again.',
+    },
+  });
+
+  assert.match(rendered, /Preparation issues/);
+  assert.match(rendered, /verification\.checks\[0\]\.argv\[0\]/);
+  assert.match(rendered, /Action:.*Restore the executable/);
+  assert.doesNotMatch(rendered, /Authority issues/);
+});
+
+test('CLI non-runnable outcomes write no run and JSON mode stays prompt- and ANSI-free', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'resonant-cli-no-run-'));
+  const inputRoot = mkdtempSync(join(tmpdir(), 'resonant-cli-input-'));
   try {
-    await runCli(['init', root, '--adapter', 'codex', '--json']);
-    git(root, ['init', '-q']);
-    git(root, ['config', 'user.email', 'readiness@example.invalid']);
-    git(root, ['config', 'user.name', 'Readiness Test']);
+    initializeRepository(root);
+    writeFileSync(join(root, 'source.txt'), 'before\n', 'utf8');
     git(root, ['add', '.']);
     git(root, ['commit', '-qm', 'initial']);
-    const head = gitOutput(root, ['rev-parse', 'HEAD']);
-    git(root, [
-      'update-index',
-      '--add',
-      '--cacheinfo',
-      `160000,${head},vendor/dependency`,
-    ]);
-    git(root, ['commit', '-qm', 'add uninitialized dependency']);
-
-    const doctor = await runCli(['doctor', root, '--strict', '--json']);
-    const output = doctor.output as {
-      status: string;
-      sources: { worktree: string };
-      readiness: {
-        status: string;
-        required: Array<{ code: string }>;
-        recommended: Array<{ code: string }>;
-        optional: Array<{ code: string }>;
-      };
-    };
-    assert.equal(doctor.exitCode, 0);
-    assert.equal(output.status, 'ok');
-    assert.equal(output.sources.worktree, 'supported');
-    assert.equal(output.readiness.status, 'ready');
-    assert.deepEqual(output.readiness.required, []);
-    assert.ok(
-      output.readiness.recommended.some((action) =>
-        action.code === 'local-augment-absent'),
-    );
-    assert.ok(
-      output.readiness.optional.some((action) => action.code === 'rccl-absent'),
-    );
-    assert.ok(
-      output.readiness.optional.some((action) =>
-        action.code === 'team-checks-absent'),
-    );
-
-    writeFileSync(join(root, '.resonant-code', 'checks.json'), JSON.stringify({
-      version: '1.0',
-      checks: [{
-        id: 'test',
-        command: [process.execPath, '-e', 'process.exit(0)'],
-        timeoutMs: 10_000,
-      }],
-    }), 'utf8');
-    const invalidDoctor = await runCli([
-      'doctor',
+    const inputPath = join(inputRoot, 'prepare.json');
+    writePrepareInput(inputPath, false);
+    const execution = await runCli([
+      'change',
+      'prepare',
       root,
-      '--strict',
+      '--input',
+      inputPath,
       '--json',
-    ]);
-    assert.equal(invalidDoctor.exitCode, 2);
-    assert.equal(
-      (invalidDoctor.output as { status: string }).status,
-      'blocked',
-    );
-    assert.ok((invalidDoctor.output as {
-      readiness: { required: Array<{ code: string }> };
-    }).readiness.required.some((item) => item.code === 'checks-invalid'));
+    ], {
+      interactive: true,
+      color: true,
+    });
+    assert.equal((execution.output as { status: string }).status, 'verification-required');
+    assert.equal(execution.exitCode, 0);
+    assert.equal(existsSync(join(root, '.resonant-code', 'runs')), false);
+    const rendered = formatCliOutput(execution);
+    assert.deepEqual(JSON.parse(rendered), execution.output);
+    assert.doesNotMatch(rendered, /\u001B\[/);
   } finally {
     rmSync(root, { recursive: true, force: true });
+    rmSync(inputRoot, { recursive: true, force: true });
   }
 });
 
-test('Commander exposes nested help and classifies usage errors', async () => {
-  const help = await runCli(['change', 'prepare', '--help']);
-  assert.equal(help.exitCode, 0);
-  assert.equal(help.json, false);
-  assert.match(String(help.output), /--guidance-byte-limit/);
-  assert.doesNotMatch(String(help.output), /--mode/);
+test('CLI finalize reports facts-stale before parsing the Host handoff', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'resonant-cli-stale-'));
+  const inputRoot = mkdtempSync(join(tmpdir(), 'resonant-cli-input-'));
+  try {
+    initializeRepository(root);
+    writeFileSync(join(root, 'source.txt'), 'before\n', 'utf8');
+    git(root, ['add', '.']);
+    git(root, ['commit', '-qm', 'initial']);
+    const inputPath = join(inputRoot, 'prepare.json');
+    writePrepareInput(inputPath, true);
+    const prepared = (await runCli([
+      'change', 'prepare', root, '--input', inputPath, '--json',
+    ])).output as { runId: string };
+    writeFileSync(join(root, 'source.txt'), 'first\n', 'utf8');
+    const collected = (await runCli([
+      'change', 'collect', root, '--run', prepared.runId, '--json',
+    ])).output as { handoffPath: string };
+    writeFileSync(collected.handoffPath, '{not valid JSON', 'utf8');
+    writeFileSync(join(root, 'source.txt'), 'repair\n', 'utf8');
+    const finalized = await runCli([
+      'change', 'finalize', root, '--run', prepared.runId, '--json',
+    ]);
+    assert.equal((finalized.output as { status: string }).status, 'facts-stale');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+    rmSync(inputRoot, { recursive: true, force: true });
+  }
+});
+
+test('Commander exposes only the new change lifecycle and classifies usage errors', async () => {
+  const help = await runCli(['change', '--help']);
+  assert.match(String(help.output), /prepare/);
+  assert.match(String(help.output), /collect/);
+  assert.match(String(help.output), /finalize/);
+  assert.match(String(help.output), /explain/);
+  assert.doesNotMatch(String(help.output), /\n\s+complete\s/);
 
   await assert.rejects(
     () => runCli(['change', 'prepare']),
@@ -621,350 +302,156 @@ test('Commander exposes nested help and classifies usage errors', async () => {
       assert.ok(error instanceof CliError);
       assert.equal(error.code, 'USAGE_ERROR');
       assert.equal(error.exitCode, 2);
-      assert.match(error.message, /required option '--task/);
+      assert.match(error.message, /required option '--input/);
       return true;
     },
   );
-
   await assert.rejects(
-    () => runCli([
-      'change',
-      'prepare',
-      '--task',
-      'Missing semantic fields fixture',
-    ]),
-    (error: unknown) => {
-      assert.ok(error instanceof CliError);
-      assert.equal(error.code, 'USAGE_ERROR');
-      assert.match(error.message, /required option '--change-type/);
-      return true;
-    },
+    () => runCli(['change', 'complete']),
+    /unknown command 'complete'/i,
   );
-
-  await assert.rejects(
-    () => runCli([
-      'change',
-      'prepare',
-      '--task',
-      'Invalid option fixture',
-      '--change-type',
-      'bugfix',
-      '--target',
-      'src/example.ts',
-      '--risk',
-      'critical',
-      '--scope',
-      'local',
-    ]),
-    (error: unknown) => {
-      assert.ok(error instanceof CliError);
-      assert.equal(error.code, 'USAGE_ERROR');
-      assert.equal(error.exitCode, 2);
-      assert.match(error.message, /Invalid risk/);
-      return true;
-    },
-  );
+  await assert.rejects(() => runCli(['bootstrap']), /unknown command 'bootstrap'/i);
+  await assert.rejects(() => runCli(['context']), /unknown command 'context'/i);
 });
 
-test('machine mode never prompts or emits ANSI', async () => {
-  const root = mkdtempSync(join(tmpdir(), 'resonant-cli-machine-'));
-  let promptCalls = 0;
-  const prompts: PromptProvider = {
-    async selectAdapters() {
-      promptCalls += 1;
-      throw new Error('machine mode attempted to prompt');
-    },
-    async selectGuidance() {
-      promptCalls += 1;
-      throw new Error('machine mode attempted to prompt');
-    },
-  };
+test('status and strict doctor report only adapter, legacy, and Git readiness', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'resonant-cli-status-'));
   try {
-    const execution = await runCli(
-      ['init', root, '--json'],
-      {
-        interactive: true,
-        color: true,
-        input: new PassThrough(),
-        output: new PassThrough(),
-        prompts,
-      },
-    );
-    assert.equal(promptCalls, 0);
-    assert.deepEqual(
-      (execution.output as { adapters: string[] }).adapters,
-      ['claude', 'codex'],
-    );
-    const rendered = formatCliOutput(execution);
-    assert.deepEqual(JSON.parse(rendered), execution.output);
-    assert.doesNotMatch(rendered, /\u001B\[/);
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
-});
+    const absent = await runCli(['status', root, '--json']);
+    assert.equal((absent.output as {
+      readiness: { required: Array<{ code: string }> };
+    }).readiness.required[0].code, 'host-adapter-absent');
 
-test('interactive init collects adapters without changing project planning rules', async () => {
-  const root = mkdtempSync(join(tmpdir(), 'resonant-cli-interactive-init-'));
-  let adapterPrompts = 0;
-  const prompts: PromptProvider = {
-    async selectAdapters() {
-      adapterPrompts += 1;
-      return ['codex'];
-    },
-    async selectGuidance() {
-      throw new Error('unexpected guidance prompt');
-    },
-  };
-  try {
-    const execution = await runCli(
-      ['init', root, '--dry-run'],
-      {
-        interactive: true,
-        color: true,
-        input: new PassThrough(),
-        output: new PassThrough(),
-        prompts,
-      },
-    );
-    assert.equal(adapterPrompts, 1);
-    assert.deepEqual(
-      (execution.output as { adapters: string[] }).adapters,
-      ['codex'],
-    );
-    const rendered = formatCliOutput(execution);
-    assert.match(rendered, /\u001B\[/);
-    assert.equal(existsSync(join(root, '.resonant-code', 'manifest.json')), false);
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
-});
-
-test('interactive guidance overflow returns an explicit selection to Runtime', async () => {
-  const root = mkdtempSync(join(tmpdir(), 'resonant-cli-interactive-overflow-'));
-  let guidancePrompts = 0;
-  const prompts: PromptProvider = {
-    async selectAdapters() {
-      throw new Error('unexpected adapter prompt');
-    },
-    async selectGuidance(input) {
-      guidancePrompts += 1;
-      assert.ok(input.candidates.length > 0);
-      assert.ok(input.mandatoryBytes <= input.byteLimit);
-      return {
-        considerIds: [],
-        rationale: 'The mandatory guidance is sufficient for this focused fixture.',
-      };
-    },
-  };
-  try {
-    writeFileSync(join(root, 'example.ts'), 'export const value = 1;\n', 'utf8');
-    git(root, ['init', '-q']);
-    git(root, ['config', 'user.email', 'cli@example.invalid']);
-    git(root, ['config', 'user.name', 'CLI Test']);
+    await runCli(['init', root, '--adapter', 'codex', '--json']);
+    initializeRepository(root);
     git(root, ['add', '.']);
-    git(root, ['commit', '-qm', 'initial']);
-
-    const execution = await runCli(
-      [
-        'change',
-        'prepare',
-        root,
-        '--task',
-        'Add an exported feature',
-        '--change-type',
-        'feature',
-        '--target',
-        'example.ts',
-        '--tech',
-        'typescript',
-        '--risk',
-        'low',
-        '--scope',
-        'local',
-        '--guidance-byte-limit',
-        '3000',
-      ],
-      {
-        interactive: true,
-        input: new PassThrough(),
-        output: new PassThrough(),
-        prompts,
-      },
-    );
-    assert.equal(guidancePrompts, 1);
-    assert.notEqual(
-      (execution.output as { status: string }).status,
-      'guidance-overflow',
-    );
-    const decision = execution.output as {
-      delivery: { selection: { considerIds: string[]; rationale: string } };
-    };
-    assert.deepEqual(decision.delivery.selection.considerIds, []);
-    assert.match(decision.delivery.selection.rationale, /mandatory guidance/);
+    git(root, ['commit', '-qm', 'initialized']);
+    const doctor = await runCli(['doctor', root, '--strict', '--json']);
+    assert.equal(doctor.exitCode, 0);
+    assert.equal((doctor.output as { status: string }).status, 'ok');
+    assert.equal((doctor.output as { worktree: string }).worktree, 'supported');
+    assert.deepEqual((doctor.output as {
+      readiness: { required: unknown[] };
+    }).readiness.required, []);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
 });
 
-test('prompt cancellation maps to conventional exit code 130', async () => {
-  const root = mkdtempSync(join(tmpdir(), 'resonant-cli-cancel-'));
-  const prompts: PromptProvider = {
-    async selectAdapters() {
-      const error = new Error('cancelled');
-      error.name = 'ExitPromptError';
-      throw error;
-    },
-    async selectGuidance() {
-      throw new Error('unexpected guidance prompt');
-    },
-  };
+test('change prepare reports legacy artifacts without mutating them', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'resonant-cli-legacy-'));
+  const inputRoot = mkdtempSync(join(tmpdir(), 'resonant-cli-input-'));
   try {
+    initializeRepository(root);
+    writeFileSync(join(root, 'source.txt'), 'before\n', 'utf8');
+    const legacyRoot = join(root, '.resonant-code', 'playbook');
+    mkdirSync(legacyRoot, { recursive: true });
+    writeFileSync(join(legacyRoot, 'local-augment.yaml'), 'legacy\n', 'utf8');
+    git(root, ['add', '.']);
+    git(root, ['commit', '-qm', 'legacy']);
+    const inputPath = join(inputRoot, 'prepare.json');
+    writePrepareInput(inputPath, true);
     await assert.rejects(
-      () => runCli(['init', root], {
-        interactive: true,
-        input: new PassThrough(),
-        output: new PassThrough(),
-        prompts,
-      }),
-      (error: unknown) => {
-        assert.ok(error instanceof CliError);
-        assert.equal(error.code, 'PROMPT_CANCELLED');
-        assert.equal(error.exitCode, 130);
-        return true;
-      },
+      () => runCli(['change', 'prepare', root, '--input', inputPath, '--json']),
+      /Archive or remove.*\.resonant-code\/playbook/i,
     );
+    assert.equal(readFileSync(join(legacyRoot, 'local-augment.yaml'), 'utf8'), 'legacy\n');
+    assert.equal(existsSync(join(root, '.resonant-code', 'runs')), false);
   } finally {
     rmSync(root, { recursive: true, force: true });
+    rmSync(inputRoot, { recursive: true, force: true });
   }
 });
 
-test('CLI returns business guidance overflow as a successful machine result', async () => {
-  const root = mkdtempSync(join(tmpdir(), 'resonant-cli-overflow-'));
-  try {
-    writeFileSync(join(root, 'example.ts'), 'export const value = 1;\n', 'utf8');
-    git(root, ['init', '-q']);
-    git(root, ['config', 'user.email', 'cli@example.invalid']);
-    git(root, ['config', 'user.name', 'CLI Test']);
-    git(root, ['add', '.']);
-    git(root, ['commit', '-qm', 'initial']);
+const TASK = 'Implement the Semantic Handoff change without legacy compatibility.';
 
-    const result = await runCli([
-      'change',
-      'prepare',
-      root,
-      '--task',
-      'Add an exported feature',
-      '--change-type',
-      'feature',
-      '--target',
-      'example.ts',
-      '--tech',
-      'typescript',
-      '--risk',
-      'low',
-      '--scope',
-      'local',
-      '--guidance-byte-limit',
-      '3000',
-      '--json',
-    ]);
-    assert.equal((result.output as { status: string }).status, 'guidance-overflow');
-    assert.equal(result.exitCode, 0);
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
-});
-
-test('human completion output separates actions from optional information', () => {
-  const rendered = formatCliOutput({
-    command: 'change complete',
-    json: false,
-    color: false,
-    exitCode: 0,
-    output: {
-      status: 'rejected',
-      evaluationId: 'evaluation-id',
-      changes: {
-        files: [
-          { path: 'src/a.ts', status: 'modified' },
-          { path: 'src/b.ts', status: 'added' },
-        ],
+function writePrepareInput(path: string, withCheck: boolean): void {
+  writeFileSync(path, `${JSON.stringify({
+    protocol: 'semantic-delegation',
+    schemaVersion: '1',
+    humanEvents: [{ id: 'event:task', kind: 'task', content: TASK }],
+    interpretations: [
+      {
+        id: 'meaning:outcome',
+        field: 'desired-outcome',
+        value: 'Produce an inspectable fact-bound handoff.',
+        basis: { humanEventIds: ['event:task'], repositoryEvidenceIds: [] },
       },
-      checks: [
-        { id: 'typecheck', status: 'passed' },
-        { id: 'test', status: 'failed', reason: 'Check exited with 1.' },
-      ],
-      results: [
-        {
-          guidanceId: 'required-1',
-          section: 'required',
-          verdict: 'satisfied',
-          basis: 'agent-attested',
-          reasons: ['Evidence covered the requirement.'],
-        },
-        {
-          guidanceId: 'required-2',
-          section: 'required',
-          verdict: 'partial',
-          basis: 'agent-attested',
-          reasons: ['Missing evidence for: semantic.'],
-        },
-        {
-          guidanceId: 'consider-1',
-          section: 'consider',
-          verdict: 'unverified',
-          basis: 'unverified',
-          reasons: ['No evidence-backed verdict was provided.'],
-        },
-      ],
-      actionRequired: [
-        {
-          kind: 'check-failure',
-          id: 'test',
-          message: 'Check exited with 1.',
-        },
-        {
-          kind: 'guidance-evidence',
-          id: 'required-2',
-          message: 'Missing evidence for: semantic.',
-        },
-      ],
-      informational: [
-        {
-          kind: 'optional-guidance',
-          id: 'consider-1',
-          message: 'No evidence-backed verdict was provided.',
-        },
-      ],
-      runId: 'f61d2968-155a-4249-a72e-4789001bb515',
-      runPath: '/tmp/run/run.json',
+      {
+        id: 'meaning:consequence',
+        field: 'consequence',
+        value: 'high',
+        basis: { humanEventIds: ['event:task'], repositoryEvidenceIds: [] },
+      },
+    ],
+    semantic: {
+      desiredOutcomeId: 'meaning:outcome',
+      constraintIds: [],
+      nonGoalIds: [],
+      focusIds: [],
+      consequenceId: 'meaning:consequence',
     },
-  });
-  assert.match(rendered, /Changed files: 2/);
-  assert.match(rendered, /Checks: 2/);
-  assert.match(rendered, /test: Check exited with 1/);
-  assert.match(rendered, /required: partial=1, satisfied=1/);
-  assert.match(rendered, /required-2 \[guidance-evidence\]/);
-  assert.match(rendered, /Optional information/);
-  assert.match(rendered, /consider-1/);
-  assert.match(rendered, /Agent judgments/);
-  assert.match(rendered, /Unverified conclusions/);
-  assert.doesNotMatch(rendered, /Run: f61d2968-155a-4249-a72e-4789001bb515/);
-  assert.match(rendered, /Fix hard violations or failed required checks/);
-});
+    verification: withCheck
+      ? {
+          checks: [{
+            id: 'fixture-check',
+            rationale: 'Run the explicit fixture acceptance command.',
+            argv: [process.execPath, '-e', 'process.exit(0)'],
+            timeoutMs: 10_000,
+            source: 'host-task',
+            verifierRefs: [],
+          }],
+        }
+      : {},
+  }, null, 2)}\n`, 'utf8');
+}
 
-function writeJsonFixture(root: string, name: string, value: unknown): string {
-  const path = join(root, name);
-  writeFileSync(path, `${JSON.stringify(value, null, 2)}\n`, 'utf8');
-  return path;
+function writeHandoff(
+  path: string,
+  changedFile: string,
+  checkId: string,
+): void {
+  writeFileSync(path, `${JSON.stringify({
+    protocol: 'semantic-delegation',
+    schemaVersion: '1',
+    systemMeaningUpdate: 'The fixture behavior changed from before to after.',
+    materialClaims: [{
+      id: 'claim:behavior',
+      dimension: 'behavior',
+      statement: 'The fixture now exposes the requested after behavior.',
+      adoptionConsequence: 'Adoption replaces the prior fixture behavior.',
+      adoptionCritical: true,
+      basis: 'agent-judgment',
+      evidence: { changedFiles: [changedFile], checks: [checkId] },
+      falsification: {
+        failureHypothesis: 'The fixture could still expose the prior behavior.',
+        attempt: 'Inspected the complete patch and executed the frozen check.',
+        status: 'supported',
+        supportingEvidence: { changedFiles: [changedFile], checks: [checkId] },
+        counterEvidence: {},
+        conclusion: 'No counterevidence was found within the complete collected boundary.',
+      },
+    }],
+    residualUnknowns: [],
+    reviewMap: [{
+      id: 'review:source',
+      priority: 'must-read',
+      changedFiles: [changedFile],
+      checkIds: [checkId],
+      claimIds: ['claim:behavior'],
+      unknownIds: [],
+      rationale: 'The source file owns the behavior change.',
+      prevents: 'Adopting an unintended behavior change.',
+    }],
+  }, null, 2)}\n`, 'utf8');
+}
+
+function initializeRepository(root: string): void {
+  git(root, ['init', '-q']);
+  git(root, ['config', 'user.email', 'cli@example.invalid']);
+  git(root, ['config', 'user.name', 'CLI Test']);
 }
 
 function git(root: string, args: string[]): void {
   execFileSync('git', ['-C', root, ...args], { stdio: 'ignore' });
-}
-
-function gitOutput(root: string, args: string[]): string {
-  return execFileSync('git', ['-C', root, ...args], {
-    encoding: 'utf8',
-  }).trim();
 }

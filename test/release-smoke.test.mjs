@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import {
+  existsSync,
   mkdtempSync,
   mkdirSync,
   readFileSync,
@@ -18,16 +19,11 @@ const temporary = mkdtempSync(join(tmpdir(), 'resonant-core-release-'));
 try {
   const packDirectory = join(temporary, 'pack');
   const consumer = join(temporary, 'consumer');
-  const project = join(temporary, 'project');
   mkdirSync(packDirectory, { recursive: true });
   mkdirSync(consumer, { recursive: true });
-  mkdirSync(join(project, '.resonant-code'), { recursive: true });
   writeFileSync(join(consumer, 'package.json'), '{"private":true}\n', 'utf8');
 
-  const coreTarball = packPackage(
-    join(workspace, 'packages', 'core'),
-    packDirectory,
-  );
+  const coreTarball = packPackage(join(workspace, 'packages', 'core'), packDirectory);
   run(npmCommand(), [
     'install',
     coreTarball,
@@ -35,281 +31,176 @@ try {
     '--no-audit',
     '--no-fund',
   ], consumer);
-  const installedCore = join(
-    consumer,
-    'node_modules',
-    '@sovea',
-    'resonant-code-core',
-  );
-  const coreManifest = JSON.parse(readFileSync(join(installedCore, 'package.json'), 'utf8'));
-  assert.equal(coreManifest.name, '@sovea/resonant-code-core');
-  assert.equal(coreManifest.version, '0.0.1');
-  assert.ok(!Object.hasOwn(coreManifest, 'private'));
-  assert.ok(readFileSync(join(installedCore, 'assets', 'playbook', 'core.yaml'), 'utf8'));
+  const installedCore = join(consumer, 'node_modules', '@sovea', 'resonant-code-core');
+  const manifest = JSON.parse(readFileSync(join(installedCore, 'package.json'), 'utf8'));
+  assert.equal(manifest.name, '@sovea/resonant-code-core');
+  assert.equal(manifest.version, '0.0.1');
+  assert.deepEqual(Object.keys(manifest.exports).sort(), ['.', './package.json']);
+  assert.equal(existsSync(join(installedCore, 'assets')), false);
+  assert.equal(existsSync(join(installedCore, 'dist', 'rccl.mjs')), false);
 
-  writeFileSync(join(project, 'example.ts'), 'export const answer = 42;\n', 'utf8');
-  mkdirSync(join(project, '.resonant-code', 'playbook'), { recursive: true });
-  const personalOverlayPath = join(project, '.resonant-code', 'playbook', 'personal-overlay.yaml');
-  writeFileSync(personalOverlayPath, `version: "1.0"
-meta:
-  name: smoke-personal-taste
-augments: []
-additions:
-  - id: personal-explicit-export-names-01
-    type: preference
-    layer: personal
-    scope:
-      path: "**/*.ts"
-    prescription: should
-    description: Prefer descriptive named exports at module boundaries.
-    rationale: Named exports are easier for me to review and search.
-    exceptions: []
-    examples:
-      - good:
-          code: "export const answer = 42;"
-        note: The export name communicates its role.
-`, 'utf8');
-  const rccl = await import(pathToFileURL(join(installedCore, 'dist', 'rccl.mjs')).href);
-  const preparedRccl = rccl.prepareCalibration({
-    projectRoot: project,
-    evidenceSelections: [{ file: 'example.ts', lineRange: [1, 1] }],
+  const core = await import(pathToFileURL(join(installedCore, 'dist', 'index.mjs')).href);
+  assert.deepEqual(Object.keys(core).sort(), ['compileDelegation', 'evaluateHandoff']);
+  const task = 'Replace the public workflow with an inspectable Semantic Handoff.';
+  const compiled = core.compileDelegation({
+    protocol: 'semantic-delegation',
+    schemaVersion: '1',
+    humanEvents: [{
+      id: 'event:task',
+      kind: 'task',
+      content: task,
+      contentFingerprint: sha256(task),
+    }],
+    interpretations: [
+      {
+        id: 'meaning:outcome',
+        field: 'desired-outcome',
+        value: 'Expose the Semantic Handoff workflow.',
+        basis: { humanEventIds: ['event:task'], repositoryEvidenceIds: [] },
+      },
+      {
+        id: 'meaning:consequence',
+        field: 'consequence',
+        value: 'high',
+        basis: { humanEventIds: ['event:task'], repositoryEvidenceIds: [] },
+      },
+    ],
+    semantic: {
+      desiredOutcomeId: 'meaning:outcome',
+      constraintIds: [],
+      nonGoalIds: [],
+      focusIds: [],
+      consequenceId: 'meaning:consequence',
+    },
+    verification: {
+      noCommandRationale: 'The isolated Core smoke has no repository command surface.',
+    },
   });
-  assert.equal(preparedRccl.status, 'ready');
-  const committedRccl = rccl.commitCalibration({
-    projectRoot: project,
-    contract: preparedRccl.contract,
-    proposal: {
-      schemaVersion: '1.0',
-      requestId: preparedRccl.contract.requestId,
-      contextFingerprint: preparedRccl.contract.contextFingerprint,
-      observations: [{
-        id: 'obs-export-boundary',
-        category: 'architecture',
-        scope: '**/*.ts',
-        statement: 'Named exports define the module boundary in the selected TypeScript entrypoint.',
-        affects: ['api-shape', 'architecture-boundary'],
-        decisionImpact: 'A new export style would make the feature inconsistent with the existing module boundary.',
-        semanticConfidence: 'high',
-        evidence: [{ windowId: preparedRccl.contract.evidenceWindows[0].windowId }],
+  assert.equal(compiled.status, 'delegation-compiled');
+  const contract = compiled.contract;
+  const changedFile = {
+    id: 'file:example',
+    path: 'example.ts',
+    operation: 'modified',
+    before: { kind: 'file', contentDigest: sha256('before'), mode: '100644' },
+    after: { kind: 'file', contentDigest: sha256('after'), mode: '100644' },
+    representation: 'text',
+  };
+  const timestamp = '2026-08-03T12:00:00.000Z';
+  const bundleBase = {
+    protocol: 'semantic-delegation',
+    schemaVersion: '1',
+    contractId: contract.contractId,
+    collectedAt: timestamp,
+    baseline: {
+      head: null,
+      fingerprint: sha256('baseline'),
+      entryCount: 1,
+      capturedAt: timestamp,
+    },
+    current: {
+      head: null,
+      fingerprint: sha256('current'),
+      entryCount: 1,
+      capturedAt: timestamp,
+    },
+    changeFingerprint: stableFingerprint([changedFile]),
+    changedFiles: [changedFile],
+    checks: [],
+    verifierMutations: [],
+    patch: {
+      path: 'change.patch',
+      digest: sha256('patch'),
+      byteLength: 5,
+    },
+    provenance: {
+      collector: 'resonant-code-cli',
+      cliVersion: '0.0.1',
+      coreVersion: '0.0.1',
+    },
+  };
+  const factCollectionId = stableFingerprint({
+    contractId: bundleBase.contractId,
+    baselineFingerprint: bundleBase.baseline.fingerprint,
+    currentFingerprint: bundleBase.current.fingerprint,
+    changeFingerprint: bundleBase.changeFingerprint,
+    changedFiles: bundleBase.changedFiles,
+    checks: bundleBase.checks,
+    verifierMutations: bundleBase.verifierMutations,
+    patch: bundleBase.patch,
+  });
+  const withCollection = { ...bundleBase, factCollectionId };
+  const factBundle = {
+    ...withCollection,
+    bundleFingerprint: stableFingerprint(withCollection),
+  };
+  const evaluation = core.evaluateHandoff({
+    protocol: 'semantic-delegation',
+    schemaVersion: '1',
+    contract,
+    factBundle,
+    currentWorktreeFingerprint: factBundle.current.fingerprint,
+    handoff: {
+      protocol: 'semantic-delegation',
+      schemaVersion: '1',
+      systemMeaningUpdate: 'The isolated consumer now exposes the new public workflow.',
+      materialClaims: [{
+        id: 'claim:behavior',
+        dimension: 'behavior',
+        statement: 'The public workflow changed as requested.',
+        adoptionConsequence: 'Consumers use the Semantic Handoff API.',
+        adoptionCritical: true,
+        basis: 'agent-judgment',
+        evidence: { changedFiles: [changedFile.path] },
+        falsification: {
+          failureHypothesis: 'The isolated public workflow could retain legacy behavior.',
+          attempt: 'Inspected the complete isolated change for legacy behavior.',
+          status: 'supported',
+          supportingEvidence: { changedFiles: [changedFile.path] },
+          counterEvidence: {},
+          conclusion: 'No conflicting public behavior was present in the bounded change.',
+        },
+      }],
+      residualUnknowns: [],
+      reviewMap: [{
+        id: 'review:public',
+        priority: 'must-read',
+        changedFiles: [changedFile.path],
+        checkIds: [],
+        claimIds: ['claim:behavior'],
+        unknownIds: [],
+        rationale: 'This file represents the public behavior change.',
+        prevents: 'Adopting an unintended API boundary.',
       }],
     },
   });
-  assert.equal(committedRccl.status, 'committed');
-  assert.equal(committedRccl.document.observations[0].reviewStatus, 'generated');
-  const approvedRccl = rccl.approveContext({
-    projectRoot: project,
-    observationIds: ['obs-export-boundary'],
-    approvedBy: 'release-smoke-reviewer',
-  });
-  assert.equal(approvedRccl.status, 'approved');
-  assert.equal(approvedRccl.document.observations[0].reviewStatus, 'reviewed');
-
-  const core = await import(pathToFileURL(join(installedCore, 'dist', 'index.mjs')).href);
-  assert.deepEqual(Object.keys(core).sort(), ['compileChange', 'evaluateChange']);
-  const compileInput = {
-    builtinRoot: join(installedCore, 'assets', 'playbook'),
-    personalOverlayPath,
-    rcclPath: join(project, '.resonant-code', 'rccl.yaml'),
-    projectRoot: project,
-    task: {
-      description: 'Add an exported feature',
-      changeType: 'feature',
-      targets: ['example.ts'],
-      techStack: ['typescript'],
-      risk: 'low',
-      scope: 'local',
-      provenance: {
-        description: 'human-stated',
-        changeType: 'agent-inferred',
-        targets: {
-          'example.ts': 'repository-derived',
-        },
-        techStack: {
-          typescript: 'repository-derived',
-        },
-        risk: 'agent-inferred',
-        scope: 'agent-inferred',
-      },
-    },
-    relationProposals: [{
-      directiveId: 'feature-fit-existing-system-01',
-      observationId: 'obs-export-boundary',
-      relation: 'supports',
-      rationale: 'The existing export boundary is concrete evidence for repository fit.',
-      evidenceRefs: ['example.ts:1-1'],
-    }],
-  };
-  const direct = await core.compileChange(compileInput);
-  assert.equal(direct.status, 'compiled');
-  assert.ok(direct.trace.delivery.deliveredBytes <= direct.trace.delivery.byteLimit);
-  assert.ok(direct.trace.delivery.fullGuidanceBytes > direct.trace.delivery.deliveredBytes);
-  assert.deepEqual(direct.executionGuidance.required.map((item) => item.id), direct.guidance.required.map((item) => item.id));
-
-  const overflow = await core.compileChange({
-    ...compileInput,
-    guidanceByteLimit: 3_000,
-  });
-  assert.equal(overflow.status, 'guidance-overflow');
-  assert.ok(overflow.selectableConsider.length > 3);
-  assert.ok(overflow.candidateDetails.some((item) => item.id === 'rccl:obs-export-boundary'));
-
-  const decision = await core.compileChange({
-    ...compileInput,
-    guidanceByteLimit: 3_000,
-    deliverySelection: {
-      considerIds: [
-        'feature-start-from-requested-behavior-01',
-        'ts-explicit-public-interfaces-01',
-        'rccl:obs-export-boundary',
-        'personal-explicit-export-names-01',
-      ],
-      rationale: 'The selected optional guidance covers requested behavior, the public TypeScript API, and the observed export boundary.',
-    },
-  });
-  assert.equal(decision.schemaVersion, '1.0');
-  assert.equal(decision.status, 'compiled');
-  assert.equal(decision.task.changeType, 'feature');
-  assert.equal(
-    decision.task.provenance.find((item) => item.field === 'description')?.source,
-    'human-stated',
-  );
-  assert.ok(decision.trace.selectedLayers.includes('builtin/task-types/feature'));
-  assert.deepEqual(decision.trace.relevantObservationIds, ['obs-export-boundary']);
-  assert.ok(decision.trace.relationDecisions.some((item) => item.status === 'accepted' && item.relation === 'reinforce'));
-  assert.deepEqual(
-    decision.guidance.consider.map((item) => item.id),
-    [
-      'personal-explicit-export-names-01',
-      'feature-start-from-requested-behavior-01',
-      'ts-explicit-public-interfaces-01',
-      'rccl:obs-export-boundary',
-    ],
-  );
-  assert.equal(
-    decision.guidance.consider
-      .find((item) => item.id === 'personal-explicit-export-names-01')
-      ?.source.kind,
-    'personal-playbook',
-  );
-  assert.equal(decision.trace.playbookSources.personal, 'present');
-  assert.ok(decision.trace.deliveredGuidanceIds.length > 0);
-
-  const changes = machineChangeSet([
-    { path: 'example.ts', status: 'modified' },
-  ]);
-  const checks = decision.verificationPlan.commands.map((command) => ({
-    id: command.id,
-    status: 'passed',
-    command: ['release-smoke-check', command.id],
-    exitCode: 0,
-    outputDigest: stableHash([command.id, 'passed']),
-    outputRefs: {
-      stdout: `.resonant-code/runs/release-smoke/checks/${command.id}.stdout.log`,
-      stderr: `.resonant-code/runs/release-smoke/checks/${command.id}.stderr.log`,
-    },
-    definitionFingerprint: stableHash([command.id, 'definition']),
-    provenance: {
-      source: 'resonant-code-workflow',
-      collectionId: changes.provenance.collectionId,
-    },
-  }));
-  const evaluationInput = {
-    decision,
-    changes,
-    checks,
-    attestations: attestationsForDecision(decision),
-  };
-  const evaluation = core.evaluateChange(evaluationInput);
-  assert.equal(evaluation.schemaVersion, '1.0');
-  assert.equal(evaluation.status, 'ready-for-adoption');
-  assert.equal(evaluation.operation, 'modify');
-  assert.equal(evaluation.results[0].basis, 'agent-attested');
-  assert.equal(core.evaluateChange(evaluationInput).evaluationId, evaluation.evaluationId);
+  assert.equal(evaluation.status, 'handoff-ready');
+  assert.match(evaluation.humanAuthorityNotice, /human review only/);
 } finally {
   rmSync(temporary, { recursive: true, force: true });
 }
 
-function attestationsForDecision(decision) {
-  const items = [
-    ...decision.guidance.required.map((item) => ({ ...item, section: 'required' })),
-    ...decision.guidance.consider.map((item) => ({ ...item, section: 'consider' })),
-    ...decision.guidance.avoid.map((item) => ({ ...item, section: 'avoid' })),
-  ];
-  const attestations = items.map((item) => {
-    const refs = [{ kind: 'diff', ref: 'diff:example.ts', file: 'example.ts' }];
-    for (const requirement of item.verification) {
-      if (requirement.kind === 'semantic') {
-        refs.push({ kind: 'semantic', ref: `semantic:${item.id}`, description: `Inspected ${item.id} at the exported module boundary.` });
-      }
-    }
-    return {
-      guidanceId: item.id,
-      verdict: 'satisfied',
-      evidenceRefs: refs,
-      explanation: `Inspected ${item.id} against the isolated machine-collected change.`,
-    };
-  });
-  for (const tension of decision.guidance.tensions) {
-    attestations.push({
-      guidanceId: tension.id,
-      verdict: 'satisfied',
-      evidenceRefs: [{ kind: 'semantic', ref: `semantic:${tension.id}`, description: tension.resolution }],
-      explanation: `Applied the compiled resolution for ${tension.id}.`,
-    });
-  }
-  return attestations;
+function sha256(value) {
+  return `sha256:${createHash('sha256').update(value).digest('hex')}`;
 }
 
-function machineChangeSet(inputs) {
-  const files = inputs.map((input) => ({
-    ...input,
-    before: {
-      kind: 'file',
-      contentHash: stableHash([input.path, 'before']),
-      mode: '100644',
-    },
-    after: {
-      kind: 'file',
-      contentHash: stableHash([input.path, 'after']),
-      mode: '100644',
-    },
-  })).sort((left, right) => left.path.localeCompare(right.path));
-  const baselineFingerprint = stableHash(['release-baseline']);
-  const currentFingerprint = stableHash(['release-current']);
-  const changeFingerprint = stableHash([files]);
-  const collectionId = stableHash([
-    baselineFingerprint,
-    currentFingerprint,
-    changeFingerprint,
-  ]);
-  return {
-    files,
-    baselineFingerprint,
-    currentFingerprint,
-    changeFingerprint,
-    baselineHead: null,
-    currentHead: null,
-    provenance: {
-      source: 'resonant-code-workflow',
-      collectionId,
-    },
-  };
+function stableFingerprint(value) {
+  return sha256(JSON.stringify(canonicalize(value)));
 }
 
-function stableHash(parts) {
-  return createHash('sha256')
-    .update(JSON.stringify(parts))
-    .digest('hex')
-    .slice(0, 16);
+function canonicalize(value) {
+  if (Array.isArray(value)) return value.map(canonicalize);
+  if (!value || typeof value !== 'object') return value;
+  return Object.fromEntries(
+    Object.keys(value)
+      .sort((left, right) => left.localeCompare(right))
+      .map((key) => [key, canonicalize(value[key])]),
+  );
 }
 
 function packPackage(packageDirectory, destination) {
   const before = new Set(readdirSync(destination));
-  run(
-    'corepack',
-    ['pnpm', 'pack', '--pack-destination', destination],
-    packageDirectory,
-  );
+  run('corepack', ['pnpm', 'pack', '--pack-destination', destination], packageDirectory);
   const created = readdirSync(destination)
     .filter((name) => name.endsWith('.tgz') && !before.has(name));
   assert.equal(created.length, 1, `Expected one tarball from ${packageDirectory}.`);
@@ -323,15 +214,11 @@ function run(command, args, cwd) {
     maxBuffer: 20 * 1024 * 1024,
     shell: process.platform === 'win32',
   });
-  assert.equal(
-    result.status,
-    0,
-    [
-      `Command failed: ${command} ${args.join(' ')}`,
-      result.stdout,
-      result.stderr,
-    ].join('\n'),
-  );
+  assert.equal(result.status, 0, [
+    `Command failed: ${command} ${args.join(' ')}`,
+    result.stdout,
+    result.stderr,
+  ].join('\n'));
   return result;
 }
 

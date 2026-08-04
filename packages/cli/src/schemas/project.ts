@@ -1,5 +1,10 @@
 import { z } from 'zod';
 
+import {
+  DELEGATION_PROTOCOL,
+  DELEGATION_SCHEMA_VERSION,
+} from '../protocol.ts';
+
 export const HostAdapterSchema = z.enum(['codex', 'claude']);
 
 export const ManifestArtifactSchema = z.strictObject({
@@ -10,9 +15,10 @@ export const ManifestArtifactSchema = z.strictObject({
 });
 
 export const ProjectManifestSchema = z.strictObject({
-  schemaVersion: z.string(),
+  protocol: z.literal(DELEGATION_PROTOCOL),
+  schemaVersion: z.literal(DELEGATION_SCHEMA_VERSION),
   generatorVersion: z.string().regex(/^\d+\.\d+\.\d+$/),
-  protocolVersion: z.string(),
+  adapterProtocolVersion: z.literal(DELEGATION_SCHEMA_VERSION),
   adapters: z.array(HostAdapterSchema),
   artifacts: z.array(ManifestArtifactSchema),
 }).superRefine((manifest, context) => {

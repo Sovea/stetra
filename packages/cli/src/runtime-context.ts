@@ -2,28 +2,12 @@ import type { Readable, Writable } from 'node:stream';
 
 import type { HostAdapter } from './project/init.ts';
 
-export interface GuidancePromptCandidate {
-  id: string;
-  instruction: string;
-  bytes: number;
-  source?: {
-    kind?: string;
-    id?: string;
-  };
-}
-
 export interface PromptProvider {
   selectAdapters(input: {
     choices: HostAdapter[];
     defaults: HostAdapter[];
     streams: PromptStreams;
   }): Promise<HostAdapter[]>;
-  selectGuidance(input: {
-    candidates: GuidancePromptCandidate[];
-    byteLimit: number;
-    mandatoryBytes: number;
-    streams: PromptStreams;
-  }): Promise<{ considerIds: string[]; rationale: string }>;
 }
 
 export interface PromptStreams {
@@ -82,32 +66,5 @@ const defaultPromptProvider: PromptProvider = {
         checked: defaults.includes(adapter),
       })),
     }, streams);
-  },
-
-  async selectGuidance({
-    candidates,
-    byteLimit,
-    mandatoryBytes,
-    streams,
-  }) {
-    const { checkbox, input } = await import('@inquirer/prompts');
-    const availableBytes = Math.max(0, byteLimit - mandatoryBytes);
-    const considerIds = await checkbox<string>({
-      message: `Select optional guidance to deliver (${availableBytes} bytes available)`,
-      choices: candidates.map((candidate) => ({
-        value: candidate.id,
-        name: `${candidate.id} · ${candidate.bytes} bytes`,
-        description: candidate.instruction,
-        checked: false,
-      })),
-    }, streams);
-    const rationale = await input({
-      message: 'Explain why this optional guidance set fits the task',
-      required: true,
-      validate: (value) => value.trim()
-        ? true
-        : 'A non-empty rationale is required.',
-    }, streams);
-    return { considerIds, rationale: rationale.trim() };
   },
 };

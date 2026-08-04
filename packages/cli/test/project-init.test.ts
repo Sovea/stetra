@@ -1,269 +1,151 @@
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdtempSync,
+  mkdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 
-import { CliError } from '../src/errors.ts';
 import {
   initializeProject,
   inspectProjectInstallation,
 } from '../src/project/init.ts';
 
-test('project init creates and safely upgrades only managed adapter artifacts', () => {
-  const root = mkdtempSync(join(tmpdir(), 'resonant-cli-init-'));
+test('project init generates only the Semantic Handoff adapter and manifest', () => {
+  const root = mkdtempSync(join(tmpdir(), 'resonant-init-'));
   try {
-    writeFileSync(join(root, 'AGENTS.md'), '# Owner instructions\n', 'utf8');
-    const initialized = initializeProject({
-      projectRoot: root,
-      adapters: ['codex'],
-    });
+    const initialized = initializeProject({ projectRoot: root, adapters: ['codex'] });
     assert.equal(initialized.status, 'initialized');
-    assert.deepEqual(initialized.adapters, ['codex']);
-    assert.equal(initialized.counts.create, 6);
-    assert.deepEqual(initialized.readiness.required, []);
-    assert.ok(initialized.readiness.optional.some((item) =>
-      item.code === 'team-checks-absent'));
-    assert.match(readFileSync(join(root, 'AGENTS.md'), 'utf8'), /# Owner instructions/);
-    assert.match(readFileSync(join(root, 'AGENTS.md'), 'utf8'), /resonant-code:begin/);
-    const skillRoot = join(root, '.agents', 'skills', 'resonant-code');
-    const skill = readFileSync(join(skillRoot, 'SKILL.md'), 'utf8');
-    assert.match(skill, /read `references\/change\.md` completely/);
-    assert.doesNotMatch(skill, /^metadata:/m);
-    assert.match(skill, /Do not surface[\s\S]*routine user updates/);
-    assert.match(skill, /semantic decision[\s\S]*verification outcome/);
-    const changeReference = readFileSync(
-      join(skillRoot, 'references', 'change.md'),
-      'utf8',
-    );
-    assert.match(changeReference, /change complete/);
-    assert.match(changeReference, /intended change-scope root/);
-    assert.match(changeReference, /attestationPlan\.attentionItems/);
-    assert.match(changeReference, /canonical lowercase form/);
-    assert.match(
-      changeReference,
-      /--scope[\s\S]*local\|module\|cross-module\|repository/,
-    );
-    assert.doesNotMatch(changeReference, /--mode/);
-    assert.match(changeReference, /Runtime does not guess them/);
-    assert.doesNotMatch(changeReference, /attestedBy/);
-    assert.match(changeReference, /verification-required/);
-    assert.match(changeReference, /transient check configuration outside the repository/);
-    assert.doesNotMatch(changeReference, /not-requested/);
-    assert.match(changeReference, /## Align/);
-    assert.match(changeReference, /ask one consolidated\s+question/);
-    assert.match(changeReference, /human owns semantic authority/i);
-    assert.match(changeReference, /standing authorization/);
-    assert.match(changeReference, /without requesting per-action\s+approval/);
-    assert.match(changeReference, /--provenance-file/);
-    assert.match(changeReference, /ready-for-adoption/);
-    assert.match(changeReference, /not a file write allowlist/);
-    assert.match(changeReference, /at most one durable learning/);
-    assert.match(changeReference, /perform a contradiction review/);
-    assert.match(changeReference, /first try to falsify satisfaction/);
-    const setupReference = readFileSync(
-      join(skillRoot, 'references', 'setup.md'),
-      'utf8',
-    );
-    assert.match(setupReference, /semantic team policy/);
-    assert.match(setupReference, /absent .*checks\.json.*not a readiness failure/s);
-    assert.match(setupReference, /"rationale"/);
-    const contextReference = readFileSync(
-      join(skillRoot, 'references', 'context.md'),
-      'utf8',
-    );
-    assert.match(contextReference, /--fingerprint/);
-    assert.match(contextReference, /Host handles[\s\S]*fingerprint binding/);
-    const manifest = JSON.parse(
-      readFileSync(join(root, '.resonant-code', 'manifest.json'), 'utf8'),
-    );
-    assert.ok(manifest.artifacts.every(
-      (artifact: { templateRevision: number }) => artifact.templateRevision === 1,
-    ));
-    assert.equal(inspectProjectInstallation(root).status, 'current');
-
-    const unchanged = initializeProject({ projectRoot: root });
-    assert.equal(unchanged.status, 'initialized');
-    assert.deepEqual(unchanged.adapters, ['codex']);
-    assert.equal(unchanged.counts.unchanged, 6);
+    assert.equal(initialized.protocol, 'semantic-delegation');
+    assert.equal(initialized.schemaVersion, '1');
+    assert.equal(initialized.adapterProtocolVersion, '1');
+    assert.deepEqual(initialized.readiness, { required: [], recommended: [], optional: [] });
 
     const skillPath = join(root, '.agents', 'skills', 'resonant-code', 'SKILL.md');
-    writeFileSync(skillPath, `${readFileSync(skillPath, 'utf8')}owner edit\n`, 'utf8');
-    const blocked = initializeProject({ projectRoot: root });
+    const changePath = join(root, '.agents', 'skills', 'resonant-code', 'references', 'change.md');
+    assert.equal(existsSync(skillPath), true);
+    assert.equal(existsSync(changePath), true);
+    assert.equal(existsSync(join(root, '.agents', 'skills', 'resonant-code', 'references', 'bootstrap.md')), false);
+    assert.equal(existsSync(join(root, '.agents', 'skills', 'resonant-code', 'references', 'context.md')), false);
+    const skill = readFileSync(skillPath, 'utf8');
+    const change = readFileSync(changePath, 'utf8');
+    assert.match(skill, /Humans own goals, long-lived tradeoffs, exceptions/);
+    assert.match(change, /change prepare/);
+    assert.match(change, /change collect/);
+    assert.match(change, /change finalize/);
+    assert.match(change, /handoff-ready.*human review/s);
+    assert.match(change, /verifierRefs.*command-definition.*acceptance-surface/s);
+    assert.match(change, /checks only top-level executable resolution/);
+    assert.match(change, /Attention explains the adoption impact/);
+    assert.match(change, /Review Map.*not.*substitute/s);
+    assert.match(change, /failed or\s+unavailable check, verifier mutation/);
+    assert.match(change, /state-ownership.*every writer.*third\s+participant/s);
+    assert.match(change, /control-flow.*cleanup path.*async timing boundary/s);
+    assert.match(change, /compatibility.*generic\s+implementation owner.*older\s+environments/s);
+    assert.match(change, /failure-recovery.*partial execution.*idempotency/s);
+    assert.match(change, /happy-path check is not itself a\s+falsification attempt/);
+    assert.doesNotMatch(change, /Playbook|RCCL|ready-for-adoption/);
+    const manifest = JSON.parse(readFileSync(join(root, '.resonant-code', 'manifest.json'), 'utf8'));
+    assert.equal(manifest.protocol, 'semantic-delegation');
+    assert.equal(manifest.schemaVersion, '1');
+    assert.equal(manifest.adapterProtocolVersion, '1');
+    assert.deepEqual(
+      manifest.artifacts.map((artifact: { path: string }) => artifact.path),
+      [
+        '.agents/skills/resonant-code/references/change.md',
+        '.agents/skills/resonant-code/SKILL.md',
+        '.gitignore',
+        'AGENTS.md',
+      ],
+    );
+    assert.equal(inspectProjectInstallation(root).status, 'current');
+
+    const unchanged = initializeProject({ projectRoot: root, adapters: ['codex'] });
+    assert.equal(unchanged.status, 'initialized');
+    assert.equal(unchanged.counts.unchanged, 4);
+
+    writeFileSync(skillPath, `${skill}\nowner note\n`, 'utf8');
+    const blocked = initializeProject({ projectRoot: root, adapters: ['codex'] });
     assert.equal(blocked.status, 'blocked');
-    assert.equal(blocked.counts.blocked, 1);
-    assert.match(readFileSync(skillPath, 'utf8'), /owner edit/);
-    assert.equal(inspectProjectInstallation(root).status, 'drifted');
-
-    const forced = initializeProject({ projectRoot: root, force: true });
+    assert.ok(blocked.artifacts.some((artifact) =>
+      artifact.path.endsWith('SKILL.md') && artifact.action === 'blocked'));
+    assert.match(readFileSync(skillPath, 'utf8'), /owner note/);
+    const forced = initializeProject({ projectRoot: root, adapters: ['codex'], force: true });
     assert.equal(forced.status, 'initialized');
-    assert.equal(forced.counts.force, 1);
-    assert.doesNotMatch(readFileSync(skillPath, 'utf8'), /owner edit/);
-    assert.equal(inspectProjectInstallation(root).status, 'current');
-
-    writeFileSync(
-      join(root, 'AGENTS.md'),
-      `${readFileSync(join(root, 'AGENTS.md'), 'utf8')}\nOwner tail\n`,
-      'utf8',
-    );
-    assert.equal(inspectProjectInstallation(root).status, 'current');
-    initializeProject({ projectRoot: root });
-    assert.match(readFileSync(join(root, 'AGENTS.md'), 'utf8'), /Owner tail/);
-
-    writeFileSync(
-      join(root, 'AGENTS.md'),
-      readFileSync(join(root, 'AGENTS.md'), 'utf8')
-        .replace('Use the `resonant-code` CLI', 'Use the owner CLI'),
-      'utf8',
-    );
-    assert.equal(initializeProject({ projectRoot: root }).status, 'blocked');
-    initializeProject({ projectRoot: root, force: true });
-    const restoredAgentInstructions = readFileSync(join(root, 'AGENTS.md'), 'utf8');
-    assert.match(restoredAgentInstructions, /Use the `resonant-code` CLI/);
-    assert.match(restoredAgentInstructions, /# Owner instructions/);
-    assert.match(restoredAgentInstructions, /Owner tail/);
+    assert.doesNotMatch(readFileSync(skillPath, 'utf8'), /owner note/);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
 });
 
-test('installation inspection reports a missing workflow reference as drift', () => {
-  const root = mkdtempSync(join(tmpdir(), 'resonant-cli-reference-drift-'));
+test('installation inspection reports generated adapter drift', () => {
+  const root = mkdtempSync(join(tmpdir(), 'resonant-drift-'));
   try {
-    initializeProject({ projectRoot: root, adapters: ['codex'] });
-    rmSync(
-      join(root, '.agents', 'skills', 'resonant-code', 'references', 'context.md'),
-    );
+    initializeProject({ projectRoot: root, adapters: ['claude'] });
+    const changePath = join(root, '.claude', 'skills', 'resonant-code', 'references', 'change.md');
+    rmSync(changePath);
     const inspection = inspectProjectInstallation(root);
     assert.equal(inspection.status, 'drifted');
-    assert.ok(
-      inspection.artifacts.some((artifact) =>
-        artifact.path.endsWith('/references/context.md')
-        && artifact.status === 'missing'),
-    );
-
-    initializeProject({ projectRoot: root });
-    assert.equal(inspectProjectInstallation(root).status, 'current');
-
-    const manifestPath = join(root, '.resonant-code', 'manifest.json');
-    const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
-    manifest.artifacts = manifest.artifacts.filter(
-      (artifact: { path: string }) => !artifact.path.includes('/references/'),
-    );
-    writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, 'utf8');
-    assert.equal(inspectProjectInstallation(root).status, 'drifted');
-    initializeProject({ projectRoot: root });
-    assert.equal(inspectProjectInstallation(root).status, 'current');
+    assert.ok(inspection.artifacts.some((artifact) =>
+      artifact.path.endsWith('change.md') && artifact.status === 'missing'));
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
 });
 
-test('dry-run writes nothing and managed blocks preserve owner line endings', () => {
-  const root = mkdtempSync(join(tmpdir(), 'resonant-cli-dry-run-'));
+test('legacy artifacts block init without migration or deletion', () => {
+  const root = mkdtempSync(join(tmpdir(), 'resonant-legacy-'));
   try {
-    writeFileSync(join(root, 'AGENTS.md'), '# Owner\r\nKeep this\r\n', 'utf8');
-    const planned = initializeProject({
-      projectRoot: root,
-      adapters: ['codex'],
-      dryRun: true,
-    });
+    const legacyPath = join(root, '.resonant-code', 'playbook');
+    mkdirSync(legacyPath, { recursive: true });
+    writeFileSync(join(legacyPath, 'local-augment.yaml'), 'legacy\n', 'utf8');
+    const result = initializeProject({ projectRoot: root, adapters: ['codex'], force: true });
+    assert.equal(result.status, 'blocked');
+    assert.ok(result.artifacts.some((artifact) =>
+      artifact.path === '.resonant-code/playbook' && artifact.action === 'blocked'));
+    assert.equal(readFileSync(join(legacyPath, 'local-augment.yaml'), 'utf8'), 'legacy\n');
+    assert.equal(existsSync(join(root, '.resonant-code', 'manifest.json')), false);
+    const inspection = inspectProjectInstallation(root);
+    assert.equal(inspection.status, 'legacy');
+    assert.deepEqual(inspection.legacyArtifacts, ['.resonant-code/playbook']);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('dry-run writes nothing and managed blocks preserve owner content', () => {
+  const root = mkdtempSync(join(tmpdir(), 'resonant-dry-run-'));
+  try {
+    writeFileSync(join(root, 'AGENTS.md'), 'Owner instructions\r\n', 'utf8');
+    const planned = initializeProject({ projectRoot: root, adapters: ['codex'], dryRun: true });
     assert.equal(planned.status, 'planned');
-    assert.throws(
-      () => readFileSync(join(root, '.resonant-code', 'manifest.json'), 'utf8'),
-      /ENOENT/,
-    );
-    assert.equal(readFileSync(join(root, 'AGENTS.md'), 'utf8'), '# Owner\r\nKeep this\r\n');
-
+    assert.equal(existsSync(join(root, '.resonant-code', 'manifest.json')), false);
+    assert.equal(readFileSync(join(root, 'AGENTS.md'), 'utf8'), 'Owner instructions\r\n');
     initializeProject({ projectRoot: root, adapters: ['codex'] });
-    const content = readFileSync(join(root, 'AGENTS.md'), 'utf8');
-    assert.ok(content.startsWith('# Owner\r\nKeep this\r\n'));
-    assert.equal(content.replace(/\r\n/g, '').includes('\n'), false);
-    assert.equal(inspectProjectInstallation(root).status, 'current');
+    const agents = readFileSync(join(root, 'AGENTS.md'), 'utf8');
+    assert.match(agents, /^Owner instructions\r\n/);
+    assert.equal(agents.match(/<!-- resonant-code:begin -->/g)?.length, 1);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
 });
 
-test('init surfaces generator drift and rejects manifests from a newer generator', () => {
-  const root = mkdtempSync(join(tmpdir(), 'resonant-cli-version-'));
-  try {
-    initializeProject({ projectRoot: root, adapters: ['codex'] });
-
-    const manifestPath = join(root, '.resonant-code', 'manifest.json');
-    const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
-    writeFileSync(
-      manifestPath,
-      `${JSON.stringify({ ...manifest, generatorVersion: '0.0.0' }, null, 2)}\n`,
-      'utf8',
-    );
-    assert.equal(inspectProjectInstallation(root).status, 'version-drift');
-    initializeProject({ projectRoot: root });
-    assert.equal(inspectProjectInstallation(root).status, 'current');
-
-    writeFileSync(
-      manifestPath,
-      `${JSON.stringify({ ...manifest, generatorVersion: '9.0.0' }, null, 2)}\n`,
-      'utf8',
-    );
-    assert.throws(
-      () => initializeProject({ projectRoot: root }),
-      /UNSUPPORTED_GENERATOR_VERSION/,
-    );
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
-});
-
-test('init plans all changes before writing when a managed path conflicts', () => {
-  const root = mkdtempSync(join(tmpdir(), 'resonant-cli-plan-'));
-  try {
-    mkdirSync(join(root, '.agents', 'skills', 'resonant-code'), { recursive: true });
-    writeFileSync(
-      join(root, '.agents', 'skills', 'resonant-code', 'SKILL.md'),
-      'owner-created skill\n',
-      'utf8',
-    );
-    const blocked = initializeProject({
-      projectRoot: root,
-      adapters: ['codex'],
-    });
-    assert.equal(blocked.status, 'blocked');
-    assert.equal(blocked.counts.blocked, 1);
-    assert.equal(readFileSync(
-      join(root, '.agents', 'skills', 'resonant-code', 'SKILL.md'),
-      'utf8',
-    ), 'owner-created skill\n');
-    assert.throws(
-      () => readFileSync(join(root, '.resonant-code', 'manifest.json'), 'utf8'),
-      /ENOENT/,
-    );
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
-});
-
-test('manifest validation rejects unknown fields with stable issue paths', () => {
-  const root = mkdtempSync(join(tmpdir(), 'resonant-cli-manifest-schema-'));
+test('new manifest rejects unknown fields and newer generators', () => {
+  const root = mkdtempSync(join(tmpdir(), 'resonant-manifest-'));
   try {
     initializeProject({ projectRoot: root, adapters: ['codex'] });
     const manifestPath = join(root, '.resonant-code', 'manifest.json');
     const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
-    writeFileSync(
-      manifestPath,
-      `${JSON.stringify({ ...manifest, inferredCompatibility: true }, null, 2)}\n`,
-      'utf8',
-    );
-    assert.throws(
-      () => inspectProjectInstallation(root),
-      (error: unknown) => {
-        assert.ok(error instanceof CliError);
-        assert.equal(error.code, 'INVALID_INPUT');
-        assert.match(error.message, /\$/);
-        assert.match(error.message, /inferredCompatibility/);
-        return true;
-      },
-    );
+    writeFileSync(manifestPath, `${JSON.stringify({ ...manifest, unknown: true })}\n`, 'utf8');
+    assert.throws(() => initializeProject({ projectRoot: root }), /unrecognized key|unknown/i);
+
+    writeFileSync(manifestPath, `${JSON.stringify({ ...manifest, generatorVersion: '99.0.0' })}\n`, 'utf8');
+    assert.throws(() => initializeProject({ projectRoot: root }), /newer CLI/);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
