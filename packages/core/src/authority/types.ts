@@ -1,5 +1,3 @@
-import type { ProtocolEnvelope } from '../shared/protocol.ts';
-
 export type HumanEventKind = 'task' | 'decision';
 
 export interface HumanEvent {
@@ -37,10 +35,4 @@ export interface RepositoryEvidence {
   endLine: number;
   text: string;
   digest: string;
-}
-
-export interface AuthorityInput extends ProtocolEnvelope {
-  humanEvents: HumanEvent[];
-  interpretations: AgentInterpretation[];
-  repositoryEvidence?: RepositoryEvidence[];
 }

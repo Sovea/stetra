@@ -25,20 +25,18 @@ const HumanEventSchema = z.strictObject({
   nativeId: NonEmptyStringSchema.optional(),
 });
 
-const InterpretationSchema = z.strictObject({
-  id: StableIdSchema,
-  field: z.enum([
-    'desired-outcome',
-    'constraint',
-    'non-goal',
-    'focus-path',
-    'consequence',
-  ]),
+const InterpretationBasisSchema = z.strictObject({
+  humanEventIds: z.array(StableIdSchema),
+  repositoryEvidenceIds: z.array(StableIdSchema),
+});
+
+const SemanticValueSchema = z.strictObject({
   value: NonEmptyStringSchema,
-  basis: z.strictObject({
-    humanEventIds: z.array(StableIdSchema),
-    repositoryEvidenceIds: z.array(StableIdSchema),
-  }),
+  basis: InterpretationBasisSchema,
+});
+
+const ConsequenceValueSchema = SemanticValueSchema.extend({
+  value: z.enum(['low', 'medium', 'high']),
 });
 
 const EvidenceWindowSchema = z.strictObject({
@@ -102,8 +100,10 @@ const ResidualUnknownSchema = z.strictObject({
   statement: NonEmptyStringSchema,
   adoptionImpact: NonEmptyStringSchema,
   validationPath: NonEmptyStringSchema,
-  relatedClaimIds: z.array(StableIdSchema),
-  changedFiles: z.array(SafeRepositoryPathSchema),
+  references: z.strictObject({
+    claims: z.array(StableIdSchema),
+    changedFiles: z.array(SafeRepositoryPathSchema),
+  }),
 });
 
 const ReviewMapEntrySchema = z.strictObject({
@@ -136,24 +136,21 @@ export const VerificationDefinitionSchema = z.strictObject({
   argv: z.array(z.string().min(1)).min(1),
   timeoutMs: z.number().int().positive(),
   source: z.enum(['team-default', 'host-task']),
-  verifierRefs: z.array(z.strictObject({
-    path: SafeRepositoryPathSchema,
-    role: z.enum(['command-definition', 'acceptance-surface']),
-  })),
+  commandDefinitionPaths: z.array(SafeRepositoryPathSchema),
+  acceptanceSurfacePaths: z.array(SafeRepositoryPathSchema),
 });
 
 export const DelegationPrepareDocumentSchema = z.strictObject({
   protocol: z.literal(DELEGATION_PROTOCOL),
   schemaVersion: z.literal(DELEGATION_SCHEMA_VERSION),
   humanEvents: z.array(HumanEventSchema).min(1),
-  interpretations: z.array(InterpretationSchema).min(1),
   repositoryEvidence: z.array(EvidenceWindowSchema).optional(),
   semantic: z.strictObject({
-    desiredOutcomeId: StableIdSchema,
-    constraintIds: z.array(StableIdSchema),
-    nonGoalIds: z.array(StableIdSchema),
-    focusIds: z.array(StableIdSchema),
-    consequenceId: StableIdSchema,
+    desiredOutcome: SemanticValueSchema,
+    constraints: z.array(SemanticValueSchema),
+    nonGoals: z.array(SemanticValueSchema),
+    focus: z.array(SemanticValueSchema.extend({ value: SafeRepositoryPathSchema })),
+    consequence: ConsequenceValueSchema,
     unresolvedMaterialFork: z.strictObject({
       question: NonEmptyStringSchema,
       alternatives: z.array(NonEmptyStringSchema).min(2),

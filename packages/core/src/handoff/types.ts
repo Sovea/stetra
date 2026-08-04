@@ -58,8 +58,10 @@ export interface ResidualUnknown {
   statement: string;
   adoptionImpact: string;
   validationPath: string;
-  relatedClaimIds: string[];
-  changedFiles: string[];
+  references: {
+    claims: string[];
+    changedFiles: string[];
+  };
 }
 
 export type ReviewPriority =

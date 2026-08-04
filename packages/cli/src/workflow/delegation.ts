@@ -13,6 +13,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
+import type { Readable } from 'node:stream';
 
 import {
   compileDelegation,
@@ -20,6 +21,7 @@ import {
   type CognitiveHandoff,
   type CompileDelegationInput,
   type FactBundle,
+  type HandoffEvaluation,
   type HandoffValidationIssue,
   type SemanticContract,
   type VerifierMutation,
@@ -36,6 +38,8 @@ import {
   type WorktreeSnapshot,
 } from '../facts/worktree.ts';
 import { resolveExecutable } from '../infrastructure/executable.ts';
+import { renderCognitiveHandoffMarkdown } from '../presentation/handoff.ts';
+import { summarizeVerifierSurfaces } from '../presentation/verifiers.ts';
 import {
   DELEGATION_PROTOCOL,
   DELEGATION_SCHEMA_VERSION,
@@ -81,11 +85,12 @@ export interface DelegationRun {
 export async function prepareDelegationTask(options: {
   projectRoot: string;
   inputPath: string;
+  input?: Readable;
   productVersion: string;
 }) {
   const projectRoot = canonicalProjectRoot(options.projectRoot);
   assertNoLegacyArtifacts(projectRoot);
-  const source = readPrepareDocument(options.inputPath);
+  const source = await readPrepareDocument(projectRoot, options.inputPath, options.input);
   const repositoryEvidence = materializeEvidenceWindows(
     projectRoot,
     source.repositoryEvidence ?? [],
@@ -97,7 +102,6 @@ export async function prepareDelegationTask(options: {
       ...event,
       contentFingerprint: event.contentFingerprint ?? sha256(event.content),
     })),
-    interpretations: source.interpretations,
     ...(repositoryEvidence.length ? { repositoryEvidence } : {}),
     semantic: source.semantic,
     verification: source.verification,
@@ -164,9 +168,12 @@ export async function prepareDelegationTask(options: {
       schemaVersion: DELEGATION_SCHEMA_VERSION,
       status: 'prepared',
       runId,
-      runPath: join(runDirectory, 'run.json'),
-      contract: compiled.contract,
+      semanticContract: contractWorkPacket(compiled.contract),
       baseline: summarizeWorktree(worktreeBaseline),
+      details: {
+        runPath: join(runDirectory, 'run.json'),
+        explain: { runId, section: 'contract' as const },
+      },
       runCreated: true,
       nextStep: `Implement inside the Semantic Contract, then run change collect --run ${runId}.`,
     };
@@ -275,21 +282,30 @@ export async function collectDelegationFacts(options: {
     runId,
     factCollectionId,
     changedFiles: factBundle.changedFiles.map((file) => ({
-      ...file,
-      mechanicalStatement: changedFileMechanicalStatement(file),
+      path: file.path,
+      ...(file.previousPath ? { previousPath: file.previousPath } : {}),
+      operation: file.operation,
+      representation: file.representation,
     })),
     checks: factBundle.checks.map((check) => ({
-      ...check,
-      mechanicalStatement: `Check ${check.id} was ${check.status}.`,
+      id: check.id,
+      status: check.status,
+      exitCode: check.exitCode,
+      ...(check.reason ? { reason: check.reason } : {}),
+      stdout: compactCheckStream(check.stdout),
+      stderr: compactCheckStream(check.stderr),
     })),
-    verifierMutations,
+    verifierSurfaces: summarizeVerifierSurfaces(verifierMutations),
     patch: factBundle.patch
       ? {
           ...factBundle.patch,
-          mechanicalStatement: `Change patch ${factBundle.patch.digest} was collected.`,
         }
       : null,
     handoffPath,
+    details: {
+      runPath,
+      explain: { runId, section: 'facts' as const },
+    },
     nextStep: `Inspect the complete facts and patch, fill ${handoffPath}, then run change finalize --run ${runId}.`,
   };
 }
@@ -389,6 +405,11 @@ export async function finalizeDelegationHandoff(options: {
   if (evaluation.status === 'facts-stale' || !evaluation.handoffFingerprint) {
     throw new Error('Fresh fact validation unexpectedly returned a stale or unbound evaluation.');
   }
+  const presentationMarkdown = renderCognitiveHandoffMarkdown({
+    evaluation,
+    facts: run.factBundle,
+    handoff,
+  });
   const completedRun: DelegationRun = {
     ...run,
     state: 'completed',
@@ -403,21 +424,32 @@ export async function finalizeDelegationHandoff(options: {
   rmSync(worktreeObjectDirectory(runDirectory), { recursive: true, force: true });
   const removedCompletedRunIds = cleanupCompletedRuns(run.projectRoot, run.runId);
   return {
-    ...evaluation,
+    protocol: DELEGATION_PROTOCOL,
+    schemaVersion: DELEGATION_SCHEMA_VERSION,
+    status: evaluation.status,
     runId: run.runId,
     state: 'completed',
-    runtimeFacts: {
-      factCollectionId: run.factBundle.factCollectionId,
-      collectedAt: run.factBundle.collectedAt,
-      changeFingerprint: run.factBundle.changeFingerprint,
-      changedFiles: run.factBundle.changedFiles,
-      checks: run.factBundle.checks,
-      verifierMutations: run.factBundle.verifierMutations,
-      patch: run.factBundle.patch ?? null,
+    factCollectionId: run.factBundle.factCollectionId,
+    handoffFingerprint: evaluation.handoffFingerprint,
+    attention: evaluation.attention,
+    humanAuthorityNotice: evaluation.humanAuthorityNotice,
+    presentationMarkdown,
+    details: {
+      runPath,
+      handoffPath,
+      patchPath: run.factBundle.patch?.path ?? null,
+      checkLogs: run.factBundle.checks.flatMap((check) => {
+        const logs = {
+          ...(check.stdout.logPath ? { stdout: check.stdout.logPath } : {}),
+          ...(check.stderr.logPath ? { stderr: check.stderr.logPath } : {}),
+        };
+        return Object.keys(logs).length ? [{ checkId: check.id, ...logs }] : [];
+      }),
+      explain: {
+        runId: run.runId,
+        sections: ['contract', 'facts', 'handoff', 'evaluation', 'presentation'] as const,
+      },
     },
-    materialClaims: handoff.materialClaims,
-    residualUnknowns: handoff.residualUnknowns,
-    reviewMap: handoff.reviewMap,
     retention: { removedCompletedRunIds },
     nextStep: finalizeNextStep(evaluation.status),
   };
@@ -454,18 +486,91 @@ function assertWorktreeObjectStore(runDirectory: string, runId: string): void {
 export function explainDelegationRun(options: {
   projectRoot: string;
   runId: string;
-}) {
+  section?: string;
+}): {
+  protocol: typeof DELEGATION_PROTOCOL;
+  schemaVersion: typeof DELEGATION_SCHEMA_VERSION;
+  runId: string;
+  state: DelegationRun['state'];
+  packageIdentity: DelegationRun['packageIdentity'];
+  section: string;
+  contract?: SemanticContract;
+  baseline?: ReturnType<typeof summarizeWorktree>;
+  factBundle?: FactBundle | null;
+  handoff?: unknown;
+  evaluation?: unknown;
+  presentationMarkdown?: string | null;
+  issue?: string;
+} {
   const { run, runDirectory } = readDelegationRun(options.projectRoot, options.runId);
   const handoffPath = join(runDirectory, 'handoff.json');
   const handoff = existsSync(handoffPath)
     ? readJsonValue(handoffPath, 'Cognitive Handoff')
     : null;
-  return {
+  const common = {
     protocol: run.protocol,
     schemaVersion: run.schemaVersion,
     runId: run.runId,
     state: run.state,
     packageIdentity: run.packageIdentity,
+  };
+  const section = options.section ?? 'all';
+  if (section === 'contract') {
+    return {
+      ...common,
+      section,
+      contract: run.contract,
+      baseline: summarizeWorktree(run.worktreeBaseline),
+    };
+  }
+  if (section === 'facts') {
+    return { ...common, section, factBundle: run.factBundle ?? null };
+  }
+  if (section === 'handoff') {
+    return { ...common, section, handoff };
+  }
+  if (section === 'evaluation') {
+    return { ...common, section, evaluation: run.completion?.evaluation ?? null };
+  }
+  if (section === 'presentation') {
+    if (!run.factBundle || !handoff || !run.completion) {
+      return {
+        ...common,
+        section,
+        presentationMarkdown: null,
+        issue: 'The run has no completed Cognitive Handoff presentation.',
+      };
+    }
+    const currentHandoffFingerprint = stableFingerprint({
+      factCollectionId: run.factBundle.factCollectionId,
+      handoff,
+    });
+    if (currentHandoffFingerprint !== run.completion.handoffFingerprint) {
+      return {
+        ...common,
+        section,
+        presentationMarkdown: null,
+        issue: 'The persisted handoff changed after completion; exact presentation recovery is unavailable.',
+      };
+    }
+    return {
+      ...common,
+      section,
+      presentationMarkdown: renderCognitiveHandoffMarkdown({
+        evaluation: run.completion.evaluation as HandoffEvaluation,
+        facts: run.factBundle,
+        handoff: handoff as CognitiveHandoff,
+      }),
+    };
+  }
+  if (section !== 'all') {
+    throw usageError(
+      `Invalid explain section ${JSON.stringify(section)}; use contract, facts, handoff, evaluation, presentation, or all.`,
+    );
+  }
+  return {
+    ...common,
+    section,
     contract: run.contract,
     baseline: summarizeWorktree(run.worktreeBaseline),
     factBundle: run.factBundle ?? null,
@@ -478,14 +583,29 @@ export function writeDelegationRun(path: string, run: DelegationRun): void {
   writeJsonAtomic(path, run);
 }
 
-function readPrepareDocument(pathInput: string): DelegationPrepareDocument {
-  const path = resolve(pathInput);
-  let value: unknown;
+async function readPrepareDocument(
+  projectRoot: string,
+  pathInput: string,
+  input: Readable = process.stdin,
+): Promise<DelegationPrepareDocument> {
+  const sourceLabel = pathInput === '-' ? 'stdin' : safePrepareInputPath(projectRoot, pathInput);
+  let textValue: string;
   try {
-    value = JSON.parse(readFileSync(path, 'utf8'));
+    textValue = pathInput === '-'
+      ? await readUtf8Stream(input)
+      : readFileSync(sourceLabel, 'utf8');
   } catch (error) {
     throw inputError(
-      `Failed to read Semantic Contract input at ${path}: ${error instanceof Error ? error.message : String(error)}`,
+      `Failed to read Semantic Contract input from ${sourceLabel}: ${error instanceof Error ? error.message : String(error)}`,
+      error,
+    );
+  }
+  let value: unknown;
+  try {
+    value = JSON.parse(textValue);
+  } catch (error) {
+    throw inputError(
+      `Semantic Contract input from ${sourceLabel} is not valid JSON: ${error instanceof Error ? error.message : String(error)}`,
       error,
     );
   }
@@ -494,6 +614,33 @@ function readPrepareDocument(pathInput: string): DelegationPrepareDocument {
     value,
     'Semantic Contract input',
   );
+}
+
+function safePrepareInputPath(projectRoot: string, pathInput: string): string {
+  const path = resolve(pathInput);
+  const canonical = existsSync(path) ? realpathSync(path) : path;
+  const rel = relative(projectRoot, canonical);
+  if (!isAbsolute(rel) && rel !== '..' && !rel.startsWith(`..${sep}`)) {
+    throw inputError(
+      `Semantic Contract input must not be stored inside the project worktree: ${canonical}`,
+      undefined,
+      [{
+        code: 'prepare-input-inside-project',
+        path: 'input',
+        message: 'A task input inside the worktree can pollute the collected change.',
+        remediation: 'Pass the JSON on stdin with --input -, or use a file outside the project root.',
+      }],
+    );
+  }
+  return canonical;
+}
+
+async function readUtf8Stream(input: Readable): Promise<string> {
+  const chunks: Buffer[] = [];
+  for await (const chunk of input) {
+    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk), 'utf8'));
+  }
+  return Buffer.concat(chunks).toString('utf8');
 }
 
 function readHandoffDocument(path: string) {
@@ -585,13 +732,53 @@ function collectVerifierMutations(
     }));
 }
 
-function changedFileMechanicalStatement(
-  file: FactBundle['changedFiles'][number],
-): string {
-  if (file.operation === 'renamed') {
-    return `File ${file.previousPath} was renamed to ${file.path}.`;
-  }
-  return `File ${file.path} was ${file.operation}.`;
+function contractWorkPacket(contract: SemanticContract) {
+  return {
+    contractId: contract.contractId,
+    humanEvents: contract.authority.humanEvents,
+    interpretations: contract.interpretationTrace,
+    semantic: {
+      desiredOutcome: contract.semantic.desiredOutcome.value,
+      constraints: contract.semantic.constraints.map((item) => item.value),
+      nonGoals: contract.semantic.nonGoals.map((item) => item.value),
+      focus: contract.semantic.focus.map((item) => item.value),
+      consequence: contract.semantic.consequence,
+    },
+    repositoryEvidence: contract.repositoryEvidence.map((evidence) => ({
+      id: evidence.id,
+      path: evidence.path,
+      startLine: evidence.startLine,
+      endLine: evidence.endLine,
+      digest: evidence.digest,
+    })),
+    authorization: contract.authorization,
+    verification: contract.verification.mode === 'no-command'
+      ? contract.verification
+      : {
+          mode: 'checks' as const,
+          checks: contract.verification.checks.map((check) => ({
+            id: check.id,
+            rationale: check.rationale,
+            argv: check.argv,
+            timeoutMs: check.timeoutMs,
+            source: check.source,
+            commandDefinitionPaths: check.verifierRefs
+              .filter((reference) => reference.role === 'command-definition')
+              .map((reference) => reference.path),
+            acceptanceSurfacePaths: check.verifierRefs
+              .filter((reference) => reference.role === 'acceptance-surface')
+              .map((reference) => reference.path),
+          })),
+        },
+  };
+}
+
+function compactCheckStream(stream: FactBundle['checks'][number]['stdout']) {
+  return {
+    byteLength: stream.byteLength,
+    truncated: stream.truncated,
+    ...(stream.logPath ? { logPath: stream.logPath } : {}),
+  };
 }
 
 function cleanupCompletedRuns(projectRoot: string, currentRunId: string): string[] {

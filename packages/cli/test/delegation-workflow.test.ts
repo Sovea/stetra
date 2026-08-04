@@ -58,7 +58,7 @@ test('worktree snapshots keep Git objects task-scoped and tolerate read-only met
     });
     assert.equal(prepared.status, 'prepared');
     if (prepared.status !== 'prepared') return;
-    const runDirectory = dirname(prepared.runPath);
+    const runDirectory = dirname(prepared.details.runPath);
     assert.equal(existsSync(join(runDirectory, 'worktree-objects')), true);
     assert.equal(directoryContentFingerprint(objectDirectory), originalObjects);
 
@@ -117,7 +117,8 @@ test('prepare and collect bind dirty-baseline changes, checks, patch, and verifi
         argv: [process.execPath, '-e', 'process.stdout.write("checked")'],
         timeoutMs: 10_000,
         source: 'host-task',
-        verifierRefs: [{ path: 'package.json', role: 'command-definition' }],
+        commandDefinitionPaths: ['package.json'],
+        acceptanceSurfacePaths: [],
       }],
     });
     const prepared = await prepareDelegationTask({
@@ -127,11 +128,13 @@ test('prepare and collect bind dirty-baseline changes, checks, patch, and verifi
     });
     assert.equal(prepared.status, 'prepared');
     if (prepared.status !== 'prepared') return;
-    assert.equal(prepared.contract.authority.humanEvents[0].contentFingerprint, sha256(TASK));
-    assert.equal(prepared.contract.repositoryEvidence[0].text, '{"name":"fixture"}\n');
-    assert.equal(existsSync(join(dirname(prepared.runPath), 'handoff.json')), false);
-    const preparedRun = JSON.parse(readFileSync(prepared.runPath, 'utf8'));
+    assert.equal(prepared.semanticContract.humanEvents[0].contentFingerprint, sha256(TASK));
+    assert.match(prepared.semanticContract.repositoryEvidence[0].digest, /^sha256:/);
+    assert.equal(Object.hasOwn(prepared, 'contract'), false);
+    assert.equal(existsSync(join(dirname(prepared.details.runPath), 'handoff.json')), false);
+    const preparedRun = JSON.parse(readFileSync(prepared.details.runPath, 'utf8'));
     assert.equal(preparedRun.state, 'prepared');
+    assert.equal(preparedRun.contract.repositoryEvidence[0].text, '{"name":"fixture"}\n');
     assert.ok(preparedRun.worktreeBaseline.entries.some(
       (entry: { path: string }) => entry.path === 'src/preexisting.txt',
     ));
@@ -152,19 +155,17 @@ test('prepare and collect bind dirty-baseline changes, checks, patch, and verifi
     assert.equal(collected.status, 'facts-collected');
     assert.match(collected.factCollectionId, /^sha256:[a-f0-9]{64}$/);
     assert.equal(collected.checks[0].status, 'passed');
-    assert.equal(collected.checks[0].mechanicalStatement, 'Check fixture-check was passed.');
+    assert.equal(Object.hasOwn(collected.checks[0], 'definitionFingerprint'), false);
     assert.ok(collected.checks[0].stdout.logPath);
-    assert.equal(collected.verifierMutations.length, 1);
-    assert.equal(collected.verifierMutations[0].path, 'package.json');
-    assert.equal(collected.verifierMutations[0].role, 'command-definition');
+    assert.equal(collected.verifierSurfaces.length, 1);
+    assert.equal(collected.verifierSurfaces[0].path, 'package.json');
+    assert.equal(collected.verifierSurfaces[0].role, 'command-definition');
+    assert.deepEqual(collected.verifierSurfaces[0].checkIds, ['fixture-check']);
     assert.equal(existsSync(collected.handoffPath), true);
-    assert.equal(existsSync(join(dirname(prepared.runPath), 'change.patch')), true);
+    assert.equal(existsSync(join(dirname(prepared.details.runPath), 'change.patch')), true);
     const operations = new Map(collected.changedFiles.map((file) => [file.path, file]));
     assert.equal(operations.get('src/modified.txt')?.operation, 'modified');
-    assert.equal(
-      operations.get('src/modified.txt')?.mechanicalStatement,
-      'File src/modified.txt was modified.',
-    );
+    assert.equal(Object.hasOwn(operations.get('src/modified.txt') ?? {}, 'before'), false);
     assert.equal(operations.get('src/deleted.txt')?.operation, 'deleted');
     assert.equal(operations.get('src/moved.txt')?.operation, 'renamed');
     assert.equal(operations.get('src/moved.txt')?.previousPath, 'src/renamed.txt');
@@ -172,15 +173,11 @@ test('prepare and collect bind dirty-baseline changes, checks, patch, and verifi
     assert.equal(operations.get('src/binary.bin')?.representation, 'binary');
     assert.equal(operations.get('src/link.txt')?.representation, 'metadata-only');
     assert.equal(operations.has('src/preexisting.txt'), false);
-    const patch = readFileSync(join(dirname(prepared.runPath), 'change.patch'));
+    const patch = readFileSync(join(dirname(prepared.details.runPath), 'change.patch'));
     assert.equal(sha256(patch), collected.patch?.digest);
-    assert.equal(
-      collected.patch?.mechanicalStatement,
-      `Change patch ${collected.patch?.digest} was collected.`,
-    );
     assert.match(patch.toString('utf8'), /dirty baseline/);
     assert.match(patch.toString('utf8'), /implemented/);
-    const collectedRun = JSON.parse(readFileSync(prepared.runPath, 'utf8'));
+    const collectedRun = JSON.parse(readFileSync(prepared.details.runPath, 'utf8'));
     assert.equal(collectedRun.state, 'facts-collected');
     assert.equal(Object.hasOwn(collectedRun, 'worktreeCurrent'), false);
     assert.equal(collectedRun.factBundle.factCollectionId, collected.factCollectionId);
@@ -209,11 +206,13 @@ test('prepare and collect bind dirty-baseline changes, checks, patch, and verifi
     assert.ok(finalized.attention.some((item) =>
       item.code === 'verifier-surface-changed'
       && item.resolution.kind === 'direct-review'));
-    if (!('runtimeFacts' in finalized)) {
-      assert.fail('fresh terminal finalization must include Runtime facts');
+    assert.equal(finalized.factCollectionId, collected.factCollectionId);
+    assert.equal(Object.hasOwn(finalized, 'runtimeFacts'), false);
+    if (typeof finalized.presentationMarkdown !== 'string') {
+      assert.fail('fresh terminal finalization must include the rendered handoff');
     }
-    assert.equal(finalized.runtimeFacts.factCollectionId, collected.factCollectionId);
-    assert.equal(finalized.runtimeFacts.verifierMutations.length, 1);
+    assert.match(finalized.presentationMarkdown, /### Runtime facts/);
+    assert.match(finalized.presentationMarkdown, /package\.json.*command-definition/);
     assert.match(finalized.nextStep, /Attention action/);
   } finally {
     rmSync(root, { recursive: true, force: true });
@@ -286,7 +285,8 @@ test('prepare rejects unavailable top-level executables without claiming nested 
         argv: ['resonant-code-certainly-missing-executable', '--version'],
         timeoutMs: 10_000,
         source: 'host-task',
-        verifierRefs: [],
+        commandDefinitionPaths: [],
+        acceptanceSurfacePaths: [],
       }],
     });
     const missing = await prepareDelegationTask({
@@ -312,7 +312,8 @@ test('prepare rejects unavailable top-level executables without claiming nested 
         argv: [process.execPath, '-e', 'require("resonant-code-certainly-missing-module")'],
         timeoutMs: 10_000,
         source: 'host-task',
-        verifierRefs: [],
+        commandDefinitionPaths: [],
+        acceptanceSurfacePaths: [],
       }],
     });
     const nested = await prepareDelegationTask({
@@ -399,6 +400,7 @@ test('finalize completes a fresh fact-bound handoff and explain preserves all au
     assert.match(finalized.humanAuthorityNotice, /human review only/);
     const explained = explainDelegationRun({ projectRoot: root, runId: prepared.runId });
     assert.equal(explained.state, 'completed');
+    assert.ok(explained.contract);
     assert.equal(explained.contract.authority.humanEvents[0].content, TASK);
     assert.equal(explained.factBundle?.factCollectionId, collected.factCollectionId);
     assert.equal(
@@ -510,8 +512,10 @@ test('finalize reports independent semantic authoring issues together and remain
       statement: 'A boundary remains unknown.',
       adoptionImpact: 'Adoption could preserve the wrong behavior.',
       validationPath: 'Inspect the exact missing boundary.',
-      relatedClaimIds: ['claim:missing'],
-      changedFiles: ['missing.ts'],
+      references: {
+        claims: ['claim:missing'],
+        changedFiles: ['missing.ts'],
+      },
     }];
     writeFileSync(collected.handoffPath, `${JSON.stringify(invalid, null, 2)}\n`, 'utf8');
 
@@ -560,8 +564,8 @@ test('retention removes only whole old completed runs and preserves prepared run
     writeValidHandoff(firstFacts.handoffPath, firstFacts.changedFiles[0].path);
     await finalizeDelegationHandoff({ projectRoot: root, runId: first.runId });
 
-    const firstRunDirectory = dirname(first.runPath);
-    const completedFixture = JSON.parse(readFileSync(first.runPath, 'utf8'));
+    const firstRunDirectory = dirname(first.details.runPath);
+    const completedFixture = JSON.parse(readFileSync(first.details.runPath, 'utf8'));
     const handoffFixture = readFileSync(join(firstRunDirectory, 'handoff.json'));
     const clonedRunIds: string[] = [];
     for (let index = 0; index < 50; index += 1) {
@@ -590,11 +594,13 @@ test('retention removes only whole old completed runs and preserves prepared run
     );
     const finalized = await finalizeDelegationHandoff({ projectRoot: root, runId: current.runId });
 
-    if (!('retention' in finalized)) assert.fail('fresh finalization must apply retention');
+    if (!('retention' in finalized) || !finalized.retention) {
+      assert.fail('fresh finalization must apply retention');
+    }
     assert.equal(finalized.retention.removedCompletedRunIds.length, 2);
-    assert.equal(existsSync(inProgress.runPath), true);
-    assert.equal(JSON.parse(readFileSync(inProgress.runPath, 'utf8')).state, 'prepared');
-    assert.equal(existsSync(current.runPath), true);
+    assert.equal(existsSync(inProgress.details.runPath), true);
+    assert.equal(JSON.parse(readFileSync(inProgress.details.runPath, 'utf8')).state, 'prepared');
+    assert.equal(existsSync(current.details.runPath), true);
     const remainingCompleted = [first.runId, current.runId, ...clonedRunIds]
       .filter((runId) => {
         const runPath = join(root, '.resonant-code', 'runs', runId, 'run.json');
@@ -619,10 +625,8 @@ function writePrepareInput(
       argv: string[];
       timeoutMs: number;
       source: 'host-task';
-      verifierRefs: Array<{
-        path: string;
-        role: 'command-definition' | 'acceptance-surface';
-      }>;
+      commandDefinitionPaths: string[];
+      acceptanceSurfacePaths: string[];
     }>;
     noCommandRationale?: string;
     repositoryEvidence?: Array<{
@@ -637,10 +641,8 @@ function writePrepareInput(
     protocol: 'semantic-delegation',
     schemaVersion: '1',
     humanEvents: [{ id: 'event:task', kind: 'task', content: TASK }],
-    interpretations: [
-      {
-        id: 'meaning:outcome',
-        field: 'desired-outcome',
+    semantic: {
+      desiredOutcome: {
         value: 'Produce a fact-bound cognitive handoff.',
         basis: {
           humanEventIds: ['event:task'],
@@ -649,23 +651,17 @@ function writePrepareInput(
             : [],
         },
       },
-      {
-        id: 'meaning:consequence',
-        field: 'consequence',
+      constraints: [],
+      nonGoals: [],
+      focus: [],
+      consequence: {
         value: 'high',
         basis: { humanEventIds: ['event:task'], repositoryEvidenceIds: [] },
       },
-    ],
+    },
     ...(verification.repositoryEvidence
       ? { repositoryEvidence: verification.repositoryEvidence }
       : {}),
-    semantic: {
-      desiredOutcomeId: 'meaning:outcome',
-      constraintIds: [],
-      nonGoalIds: [],
-      focusIds: [],
-      consequenceId: 'meaning:consequence',
-    },
     verification: {
       ...(verification.checks ? { checks: verification.checks } : {}),
       ...(verification.noCommandRationale

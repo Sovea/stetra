@@ -51,26 +51,18 @@ try {
       content: task,
       contentFingerprint: sha256(task),
     }],
-    interpretations: [
-      {
-        id: 'meaning:outcome',
-        field: 'desired-outcome',
+    semantic: {
+      desiredOutcome: {
         value: 'Expose the Semantic Handoff workflow.',
         basis: { humanEventIds: ['event:task'], repositoryEvidenceIds: [] },
       },
-      {
-        id: 'meaning:consequence',
-        field: 'consequence',
+      constraints: [],
+      nonGoals: [],
+      focus: [],
+      consequence: {
         value: 'high',
         basis: { humanEventIds: ['event:task'], repositoryEvidenceIds: [] },
       },
-    ],
-    semantic: {
-      desiredOutcomeId: 'meaning:outcome',
-      constraintIds: [],
-      nonGoalIds: [],
-      focusIds: [],
-      consequenceId: 'meaning:consequence',
     },
     verification: {
       noCommandRationale: 'The isolated Core smoke has no repository command surface.',

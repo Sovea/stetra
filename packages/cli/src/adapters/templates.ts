@@ -14,17 +14,17 @@ description: Run an authority-visible, fact-bound Semantic Handoff for productio
 
 # resonant-code
 
-Use this workflow for production coding changes where a developer needs to
-retain semantic authority and receive an inspectable model of the actual
-change before deciding whether to adopt it.
+Use this workflow for production coding changes where a developer needs an
+inspectable model of the actual change before deciding whether to adopt it.
 
-${host} owns repository investigation, interpretation, implementation,
-falsification, and repair. Humans own goals, long-lived tradeoffs, exceptions,
-and adoption. Runtime owns collected Git and check facts. Never relabel Agent
-judgment as a Human Event or a machine fact.
+${host} owns investigation, interpretation, implementation, falsification,
+and repair. Humans own goals, long-lived tradeoffs, exceptions, and adoption.
+Runtime owns only collected Git and check facts. Never relabel Agent judgment
+as a Human Event or Runtime fact.
 
 Read [references/change.md](references/change.md) completely before preparing
-a change. Invoke every command with \`--json\`. The CLI never calls an LLM.
+a change. Invoke every lifecycle command with \`--json\`. The CLI never calls
+an LLM.
 `;
 }
 
@@ -50,25 +50,28 @@ ${markers.end}`;
 
 const CHANGE_REFERENCE = `# Semantic Handoff change workflow
 
-## Authority contract
+## Authority and autonomy
 
-- Treat exact user messages and explicit follow-up decisions as Human Events.
-- Keep every structured outcome, constraint, non-goal, focus path, and
-  consequence assessment visibly Agent-authored, with exact event/evidence
+- Preserve exact user messages and explicit decisions as Human Events.
+- Structured outcomes, constraints, focus, consequence, claims, and
+  recommendations remain Agent interpretations with exact event/evidence
   references.
-- Resolve repository-discoverable questions yourself. Ask one consolidated
-  question only when materially different choices change the goal, public
-  behavior, compatibility, architectural ownership, irreversible migration,
-  security/reliability burden, or another long-lived tradeoff.
-- A concrete task authorizes necessary local, reversible inspection, edits,
-  verification, diagnosis, and repair inside the aligned contract. Focus paths
-  guide investigation and review; they are not write permissions.
-- Do not proceed to prepare with a remaining material semantic fork.
+- Resolve repository facts yourself. Ask one consolidated question only when
+  viable choices differ on public behavior, compatibility, ownership,
+  irreversible migration, security/reliability burden, or another long-lived
+  human-owned tradeoff.
+- The task authorizes necessary local reversible investigation, edits, checks,
+  diagnosis, and repair. Focus paths are not write permissions.
+- Do not prepare while a material semantic fork remains.
 
-## 1. Prepare
+The normal path is exactly \`prepare -> collect -> finalize\`. Repeat collect
+after a repair. Explain is an on-demand inspection command, not a normal final
+step.
 
-Inspect the task and repository first. Create a transient JSON file outside the
-repository when practical. Use this exact protocol shape:
+## 1. Prepare the Semantic Contract
+
+Send the JSON on stdin with \`--input -\`. Never store this transient task
+input inside the project worktree.
 
 \`\`\`json
 {
@@ -83,234 +86,179 @@ repository when practical. Use this exact protocol shape:
       "nativeId": "optional native event id"
     }
   ],
-  "interpretations": [
-    {
-      "id": "meaning:outcome",
-      "field": "desired-outcome",
-      "value": "concrete implemented outcome",
-      "basis": {
-        "humanEventIds": ["event:task"],
-        "repositoryEvidenceIds": []
-      }
-    },
-    {
-      "id": "meaning:consequence",
-      "field": "consequence",
-      "value": "medium",
-      "basis": {
-        "humanEventIds": ["event:task"],
-        "repositoryEvidenceIds": []
-      }
-    }
-  ],
   "repositoryEvidence": [],
   "semantic": {
-    "desiredOutcomeId": "meaning:outcome",
-    "constraintIds": [],
-    "nonGoalIds": [],
-    "focusIds": [],
-    "consequenceId": "meaning:consequence"
+    "desiredOutcome": {
+      "value": "concrete requested outcome",
+      "basis": {"humanEventIds": ["event:task"], "repositoryEvidenceIds": []}
+    },
+    "constraints": [],
+    "nonGoals": [],
+    "focus": [],
+    "consequence": {
+      "value": "medium",
+      "basis": {"humanEventIds": ["event:task"], "repositoryEvidenceIds": []}
+    }
   },
   "verification": {
     "checks": [
       {
         "id": "test",
-        "rationale": "what requested behavior or regression boundary this checks",
+        "rationale": "requested behavior or regression boundary",
         "argv": ["package-manager", "test"],
         "timeoutMs": 120000,
         "source": "host-task",
-        "verifierRefs": [
-          { "path": "package.json", "role": "command-definition" },
-          { "path": "test/public.test.ts", "role": "acceptance-surface" }
-        ]
+        "commandDefinitionPaths": ["package.json"],
+        "acceptanceSurfacePaths": ["test/public.test.ts"]
       }
     ]
   }
 }
 \`\`\`
 
-Allowed interpretation fields are \`desired-outcome\`, \`constraint\`,
-\`non-goal\`, \`focus-path\`, and \`consequence\`. Consequence is \`low\`,
-\`medium\`, or \`high\` and affects review depth only. Every interpretation
-must affect the compiled contract and name at least one exact Human Event or
-repository evidence window.
+Each semantic value contains \`value\` and \`basis\`; Runtime generates the
+interpretation identity. Consequence is \`low\`, \`medium\`, or \`high\` and
+changes review depth only. Evidence windows contain \`id\`, repository-relative
+\`path\`, \`startLine\`, and \`endLine\`; matching proves currency, not truth.
 
-Repository evidence windows contain only \`id\`, repository-relative \`path\`,
-\`startLine\`, and \`endLine\`; the CLI materializes exact text and digest.
-Matching proves currency, not semantic truth or representativeness.
+Checks use argv arrays without a shell. If no executable check applies, replace
+\`checks\` with a concrete \`noCommandRationale\`. Declare command-definition
+and acceptance-surface paths separately; use empty arrays when neither exists.
+Prepare resolves only the top-level executable; nested modules, services, and
+runtime prerequisites remain collect-time facts.
 
-Select every applicable local check explicitly. Commands are argv arrays and
-never shell strings. If no executable check applies, replace \`checks\` with a
-concrete \`noCommandRationale\`. Do not invent a rationale merely to avoid an
-available check. Declare exact \`verifierRefs\` only for files that define the
-command or its acceptance surface, and label each role explicitly. Prepare
-checks only top-level executable resolution; it does not claim that nested
-tools, modules, services, or runtime prerequisites are available.
-
-Run:
+Run the command with the document on stdin:
 
 \`\`\`sh
-resonant-code change prepare . --input <transient-json> --json
+resonant-code change prepare . --input - --json
 \`\`\`
 
-No run is created for \`semantic-decision-required\`,
-\`verification-required\`, or \`authority-invalid\`. Correct the exact issue;
-do not bypass it.
+Inspect the returned \`semanticContract\`. Non-runnable results create no run;
+correct the exact issue without bypassing it.
 
-## 2. Implement and collect
+## 2. Implement and collect facts
 
-Implement the contract using normal repository tools. Diagnose and safely
-repair without asking for generic file/command permission. Re-align only if
-new work changes a long-lived semantic value.
-
-Then run:
+Implement and safely repair inside the compiled contract. Re-align only if the
+discovered work changes a long-lived semantic value. Then run:
 
 \`\`\`sh
 resonant-code change collect . --run <run-id> --json
 \`\`\`
 
-Collect runs every frozen check before capturing the current worktree. Inspect
-all returned changed-file operations, check outcomes, verifier mutations, and
-the complete \`change.patch\`. The Fact Bundle—not Host prose—is authoritative
-for changed files, checks, output digests, and collection identity.
+Inspect every returned changed path, check outcome, changed verifier surface,
+and the complete patch at \`patch.path\`. Runtime, not Host prose, owns those
+facts. If repair is needed, edit and collect again; recollection replaces the
+old facts and resets \`handoff.json\`.
 
-If repair is needed after collect, edit normally and run collect again. The new
-collection replaces the old identity and resets \`handoff.json\`. Never reuse a
-handoff from an earlier collection.
+## 3. Author the Cognitive Handoff
 
-Treat collected problems according to their evidence meaning. Repair a failed
-check and collect again. For an unavailable command, safely restore the local
-environment and collect again when possible; otherwise preserve the missing
-evidence as attention. A verifier mutation means the result is not independent
-of the implementation: review the changed verifier surface directly and seek
-independent evidence when it could hide a regression. Resolve repository-local
-unknowns before finalize when ordinary inspection or a safe check can answer
-them.
-
-## 3. Build the Cognitive Handoff
-
-Fill the exact \`handoffPath\` returned by collect. Select only exact changed
-paths and check IDs from that output. Do not add a collection identity, changed
-file operations, check results, patch content, confidence scores, adoption
-claims, or any other Host-declared machine facts.
+Fill the returned \`handoffPath\`. Select only changed paths and check IDs from
+the current collect packet. Do not declare collection identity, operations,
+check results, patch content, confidence, or adoption.
 
 \`\`\`json
 {
   "protocol": "semantic-delegation",
   "schemaVersion": "1",
-  "systemMeaningUpdate": "compact description of the implemented system, not the plan",
+  "systemMeaningUpdate": "compact description of the implemented system",
   "materialClaims": [
     {
       "id": "claim:behavior",
       "dimension": "behavior",
       "statement": "concrete adoption-relevant conclusion",
-      "adoptionConsequence": "what accepting this conclusion changes for the developer",
+      "adoptionConsequence": "what accepting this conclusion changes",
       "adoptionCritical": true,
       "basis": "agent-judgment",
       "evidence": {
-        "changedFiles": ["exact/path/from/collect.ts"],
+        "changedFiles": ["exact/path.ts"],
         "checks": ["test"],
         "patch": true
       },
       "falsification": {
-        "failureHypothesis": "specific way this conclusion could be false",
-        "attempt": "specific attempt to find that failure in the complete change",
+        "failureHypothesis": "specific way the conclusion could be false",
+        "attempt": "specific attempt to find that failure",
         "status": "supported",
-        "supportingEvidence": {
-          "changedFiles": ["exact/path/from/collect.ts"],
-          "checks": ["test"]
-        },
+        "supportingEvidence": {"changedFiles": ["exact/path.ts"], "checks": ["test"]},
         "counterEvidence": {},
         "conclusion": "bounded conclusion from the challenge"
       }
     }
   ],
-  "residualUnknowns": [],
+  "residualUnknowns": [
+    {
+      "id": "unknown:example",
+      "statement": "what cannot currently be established",
+      "adoptionImpact": "why it could affect adoption or operation",
+      "validationPath": "exact validation or takeover action",
+      "references": {"claims": ["claim:behavior"], "changedFiles": ["exact/path.ts"]}
+    }
+  ],
   "reviewMap": [
     {
       "id": "review:behavior",
       "priority": "must-read",
-      "changedFiles": ["exact/path/from/collect.ts"],
+      "changedFiles": ["exact/path.ts"],
       "checkIds": ["test"],
       "claimIds": ["claim:behavior"],
-      "unknownIds": [],
+      "unknownIds": ["unknown:example"],
       "rationale": "why direct attention belongs here",
-      "prevents": "failure or misunderstanding this review can prevent"
+      "prevents": "failure or misunderstanding this review prevents"
     }
   ]
 }
 \`\`\`
 
-Claim dimensions are behavior, invariant, state-ownership, data-flow,
-control-flow, compatibility, migration, failure-recovery, security,
-operations, maintenance, and important-non-change. Bases are
-repository-evidence, agent-judgment, human-decision, and unverified.
+Use an empty \`residualUnknowns\` array when none remains. Claim dimensions are
+behavior, invariant, state-ownership, data-flow, control-flow, compatibility,
+migration, failure-recovery, security, operations, maintenance, and
+important-non-change. Bases are repository-evidence, agent-judgment,
+human-decision, and unverified. A passing check supports Agent judgment; it
+does not create a Runtime semantic fact.
 
-A passing check supports an Agent semantic judgment; it does not turn that
-judgment into a Runtime fact. Runtime presents mechanical facts separately.
-Human-decision must select an exact decision event in
-\`evidence.humanEvents\`.
+Every adoption-critical Agent/repository/unverified claim requires
+falsification. Inspect the complete patch and actively seek counterevidence.
+Use supported, contradicted, partial, or unverified; never hide counterevidence.
+Non-critical claims must omit falsification. Put unresolved critical claims,
+unknowns, failed/unavailable checks, changed verifier surfaces, and
+unrepresentable files in a must-read or unresolved Review Map entry.
+Attention explains adoption impact, exact evidence, and a concrete action. The
+Review Map only orders inspection surfaces and never substitutes for attention.
+A passing happy path alone is not a falsification attempt.
 
-For every adoption-critical Agent/repository/unverified claim, inspect the
-complete patch and actively seek counterevidence. Record supported,
-contradicted, partial, or unverified. Never write supported when accepted
-evidence is absent or counterevidence exists. Put every contradicted, partial,
-or unverified critical claim and every residual unknown in a must-read or
-unresolved Review Map entry. Do the same for every collected failed or
-unavailable check, verifier mutation, and unrepresentable changed file that
-remains at finalize. Select the exact check and changed path so Runtime can
-verify that urgent attention has a concrete review surface.
+Choose challenge depth by the actual dimension:
 
-Choose the challenge from the claim's actual risk dimension; do not create
-extra claims merely to run a generic checklist:
-
-- For \`state-ownership\`, enumerate every writer and coupled state field;
-  trace owner, non-owner, success, early-return, and failure paths; challenge
-  relevant execution orders, repeated operations, and a later third
-  participant; distinguish transient state from committed state.
-- For \`control-flow\`, walk every material branch, cleanup path, and callback
-  or async timing boundary that could bypass the claimed invariant.
-- For \`compatibility\`, test the promised compatibility scope at the generic
-  implementation owner, not only the changed caller; cover applicable older
-  environments or build tags and preservation of existing state or inputs.
-- For \`failure-recovery\`, force applicable partial execution, retry,
-  duplicate invocation, rollback, and cleanup paths; inspect idempotency and
-  what remains committed after failure.
-
-For other dimensions, name an equally concrete failure mechanism and probe
-the boundary that could expose it. A passing happy-path check is not itself a
-falsification attempt.
-
-An unknown must explain what is unknown, its adoption impact, a concrete
-validation/takeover path, and related claims/files. A no-change run requires an
-important-non-change claim explaining the result.
+- state ownership: trace every writer, coupled field, early return, failure,
+  execution order, repeated operation, and later participant;
+- control flow: trace every material branch, cleanup, callback, and async
+  timing boundary;
+- compatibility: probe the promised scope at the generic implementation owner
+  across applicable environments and preserved inputs/state;
+- failure/recovery: force partial execution, retry, duplicate invocation,
+  rollback, cleanup, and idempotency boundaries.
 
 ## 4. Finalize and hand off
-
-Run:
 
 \`\`\`sh
 resonant-code change finalize . --run <run-id> --json
 \`\`\`
 
-If the repository changed after collect, finalize returns \`facts-stale\`
-without evaluating the handoff. Collect again. A failed check or contradicted
-critical claim returns \`rejected\`; unavailable checks, partial/unverified
-critical claims, verifier mutations, and residual unknowns return
-\`needs-attention\`.
+Repository edits after collect return \`facts-stale\`. Failed checks or a
+contradicted critical claim reject. Missing evidence, changed verifier
+surfaces, residual unknowns, and partial/unverified critical claims need
+attention. \`handoff-ready\` means ready for human review, never adopted.
 
-\`handoff-ready\` means the evidence is ready for human review, not adopted.
-For every terminal status, present, in order: the system-meaning update,
-Runtime facts, claims grouped by basis, residual unknowns, actionable
-\`attention\`, and the Review Map. Attention explains the adoption impact,
-exact evidence to inspect, and the next repair, validation, or direct-review
-action. The Review Map separately orders those inspection surfaces; it is not
-a substitute for explaining why the run needs attention. State the limits of
-evidence and leave the adoption decision to the developer. Use:
+For a completed result, return \`presentationMarkdown\` to the developer
+unchanged. It is the CLI-owned authority partition. If supplemental Host-only
+probes materially help, append them under a separate **Agent supplemental
+evidence** heading; never add them to Runtime facts.
+
+Only when exact underlying detail is needed, use one of:
 
 \`\`\`sh
-resonant-code change explain . --run <run-id> --json
+resonant-code change explain . --run <run-id> --section contract --json
+resonant-code change explain . --run <run-id> --section facts --json
+resonant-code change explain . --run <run-id> --section handoff --json
+resonant-code change explain . --run <run-id> --section evaluation --json
+resonant-code change explain . --run <run-id> --section presentation --json
 \`\`\`
-
-for the complete inspectable contract, facts, handoff, and evaluation.
 `;

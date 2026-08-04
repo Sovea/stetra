@@ -16,6 +16,10 @@ interface RunOptions {
   run: string;
 }
 
+interface ExplainOptions extends RunOptions {
+  section?: string;
+}
+
 export function registerChangeCommands(
   program: Command,
   environment: CommandEnvironment,
@@ -29,7 +33,7 @@ export function registerChangeCommands(
     .command('prepare')
     .description('Compile the Semantic Contract and freeze the Git worktree baseline')
     .argument('[project-root]', 'Git worktree root', '.')
-    .requiredOption('--input <path>', 'Semantic Contract input JSON')
+    .option('--input <path>', 'Semantic Contract input JSON path, or - for stdin', '-')
     .action(async (
       projectRoot: string,
       options: PrepareOptions,
@@ -38,6 +42,7 @@ export function registerChangeCommands(
       environment.emit('change prepare', await prepareDelegationTask({
         projectRoot,
         inputPath: options.input,
+        input: environment.runtime.input,
         productVersion,
       }), command);
     });
@@ -80,14 +85,16 @@ export function registerChangeCommands(
     .description('Inspect the exact contract, facts, handoff, and evaluation')
     .argument('[project-root]', 'Git worktree root', '.')
     .requiredOption('--run <id>', 'run ID returned by prepare')
+    .option('--section <name>', 'contract, facts, handoff, evaluation, presentation, or all', 'all')
     .action((
       projectRoot: string,
-      options: RunOptions,
+      options: ExplainOptions,
       command: Command,
     ) => {
       environment.emit('change explain', explainDelegationRun({
         projectRoot,
         runId: options.run,
+        section: options.section,
       }), command);
     });
 }

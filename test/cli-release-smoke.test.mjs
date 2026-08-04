@@ -73,7 +73,7 @@ try {
     'change.md',
   );
   assert.match(readFileSync(changeReference, 'utf8'), /change collect/);
-  assert.match(readFileSync(changeReference, 'utf8'), /human review, not adopted/);
+  assert.match(readFileSync(changeReference, 'utf8'), /human review, never adopted/);
   assert.equal(existsSync(join(project, '.agents', 'skills', 'resonant-code', 'references', 'bootstrap.md')), false);
 
   git(project, ['init', '-q']);
@@ -87,26 +87,18 @@ try {
     protocol: 'semantic-delegation',
     schemaVersion: '1',
     humanEvents: [{ id: 'event:task', kind: 'task', content: task }],
-    interpretations: [
-      {
-        id: 'meaning:outcome',
-        field: 'desired-outcome',
+    semantic: {
+      desiredOutcome: {
         value: 'Change the exported fixture value with a fact-bound handoff.',
         basis: { humanEventIds: ['event:task'], repositoryEvidenceIds: [] },
       },
-      {
-        id: 'meaning:consequence',
-        field: 'consequence',
+      constraints: [],
+      nonGoals: [],
+      focus: [],
+      consequence: {
         value: 'medium',
         basis: { humanEventIds: ['event:task'], repositoryEvidenceIds: [] },
       },
-    ],
-    semantic: {
-      desiredOutcomeId: 'meaning:outcome',
-      constraintIds: [],
-      nonGoalIds: [],
-      focusIds: [],
-      consequenceId: 'meaning:consequence',
     },
     verification: {
       checks: [{
@@ -115,7 +107,8 @@ try {
         argv: [process.execPath, '-e', 'process.exit(0)'],
         timeoutMs: 10_000,
         source: 'host-task',
-        verifierRefs: [{ path: 'package.json', role: 'command-definition' }],
+        commandDefinitionPaths: ['package.json'],
+        acceptanceSurfacePaths: [],
       }],
     },
   }, null, 2)}\n`, 'utf8');
@@ -123,8 +116,9 @@ try {
     'change', 'prepare', project, '--input', inputPath, '--json',
   ]);
   assert.equal(prepared.status, 'prepared');
-  assert.equal(prepared.contract.authority.humanEvents[0].content, task);
-  const preparedRun = JSON.parse(readFileSync(prepared.runPath, 'utf8'));
+  assert.equal(prepared.semanticContract.humanEvents[0].content, task);
+  assert.equal(Object.hasOwn(prepared, 'contract'), false);
+  const preparedRun = JSON.parse(readFileSync(prepared.details.runPath, 'utf8'));
   assert.equal(preparedRun.workflow, 'semantic-handoff');
   assert.equal(preparedRun.state, 'prepared');
   assert.equal(preparedRun.packageIdentity.core.version, '0.0.1');
@@ -140,7 +134,7 @@ try {
     [['src/example.ts', 'modified']],
   );
   assert.equal(collected.checks[0].status, 'passed');
-  assert.ok(readFileSync(join(resolve(prepared.runPath, '..'), 'change.patch'), 'utf8'));
+  assert.ok(readFileSync(join(resolve(prepared.details.runPath, '..'), 'change.patch'), 'utf8'));
   const changedFile = collected.changedFiles[0].path;
   writeFileSync(collected.handoffPath, `${JSON.stringify({
     protocol: 'semantic-delegation',
@@ -181,6 +175,8 @@ try {
   assert.equal(finalized.status, 'handoff-ready');
   assert.equal(finalized.state, 'completed');
   assert.match(finalized.humanAuthorityNotice, /human review only/);
+  assert.match(finalized.presentationMarkdown, /### Runtime facts/);
+  assert.equal(Object.hasOwn(finalized, 'runtimeFacts'), false);
   const explained = runInstalledCli([
     'change', 'explain', project, '--run', prepared.runId, '--json',
   ]);

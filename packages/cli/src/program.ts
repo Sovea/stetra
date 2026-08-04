@@ -28,7 +28,7 @@ export function createProgram(
     .name('resonant-code')
     .description('CLI-first control plane for the resonant-code change harness')
     .version(PRODUCT_VERSION)
-    .option('--json', 'emit the complete machine-readable result')
+    .option('--json', 'emit a deterministic machine-readable decision packet')
     .option('--no-interactive', 'disable all human prompts')
     .option('--no-color', 'disable ANSI formatting in human output')
     .showHelpAfterError('(add --help for command details)')

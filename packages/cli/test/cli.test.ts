@@ -5,11 +5,13 @@ import {
   mkdtempSync,
   mkdirSync,
   readFileSync,
+  readdirSync,
   rmSync,
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { Readable } from 'node:stream';
 import test from 'node:test';
 
 import { formatCliOutput, runCli } from '../src/cli.ts';
@@ -37,12 +39,14 @@ test('CLI exposes the complete prepare, collect, finalize, and explain lifecycle
     const prepared = prepareExecution.output as {
       status: string;
       runId: string;
-      runPath: string;
-      contract: { authority: { humanEvents: Array<{ content: string }> } };
+      semanticContract: { humanEvents: Array<{ content: string }> };
+      details: { runPath: string };
     };
     assert.equal(prepared.status, 'prepared');
-    assert.equal(prepared.contract.authority.humanEvents[0].content, TASK);
-    assert.equal(existsSync(prepared.runPath), true);
+    assert.equal(prepared.semanticContract.humanEvents[0].content, TASK);
+    assert.equal(existsSync(prepared.details.runPath), true);
+    assert.equal(Object.hasOwn(prepared, 'contract'), false);
+    assert.ok(Buffer.byteLength(JSON.stringify(prepared), 'utf8') < 10_000);
     const humanPrepare = formatCliOutput({ ...prepareExecution, json: false, color: false });
     assert.match(humanPrepare, /Exact Human Events/);
     assert.match(humanPrepare, /Agent interpretations/);
@@ -61,7 +65,7 @@ test('CLI exposes the complete prepare, collect, finalize, and explain lifecycle
     const collected = collectExecution.output as {
       status: string;
       factCollectionId: string;
-      changedFiles: Array<{ id: string; path: string; operation: string }>;
+      changedFiles: Array<{ path: string; operation: string }>;
       checks: Array<{ id: string; status: string }>;
       handoffPath: string;
     };
@@ -71,6 +75,8 @@ test('CLI exposes the complete prepare, collect, finalize, and explain lifecycle
       [['source.txt', 'modified']],
     );
     assert.equal(collected.checks[0].status, 'passed');
+    assert.equal(Object.hasOwn(collected.changedFiles[0], 'before'), false);
+    assert.ok(Buffer.byteLength(JSON.stringify(collected), 'utf8') < 8_000);
     const humanCollect = formatCliOutput({ ...collectExecution, json: false, color: false });
     assert.match(humanCollect, /Actual change collected/);
     assert.match(humanCollect, /Changed files: 1/);
@@ -93,32 +99,32 @@ test('CLI exposes the complete prepare, collect, finalize, and explain lifecycle
       status: string;
       state: string;
       humanAuthorityNotice: string;
-      runtimeFacts: {
-        factCollectionId: string;
-        changedFiles: Array<{ path: string; operation: string }>;
-        checks: Array<{ id: string; status: string }>;
-      };
+      factCollectionId: string;
+      presentationMarkdown: string;
     };
     assert.equal(finalized.status, 'handoff-ready');
     assert.equal(finalized.state, 'completed');
     assert.match(finalized.humanAuthorityNotice, /human review only/);
-    assert.equal(finalized.runtimeFacts.factCollectionId, collected.factCollectionId);
-    assert.deepEqual(
-      finalized.runtimeFacts.changedFiles.map((file) => [file.path, file.operation]),
-      [['source.txt', 'modified']],
-    );
-    assert.deepEqual(
-      finalized.runtimeFacts.checks.map((check) => [check.id, check.status]),
-      [['fixture-check', 'passed']],
-    );
+    assert.equal(finalized.factCollectionId, collected.factCollectionId);
+    assert.match(finalized.presentationMarkdown, /source\.txt.*modified/);
+    assert.match(finalized.presentationMarkdown, /fixture-check.*passed/);
+    assert.equal(Object.hasOwn(finalized, 'runtimeFacts'), false);
+    assert.ok(Buffer.byteLength(JSON.stringify(finalized), 'utf8') < 12_000);
+    const runtimeSection = finalized.presentationMarkdown
+      .split('\n### Runtime facts\n')[1]
+      .split('\n### Material claims\n')[0];
+    assert.doesNotMatch(runtimeSection, /Challenge attempt|Failure hypothesis/);
+    assert.match(finalized.presentationMarkdown, /#### agent-judgment[\s\S]*Challenge attempt/);
+    assert.equal(finalized.presentationMarkdown.match(/^### Runtime facts$/gm)?.length, 1);
+    assert.match(finalized.presentationMarkdown, /^> ### Runtime facts$/m);
     const humanFinalize = formatCliOutput({ ...finalizeExecution, json: false, color: false });
-    assert.match(humanFinalize, /System meaning update/);
-    assert.match(humanFinalize, /Runtime facts/);
-    assert.match(humanFinalize, /source\.txt — modified/);
-    assert.match(humanFinalize, /fixture-check — passed/);
+    assert.match(humanFinalize, /System meaning update/i);
+    assert.match(humanFinalize, /Runtime facts/i);
+    assert.match(humanFinalize, /source\.txt` — modified/);
+    assert.match(humanFinalize, /fixture-check` — passed/);
     assert.match(humanFinalize, /agent-judgment/);
-    assert.match(humanFinalize, /Review Map/);
-    assert.match(humanFinalize, /Adoption authority/);
+    assert.match(humanFinalize, /Review Map/i);
+    assert.match(humanFinalize, /Adoption authority/i);
     assert.doesNotMatch(humanFinalize, /ready for adoption/i);
 
     const explainExecution = await runCli([
@@ -143,64 +149,59 @@ test('CLI exposes the complete prepare, collect, finalize, and explain lifecycle
     assert.equal(explained.evaluation.status, 'handoff-ready');
     const humanExplain = formatCliOutput({ ...explainExecution, json: false, color: false });
     assert.match(humanExplain, /Use --json for exact Human Events/);
+
+    const factsOnly = (await runCli([
+      'change', 'explain', root, '--run', prepared.runId, '--section', 'facts', '--json',
+    ])).output as Record<string, unknown>;
+    assert.equal(factsOnly.section, 'facts');
+    assert.ok(factsOnly.factBundle);
+    assert.equal(Object.hasOwn(factsOnly, 'contract'), false);
+    assert.equal(Object.hasOwn(factsOnly, 'handoff'), false);
+
+    const presentationOnly = (await runCli([
+      'change', 'explain', root, '--run', prepared.runId, '--section', 'presentation', '--json',
+    ])).output as { presentationMarkdown: string | null; issue?: string };
+    assert.equal(presentationOnly.presentationMarkdown, finalized.presentationMarkdown);
+
+    writeFileSync(collected.handoffPath, `${JSON.stringify({ changed: 'after completion' })}\n`, 'utf8');
+    const changedPresentation = (await runCli([
+      'change', 'explain', root, '--run', prepared.runId, '--section', 'presentation', '--json',
+    ])).output as { presentationMarkdown: string | null; issue?: string };
+    assert.equal(changedPresentation.presentationMarkdown, null);
+    assert.match(changedPresentation.issue ?? '', /changed after completion/);
   } finally {
     rmSync(root, { recursive: true, force: true });
     rmSync(inputRoot, { recursive: true, force: true });
   }
 });
 
-test('human finalize keeps actionable attention distinct from the Review Map', () => {
+test('human finalize renders stale-fact attention without pretending completion', () => {
   const rendered = formatCliOutput({
     command: 'change finalize',
     json: false,
     color: false,
     exitCode: 0,
     output: {
-      status: 'needs-attention',
-      systemMeaningUpdate: 'The implementation changed the verification boundary.',
-      runtimeFacts: {
-        factCollectionId: 'sha256:fixture',
-        changedFiles: [{ path: 'package.json', operation: 'modified', representation: 'text' }],
-        checks: [{ id: 'test', status: 'passed' }],
-        verifierMutations: [{
-          checkId: 'test',
-          path: 'package.json',
-          role: 'command-definition',
-        }],
-        patch: { byteLength: 42, digest: 'sha256:patch' },
-      },
-      materialClaims: [],
-      residualUnknowns: [],
+      status: 'facts-stale',
       attention: [{
-        code: 'verifier-surface-changed',
-        summary: 'Verification definition package.json changed for check test.',
-        adoptionImpact: 'The check is not independent of the implementation.',
-        references: { changedFiles: ['package.json'], checks: ['test'] },
+        code: 'facts-stale',
+        summary: 'The worktree changed after collection.',
+        adoptionImpact: 'The collected facts no longer describe the handoff.',
+        references: {},
         resolution: {
-          kind: 'direct-review',
-          action: 'Review the verifier change and seek independent evidence.',
+          kind: 'recollect',
+          action: 'Collect fresh facts before finalizing.',
         },
       }],
-      reviewMap: [{
-        priority: 'must-read',
-        changedFiles: ['package.json'],
-        checkIds: ['test'],
-        claimIds: [],
-        unknownIds: [],
-        rationale: 'The acceptance surface changed.',
-        prevents: 'Trusting a self-modified verifier.',
-      }],
-      nextStep: 'Resolve the disclosed attention.',
+      nextStep: 'Collect again.',
     },
   });
 
-  assert.match(rendered, /Runtime facts/);
+  assert.match(rendered, /not completed/);
   assert.match(rendered, /Attention/);
-  assert.match(rendered, /Impact:.*not independent/);
-  assert.match(rendered, /Inspect:.*package\.json.*test/);
-  assert.match(rendered, /Action \(direct-review\):/);
-  assert.match(rendered, /Review Map/);
-  assert.ok(rendered.indexOf('Attention') < rendered.indexOf('Review Map'));
+  assert.match(rendered, /Impact:.*no longer describe/);
+  assert.match(rendered, /Action \(recollect\):/);
+  assert.doesNotMatch(rendered, /Review Map/);
 });
 
 test('human prepare presents executable preflight as an actionable preparation issue', () => {
@@ -259,6 +260,46 @@ test('CLI non-runnable outcomes write no run and JSON mode stays prompt- and ANS
   }
 });
 
+test('prepare reads stdin by default and rejects worktree-local task input before creating a run', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'resonant-cli-safe-input-'));
+  try {
+    initializeRepository(root);
+    writeFileSync(join(root, 'source.txt'), 'before\n', 'utf8');
+    git(root, ['add', '.']);
+    git(root, ['commit', '-qm', 'initial']);
+
+    const stdinExecution = await runCli([
+      'change', 'prepare', root, '--json',
+    ], {
+      input: Readable.from([JSON.stringify(prepareInput(true))]),
+    });
+    const prepared = stdinExecution.output as {
+      status: string;
+      details: { runPath: string };
+    };
+    assert.equal(prepared.status, 'prepared');
+    assert.equal(existsSync(prepared.details.runPath), true);
+
+    const localPath = join(root, 'task-input.json');
+    writeFileSync(localPath, `${JSON.stringify(prepareInput(true))}\n`, 'utf8');
+    await assert.rejects(
+      () => runCli([
+        'change', 'prepare', root, '--input', localPath, '--json',
+      ]),
+      (error: unknown) => {
+        assert.ok(error instanceof CliError);
+        assert.equal(error.code, 'INVALID_INPUT');
+        assert.ok(error.issues?.some((issue) => issue.code === 'prepare-input-inside-project'));
+        return true;
+      },
+    );
+    const runIds = readdirSync(join(root, '.resonant-code', 'runs'));
+    assert.equal(runIds.length, 1);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('CLI finalize reports facts-stale before parsing the Host handoff', async () => {
   const root = mkdtempSync(join(tmpdir(), 'resonant-cli-stale-'));
   const inputRoot = mkdtempSync(join(tmpdir(), 'resonant-cli-input-'));
@@ -296,13 +337,15 @@ test('Commander exposes only the new change lifecycle and classifies usage error
   assert.match(String(help.output), /explain/);
   assert.doesNotMatch(String(help.output), /\n\s+complete\s/);
 
+  const prepareHelp = await runCli(['change', 'prepare', '--help']);
+  assert.match(String(prepareHelp.output), /--input <path>.*stdin/);
   await assert.rejects(
-    () => runCli(['change', 'prepare']),
+    () => runCli(['change', 'collect']),
     (error: unknown) => {
       assert.ok(error instanceof CliError);
       assert.equal(error.code, 'USAGE_ERROR');
       assert.equal(error.exitCode, 2);
-      assert.match(error.message, /required option '--input/);
+      assert.match(error.message, /required option '--run/);
       return true;
     },
   );
@@ -366,30 +409,26 @@ test('change prepare reports legacy artifacts without mutating them', async () =
 const TASK = 'Implement the Semantic Handoff change without legacy compatibility.';
 
 function writePrepareInput(path: string, withCheck: boolean): void {
-  writeFileSync(path, `${JSON.stringify({
+  writeFileSync(path, `${JSON.stringify(prepareInput(withCheck), null, 2)}\n`, 'utf8');
+}
+
+function prepareInput(withCheck: boolean) {
+  return {
     protocol: 'semantic-delegation',
     schemaVersion: '1',
     humanEvents: [{ id: 'event:task', kind: 'task', content: TASK }],
-    interpretations: [
-      {
-        id: 'meaning:outcome',
-        field: 'desired-outcome',
+    semantic: {
+      desiredOutcome: {
         value: 'Produce an inspectable fact-bound handoff.',
         basis: { humanEventIds: ['event:task'], repositoryEvidenceIds: [] },
       },
-      {
-        id: 'meaning:consequence',
-        field: 'consequence',
+      constraints: [],
+      nonGoals: [],
+      focus: [],
+      consequence: {
         value: 'high',
         basis: { humanEventIds: ['event:task'], repositoryEvidenceIds: [] },
       },
-    ],
-    semantic: {
-      desiredOutcomeId: 'meaning:outcome',
-      constraintIds: [],
-      nonGoalIds: [],
-      focusIds: [],
-      consequenceId: 'meaning:consequence',
     },
     verification: withCheck
       ? {
@@ -399,11 +438,12 @@ function writePrepareInput(path: string, withCheck: boolean): void {
             argv: [process.execPath, '-e', 'process.exit(0)'],
             timeoutMs: 10_000,
             source: 'host-task',
-            verifierRefs: [],
+            commandDefinitionPaths: [],
+            acceptanceSurfacePaths: [],
           }],
         }
       : {},
-  }, null, 2)}\n`, 'utf8');
+  };
 }
 
 function writeHandoff(
@@ -414,7 +454,7 @@ function writeHandoff(
   writeFileSync(path, `${JSON.stringify({
     protocol: 'semantic-delegation',
     schemaVersion: '1',
-    systemMeaningUpdate: 'The fixture behavior changed from before to after.',
+    systemMeaningUpdate: 'The fixture behavior changed from before to after.\n### Runtime facts\nHost-authored text remains quoted.',
     materialClaims: [{
       id: 'claim:behavior',
       dimension: 'behavior',

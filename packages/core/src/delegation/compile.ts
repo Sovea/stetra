@@ -1,5 +1,9 @@
 import { validateAuthority } from '../authority/validate.ts';
-import type { AgentInterpretation } from '../authority/types.ts';
+import type {
+  AgentInterpretation,
+  InterpretationBasis,
+  InterpretationField,
+} from '../authority/types.ts';
 import {
   assertProtocol,
   hasExactKeys,
@@ -9,6 +13,7 @@ import {
   isStableId,
   SEMANTIC_DELEGATION_PROTOCOL,
   SEMANTIC_DELEGATION_SCHEMA_VERSION,
+  sortedUnique,
   stableFingerprint,
   type ValidationIssue,
 } from '../shared/protocol.ts';
@@ -35,7 +40,6 @@ export function compileDelegation(input: CompileDelegationInput): DelegationComp
     'protocol',
     'schemaVersion',
     'humanEvents',
-    'interpretations',
     'repositoryEvidence',
     'semantic',
     'verification',
@@ -45,12 +49,16 @@ export function compileDelegation(input: CompileDelegationInput): DelegationComp
 
   const authorityResult = validateAuthority(source);
   issues.push(...authorityResult.issues);
-  const semanticResult = validateSemantic(source.semantic, authorityResult.authority?.interpretations ?? []);
+  const semanticResult = validateSemantic(
+    source.semantic,
+    new Set(authorityResult.authority.humanEvents.map((event) => event.id)),
+    new Set(authorityResult.authority.repositoryEvidence.map((evidence) => evidence.id)),
+  );
   issues.push(...semanticResult.issues);
   const verificationResult = validateVerification(source.verification);
   issues.push(...verificationResult.issues);
 
-  if (issues.length || !authorityResult.authority || !semanticResult.semantic) {
+  if (issues.length || !semanticResult.semantic) {
     return { ...ENVELOPE, status: 'authority-invalid', issues };
   }
   if (semanticResult.fork) {
@@ -77,9 +85,14 @@ export function compileDelegation(input: CompileDelegationInput): DelegationComp
   }
 
   const authority = authorityResult.authority;
-  const interpretations = authority.interpretations;
-  const byId = new Map(interpretations.map((interpretation) => [interpretation.id, interpretation]));
   const selected = semanticResult.semantic;
+  const interpretations = [
+    selected.desiredOutcome,
+    ...selected.constraints,
+    ...selected.nonGoals,
+    ...selected.focus,
+    selected.consequence,
+  ];
   const contractWithoutId = {
     ...ENVELOPE,
     authority: {
@@ -87,12 +100,12 @@ export function compileDelegation(input: CompileDelegationInput): DelegationComp
       providerTrustBoundary: 'host-supplied-events-not-runtime-authenticated' as const,
     },
     semantic: {
-      desiredOutcome: byId.get(selected.desiredOutcomeId)!,
-      constraints: selected.constraintIds.map((id) => byId.get(id)!),
-      nonGoals: selected.nonGoalIds.map((id) => byId.get(id)!),
-      focus: selected.focusIds.map((id) => byId.get(id)!),
-      consequence: byId.get(selected.consequenceId)!.value as ConsequenceLevel,
-      consequenceInterpretation: byId.get(selected.consequenceId)!,
+      desiredOutcome: selected.desiredOutcome,
+      constraints: selected.constraints,
+      nonGoals: selected.nonGoals,
+      focus: selected.focus,
+      consequence: selected.consequence.value as ConsequenceLevel,
+      consequenceInterpretation: selected.consequence,
     },
     repositoryEvidence: authority.repositoryEvidence,
     interpretationTrace: interpretations,
@@ -127,14 +140,15 @@ export function validateCompiledContract(contract: SemanticContract): void {
 
 function validateSemantic(
   value: unknown,
-  interpretations: AgentInterpretation[],
+  eventIds: Set<string>,
+  evidenceIds: Set<string>,
 ): {
   semantic?: {
-    desiredOutcomeId: string;
-    constraintIds: string[];
-    nonGoalIds: string[];
-    focusIds: string[];
-    consequenceId: string;
+    desiredOutcome: AgentInterpretation;
+    constraints: AgentInterpretation[];
+    nonGoals: AgentInterpretation[];
+    focus: AgentInterpretation[];
+    consequence: AgentInterpretation;
   };
   fork?: MaterialSemanticFork;
   issues: ValidationIssue[];
@@ -146,62 +160,211 @@ function validateSemantic(
     };
   }
   for (const key of hasExactKeys(value, [
-    'desiredOutcomeId',
-    'constraintIds',
-    'nonGoalIds',
-    'focusIds',
-    'consequenceId',
+    'desiredOutcome',
+    'constraints',
+    'nonGoals',
+    'focus',
+    'consequence',
     'unresolvedMaterialFork',
   ])) {
     issues.push(issue('unsupported-field', `semantic.${key}`, `Unsupported semantic field ${key}.`));
   }
-  const desiredOutcomeId = referenceId(value.desiredOutcomeId, 'semantic.desiredOutcomeId', issues);
-  const constraintIds = referenceIds(value.constraintIds, 'semantic.constraintIds', issues);
-  const nonGoalIds = referenceIds(value.nonGoalIds, 'semantic.nonGoalIds', issues);
-  const focusIds = referenceIds(value.focusIds, 'semantic.focusIds', issues);
-  const consequenceId = referenceId(value.consequenceId, 'semantic.consequenceId', issues);
-  const byId = new Map(interpretations.map((interpretation) => [interpretation.id, interpretation]));
-  requireField(byId, desiredOutcomeId, 'desired-outcome', 'semantic.desiredOutcomeId', issues);
-  requireFields(byId, constraintIds, 'constraint', 'semantic.constraintIds', issues);
-  requireFields(byId, nonGoalIds, 'non-goal', 'semantic.nonGoalIds', issues);
-  requireFields(byId, focusIds, 'focus-path', 'semantic.focusIds', issues);
-  requireField(byId, consequenceId, 'consequence', 'semantic.consequenceId', issues);
-
-  const selected = new Set([
-    desiredOutcomeId,
-    consequenceId,
-    ...constraintIds,
-    ...nonGoalIds,
-    ...focusIds,
-  ].filter(Boolean));
-  for (const interpretation of interpretations) {
-    if (!selected.has(interpretation.id)) {
-      issues.push(issue(
-        'interpretation-unused',
-        `interpretations.${interpretation.id}`,
-        'Every supplied interpretation must change the compiled Semantic Contract.',
-      ));
-    }
-  }
+  const desiredOutcome = validateSemanticValue(
+    value.desiredOutcome,
+    'semantic.desiredOutcome',
+    'desired-outcome',
+    0,
+    eventIds,
+    evidenceIds,
+    issues,
+  );
+  const constraints = validateSemanticValues(
+    value.constraints,
+    'semantic.constraints',
+    'constraint',
+    eventIds,
+    evidenceIds,
+    issues,
+  );
+  const nonGoals = validateSemanticValues(
+    value.nonGoals,
+    'semantic.nonGoals',
+    'non-goal',
+    eventIds,
+    evidenceIds,
+    issues,
+  );
+  const focus = validateSemanticValues(
+    value.focus,
+    'semantic.focus',
+    'focus-path',
+    eventIds,
+    evidenceIds,
+    issues,
+  );
+  const consequence = validateSemanticValue(
+    value.consequence,
+    'semantic.consequence',
+    'consequence',
+    0,
+    eventIds,
+    evidenceIds,
+    issues,
+  );
 
   const fork = value.unresolvedMaterialFork === undefined
     ? undefined
     : validateFork(value.unresolvedMaterialFork, issues);
   return {
-    ...(desiredOutcomeId && consequenceId
+    ...(desiredOutcome && consequence
       ? {
           semantic: {
-            desiredOutcomeId,
-            constraintIds,
-            nonGoalIds,
-            focusIds,
-            consequenceId,
+            desiredOutcome,
+            constraints,
+            nonGoals,
+            focus,
+            consequence,
           },
         }
       : {}),
     ...(fork ? { fork } : {}),
     issues,
   };
+}
+
+function validateSemanticValues(
+  value: unknown,
+  path: string,
+  field: InterpretationField,
+  eventIds: Set<string>,
+  evidenceIds: Set<string>,
+  issues: ValidationIssue[],
+): AgentInterpretation[] {
+  if (!Array.isArray(value)) {
+    issues.push(issue('semantic-values-invalid', path, 'Semantic values must be an array.'));
+    return [];
+  }
+  return value.flatMap((candidate, index) => {
+    const interpretation = validateSemanticValue(
+      candidate,
+      `${path}[${index}]`,
+      field,
+      index,
+      eventIds,
+      evidenceIds,
+      issues,
+    );
+    return interpretation ? [interpretation] : [];
+  });
+}
+
+function validateSemanticValue(
+  value: unknown,
+  path: string,
+  field: InterpretationField,
+  index: number,
+  eventIds: Set<string>,
+  evidenceIds: Set<string>,
+  issues: ValidationIssue[],
+): AgentInterpretation | undefined {
+  const issueCount = issues.length;
+  if (!isRecord(value)) {
+    issues.push(issue('semantic-value-invalid', path, 'Semantic value must contain value and basis.'));
+    return undefined;
+  }
+  for (const key of hasExactKeys(value, ['value', 'basis'])) {
+    issues.push(issue('unsupported-field', `${path}.${key}`, `Unsupported semantic value field ${key}.`));
+  }
+  if (!isNonEmptyString(value.value)) {
+    issues.push(issue('semantic-value-empty', `${path}.value`, 'Semantic value is required.'));
+  } else if (field === 'focus-path' && !isSafeRepositoryPath(value.value)) {
+    issues.push(issue('focus-path-unsafe', `${path}.value`, 'Focus paths must be safe repository-relative paths.'));
+  } else if (field === 'consequence' && !['low', 'medium', 'high'].includes(value.value)) {
+    issues.push(issue('consequence-invalid', `${path}.value`, 'Consequence must be low, medium, or high.'));
+  }
+  const basis = validateInterpretationBasis(
+    value.basis,
+    `${path}.basis`,
+    eventIds,
+    evidenceIds,
+    issues,
+  );
+  if (issues.length !== issueCount || !basis || !isNonEmptyString(value.value)) {
+    return undefined;
+  }
+  const normalizedValue = value.value.trim();
+  return {
+    id: `meaning:${field}:${stableFingerprint({ field, index, value: normalizedValue, basis }).slice('sha256:'.length)}`,
+    field,
+    value: normalizedValue,
+    basis,
+  };
+}
+
+function validateInterpretationBasis(
+  value: unknown,
+  path: string,
+  eventIds: Set<string>,
+  evidenceIds: Set<string>,
+  issues: ValidationIssue[],
+): InterpretationBasis | undefined {
+  const issueCount = issues.length;
+  if (!isRecord(value)) {
+    issues.push(issue('interpretation-basis-invalid', path, 'Interpretation basis must be an object.'));
+    return undefined;
+  }
+  for (const key of hasExactKeys(value, ['humanEventIds', 'repositoryEvidenceIds'])) {
+    issues.push(issue('unsupported-field', `${path}.${key}`, `Unsupported basis field ${key}.`));
+  }
+  const humanEventIds = validateReferenceList(
+    value.humanEventIds,
+    `${path}.humanEventIds`,
+    'Human Event',
+    eventIds,
+    'human-event-reference-missing',
+    issues,
+  );
+  const repositoryEvidenceIds = validateReferenceList(
+    value.repositoryEvidenceIds,
+    `${path}.repositoryEvidenceIds`,
+    'Repository evidence',
+    evidenceIds,
+    'repository-evidence-reference-missing',
+    issues,
+  );
+  if (!humanEventIds.length && !repositoryEvidenceIds.length) {
+    issues.push(issue(
+      'interpretation-basis-empty',
+      path,
+      'Every Agent interpretation must reference at least one Human Event or repository evidence window.',
+    ));
+  }
+  return issues.length === issueCount
+    ? { humanEventIds, repositoryEvidenceIds }
+    : undefined;
+}
+
+function validateReferenceList(
+  value: unknown,
+  path: string,
+  label: string,
+  available: Set<string>,
+  missingCode: string,
+  issues: ValidationIssue[],
+): string[] {
+  if (!Array.isArray(value) || value.some((item) => !isStableId(item))) {
+    issues.push(issue('reference-list-invalid', path, 'References must be an array of stable ids.'));
+    return [];
+  }
+  if (new Set(value).size !== value.length) {
+    issues.push(issue('reference-list-duplicate', path, 'References must not contain duplicates.'));
+  }
+  for (const id of value) {
+    if (!available.has(id)) {
+      issues.push(issue(missingCode, path, `${label} ${JSON.stringify(id)} does not exist.`));
+    }
+  }
+  return sortedUnique(value);
 }
 
 function validateFork(value: unknown, issues: ValidationIssue[]): MaterialSemanticFork | undefined {
@@ -256,7 +419,15 @@ function validateVerification(value: unknown): {
       issues.push(issue('verification-check-invalid', path, 'Check must be an object.'));
       continue;
     }
-    for (const key of hasExactKeys(candidate, ['id', 'rationale', 'argv', 'timeoutMs', 'source', 'verifierRefs'])) {
+    for (const key of hasExactKeys(candidate, [
+      'id',
+      'rationale',
+      'argv',
+      'timeoutMs',
+      'source',
+      'commandDefinitionPaths',
+      'acceptanceSurfacePaths',
+    ])) {
       issues.push(issue('unsupported-field', `${path}.${key}`, `Unsupported check field ${key}.`));
     }
     if (!isStableId(candidate.id) || ids.has(candidate.id)) {
@@ -274,10 +445,29 @@ function validateVerification(value: unknown): {
       issues.push(issue('verification-check-invalid', path, 'Check definition is malformed.'));
       continue;
     }
-    const verifierRefs = validateVerifierRefs(candidate.verifierRefs, `${path}.verifierRefs`, issues);
-    if (!verifierRefs) {
+    const commandDefinitionPaths = validateVerifierPaths(
+      candidate.commandDefinitionPaths,
+      `${path}.commandDefinitionPaths`,
+      issues,
+    );
+    const acceptanceSurfacePaths = validateVerifierPaths(
+      candidate.acceptanceSurfacePaths,
+      `${path}.acceptanceSurfacePaths`,
+      issues,
+    );
+    if (!commandDefinitionPaths || !acceptanceSurfacePaths) {
       continue;
     }
+    const verifierRefs: VerifierRef[] = [
+      ...commandDefinitionPaths.map((verifierPath) => ({
+        path: verifierPath,
+        role: 'command-definition' as const,
+      })),
+      ...acceptanceSurfacePaths.map((verifierPath) => ({
+        path: verifierPath,
+        role: 'acceptance-surface' as const,
+      })),
+    ];
     checks.push({
       id: candidate.id,
       rationale: candidate.rationale.trim(),
@@ -302,89 +492,28 @@ function validateVerification(value: unknown): {
   return { missing: true, issues };
 }
 
-function validateVerifierRefs(
+function validateVerifierPaths(
   value: unknown,
   path: string,
   issues: ValidationIssue[],
-): VerifierRef[] | undefined {
-  if (!Array.isArray(value)) {
-    issues.push(issue('verification-verifier-refs-invalid', path, 'Verifier refs must be an array.'));
+): string[] | undefined {
+  if (!Array.isArray(value) || value.some((candidate) => !isSafeRepositoryPath(candidate))) {
+    issues.push(issue(
+      'verification-verifier-paths-invalid',
+      path,
+      'Verifier paths must be an array of safe repository-relative paths.',
+    ));
     return undefined;
   }
-  const output: VerifierRef[] = [];
-  const identities = new Set<string>();
-  for (const [index, candidate] of value.entries()) {
-    const itemPath = `${path}[${index}]`;
-    if (!isRecord(candidate)) {
-      issues.push(issue('verification-verifier-ref-invalid', itemPath, 'Verifier ref must be an object.'));
-      continue;
-    }
-    for (const key of hasExactKeys(candidate, ['path', 'role'])) {
-      issues.push(issue('unsupported-field', `${itemPath}.${key}`, `Unsupported verifier ref field ${key}.`));
-    }
-    if (!isSafeRepositoryPath(candidate.path)
-      || (candidate.role !== 'command-definition' && candidate.role !== 'acceptance-surface')) {
-      issues.push(issue(
-        'verification-verifier-ref-invalid',
-        itemPath,
-        'Verifier ref requires a safe repository path and an explicit command-definition or acceptance-surface role.',
-      ));
-      continue;
-    }
-    const identity = `${candidate.role}:${candidate.path}`;
-    if (identities.has(identity)) {
-      issues.push(issue('verification-verifier-ref-duplicate', itemPath, 'Verifier refs must be unique by path and role.'));
-      continue;
-    }
-    identities.add(identity);
-    output.push({ path: candidate.path, role: candidate.role });
-  }
-  return output.length === value.length ? output : undefined;
-}
-
-function referenceId(value: unknown, path: string, issues: ValidationIssue[]): string {
-  if (!isStableId(value)) {
-    issues.push(issue('interpretation-reference-invalid', path, 'Interpretation reference must be a stable id.'));
-    return '';
-  }
-  return value;
-}
-
-function referenceIds(value: unknown, path: string, issues: ValidationIssue[]): string[] {
-  if (!Array.isArray(value) || value.some((item) => !isStableId(item))) {
-    issues.push(issue('interpretation-references-invalid', path, 'Interpretation references must be stable ids.'));
-    return [];
-  }
   if (new Set(value).size !== value.length) {
-    issues.push(issue('interpretation-references-duplicate', path, 'Interpretation references must be unique.'));
+    issues.push(issue(
+      'verification-verifier-path-duplicate',
+      path,
+      'Verifier paths must not contain duplicates within the same role.',
+    ));
+    return undefined;
   }
-  return [...value];
-}
-
-function requireField(
-  byId: Map<string, AgentInterpretation>,
-  id: string,
-  field: AgentInterpretation['field'],
-  path: string,
-  issues: ValidationIssue[],
-): void {
-  if (!id) return;
-  const interpretation = byId.get(id);
-  if (!interpretation) {
-    issues.push(issue('interpretation-reference-missing', path, `Interpretation ${JSON.stringify(id)} does not exist.`));
-  } else if (interpretation.field !== field) {
-    issues.push(issue('interpretation-field-mismatch', path, `Interpretation ${id} must have field ${field}.`));
-  }
-}
-
-function requireFields(
-  byId: Map<string, AgentInterpretation>,
-  ids: string[],
-  field: AgentInterpretation['field'],
-  path: string,
-  issues: ValidationIssue[],
-): void {
-  for (const id of ids) requireField(byId, id, field, path, issues);
+  return sortedUnique(value);
 }
 
 function issue(code: string, path: string, message: string): ValidationIssue {

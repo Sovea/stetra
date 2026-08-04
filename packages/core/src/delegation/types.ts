@@ -1,6 +1,7 @@
 import type {
   AgentInterpretation,
   HumanEvent,
+  InterpretationBasis,
   RepositoryEvidence,
 } from '../authority/types.ts';
 import type {
@@ -24,12 +25,22 @@ export interface MaterialSemanticFork {
 }
 
 export interface SemanticEnvelopeInput {
-  desiredOutcomeId: string;
-  constraintIds: string[];
-  nonGoalIds: string[];
-  focusIds: string[];
-  consequenceId: string;
+  desiredOutcome: SemanticValueInput;
+  constraints: SemanticValueInput[];
+  nonGoals: SemanticValueInput[];
+  focus: SemanticValueInput[];
+  consequence: ConsequenceValueInput;
   unresolvedMaterialFork?: MaterialSemanticFork;
+}
+
+export interface SemanticValueInput {
+  value: string;
+  basis: InterpretationBasis;
+}
+
+export interface ConsequenceValueInput {
+  value: ConsequenceLevel;
+  basis: InterpretationBasis;
 }
 
 export interface VerificationDefinition {
@@ -41,14 +52,23 @@ export interface VerificationDefinition {
   verifierRefs: VerifierRef[];
 }
 
+export interface VerificationDefinitionInput {
+  id: string;
+  rationale: string;
+  argv: string[];
+  timeoutMs: number;
+  source: VerificationSource;
+  commandDefinitionPaths: string[];
+  acceptanceSurfacePaths: string[];
+}
+
 export interface VerificationInput {
-  checks?: VerificationDefinition[];
+  checks?: VerificationDefinitionInput[];
   noCommandRationale?: string;
 }
 
 export interface CompileDelegationInput extends ProtocolEnvelope {
   humanEvents: HumanEvent[];
-  interpretations: AgentInterpretation[];
   repositoryEvidence?: RepositoryEvidence[];
   semantic: SemanticEnvelopeInput;
   verification: VerificationInput;

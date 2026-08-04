@@ -159,15 +159,34 @@ function buildAttention(
     }
   }
   const changedById = new Map(facts.changedFiles.map((file) => [file.id, file]));
+  const verifierGroups = new Map<string, {
+    path: string;
+    role: FactBundle['verifierMutations'][number]['role'];
+    changedPath: string;
+    checkIds: Set<string>;
+  }>();
   for (const mutation of facts.verifierMutations) {
     const changed = changedById.get(mutation.changedFileId)!;
+    const key = `${mutation.path}\0${mutation.role}`;
+    const group = verifierGroups.get(key) ?? {
+      path: mutation.path,
+      role: mutation.role,
+      changedPath: changed.path,
+      checkIds: new Set<string>(),
+    };
+    group.checkIds.add(mutation.checkId);
+    verifierGroups.set(key, group);
+  }
+  for (const group of [...verifierGroups.values()].sort((left, right) =>
+    left.path.localeCompare(right.path) || left.role.localeCompare(right.role))) {
+    const checkIds = [...group.checkIds].sort((left, right) => left.localeCompare(right));
     output.push({
       code: 'verifier-surface-changed',
-      summary: `Verification ${mutation.role} ${mutation.path} changed for check ${mutation.checkId}.`,
-      adoptionImpact: mutation.role === 'command-definition'
+      summary: `Verification ${group.role} ${group.path} changed for ${checkIds.length === 1 ? 'check' : 'checks'} ${checkIds.join(', ')}.`,
+      adoptionImpact: group.role === 'command-definition'
         ? 'The executed check definition changed with the implementation, so the result is not independent of that change.'
         : 'The acceptance surface changed with the implementation, so a passing result may reflect revised expectations rather than preserved behavior.',
-      references: { changedFiles: [changed.path], checks: [mutation.checkId] },
+      references: { changedFiles: [group.changedPath], checks: checkIds },
       resolution: {
         kind: 'direct-review',
         action: 'Review the changed verifier surface directly and add independent evidence when it could mask a regression.',
@@ -229,8 +248,10 @@ function buildAttention(
       summary: unknown.statement,
       adoptionImpact: unknown.adoptionImpact,
       references: {
-        ...(unknown.changedFiles.length ? { changedFiles: unknown.changedFiles } : {}),
-        ...(unknown.relatedClaimIds.length ? { claims: unknown.relatedClaimIds } : {}),
+        ...(unknown.references.changedFiles.length
+          ? { changedFiles: unknown.references.changedFiles }
+          : {}),
+        ...(unknown.references.claims.length ? { claims: unknown.references.claims } : {}),
         unknowns: [unknown.id],
       },
       resolution: {
@@ -251,6 +272,24 @@ function validateAttentionReviewCoverage(
   const issues: HandoffValidationIssue[] = [];
   for (const item of attention) {
     const references = item.references;
+    if (item.code === 'verifier-surface-changed') {
+      const changedFiles = references.changedFiles ?? [];
+      const checks = references.checks ?? [];
+      const matching = urgent.filter((entry) =>
+        changedFiles.some((path) => entry.changedFiles.includes(path)));
+      const coveredFiles = changedFiles.every((path) =>
+        matching.some((entry) => entry.changedFiles.includes(path)));
+      const coveredChecks = checks.every((id) =>
+        matching.some((entry) => entry.checkIds.includes(id)));
+      if (coveredFiles && coveredChecks) continue;
+      issues.push(handoffIssue(
+        'attention-review-required',
+        'reviewMap',
+        `Attention item ${item.code} requires must-read or unresolved Review Map coverage.`,
+        'Add one Review Map entry for the changed verifier path and every affected check.',
+      ));
+      continue;
+    }
     const covered = urgent.some((entry) => {
       if (references.unknowns?.length) {
         return references.unknowns.some((id) => entry.unknownIds.includes(id));
@@ -711,22 +750,38 @@ function validateUnknowns(
       'statement',
       'adoptionImpact',
       'validationPath',
-      'relatedClaimIds',
-      'changedFiles',
+      'references',
     ], path, issues);
     const id = stableUniqueId(candidate.id, `${path}.id`, ids, issues);
     const statement = requiredString(candidate.statement, `${path}.statement`, 'Unknown statement is required.', issues);
     const adoptionImpact = requiredString(candidate.adoptionImpact, `${path}.adoptionImpact`, 'Unknown adoption impact is required.', issues);
     const validationPath = requiredString(candidate.validationPath, `${path}.validationPath`, 'Unknown validation path is required.', issues);
-    const relatedClaimIds = validateKnownIds(
-      candidate.relatedClaimIds,
-      claimIds,
-      `${path}.relatedClaimIds`,
-      'claim',
-      issues,
-    );
-    const changedFiles = validateChangedPaths(candidate.changedFiles, `${path}.changedFiles`, references, issues);
-    if (!relatedClaimIds.length && !changedFiles.length) {
+    let relatedClaims: string[] = [];
+    let changedFiles: string[] = [];
+    if (!isRecord(candidate.references)) {
+      issues.push(handoffIssue(
+        'unknown-references-required',
+        `${path}.references`,
+        'Residual unknown references must be an object.',
+        'Provide claims and changedFiles arrays under references.',
+      ));
+    } else {
+      rejectExtraKeys(candidate.references, ['claims', 'changedFiles'], `${path}.references`, issues);
+      relatedClaims = validateKnownIds(
+        candidate.references.claims,
+        claimIds,
+        `${path}.references.claims`,
+        'claim',
+        issues,
+      );
+      changedFiles = validateChangedPaths(
+        candidate.references.changedFiles,
+        `${path}.references.changedFiles`,
+        references,
+        issues,
+      );
+    }
+    if (!relatedClaims.length && !changedFiles.length) {
       issues.push(handoffIssue(
         'unknown-reference-required',
         path,
@@ -735,7 +790,13 @@ function validateUnknowns(
       ));
     }
     if (id && statement && adoptionImpact && validationPath) {
-      output.push({ id, statement, adoptionImpact, validationPath, relatedClaimIds, changedFiles });
+      output.push({
+        id,
+        statement,
+        adoptionImpact,
+        validationPath,
+        references: { claims: relatedClaims, changedFiles },
+      });
     }
   }
   return output;

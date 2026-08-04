@@ -51,13 +51,34 @@ test('compileDelegation rejects unknown protocols and schema versions without co
     verification: { checks: Array<Record<string, unknown>> };
   };
   const check = legacy.verification.checks[0];
-  delete check.verifierRefs;
-  check.definitionRefs = ['package.json'];
+  delete check.commandDefinitionPaths;
+  check.verifierRefs = [{ path: 'package.json', role: 'command-definition' }];
   const result = compileDelegation(legacy as unknown as CompileDelegationInput);
   assert.equal(result.status, 'authority-invalid');
   if (result.status === 'authority-invalid') {
-    assert.ok(result.issues.some((item) => item.path.endsWith('.definitionRefs')));
     assert.ok(result.issues.some((item) => item.path.endsWith('.verifierRefs')));
+    assert.ok(result.issues.some((item) => item.path.endsWith('.commandDefinitionPaths')));
+  }
+
+  const oldAuthoring = structuredClone(compileInput()) as unknown as Record<string, unknown>;
+  oldAuthoring.interpretations = [{
+    id: 'meaning:outcome',
+    field: 'desired-outcome',
+    value: 'Legacy relational input.',
+    basis: { humanEventIds: ['event:task'], repositoryEvidenceIds: [] },
+  }];
+  oldAuthoring.semantic = {
+    desiredOutcomeId: 'meaning:outcome',
+    constraintIds: [],
+    nonGoalIds: [],
+    focusIds: [],
+    consequenceId: 'meaning:consequence',
+  };
+  const obsolete = compileDelegation(oldAuthoring as unknown as CompileDelegationInput);
+  assert.equal(obsolete.status, 'authority-invalid');
+  if (obsolete.status === 'authority-invalid') {
+    assert.ok(obsolete.issues.some((item) => item.path === 'interpretations'));
+    assert.ok(obsolete.issues.some((item) => item.path === 'semantic.desiredOutcomeId'));
   }
 });
 
@@ -71,7 +92,7 @@ test('compileDelegation returns authority-invalid for fabricated fingerprints an
   }
 
   const reference = compileInput();
-  reference.interpretations[0].basis.humanEventIds = ['event:missing'];
+  reference.semantic.desiredOutcome.basis.humanEventIds = ['event:missing'];
   const invalidReference = compileDelegation(reference);
   assert.equal(invalidReference.status, 'authority-invalid');
   if (invalidReference.status === 'authority-invalid') {
@@ -253,8 +274,10 @@ test('evaluateHandoff makes residual unknowns first-class attention', () => {
     statement: 'Production latency was not measured.',
     adoptionImpact: 'The rollout could regress response time.',
     validationPath: 'Run the production-shaped benchmark before rollout.',
-    relatedClaimIds: ['claim:critical'],
-    changedFiles: [facts.changedFiles[0].path],
+    references: {
+      claims: ['claim:critical'],
+      changedFiles: [facts.changedFiles[0].path],
+    },
   }];
   handoff.reviewMap.push({
     id: 'review:unknown',
@@ -275,6 +298,36 @@ test('evaluateHandoff makes residual unknowns first-class attention', () => {
   assert.equal(attention.resolution.action, 'Run the production-shaped benchmark before rollout.');
 });
 
+test('evaluateHandoff groups one changed verifier surface across checks', () => {
+  const input = compileInput();
+  const first = input.verification.checks![0];
+  first.commandDefinitionPaths = [];
+  first.acceptanceSurfacePaths = ['src/index.ts'];
+  input.verification.checks!.push({
+    ...structuredClone(first),
+    id: 'test:secondary',
+    rationale: 'Exercise a second boundary using the same acceptance surface.',
+  });
+  const compiled = compileDelegation(input);
+  assert.equal(compiled.status, 'delegation-compiled');
+  if (compiled.status !== 'delegation-compiled') return;
+  const facts = factBundle(compiled.contract, 'passed');
+  const handoff = validHandoff(facts);
+  handoff.reviewMap[0].priority = 'must-read';
+  handoff.reviewMap[0].checkIds = ['test', 'test:secondary'];
+  const result = evaluateHandoff(evaluationInput(compiled.contract, facts, handoff));
+
+  assert.equal(result.status, 'needs-attention');
+  const verifierAttention = result.attention.filter((item) =>
+    item.code === 'verifier-surface-changed');
+  assert.equal(verifierAttention.length, 1);
+  assert.deepEqual(verifierAttention[0].references, {
+    changedFiles: ['src/index.ts'],
+    checks: ['test', 'test:secondary'],
+  });
+  assert.match(verifierAttention[0].summary, /checks test, test:secondary/);
+});
+
 function compileInput(): CompileDelegationInput {
   const eventContent = 'Replace the current implementation with the approved Semantic Handoff MVP.';
   return {
@@ -288,44 +341,27 @@ function compileInput(): CompileDelegationInput {
       provider: 'test-host',
       nativeId: 'message-1',
     }],
-    interpretations: [
-      {
-        id: 'meaning:outcome',
-        field: 'desired-outcome',
+    semantic: {
+      desiredOutcome: {
         value: 'Replace the legacy workflow with an inspectable handoff.',
         basis: { humanEventIds: ['event:task'], repositoryEvidenceIds: [] },
       },
-      {
-        id: 'meaning:constraint',
-        field: 'constraint',
+      constraints: [{
         value: 'Do not add a compatibility layer.',
         basis: { humanEventIds: ['event:task'], repositoryEvidenceIds: [] },
-      },
-      {
-        id: 'meaning:non-goal',
-        field: 'non-goal',
+      }],
+      nonGoals: [{
         value: 'Do not implement cross-task Decision Continuity.',
         basis: { humanEventIds: ['event:task'], repositoryEvidenceIds: [] },
-      },
-      {
-        id: 'meaning:focus',
-        field: 'focus-path',
+      }],
+      focus: [{
         value: 'packages/core',
         basis: { humanEventIds: ['event:task'], repositoryEvidenceIds: [] },
-      },
-      {
-        id: 'meaning:consequence',
-        field: 'consequence',
+      }],
+      consequence: {
         value: 'high',
         basis: { humanEventIds: ['event:task'], repositoryEvidenceIds: [] },
       },
-    ],
-    semantic: {
-      desiredOutcomeId: 'meaning:outcome',
-      constraintIds: ['meaning:constraint'],
-      nonGoalIds: ['meaning:non-goal'],
-      focusIds: ['meaning:focus'],
-      consequenceId: 'meaning:consequence',
     },
     verification: {
       checks: [{
@@ -334,7 +370,8 @@ function compileInput(): CompileDelegationInput {
         argv: ['corepack', 'pnpm', 'test'],
         timeoutMs: 120_000,
         source: 'host-task',
-        verifierRefs: [{ path: 'package.json', role: 'command-definition' }],
+        commandDefinitionPaths: ['package.json'],
+        acceptanceSurfacePaths: [],
       }],
     },
   };
@@ -353,7 +390,6 @@ function factBundle(
 ): FactBundle {
   assert.equal(contract.verification.mode, 'checks');
   if (contract.verification.mode !== 'checks') throw new Error('fixture requires checks');
-  const definition = contract.verification.checks[0];
   const changedFile = {
     id: 'file:source',
     path: 'src/index.ts',
@@ -382,13 +418,13 @@ function factBundle(
     },
     changeFingerprint: stableFingerprint([changedFile]),
     changedFiles: [changedFile],
-    checks: [{
-      id: definition.id,
+    checks: contract.verification.checks.map((checkDefinition) => ({
+      id: checkDefinition.id,
       status,
-      argv: definition.argv,
+      argv: checkDefinition.argv,
       exitCode: status === 'passed' ? 0 : status === 'failed' ? 1 : null,
-      definitionFingerprint: checkDefinitionFingerprint(definition),
-      outputDigest: sha256(`output:${status}`),
+      definitionFingerprint: checkDefinitionFingerprint(checkDefinition),
+      outputDigest: sha256(`output:${checkDefinition.id}:${status}`),
       stdout: {
         digest: sha256(''),
         byteLength: 0,
@@ -402,8 +438,16 @@ function factBundle(
         truncated: false,
       },
       ...(status === 'unavailable' ? { reason: 'Executable was not available.' } : {}),
-    }],
-    verifierMutations: [],
+    })),
+    verifierMutations: contract.verification.checks.flatMap((checkDefinition) =>
+      checkDefinition.verifierRefs.flatMap((reference) => reference.path === changedFile.path
+        ? [{
+            checkId: checkDefinition.id,
+            path: reference.path,
+            role: reference.role,
+            changedFileId: changedFile.id,
+          }]
+        : [])),
     patch: {
       path: 'change.patch',
       digest: sha256('complete patch'),

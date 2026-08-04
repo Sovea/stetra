@@ -15,7 +15,9 @@ export function formatChangePrepare(output: JsonObject, colors: Colors): string 
     heading(status === 'prepared' ? 'Semantic Contract prepared' : 'Semantic Contract not runnable', colors),
     statusLine(status, colors),
   ];
-  if (isRecord(output.contract)) appendContract(lines, output.contract, colors);
+  if (isRecord(output.semanticContract)) {
+    appendContract(lines, output.semanticContract, colors);
+  }
   if (Array.isArray(output.issues) && output.issues.length) {
     lines.push('', colors.bold(status === 'authority-invalid' ? 'Authority issues' : 'Preparation issues'));
     for (const issue of output.issues) {
@@ -74,11 +76,12 @@ export function formatChangeCollect(output: JsonObject, colors: Colors): string 
       lines.push(`${colors.cyan('•')} ${String(check.id)} — ${String(check.status)}`);
     }
   }
-  if (Array.isArray(output.verifierMutations) && output.verifierMutations.length) {
+  if (Array.isArray(output.verifierSurfaces) && output.verifierSurfaces.length) {
     lines.push('', colors.bold('Verifier definitions changed'));
-    for (const mutation of output.verifierMutations) {
+    for (const mutation of output.verifierSurfaces) {
       if (!isRecord(mutation)) continue;
-      lines.push(`${colors.yellow('•')} ${String(mutation.path)} [${String(mutation.role)}] affects ${String(mutation.checkId)}`);
+      const checkIds = stringArray(mutation.checkIds);
+      lines.push(`${colors.yellow('•')} ${String(mutation.path)} [${String(mutation.role)}] affects ${checkIds.join(', ')}`);
     }
   }
   if (isRecord(output.patch)) {
@@ -89,47 +92,16 @@ export function formatChangeCollect(output: JsonObject, colors: Colors): string 
 }
 
 export function formatChangeFinalize(output: JsonObject, colors: Colors): string {
+  if (typeof output.presentationMarkdown === 'string') {
+    const lines = [output.presentationMarkdown];
+    appendNext(lines, output.nextStep, colors);
+    return lines.join('\n');
+  }
   const status = String(output.status ?? 'unknown');
-  const title = status === 'handoff-ready'
-    ? 'Cognitive Handoff ready for review'
-    : status === 'rejected'
-      ? 'Cognitive Handoff rejected'
-      : 'Cognitive Handoff requires attention';
   const lines = [
-    heading(title, colors),
+    heading('Cognitive Handoff not completed', colors),
     statusLine(status, colors),
   ];
-  if (typeof output.systemMeaningUpdate === 'string') {
-    lines.push('', colors.bold('System meaning update'), output.systemMeaningUpdate);
-  }
-  if (isRecord(output.runtimeFacts)) {
-    appendRuntimeFacts(lines, output.runtimeFacts, colors);
-  }
-  if (Array.isArray(output.materialClaims) && output.materialClaims.length) {
-    lines.push('', colors.bold('Material claims'));
-    const claims = output.materialClaims.filter(isRecord);
-    for (const basis of [
-      'repository-evidence',
-      'agent-judgment',
-      'human-decision',
-      'unverified',
-    ]) {
-      const group = claims.filter((claim) => claim.basis === basis);
-      if (!group.length) continue;
-      lines.push(colors.bold(basis));
-      for (const claim of group) {
-        lines.push(`${colors.cyan('•')} ${String(claim.statement)}${claim.adoptionCritical ? ' [adoption-critical]' : ''}`);
-      }
-    }
-  }
-  if (Array.isArray(output.residualUnknowns) && output.residualUnknowns.length) {
-    lines.push('', colors.bold('Residual unknowns'));
-    for (const unknown of output.residualUnknowns) {
-      if (!isRecord(unknown)) continue;
-      lines.push(`${colors.yellow('•')} ${String(unknown.statement)}`);
-      lines.push(`  ${colors.bold('Validate:')} ${String(unknown.validationPath)}`);
-    }
-  }
   if (Array.isArray(output.attention) && output.attention.length) {
     lines.push('', colors.bold('Attention'));
     for (const item of output.attention) {
@@ -147,71 +119,11 @@ export function formatChangeFinalize(output: JsonObject, colors: Colors): string
       }
     }
   }
-  if (Array.isArray(output.reviewMap) && output.reviewMap.length) {
-    lines.push('', colors.bold('Review Map'));
-    for (const entry of output.reviewMap) {
-      if (!isRecord(entry)) continue;
-      lines.push(`${colors.cyan('•')} ${String(entry.priority)} — ${String(entry.rationale)}`);
-      lines.push(`  ${String(entry.prevents)}`);
-      const files = stringArray(entry.changedFiles);
-      const checks = stringArray(entry.checkIds);
-      const claims = stringArray(entry.claimIds);
-      const unknowns = stringArray(entry.unknownIds);
-      const selections = [
-        files.length ? `files: ${files.join(', ')}` : '',
-        checks.length ? `checks: ${checks.join(', ')}` : '',
-        claims.length ? `claims: ${claims.join(', ')}` : '',
-        unknowns.length ? `unknowns: ${unknowns.join(', ')}` : '',
-      ].filter(Boolean);
-      if (selections.length) lines.push(`  ${colors.bold('Inspect:')} ${selections.join('; ')}`);
-    }
-  }
   if (typeof output.humanAuthorityNotice === 'string') {
     lines.push('', colors.bold('Adoption authority'), output.humanAuthorityNotice);
   }
-  if (isRecord(output.retention)
-    && Array.isArray(output.retention.removedCompletedRunIds)
-    && output.retention.removedCompletedRunIds.length) {
-    lines.push(
-      '',
-      `${colors.bold('Retention:')} removed ${output.retention.removedCompletedRunIds.length} old completed run(s); prepared and facts-collected runs were untouched.`,
-    );
-  }
   appendNext(lines, output.nextStep, colors);
   return lines.join('\n');
-}
-
-function appendRuntimeFacts(lines: string[], facts: JsonObject, colors: Colors): void {
-  lines.push('', colors.bold('Runtime facts'));
-  if (typeof facts.factCollectionId === 'string') {
-    lines.push(`${colors.bold('Collection:')} ${facts.factCollectionId}`);
-  }
-  if (Array.isArray(facts.changedFiles)) {
-    lines.push(`${colors.bold('Changed files:')} ${facts.changedFiles.length}`);
-    for (const file of facts.changedFiles) {
-      if (!isRecord(file)) continue;
-      const prior = typeof file.previousPath === 'string' ? ` from ${file.previousPath}` : '';
-      lines.push(`${colors.cyan('•')} ${String(file.path)} — ${String(file.operation)}${prior}; ${String(file.representation)}`);
-    }
-  }
-  if (Array.isArray(facts.checks)) {
-    lines.push(`${colors.bold('Checks:')} ${facts.checks.length}`);
-    for (const check of facts.checks) {
-      if (!isRecord(check)) continue;
-      const reason = typeof check.reason === 'string' ? ` — ${check.reason}` : '';
-      lines.push(`${colors.cyan('•')} ${String(check.id)} — ${String(check.status)}${reason}`);
-    }
-  }
-  if (Array.isArray(facts.verifierMutations) && facts.verifierMutations.length) {
-    lines.push(colors.bold('Verifier mutations'));
-    for (const mutation of facts.verifierMutations) {
-      if (!isRecord(mutation)) continue;
-      lines.push(`${colors.yellow('•')} ${String(mutation.path)} [${String(mutation.role)}] affects ${String(mutation.checkId)}`);
-    }
-  }
-  if (isRecord(facts.patch)) {
-    lines.push(`${colors.bold('Patch:')} ${String(facts.patch.byteLength)} bytes; ${String(facts.patch.digest)}`);
-  }
 }
 
 function formatAttentionReferences(value: JsonObject): string {
@@ -239,6 +151,9 @@ function stringArray(value: unknown): string[] {
 }
 
 export function formatChangeExplain(output: JsonObject, colors: Colors): string {
+  if (typeof output.presentationMarkdown === 'string') {
+    return output.presentationMarkdown;
+  }
   const lines = [
     heading('Semantic Handoff run', colors),
     statusLine(String(output.state ?? 'unknown'), colors),
@@ -256,21 +171,24 @@ export function formatChangeExplain(output: JsonObject, colors: Colors): string 
   if (isRecord(output.evaluation)) {
     lines.push(`${colors.bold('Evaluation:')} ${String(output.evaluation.status ?? 'unknown')}`);
   }
+  if (typeof output.issue === 'string') {
+    lines.push('', `${colors.yellow('•')} ${output.issue}`);
+  }
   lines.push('', colors.dim('Use --json for exact Human Events, interpretations, facts, evidence, logs, and evaluation.'));
   return lines.join('\n');
 }
 
 function appendContract(lines: string[], contract: JsonObject, colors: Colors): void {
-  if (isRecord(contract.authority) && Array.isArray(contract.authority.humanEvents)) {
+  if (Array.isArray(contract.humanEvents)) {
     lines.push('', colors.bold('Exact Human Events'));
-    for (const event of contract.authority.humanEvents) {
+    for (const event of contract.humanEvents) {
       if (!isRecord(event)) continue;
       lines.push(`${colors.cyan('•')} ${String(event.id)}: ${String(event.content)}`);
     }
   }
-  if (Array.isArray(contract.interpretationTrace)) {
+  if (Array.isArray(contract.interpretations)) {
     lines.push('', colors.bold('Agent interpretations'));
-    for (const interpretation of contract.interpretationTrace) {
+    for (const interpretation of contract.interpretations) {
       if (!isRecord(interpretation)) continue;
       const basis = isRecord(interpretation.basis)
         ? [...(Array.isArray(interpretation.basis.humanEventIds) ? interpretation.basis.humanEventIds : []),
