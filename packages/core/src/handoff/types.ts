@@ -1,21 +1,10 @@
 import type { RepositoryEvidence } from '../authority/types.ts';
+import type { ClaimDimension } from '../assurance/types.ts';
 import type { SemanticContract } from '../delegation/types.ts';
 import type { FactBundle } from '../facts/types.ts';
 import type { ProtocolEnvelope, ValidationIssue } from '../shared/protocol.ts';
 
-export type ClaimDimension =
-  | 'behavior'
-  | 'invariant'
-  | 'state-ownership'
-  | 'data-flow'
-  | 'control-flow'
-  | 'compatibility'
-  | 'migration'
-  | 'failure-recovery'
-  | 'security'
-  | 'operations'
-  | 'maintenance'
-  | 'important-non-change';
+export type { ClaimDimension } from '../assurance/types.ts';
 
 export type ClaimBasis =
   | 'repository-evidence'

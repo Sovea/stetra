@@ -63,6 +63,12 @@ try {
         value: 'high',
         basis: { humanEventIds: ['event:task'], repositoryEvidenceIds: [] },
       },
+      assuranceDimensions: [{
+        dimension: 'behavior',
+        criticality: 'adoption-critical',
+        rationale: 'The installed public workflow behavior determines whether the change can be adopted.',
+        basis: { humanEventIds: ['event:task'], repositoryEvidenceIds: [] },
+      }],
     },
     verification: {
       noCommandRationale: 'The isolated Core smoke has no repository command surface.',

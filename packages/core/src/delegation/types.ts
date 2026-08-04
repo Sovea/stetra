@@ -5,6 +5,10 @@ import type {
   RepositoryEvidence,
 } from '../authority/types.ts';
 import type {
+  AssuranceDimensionInput,
+  AssurancePlan,
+} from '../assurance/types.ts';
+import type {
   ProtocolEnvelope,
   ValidationIssue,
 } from '../shared/protocol.ts';
@@ -30,6 +34,7 @@ export interface SemanticEnvelopeInput {
   nonGoals: SemanticValueInput[];
   focus: SemanticValueInput[];
   consequence: ConsequenceValueInput;
+  assuranceDimensions: AssuranceDimensionInput[];
   unresolvedMaterialFork?: MaterialSemanticFork;
 }
 
@@ -92,6 +97,7 @@ export interface SemanticContract extends ProtocolEnvelope {
   };
   repositoryEvidence: RepositoryEvidence[];
   interpretationTrace: MaterializedInterpretation[];
+  assurancePlan: AssurancePlan;
   authorization: {
     standingAuthorization: string;
     escalationBoundary: string[];

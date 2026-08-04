@@ -11,6 +11,14 @@ export type {
   RepositoryEvidence,
 } from './authority/types.ts';
 export type {
+  AssuranceCriticality,
+  AssuranceDimensionInput,
+  AssurancePlan,
+  AssuranceProfile,
+  AssuranceRequirement,
+  ClaimDimension,
+} from './assurance/types.ts';
+export type {
   CompileDelegationInput,
   ConsequenceLevel,
   DelegationCompileResult,
@@ -44,7 +52,6 @@ export type {
   AttentionResolutionKind,
   ClaimBasis,
   ClaimFalsification,
-  ClaimDimension,
   CognitiveHandoff,
   EvaluateHandoffInput,
   FalsificationStatus,

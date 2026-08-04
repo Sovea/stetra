@@ -14,7 +14,8 @@ export type InterpretationField =
   | 'constraint'
   | 'non-goal'
   | 'focus-path'
-  | 'consequence';
+  | 'consequence'
+  | 'assurance-dimension';
 
 export interface InterpretationBasis {
   humanEventIds: string[];

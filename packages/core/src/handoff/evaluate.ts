@@ -1,4 +1,6 @@
 import { validateCompiledContract } from '../delegation/compile.ts';
+import { isClaimDimension } from '../assurance/policy.ts';
+import type { AssurancePlan } from '../assurance/types.ts';
 import { validateFactBundle } from '../facts/validate.ts';
 import type { ChangedFileFact, CheckFact, FactBundle } from '../facts/types.ts';
 import {
@@ -37,20 +39,6 @@ const ENVELOPE = {
   schemaVersion: SEMANTIC_DELEGATION_SCHEMA_VERSION,
 } as const;
 const HUMAN_AUTHORITY_NOTICE = 'This handoff is ready for human review only. Runtime and Host conclusions do not record adoption.';
-const CLAIM_DIMENSIONS = new Set([
-  'behavior',
-  'invariant',
-  'state-ownership',
-  'data-flow',
-  'control-flow',
-  'compatibility',
-  'migration',
-  'failure-recovery',
-  'security',
-  'operations',
-  'maintenance',
-  'important-non-change',
-]);
 const CLAIM_BASES = new Set<ClaimBasis>([
   'repository-evidence',
   'agent-judgment',
@@ -415,6 +403,7 @@ function validateHandoff(
   const repositoryEvidence = validateRepositoryEvidence(value.repositoryEvidence ?? [], issues);
   const references = referenceContext(facts, contract, repositoryEvidence);
   const claims = validateClaims(value.materialClaims, references, issues);
+  validateAssuranceCoverage(claims, contract.assurancePlan, issues);
   if (!facts.changedFiles.length
     && !claims.some((claim) => claim.dimension === 'important-non-change')) {
     issues.push(handoffIssue(
@@ -471,12 +460,12 @@ function validateClaims(
   references: ReferenceContext,
   issues: HandoffValidationIssue[],
 ): MaterialClaim[] {
-  if (!Array.isArray(value) || !value.length) {
+  if (!Array.isArray(value)) {
     issues.push(handoffIssue(
       'material-claims-required',
       'materialClaims',
-      'Material claims must be a non-empty array.',
-      'Add only adoption-relevant conclusions about the actual collected change.',
+      'Material claims must be an array.',
+      'Use an empty array only when the Assurance Plan requires no semantic claim.',
     ));
     return [];
   }
@@ -499,8 +488,8 @@ function validateClaims(
       'falsification',
     ], path, issues);
     const id = stableUniqueId(candidate.id, `${path}.id`, ids, issues);
-    const dimension = typeof candidate.dimension === 'string' && CLAIM_DIMENSIONS.has(candidate.dimension)
-      ? candidate.dimension as MaterialClaim['dimension']
+    const dimension = isClaimDimension(candidate.dimension)
+      ? candidate.dimension
       : undefined;
     if (!dimension) {
       issues.push(handoffIssue(
@@ -565,6 +554,34 @@ function validateClaims(
     }
   }
   return output;
+}
+
+function validateAssuranceCoverage(
+  claims: MaterialClaim[],
+  plan: AssurancePlan,
+  issues: HandoffValidationIssue[],
+): void {
+  for (const requirement of plan.requirements) {
+    const matching = claims.filter((claim) => claim.dimension === requirement.value);
+    if (!matching.length) {
+      issues.push(handoffIssue(
+        'assurance-claim-required',
+        'materialClaims',
+        `Assurance requirement ${requirement.id} requires a ${requirement.value} claim.`,
+        `Add one bounded ${requirement.value} claim that addresses: ${requirement.rationale}`,
+      ));
+      continue;
+    }
+    if (requirement.criticality === 'adoption-critical'
+      && !matching.some((claim) => claim.adoptionCritical)) {
+      issues.push(handoffIssue(
+        'assurance-critical-claim-required',
+        'materialClaims',
+        `Assurance requirement ${requirement.id} requires an adoption-critical ${requirement.value} claim.`,
+        'Mark the matching adoption-critical conclusion explicitly and provide its required falsification.',
+      ));
+    }
+  }
 }
 
 function validateClaimBasis(
@@ -873,17 +890,17 @@ function validateReviewMap(
     }
   }
   const urgentClaims = claims
-    .filter((claim) => requiresFalsification(claim) && claim.falsification?.status !== 'supported')
+    .filter((claim) => claim.adoptionCritical)
     .map((claim) => claim.id);
   const urgentEntries = output.filter((entry) => entry.priority === 'must-read' || entry.priority === 'unresolved');
   const coveredClaims = new Set(urgentEntries.flatMap((entry) => entry.claimIds));
   for (const claimId of urgentClaims) {
     if (!coveredClaims.has(claimId)) {
       issues.push(handoffIssue(
-        'urgent-claim-review-required',
+        'critical-claim-review-required',
         'reviewMap',
-        `Unresolved critical claim ${claimId} requires must-read or unresolved review coverage.`,
-        'Add a Review Map entry that points to this claim and its concrete implementation surface.',
+        `Adoption-critical claim ${claimId} requires must-read or unresolved review coverage.`,
+        'Add a Review Map entry that points to this claim and the exact implementation surface where direct review has the highest value.',
       ));
     }
   }

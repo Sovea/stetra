@@ -5,6 +5,14 @@ import type {
   InterpretationField,
 } from '../authority/types.ts';
 import {
+  compileAssurancePlan,
+  isClaimDimension,
+} from '../assurance/policy.ts';
+import type {
+  AssuranceCriticality,
+  AssuranceRequirement,
+} from '../assurance/types.ts';
+import {
   assertProtocol,
   hasExactKeys,
   isNonEmptyString,
@@ -92,7 +100,12 @@ export function compileDelegation(input: CompileDelegationInput): DelegationComp
     ...selected.nonGoals,
     ...selected.focus,
     selected.consequence,
+    ...selected.assuranceDimensions,
   ];
+  const assurancePlan = compileAssurancePlan(
+    selected.consequence.value as ConsequenceLevel,
+    selected.assuranceDimensions,
+  );
   const contractWithoutId = {
     ...ENVELOPE,
     authority: {
@@ -109,6 +122,7 @@ export function compileDelegation(input: CompileDelegationInput): DelegationComp
     },
     repositoryEvidence: authority.repositoryEvidence,
     interpretationTrace: interpretations,
+    assurancePlan,
     authorization: {
       standingAuthorization: 'Necessary local, reversible inspection, edits, verification, diagnosis, and repair inside the compiled semantic contract.',
       escalationBoundary: [
@@ -149,6 +163,7 @@ function validateSemantic(
     nonGoals: AgentInterpretation[];
     focus: AgentInterpretation[];
     consequence: AgentInterpretation;
+    assuranceDimensions: AssuranceRequirement[];
   };
   fork?: MaterialSemanticFork;
   issues: ValidationIssue[];
@@ -165,6 +180,7 @@ function validateSemantic(
     'nonGoals',
     'focus',
     'consequence',
+    'assuranceDimensions',
     'unresolvedMaterialFork',
   ])) {
     issues.push(issue('unsupported-field', `semantic.${key}`, `Unsupported semantic field ${key}.`));
@@ -211,6 +227,27 @@ function validateSemantic(
     evidenceIds,
     issues,
   );
+  const assuranceDimensions = validateAssuranceDimensions(
+    value.assuranceDimensions,
+    eventIds,
+    evidenceIds,
+    issues,
+  );
+  if (consequence?.value === 'medium' && !assuranceDimensions.length) {
+    issues.push(issue(
+      'assurance-dimension-required',
+      'semantic.assuranceDimensions',
+      'Medium-consequence work requires at least one explicit assurance dimension.',
+    ));
+  }
+  if (consequence?.value === 'high'
+    && !assuranceDimensions.some((item) => item.criticality === 'adoption-critical')) {
+    issues.push(issue(
+      'critical-assurance-dimension-required',
+      'semantic.assuranceDimensions',
+      'High-consequence work requires at least one adoption-critical assurance dimension.',
+    ));
+  }
 
   const fork = value.unresolvedMaterialFork === undefined
     ? undefined
@@ -224,12 +261,115 @@ function validateSemantic(
             nonGoals,
             focus,
             consequence,
+            assuranceDimensions,
           },
         }
       : {}),
     ...(fork ? { fork } : {}),
     issues,
   };
+}
+
+function validateAssuranceDimensions(
+  value: unknown,
+  eventIds: Set<string>,
+  evidenceIds: Set<string>,
+  issues: ValidationIssue[],
+): AssuranceRequirement[] {
+  const path = 'semantic.assuranceDimensions';
+  if (!Array.isArray(value)) {
+    issues.push(issue(
+      'assurance-dimensions-invalid',
+      path,
+      'Assurance dimensions must be an array; use an empty array only for routine low-consequence work.',
+    ));
+    return [];
+  }
+  const output: AssuranceRequirement[] = [];
+  const dimensions = new Set<string>();
+  for (const [index, candidate] of value.entries()) {
+    const itemPath = `${path}[${index}]`;
+    const issueCount = issues.length;
+    if (!isRecord(candidate)) {
+      issues.push(issue(
+        'assurance-dimension-invalid',
+        itemPath,
+        'Assurance dimension must be an object.',
+      ));
+      continue;
+    }
+    for (const key of hasExactKeys(candidate, [
+      'dimension',
+      'criticality',
+      'rationale',
+      'basis',
+    ])) {
+      issues.push(issue('unsupported-field', `${itemPath}.${key}`, `Unsupported assurance dimension field ${key}.`));
+    }
+    const dimension = isClaimDimension(candidate.dimension)
+      ? candidate.dimension
+      : undefined;
+    if (!dimension) {
+      issues.push(issue(
+        'assurance-dimension-value-invalid',
+        `${itemPath}.dimension`,
+        'Assurance dimension must be one documented handoff claim dimension.',
+      ));
+    } else if (dimensions.has(dimension)) {
+      issues.push(issue(
+        'assurance-dimension-duplicate',
+        `${itemPath}.dimension`,
+        `Assurance dimension ${dimension} is duplicated.`,
+      ));
+    }
+    const criticality = candidate.criticality === 'material'
+      || candidate.criticality === 'adoption-critical'
+      ? candidate.criticality as AssuranceCriticality
+      : undefined;
+    if (!criticality) {
+      issues.push(issue(
+        'assurance-criticality-invalid',
+        `${itemPath}.criticality`,
+        'Assurance criticality must be material or adoption-critical.',
+      ));
+    }
+    const rationale = isNonEmptyString(candidate.rationale)
+      ? candidate.rationale.trim()
+      : undefined;
+    if (!rationale) {
+      issues.push(issue(
+        'assurance-rationale-required',
+        `${itemPath}.rationale`,
+        'Assurance dimension requires a concrete adoption rationale.',
+      ));
+    }
+    const basis = validateInterpretationBasis(
+      candidate.basis,
+      `${itemPath}.basis`,
+      eventIds,
+      evidenceIds,
+      issues,
+    );
+    if (issues.length !== issueCount || !dimension || !criticality || !rationale || !basis) {
+      continue;
+    }
+    dimensions.add(dimension);
+    output.push({
+      id: `meaning:assurance-dimension:${stableFingerprint({
+        field: 'assurance-dimension',
+        value: dimension,
+        criticality,
+        rationale,
+        basis,
+      }).slice('sha256:'.length)}`,
+      field: 'assurance-dimension',
+      value: dimension,
+      criticality,
+      rationale,
+      basis,
+    });
+  }
+  return output.sort((left, right) => left.value.localeCompare(right.value));
 }
 
 function validateSemanticValues(

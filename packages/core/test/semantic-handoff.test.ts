@@ -31,10 +31,84 @@ test('compileDelegation separates exact Human Events from Agent interpretations'
   assert.equal(result.contract.semantic.desiredOutcome.value, 'Replace the legacy workflow with an inspectable handoff.');
   assert.deepEqual(result.contract.semantic.desiredOutcome.basis.humanEventIds, ['event:task']);
   assert.equal(result.contract.semantic.consequence, 'high');
+  assert.equal(result.contract.assurancePlan.profile, 'critical');
+  assert.deepEqual(
+    result.contract.assurancePlan.requirements.map((item) => ({
+      dimension: item.value,
+      criticality: item.criticality,
+    })),
+    [{ dimension: 'behavior', criticality: 'adoption-critical' }],
+  );
+  assert.ok(result.contract.interpretationTrace.some((item) =>
+    item.field === 'assurance-dimension'));
   assert.equal(result.contract.authorization.focusPathsArePermissions, false);
   assert.equal(result.contract.verification.mode, 'checks');
   assert.match(result.contract.contractId, /^sha256:[a-f0-9]{64}$/);
   assert.deepEqual(compileDelegation(input), result);
+});
+
+test('compileDelegation derives inspectable routine, standard, and critical assurance plans', () => {
+  const routine = compileInput();
+  routine.semantic.consequence.value = 'low';
+  routine.semantic.assuranceDimensions = [];
+  const compiledRoutine = compileDelegation(routine);
+  assert.equal(compiledRoutine.status, 'delegation-compiled');
+  if (compiledRoutine.status !== 'delegation-compiled') return;
+  assert.deepEqual(compiledRoutine.contract.assurancePlan, {
+    profile: 'routine',
+    requirements: [],
+  });
+
+  const standard = compileInput();
+  standard.semantic.consequence.value = 'medium';
+  standard.semantic.assuranceDimensions = [{
+    dimension: 'maintenance',
+    criticality: 'material',
+    rationale: 'The ownership boundary should remain understandable after adoption.',
+    basis: { humanEventIds: ['event:task'], repositoryEvidenceIds: [] },
+  }];
+  const compiledStandard = compileDelegation(standard);
+  assert.equal(compiledStandard.status, 'delegation-compiled');
+  if (compiledStandard.status !== 'delegation-compiled') return;
+  assert.equal(compiledStandard.contract.assurancePlan.profile, 'standard');
+  assert.equal(compiledStandard.contract.assurancePlan.requirements[0].value, 'maintenance');
+
+  const escalated = compileInput();
+  escalated.semantic.consequence.value = 'medium';
+  const compiledEscalated = compileDelegation(escalated);
+  assert.equal(compiledEscalated.status, 'delegation-compiled');
+  if (compiledEscalated.status !== 'delegation-compiled') return;
+  assert.equal(compiledEscalated.contract.assurancePlan.profile, 'critical');
+});
+
+test('compileDelegation rejects consequence labels without actionable assurance dimensions', () => {
+  const medium = compileInput();
+  medium.semantic.consequence.value = 'medium';
+  medium.semantic.assuranceDimensions = [];
+  const invalidMedium = compileDelegation(medium);
+  assert.equal(invalidMedium.status, 'authority-invalid');
+  if (invalidMedium.status === 'authority-invalid') {
+    assert.ok(invalidMedium.issues.some((item) => item.code === 'assurance-dimension-required'));
+  }
+
+  const high = compileInput();
+  high.semantic.assuranceDimensions[0].criticality = 'material';
+  const invalidHigh = compileDelegation(high);
+  assert.equal(invalidHigh.status, 'authority-invalid');
+  if (invalidHigh.status === 'authority-invalid') {
+    assert.ok(invalidHigh.issues.some((item) =>
+      item.code === 'critical-assurance-dimension-required'));
+  }
+
+  const duplicate = compileInput();
+  duplicate.semantic.assuranceDimensions.push(structuredClone(
+    duplicate.semantic.assuranceDimensions[0],
+  ));
+  const invalidDuplicate = compileDelegation(duplicate);
+  assert.equal(invalidDuplicate.status, 'authority-invalid');
+  if (invalidDuplicate.status === 'authority-invalid') {
+    assert.ok(invalidDuplicate.issues.some((item) => item.code === 'assurance-dimension-duplicate'));
+  }
 });
 
 test('compileDelegation rejects unknown protocols and schema versions without compatibility', () => {
@@ -147,6 +221,82 @@ test('evaluateHandoff accepts a fact-bound, falsified handoff for human review',
   assert.match(evaluation.humanAuthorityNotice, /human review only/);
 });
 
+test('evaluateHandoff allows a clean routine handoff without claims or review boilerplate', () => {
+  const input = compileInput();
+  input.semantic.consequence.value = 'low';
+  input.semantic.assuranceDimensions = [];
+  const compiled = compileDelegation(input);
+  assert.equal(compiled.status, 'delegation-compiled');
+  if (compiled.status !== 'delegation-compiled') return;
+  const facts = factBundle(compiled.contract, 'passed');
+  const handoff = validHandoff(facts);
+  handoff.materialClaims = [];
+  handoff.reviewMap = [];
+
+  const evaluation = evaluateHandoff(evaluationInput(compiled.contract, facts, handoff));
+  assert.equal(evaluation.status, 'handoff-ready');
+  assert.deepEqual(evaluation.claimConclusions, []);
+  assert.deepEqual(evaluation.reviewMap, []);
+});
+
+test('evaluateHandoff lets collected fact failures escalate a routine plan', () => {
+  const input = compileInput();
+  input.semantic.consequence.value = 'low';
+  input.semantic.assuranceDimensions = [];
+  const compiled = compileDelegation(input);
+  assert.equal(compiled.status, 'delegation-compiled');
+  if (compiled.status !== 'delegation-compiled') return;
+  const facts = factBundle(compiled.contract, 'unavailable');
+  const handoff = validHandoff(facts);
+  handoff.materialClaims = [];
+  handoff.reviewMap = [];
+  assert.throws(
+    () => evaluateHandoff(evaluationInput(compiled.contract, facts, handoff)),
+    /requires must-read or unresolved Review Map coverage/,
+  );
+
+  handoff.reviewMap = [{
+    id: 'review:unavailable-check',
+    priority: 'unresolved',
+    changedFiles: [],
+    checkIds: ['test'],
+    claimIds: [],
+    unknownIds: [],
+    rationale: 'The frozen verification boundary produced no result.',
+    prevents: 'Adopting without inspecting the missing verification evidence.',
+  }];
+  const evaluation = evaluateHandoff(evaluationInput(compiled.contract, facts, handoff));
+  assert.equal(evaluation.status, 'needs-attention');
+  assert.ok(evaluation.attention.some((item) => item.code === 'check-unavailable'));
+});
+
+test('evaluateHandoff enforces compiled assurance dimensions and critical review escalation', () => {
+  const contract = compiledContract();
+  const facts = factBundle(contract, 'passed');
+
+  const missing = validHandoff(facts);
+  missing.materialClaims[0].dimension = 'compatibility';
+  assert.throws(
+    () => evaluateHandoff(evaluationInput(contract, facts, missing)),
+    /requires a behavior claim/,
+  );
+
+  const downgraded = validHandoff(facts);
+  downgraded.materialClaims[0].adoptionCritical = false;
+  delete downgraded.materialClaims[0].falsification;
+  assert.throws(
+    () => evaluateHandoff(evaluationInput(contract, facts, downgraded)),
+    /requires an adoption-critical behavior claim/,
+  );
+
+  const unreviewed = validHandoff(facts);
+  unreviewed.reviewMap[0].priority = 'useful-to-sample';
+  assert.throws(
+    () => evaluateHandoff(evaluationInput(contract, facts, unreviewed)),
+    /requires must-read or unresolved review coverage/,
+  );
+});
+
 test('evaluateHandoff detects stale facts before accepting Host conclusions', () => {
   const contract = compiledContract();
   const facts = factBundle(contract, 'passed');
@@ -216,6 +366,7 @@ test('evaluateHandoff requires falsification and urgent Review Map coverage', ()
   uncovered.materialClaims[0].falsification!.counterEvidence = {
     changedFiles: [facts.changedFiles[0].path],
   };
+  uncovered.reviewMap[0].priority = 'useful-to-sample';
   assert.throws(
     () => evaluateHandoff(evaluationInput(contract, facts, uncovered)),
     /requires must-read or unresolved review coverage/,
@@ -362,6 +513,12 @@ function compileInput(): CompileDelegationInput {
         value: 'high',
         basis: { humanEventIds: ['event:task'], repositoryEvidenceIds: [] },
       },
+      assuranceDimensions: [{
+        dimension: 'behavior',
+        criticality: 'adoption-critical',
+        rationale: 'The public workflow behavior determines whether the new handoff can be adopted.',
+        basis: { humanEventIds: ['event:task'], repositoryEvidenceIds: [] },
+      }],
     },
     verification: {
       checks: [{
@@ -498,7 +655,7 @@ function validHandoff(facts: FactBundle): CognitiveHandoff {
     residualUnknowns: [],
     reviewMap: [{
       id: 'review:core',
-      priority: 'useful-to-sample',
+      priority: 'must-read',
       changedFiles: [facts.changedFiles[0].path],
       checkIds: ['test'],
       claimIds: ['claim:critical'],
