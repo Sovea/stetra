@@ -172,7 +172,6 @@ test('prepare and collect bind dirty-baseline changes, checks, patch, and verifi
         id: 'fixture-check',
         rationale: 'Exercise the explicit fixture command.',
         argv: [process.execPath, '-e', 'process.stdout.write("checked")'],
-        timeoutMs: 10_000,
         source: 'host-task',
         commandDefinitionPaths: ['package.json'],
         acceptanceSurfacePaths: [],
@@ -308,6 +307,153 @@ test('recollection replaces stale fact binding and resets the handoff input', as
   }
 });
 
+test('a timed-out check retries with a larger budget in the same run and preserves attempts', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'resonant-timeout-retry-'));
+  const inputRoot = mkdtempSync(join(tmpdir(), 'resonant-input-'));
+  try {
+    initializeRepository(root);
+    writeFileSync(join(root, 'source.txt'), 'before\n', 'utf8');
+    git(root, ['add', '.']);
+    git(root, ['commit', '-qm', 'initial']);
+    const inputPath = join(inputRoot, 'prepare.json');
+    writePrepareInput(inputPath, {
+      routine: true,
+      checks: [{
+        id: 'slow-check',
+        rationale: 'Exercise inspectable timeout recovery.',
+        argv: [
+          process.execPath,
+          '-e',
+          'process.stdout.write("start");setTimeout(()=>process.stdout.write("done"),150)',
+        ],
+        source: 'host-task',
+        commandDefinitionPaths: [],
+        acceptanceSurfacePaths: [],
+      }],
+    });
+    const prepared = await prepareDelegationTask({
+      projectRoot: root,
+      inputPath,
+      productVersion: VERSION,
+    });
+    assert.equal(prepared.status, 'prepared');
+    if (prepared.status !== 'prepared') return;
+    assert.equal(prepared.semanticContract.verification.mode, 'checks');
+    if (prepared.semanticContract.verification.mode !== 'checks') return;
+    assert.equal(
+      Object.hasOwn(prepared.semanticContract.verification.checks[0], 'timeoutMs'),
+      false,
+    );
+
+    writeFileSync(join(root, 'source.txt'), 'after\n', 'utf8');
+    const first = await collectDelegationFacts({
+      projectRoot: root,
+      runId: prepared.runId,
+      productVersion: VERSION,
+      timeoutMs: 25,
+    });
+    assert.equal(first.collectionMode, 'full-collection');
+    assert.equal(first.checks[0].status, 'unavailable');
+    assert.equal(first.checks[0].timedOut, true);
+    assert.equal(first.checks[0].timeoutMs, 25);
+    assert.equal(first.checks[0].attemptCount, 1);
+    assert.match(first.nextStep, /--retry-check slow-check=/);
+    assert.match(first.nextStep, /Do not run them outside Runtime or finalize yet/);
+
+    await assert.rejects(
+      collectDelegationFacts({
+        projectRoot: root,
+        runId: prepared.runId,
+        productVersion: VERSION,
+        retryChecks: [{ checkId: 'slow-check', timeoutMs: 25 }],
+      }),
+      /greater than 25 ms/,
+    );
+    writeFileSync(join(root, 'source.txt'), 'changed after facts\n', 'utf8');
+    await assert.rejects(
+      collectDelegationFacts({
+        projectRoot: root,
+        runId: prepared.runId,
+        productVersion: VERSION,
+        retryChecks: [{ checkId: 'slow-check', timeoutMs: 1_000 }],
+      }),
+      /changed after collection/,
+    );
+    writeFileSync(join(root, 'source.txt'), 'after\n', 'utf8');
+    writeFileSync(first.handoffPath, JSON.stringify({ custom: 'must reset' }), 'utf8');
+
+    const retried = await collectDelegationFacts({
+      projectRoot: root,
+      runId: prepared.runId,
+      productVersion: VERSION,
+      retryChecks: [{ checkId: 'slow-check', timeoutMs: 1_000 }],
+    });
+    assert.equal(retried.collectionMode, 'timeout-retry');
+    assert.equal(retried.runId, first.runId);
+    assert.notEqual(retried.factCollectionId, first.factCollectionId);
+    assert.equal(retried.checks[0].status, 'passed');
+    assert.equal(retried.checks[0].timedOut, false);
+    assert.equal(retried.checks[0].timeoutMs, 1_000);
+    assert.equal(retried.checks[0].attemptCount, 2);
+    assert.deepEqual(retried.changedFiles, first.changedFiles);
+    assert.equal(Object.hasOwn(JSON.parse(readFileSync(retried.handoffPath, 'utf8')), 'custom'), false);
+
+    const run = JSON.parse(readFileSync(prepared.details.runPath, 'utf8'));
+    const attempts = run.factBundle.checks[0].attempts;
+    assert.deepEqual(
+      attempts.map((attempt: { attempt: number; timeoutMs: number; status: string; timedOut: boolean }) => ({
+        attempt: attempt.attempt,
+        timeoutMs: attempt.timeoutMs,
+        status: attempt.status,
+        timedOut: attempt.timedOut,
+      })),
+      [
+        { attempt: 1, timeoutMs: 25, status: 'unavailable', timedOut: true },
+        { attempt: 2, timeoutMs: 1_000, status: 'passed', timedOut: false },
+      ],
+    );
+    const stdoutLogs = attempts.flatMap((attempt: { stdout: { logPath?: string } }) =>
+      attempt.stdout.logPath ? [attempt.stdout.logPath] : []);
+    assert.ok(stdoutLogs.length >= 1);
+    assert.equal(new Set(stdoutLogs).size, stdoutLogs.length);
+    assert.ok(stdoutLogs.every((path: string) => existsSync(join(root, path))));
+
+    await assert.rejects(
+      collectDelegationFacts({
+        projectRoot: root,
+        runId: prepared.runId,
+        productVersion: VERSION,
+        retryChecks: [{ checkId: 'slow-check', timeoutMs: 2_000 }],
+      }),
+      /only after its latest attempt timed out/,
+    );
+
+    writeFileSync(retried.handoffPath, `${JSON.stringify({
+      protocol: 'semantic-delegation',
+      schemaVersion: '1',
+      systemMeaningUpdate: 'The bounded fixture now contains the requested after state.',
+      materialClaims: [],
+      residualUnknowns: [],
+      reviewMap: [],
+    }, null, 2)}\n`, 'utf8');
+    const finalized = await finalizeDelegationHandoff({
+      projectRoot: root,
+      runId: prepared.runId,
+    });
+    assert.equal(finalized.status, 'handoff-ready');
+    if (typeof finalized.presentationMarkdown !== 'string' || !finalized.details) {
+      assert.fail('successful timeout retry must produce a completed handoff');
+    }
+    assert.match(finalized.presentationMarkdown, /slow-check.*passed.*2 attempts/);
+    assert.match(finalized.presentationMarkdown, /Attempt 1: unavailable/);
+    assert.ok(finalized.details.checkLogs.length >= 1);
+    assert.ok(finalized.details.checkLogs.some((entry) => entry.attempt === 2));
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+    rmSync(inputRoot, { recursive: true, force: true });
+  }
+});
+
 test('non-runnable compile outcomes create no run directory', async () => {
   const root = mkdtempSync(join(tmpdir(), 'resonant-no-run-'));
   const inputRoot = mkdtempSync(join(tmpdir(), 'resonant-input-'));
@@ -342,7 +488,6 @@ test('prepare rejects unavailable top-level executables without claiming nested 
         id: 'missing-check',
         rationale: 'Prove unavailable command preflight.',
         argv: ['resonant-code-certainly-missing-executable', '--version'],
-        timeoutMs: 10_000,
         source: 'host-task',
         commandDefinitionPaths: [],
         acceptanceSurfacePaths: [],
@@ -369,7 +514,6 @@ test('prepare rejects unavailable top-level executables without claiming nested 
         id: 'nested-check',
         rationale: 'Top-level Node is runnable while nested prerequisites remain an execution fact.',
         argv: [process.execPath, '-e', 'require("resonant-code-certainly-missing-module")'],
-        timeoutMs: 10_000,
         source: 'host-task',
         commandDefinitionPaths: [],
         acceptanceSurfacePaths: [],
@@ -393,42 +537,66 @@ test('frozen checks distinguish failed and unavailable and cap persisted output'
     const results = await runFrozenChecks({
       projectRoot: root,
       outputDirectory: join(root, 'logs'),
-      definitions: [
+      executions: [
         {
-          id: 'large',
-          rationale: 'Verify full output integrity.',
-          argv: [process.execPath, '-e', 'process.stdout.write("x".repeat(1100000))'],
           timeoutMs: 10_000,
-          source: 'host-task',
-          verifierRefs: [],
+          definition: {
+            id: 'large',
+            rationale: 'Verify full output integrity.',
+            argv: [process.execPath, '-e', 'process.stdout.write("x".repeat(1100000))'],
+            source: 'host-task',
+            verifierRefs: [],
+          },
         },
         {
-          id: 'failed',
-          rationale: 'Exercise completed failure.',
-          argv: [process.execPath, '-e', 'process.exit(9)'],
           timeoutMs: 10_000,
-          source: 'host-task',
-          verifierRefs: [],
+          definition: {
+            id: 'failed',
+            rationale: 'Exercise completed failure.',
+            argv: [process.execPath, '-e', 'process.exit(9)'],
+            source: 'host-task',
+            verifierRefs: [],
+          },
         },
         {
-          id: 'missing',
-          rationale: 'Exercise unavailable execution.',
-          argv: ['resonant-code-command-that-does-not-exist'],
           timeoutMs: 10_000,
-          source: 'host-task',
-          verifierRefs: [],
+          definition: {
+            id: 'missing',
+            rationale: 'Exercise unavailable execution.',
+            argv: ['resonant-code-command-that-does-not-exist'],
+            source: 'host-task',
+            verifierRefs: [],
+          },
         },
       ],
     });
-    assert.equal(results[0].status, 'passed');
-    assert.equal(results[0].stdout.byteLength, 1_100_000);
-    assert.equal(results[0].stdout.persistedBytes, 1024 * 1024);
-    assert.equal(results[0].stdout.truncated, true);
-    assert.equal(results[1].status, 'failed');
-    assert.equal(results[1].exitCode, 9);
-    assert.equal(results[2].status, 'unavailable');
-    assert.equal(results[2].exitCode, null);
-    assert.match(results[2].reason ?? '', /could not start/i);
+    assert.equal(results[0].attempts[0].status, 'passed');
+    assert.equal(results[0].attempts[0].stdout.byteLength, 1_100_000);
+    assert.equal(results[0].attempts[0].stdout.persistedBytes, 1024 * 1024);
+    assert.equal(results[0].attempts[0].stdout.truncated, true);
+    assert.equal(results[1].attempts[0].status, 'failed');
+    assert.equal(results[1].attempts[0].exitCode, 9);
+    assert.equal(results[2].attempts[0].status, 'unavailable');
+    assert.equal(results[2].attempts[0].exitCode, null);
+    assert.match(results[2].attempts[0].reason ?? '', /could not start/i);
+    await assert.rejects(
+      runFrozenChecks({
+        projectRoot: root,
+        outputDirectory: join(root, 'logs'),
+        executions: [{
+          definition: {
+            id: 'missing',
+            rationale: 'Exercise unavailable execution.',
+            argv: ['resonant-code-command-that-does-not-exist'],
+            source: 'host-task',
+            verifierRefs: [],
+          },
+          timeoutMs: 20_000,
+          previousAttempts: results[2].attempts,
+        }],
+      }),
+      /prior timed-out attempt/,
+    );
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -682,7 +850,6 @@ function writePrepareInput(
       id: string;
       rationale: string;
       argv: string[];
-      timeoutMs: number;
       source: 'host-task';
       commandDefinitionPaths: string[];
       acceptanceSurfacePaths: string[];

@@ -8,6 +8,7 @@ import {
 } from '../shared/protocol.ts';
 import type {
   ChangedFileFact,
+  CheckAttemptFact,
   CheckFact,
   FactBundle,
   FileContentFact,
@@ -93,7 +94,8 @@ export function changedFileMechanicalStatement(file: ChangedFileFact): string {
 }
 
 export function checkMechanicalStatement(check: CheckFact): string {
-  return `Check ${check.id} was ${check.status}.`;
+  const latest = check.attempts.at(-1);
+  return `Check ${check.id} was ${latest?.status ?? 'unavailable'} after ${check.attempts.length} attempt${check.attempts.length === 1 ? '' : 's'}.`;
 }
 
 function validateWorktreeSummary(value: WorktreeSummary, label: string): void {
@@ -177,27 +179,58 @@ function validateChecks(checks: CheckFact[], contract: SemanticContract): void {
       throw new Error(`evaluateHandoff received an unknown or duplicate check ${JSON.stringify(check?.id)}.`);
     }
     seen.add(check.id);
-    if (!['passed', 'failed', 'unavailable'].includes(check.status)
-      || JSON.stringify(check.argv) !== JSON.stringify(definition.argv)
+    if (JSON.stringify(check.argv) !== JSON.stringify(definition.argv)
       || check.definitionFingerprint !== checkDefinitionFingerprint(definition)
-      || !isSha256(check.outputDigest)) {
+      || !Array.isArray(check.attempts)
+      || !check.attempts.length) {
       throw new Error(`evaluateHandoff check ${check.id} is not bound to its frozen definition.`);
     }
-    if (check.status === 'passed' && check.exitCode !== 0) {
-      throw new Error(`evaluateHandoff passing check ${check.id} requires exit code 0.`);
+    for (const [index, attempt] of check.attempts.entries()) {
+      validateCheckAttempt(attempt, check.id, index);
+      if (index > 0 && attempt.timeoutMs <= check.attempts[index - 1].timeoutMs) {
+        throw new Error(`evaluateHandoff check ${check.id} retry timeouts must increase monotonically.`);
+      }
+      if (index < check.attempts.length - 1
+        && (!attempt.timedOut || attempt.status !== 'unavailable')) {
+        throw new Error(`evaluateHandoff check ${check.id} may retry only a timed-out attempt.`);
+      }
     }
-    if (check.status === 'failed' && (!Number.isInteger(check.exitCode) || check.exitCode === 0)) {
-      throw new Error(`evaluateHandoff failed check ${check.id} requires a non-zero exit code.`);
-    }
-    if (check.status === 'unavailable' && (check.exitCode !== null || !isNonEmptyString(check.reason))) {
-      throw new Error(`evaluateHandoff unavailable check ${check.id} requires a reason and no exit code.`);
-    }
-    validateStream(check.stdout, `${check.id}.stdout`);
-    validateStream(check.stderr, `${check.id}.stderr`);
   }
 }
 
-function validateStream(stream: CheckFact['stdout'], label: string): void {
+function validateCheckAttempt(
+  attempt: CheckAttemptFact,
+  checkId: string,
+  index: number,
+): void {
+  if (!attempt
+    || attempt.attempt !== index + 1
+    || !Number.isSafeInteger(attempt.timeoutMs)
+    || attempt.timeoutMs < 1
+    || !['passed', 'failed', 'unavailable'].includes(attempt.status)
+    || typeof attempt.timedOut !== 'boolean'
+    || !isSha256(attempt.outputDigest)) {
+    throw new Error(`evaluateHandoff check ${checkId} attempt ${index + 1} is invalid.`);
+  }
+  if (attempt.status === 'passed' && (attempt.exitCode !== 0 || attempt.timedOut)) {
+    throw new Error(`evaluateHandoff passing check ${checkId} attempt requires exit code 0.`);
+  }
+  if (attempt.status === 'failed'
+    && (!Number.isInteger(attempt.exitCode) || attempt.exitCode === 0 || attempt.timedOut)) {
+    throw new Error(`evaluateHandoff failed check ${checkId} attempt requires a non-zero exit code.`);
+  }
+  if (attempt.status === 'unavailable'
+    && (attempt.exitCode !== null || !isNonEmptyString(attempt.reason))) {
+    throw new Error(`evaluateHandoff unavailable check ${checkId} attempt requires a reason and no exit code.`);
+  }
+  if (attempt.timedOut && attempt.status !== 'unavailable') {
+    throw new Error(`evaluateHandoff timed-out check ${checkId} attempt must be unavailable.`);
+  }
+  validateStream(attempt.stdout, `${checkId}.attempts[${index}].stdout`);
+  validateStream(attempt.stderr, `${checkId}.attempts[${index}].stderr`);
+}
+
+function validateStream(stream: CheckAttemptFact['stdout'], label: string): void {
   if (!stream
     || !isSha256(stream.digest)
     || !Number.isInteger(stream.byteLength)

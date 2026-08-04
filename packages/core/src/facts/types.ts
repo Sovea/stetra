@@ -37,16 +37,23 @@ export interface CheckStreamFact {
   logPath?: string;
 }
 
-export interface CheckFact {
-  id: string;
+export interface CheckAttemptFact {
+  attempt: number;
+  timeoutMs: number;
   status: CheckStatus;
-  argv: string[];
   exitCode: number | null;
-  definitionFingerprint: string;
+  timedOut: boolean;
   outputDigest: string;
   stdout: CheckStreamFact;
   stderr: CheckStreamFact;
   reason?: string;
+}
+
+export interface CheckFact {
+  id: string;
+  argv: string[];
+  definitionFingerprint: string;
+  attempts: CheckAttemptFact[];
 }
 
 export interface VerifierMutation {

@@ -52,7 +52,6 @@ export interface VerificationDefinition {
   id: string;
   rationale: string;
   argv: string[];
-  timeoutMs: number;
   source: VerificationSource;
   verifierRefs: VerifierRef[];
 }
@@ -61,7 +60,6 @@ export interface VerificationDefinitionInput {
   id: string;
   rationale: string;
   argv: string[];
-  timeoutMs: number;
   source: VerificationSource;
   commandDefinitionPaths: string[];
   acceptanceSurfacePaths: string[];

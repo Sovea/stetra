@@ -563,7 +563,6 @@ function validateVerification(value: unknown): {
       'id',
       'rationale',
       'argv',
-      'timeoutMs',
       'source',
       'commandDefinitionPaths',
       'acceptanceSurfacePaths',
@@ -579,8 +578,6 @@ function validateVerification(value: unknown): {
       || !Array.isArray(candidate.argv)
       || !candidate.argv.length
       || candidate.argv.some((item) => typeof item !== 'string' || !item)
-      || !Number.isInteger(candidate.timeoutMs)
-      || Number(candidate.timeoutMs) < 1
       || (candidate.source !== 'team-default' && candidate.source !== 'host-task')) {
       issues.push(issue('verification-check-invalid', path, 'Check definition is malformed.'));
       continue;
@@ -612,7 +609,6 @@ function validateVerification(value: unknown): {
       id: candidate.id,
       rationale: candidate.rationale.trim(),
       argv: [...candidate.argv],
-      timeoutMs: Number(candidate.timeoutMs),
       source: candidate.source,
       verifierRefs,
     });

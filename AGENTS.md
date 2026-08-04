@@ -58,9 +58,9 @@ Remove it when those questions have no concrete answer.
 - Coding agents own repository investigation, interpretation, recommendation,
   local reversible engineering judgment, implementation, diagnosis, repair,
   falsification, and handoff claims.
-- The runtime owns only facts collected by the workflow: baselines, frozen check
-  definitions, actual changes, check outcomes, output integrity, and related
-  reproducible observations.
+- The runtime owns only facts collected by the workflow: baselines, frozen
+  semantic check definitions, actual changes, ordered check attempts and their
+  execution budgets, output integrity, and related reproducible observations.
 
 The harness binds provenance, facts, ordering, and presentation; it is not a
 fourth authority. A developer decision cannot erase a contradictory collected
@@ -122,15 +122,20 @@ dependencies are available.
 ### Collect
 
 Collect executes every frozen argv definition without a shell and records the
-complete baseline-to-current change. Preserve file operations, kinds, modes,
-digests, representable patch content, binary markers, exact check outcomes,
-full-stream digests, bounded logs, and command-definition or
-acceptance-surface mutations.
+complete baseline-to-current change. Timeout is an operational attempt budget,
+not part of Semantic Contract or check identity. A normal collection uses the
+CLI-owned default or an explicit collect-time budget and replaces prior
+attempts. A same-run timeout retry may append only after the latest attempt
+actually timed out and only with a larger budget; it must preserve every prior
+attempt. Preserve file operations, kinds, modes, digests, representable patch
+content, binary markers, exact check attempts, full-stream digests, bounded
+logs, and command-definition or acceptance-surface mutations.
 
-The host cannot supply changed files, check outcomes, patch facts, or collection
-identity. A passing check is a machine fact about that command, not proof of a
-semantic conclusion. An unavailable command and a completed failing command
-remain distinct.
+The host cannot supply changed files, check outcomes, patch facts, attempt
+history, or collection identity. A passing latest attempt is a machine fact
+about that command, not proof of a semantic conclusion. A timed-out attempt, a
+non-timeout unavailable command, and a completed failing command remain
+distinct. Direct Host execution cannot replace a frozen Runtime attempt.
 
 ### Handoff and finalize
 
@@ -263,7 +268,8 @@ behavior rather than only test results.
 
 Proportional-assurance changes must cover routine zero-claim handoff, explicit
 standard and critical dimension coverage, critical review, fact-triggered
-routine escalation, deterministic plan identity, and stale-fact priority.
+routine escalation, deterministic plan identity, stale-fact priority, and
+same-run monotonic timeout recovery without hiding earlier attempts.
 
 Passing deterministic tests establishes internal consistency and
 distributability, not product effectiveness. Claims about lower adoption cost

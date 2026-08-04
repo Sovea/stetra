@@ -76,7 +76,12 @@ export function formatChangeCollect(output: JsonObject, colors: Colors): string 
     lines.push('', `${colors.bold('Checks:')} ${output.checks.length}${formatCounts(counts)}`);
     for (const check of output.checks) {
       if (!isRecord(check)) continue;
-      lines.push(`${colors.cyan('•')} ${String(check.id)} — ${String(check.status)}`);
+      const attempts = Number(check.attemptCount ?? 0);
+      const suffix = attempts > 1 ? `; ${attempts} attempts` : '';
+      const timeout = Number.isFinite(Number(check.timeoutMs))
+        ? `; timeout ${String(check.timeoutMs)} ms`
+        : '';
+      lines.push(`${colors.cyan('•')} ${String(check.id)} — ${String(check.status)}${timeout}${suffix}`);
     }
   }
   if (Array.isArray(output.verifierSurfaces) && output.verifierSurfaces.length) {

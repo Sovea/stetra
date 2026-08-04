@@ -134,6 +134,20 @@ test('compileDelegation rejects unknown protocols and schema versions without co
     assert.ok(result.issues.some((item) => item.path.endsWith('.commandDefinitionPaths')));
   }
 
+  const timeoutInContract = structuredClone(compileInput()) as unknown as {
+    verification: { checks: Array<Record<string, unknown>> };
+  };
+  timeoutInContract.verification.checks[0].timeoutMs = 120_000;
+  const invalidTimeout = compileDelegation(
+    timeoutInContract as unknown as CompileDelegationInput,
+  );
+  assert.equal(invalidTimeout.status, 'authority-invalid');
+  if (invalidTimeout.status === 'authority-invalid') {
+    assert.ok(invalidTimeout.issues.some((item) =>
+      item.path === 'verification.checks[0].timeoutMs'
+      && item.code === 'unsupported-field'));
+  }
+
   const oldAuthoring = structuredClone(compileInput()) as unknown as Record<string, unknown>;
   oldAuthoring.interpretations = [{
     id: 'meaning:outcome',
@@ -351,6 +365,49 @@ test('evaluateHandoff rejects failed checks and surfaces unavailable checks', ()
   assert.match(unavailableAttention.summary, /Executable was not available/);
 });
 
+test('evaluateHandoff uses the latest monotonic timeout attempt without hiding history', () => {
+  const contract = compiledContract();
+  const firstFacts = factBundle(contract, 'passed');
+  const passed = firstFacts.checks[0].attempts[0];
+  firstFacts.checks[0].attempts = [
+    {
+      ...structuredClone(passed),
+      attempt: 1,
+      timeoutMs: 100,
+      status: 'unavailable',
+      exitCode: null,
+      timedOut: true,
+      outputDigest: sha256('timed-out-attempt'),
+      reason: 'Check timed out after 100 ms.',
+    },
+    {
+      ...structuredClone(passed),
+      attempt: 2,
+      timeoutMs: 1_000,
+      outputDigest: sha256('passing-retry'),
+    },
+  ];
+  const retried = rebindFactBundle(firstFacts);
+  const result = evaluateHandoff(evaluationInput(
+    contract,
+    retried,
+    validHandoff(retried),
+  ));
+  assert.equal(result.status, 'handoff-ready');
+  assert.equal(result.attention.some((item) => item.code === 'check-unavailable'), false);
+
+  const invalid = structuredClone(retried);
+  invalid.checks[0].attempts[1].timeoutMs = 100;
+  assert.throws(
+    () => evaluateHandoff(evaluationInput(
+      contract,
+      rebindFactBundle(invalid),
+      validHandoff(invalid),
+    )),
+    /retry timeouts must increase monotonically/,
+  );
+});
+
 test('evaluateHandoff requires falsification and urgent Review Map coverage', () => {
   const contract = compiledContract();
   const facts = factBundle(contract, 'passed');
@@ -525,7 +582,6 @@ function compileInput(): CompileDelegationInput {
         id: 'test',
         rationale: 'Exercise the public contract and handoff behavior.',
         argv: ['corepack', 'pnpm', 'test'],
-        timeoutMs: 120_000,
         source: 'host-task',
         commandDefinitionPaths: ['package.json'],
         acceptanceSurfacePaths: [],
@@ -577,24 +633,29 @@ function factBundle(
     changedFiles: [changedFile],
     checks: contract.verification.checks.map((checkDefinition) => ({
       id: checkDefinition.id,
-      status,
       argv: checkDefinition.argv,
-      exitCode: status === 'passed' ? 0 : status === 'failed' ? 1 : null,
       definitionFingerprint: checkDefinitionFingerprint(checkDefinition),
-      outputDigest: sha256(`output:${checkDefinition.id}:${status}`),
-      stdout: {
-        digest: sha256(''),
-        byteLength: 0,
-        persistedBytes: 0,
-        truncated: false,
-      },
-      stderr: {
-        digest: sha256(''),
-        byteLength: 0,
-        persistedBytes: 0,
-        truncated: false,
-      },
-      ...(status === 'unavailable' ? { reason: 'Executable was not available.' } : {}),
+      attempts: [{
+        attempt: 1,
+        timeoutMs: 300_000,
+        status,
+        exitCode: status === 'passed' ? 0 : status === 'failed' ? 1 : null,
+        timedOut: false,
+        outputDigest: sha256(`output:${checkDefinition.id}:${status}`),
+        stdout: {
+          digest: sha256(''),
+          byteLength: 0,
+          persistedBytes: 0,
+          truncated: false,
+        },
+        stderr: {
+          digest: sha256(''),
+          byteLength: 0,
+          persistedBytes: 0,
+          truncated: false,
+        },
+        ...(status === 'unavailable' ? { reason: 'Executable was not available.' } : {}),
+      }],
     })),
     verifierMutations: contract.verification.checks.flatMap((checkDefinition) =>
       checkDefinition.verifierRefs.flatMap((reference) => reference.path === changedFile.path
@@ -618,6 +679,20 @@ function factBundle(
   };
   const factCollection = factCollectionId(base);
   const withCollection = { ...base, factCollectionId: factCollection };
+  return {
+    ...withCollection,
+    bundleFingerprint: factBundleFingerprint(withCollection),
+  };
+}
+
+function rebindFactBundle(bundle: FactBundle): FactBundle {
+  const {
+    factCollectionId: _factCollectionId,
+    bundleFingerprint: _bundleFingerprint,
+    ...base
+  } = bundle;
+  const nextCollectionId = factCollectionId(base);
+  const withCollection = { ...base, factCollectionId: nextCollectionId };
   return {
     ...withCollection,
     bundleFingerprint: factBundleFingerprint(withCollection),

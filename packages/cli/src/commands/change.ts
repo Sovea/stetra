@@ -1,12 +1,14 @@
-import { Command } from 'commander';
+import { Command, InvalidArgumentError } from 'commander';
 
+import { DEFAULT_CHECK_TIMEOUT_MS } from '../facts/checks.ts';
 import {
   collectDelegationFacts,
   explainDelegationRun,
   finalizeDelegationHandoff,
   prepareDelegationTask,
+  type CheckTimeoutRetry,
 } from '../workflow/delegation.ts';
-import type { CommandEnvironment } from './shared.ts';
+import { collectOption, type CommandEnvironment } from './shared.ts';
 
 interface PrepareOptions {
   input: string;
@@ -14,6 +16,11 @@ interface PrepareOptions {
 
 interface RunOptions {
   run: string;
+}
+
+interface CollectOptions extends RunOptions {
+  retryCheck: string[];
+  timeoutMs?: number;
 }
 
 interface ExplainOptions extends RunOptions {
@@ -52,15 +59,28 @@ export function registerChangeCommands(
     .description('Run frozen checks and collect the complete actual change')
     .argument('[project-root]', 'Git worktree root', '.')
     .requiredOption('--run <id>', 'run ID returned by prepare')
+    .option(
+      '--timeout-ms <milliseconds>',
+      `initial timeout for each check; Runtime defaults to ${DEFAULT_CHECK_TIMEOUT_MS} ms`,
+      parseTimeout,
+    )
+    .option(
+      '--retry-check <id=milliseconds>',
+      'retry a latest timed-out check in the same run with a larger timeout; repeatable',
+      collectOption,
+      [],
+    )
     .action(async (
       projectRoot: string,
-      options: RunOptions,
+      options: CollectOptions,
       command: Command,
     ) => {
       environment.emit('change collect', await collectDelegationFacts({
         projectRoot,
         runId: options.run,
         productVersion,
+        ...(options.timeoutMs === undefined ? {} : { timeoutMs: options.timeoutMs }),
+        retryChecks: options.retryCheck.map(parseRetryCheck),
       }), command);
     });
 
@@ -97,4 +117,26 @@ export function registerChangeCommands(
         section: options.section,
       }), command);
     });
+}
+
+function parseTimeout(value: string): number {
+  if (!/^[1-9]\d*$/.test(value)) {
+    throw new InvalidArgumentError('timeout must be a positive integer in milliseconds');
+  }
+  const timeoutMs = Number(value);
+  if (!Number.isSafeInteger(timeoutMs)) {
+    throw new InvalidArgumentError('timeout must be a positive safe integer in milliseconds');
+  }
+  return timeoutMs;
+}
+
+function parseRetryCheck(value: string): CheckTimeoutRetry {
+  const separator = value.lastIndexOf('=');
+  if (separator < 1 || separator === value.length - 1) {
+    throw new InvalidArgumentError('retry check must use <check-id>=<milliseconds>');
+  }
+  return {
+    checkId: value.slice(0, separator),
+    timeoutMs: parseTimeout(value.slice(separator + 1)),
+  };
 }

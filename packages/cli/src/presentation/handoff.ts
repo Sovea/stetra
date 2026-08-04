@@ -51,11 +51,21 @@ export function renderCognitiveHandoffMarkdown(input: {
   lines.push('', `Checks (${facts.checks.length}):`);
   if (!facts.checks.length) lines.push('- None configured.');
   for (const check of facts.checks) {
-    const exit = check.exitCode === null ? '' : `; exit ${check.exitCode}`;
-    const reason = check.reason ? `; ${singleLine(check.reason)}` : '';
-    lines.push(`- \`${check.id}\` — ${check.status}${exit}${reason}.`);
-    appendStreamReference(lines, 'stdout', check.stdout);
-    appendStreamReference(lines, 'stderr', check.stderr);
+    const latest = check.attempts.at(-1)!;
+    const exit = latest.exitCode === null ? '' : `; exit ${latest.exitCode}`;
+    const reason = latest.reason ? `; ${singleLine(latest.reason)}` : '';
+    const attempts = check.attempts.length === 1
+      ? ''
+      : `; ${check.attempts.length} attempts`;
+    lines.push(`- \`${check.id}\` — ${latest.status}${exit}${reason}; timeout budget ${latest.timeoutMs} ms${attempts}.`);
+    for (const prior of check.attempts.slice(0, -1)) {
+      const priorReason = prior.reason ? `; ${singleLine(prior.reason)}` : '';
+      lines.push(`  - Attempt ${prior.attempt}: ${prior.status}${priorReason}; timeout budget ${prior.timeoutMs} ms.`);
+      appendStreamReference(lines, `attempt ${prior.attempt} stdout`, prior.stdout);
+      appendStreamReference(lines, `attempt ${prior.attempt} stderr`, prior.stderr);
+    }
+    appendStreamReference(lines, 'stdout', latest.stdout);
+    appendStreamReference(lines, 'stderr', latest.stderr);
   }
 
   const verifierSurfaces = summarizeVerifierSurfaces(facts.verifierMutations);
@@ -147,8 +157,8 @@ export function renderCognitiveHandoffMarkdown(input: {
 
 function appendStreamReference(
   lines: string[],
-  label: 'stdout' | 'stderr',
-  stream: FactBundle['checks'][number]['stdout'],
+  label: string,
+  stream: FactBundle['checks'][number]['attempts'][number]['stdout'],
 ): void {
   if (!stream.byteLength && !stream.truncated) return;
   const log = stream.logPath ? `; log ${inlineCode(stream.logPath)}` : '';

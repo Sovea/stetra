@@ -59,7 +59,7 @@ The workflow keeps three kinds of authority distinct:
 |---|---|---|
 | Developer | Desired outcome, constraints, non-goals, long-lived tradeoffs, exceptions, and adoption | Repository or check facts contradicted by observation |
 | Coding agent | Investigation, interpretation, local engineering judgment, implementation, diagnosis, repair, and handoff claims | The developer's decisions or machine-observed facts |
-| Runtime process | Baselines, frozen check definitions, actual changes, check outcomes, output integrity, and other collected facts | Product intent, semantic tradeoffs, or adoption |
+| Runtime process | Baselines, frozen check definitions, actual changes, ordered check attempts and execution budgets, output integrity, and other collected facts | Product intent, semantic tradeoffs, or adoption |
 
 The harness is not another authority. It binds provenance, controls lifecycle
 ordering, collects or validates facts, preserves contradictions, and presents
@@ -148,21 +148,26 @@ facts, and handoff.
 
 The CLI owns fact collection. It captures a complete worktree baseline before
 implementation, including existing tracked changes and non-ignored untracked
-files, and freezes the selected check definitions.
+files, and freezes the selected check definitions. A wall-clock timeout is an
+execution-attempt budget rather than part of check identity or task meaning.
 
 After implementation it records:
 
 - added, modified, deleted, and renamed paths;
 - file kinds, modes, content digests, and a complete representable patch;
 - binary or otherwise unrepresentable changes explicitly;
-- every frozen check's argv, status, exit code, output digests, bounded logs,
-  and availability;
+- every frozen check's argv and ordered attempts, including each attempt's
+  timeout budget, status, exit code, timeout marker, output digests, bounded
+  logs, and availability;
 - changes to declared command-definition and acceptance-surface files;
 - one collection identity binding the change and check facts.
 
-The coding agent cannot submit changed-file facts, check outcomes, or the
-collection identity. Passing checks establish only that those commands passed.
-They do not prove the semantic correctness or adoptability of the change.
+The coding agent cannot submit changed-file facts, check outcomes, attempt
+history, or the collection identity. A normal recollection replaces attempts
+after implementation repair. A same-run retry can append only to an actually
+timed-out latest attempt with a larger budget while the worktree is unchanged.
+Passing latest attempts establish only that those commands passed. They do not
+prove the semantic correctness or adoptability of the change.
 
 Every handoff is bound to one exact collection. If the worktree changes after
 collection, finalization returns `facts-stale`; the agent must collect again
@@ -276,6 +281,9 @@ If it cannot, it does not belong in the kernel.
     tests.
 13. Assurance requirements are explicit and may escalate; no heuristic or
     profile label may silently lower the fixed fact and authority invariants.
+14. Timeout recovery preserves prior Runtime attempts and cannot retry a
+    completed failure or non-timeout unavailability as if it merely needed more
+    time.
 
 ## Evidence boundary
 

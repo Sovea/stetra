@@ -54,7 +54,10 @@ resonant-code change finalize . --run <run-id> --json
 
 - `prepare` compiles the task's Semantic Contract and proportional Assurance
   Plan, freezes checks, and captures the pre-change worktree.
-- `collect` runs those checks and records the complete actual change.
+- `collect` runs those checks and records the complete actual change plus every
+  ordered check attempt. Execution timeout is a collect-time budget, not part
+  of task meaning; a timed-out check can retry with a larger budget in the same
+  run without hiding the first attempt.
 - `finalize` binds the agent's explanation, counterevidence search, unknowns,
   and Review Map to the collected facts.
 

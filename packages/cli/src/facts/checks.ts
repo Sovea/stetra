@@ -10,7 +10,9 @@ import { dirname, relative, resolve } from 'node:path';
 import { Writable } from 'node:stream';
 
 import type {
+  CheckAttemptFact,
   CheckFact,
+  CheckStreamFact,
   VerificationDefinition,
 } from '@sovea/resonant-code-core';
 
@@ -18,17 +20,24 @@ import { runStreamingCommand } from '../infrastructure/process.ts';
 import { sha256, stableFingerprint } from '../protocol.ts';
 
 export const MAX_CHECK_LOG_BYTES = 1024 * 1024;
+export const DEFAULT_CHECK_TIMEOUT_MS = 300_000;
+
+export interface FrozenCheckExecution {
+  definition: VerificationDefinition;
+  timeoutMs: number;
+  previousAttempts?: CheckAttemptFact[];
+}
 
 export async function runFrozenChecks(input: {
   projectRoot: string;
-  definitions: VerificationDefinition[];
+  executions: FrozenCheckExecution[];
   outputDirectory: string;
 }): Promise<CheckFact[]> {
   const results: CheckFact[] = [];
-  for (const definition of input.definitions) {
+  for (const execution of input.executions) {
     results.push(await runFrozenCheck({
       projectRoot: input.projectRoot,
-      definition,
+      ...execution,
       outputDirectory: input.outputDirectory,
     }));
   }
@@ -38,10 +47,23 @@ export async function runFrozenChecks(input: {
 async function runFrozenCheck(input: {
   projectRoot: string;
   definition: VerificationDefinition;
+  timeoutMs: number;
+  previousAttempts?: CheckAttemptFact[];
   outputDirectory: string;
 }): Promise<CheckFact> {
   const { definition } = input;
-  const logStem = `check-${sha256(definition.id).slice(-16)}`;
+  if (!Number.isSafeInteger(input.timeoutMs) || input.timeoutMs < 1) {
+    throw new Error(`Check ${definition.id} timeout must be a positive safe integer.`);
+  }
+  const previousAttempts = input.previousAttempts ?? [];
+  const prior = previousAttempts.at(-1);
+  if (prior && (!prior.timedOut || input.timeoutMs <= prior.timeoutMs)) {
+    throw new Error(
+      `Check ${definition.id} retry requires a timeout greater than the prior timed-out attempt.`,
+    );
+  }
+  const attemptNumber = previousAttempts.length + 1;
+  const logStem = `check-${sha256(definition.id).slice(-16)}-attempt-${attemptNumber}`;
   const stdoutPath = resolve(input.outputDirectory, `${logStem}.stdout.log`);
   const stderrPath = resolve(input.outputDirectory, `${logStem}.stderr.log`);
   const stdout = new BoundedLogWriter(stdoutPath, MAX_CHECK_LOG_BYTES);
@@ -53,7 +75,7 @@ async function runFrozenCheck(input: {
     file,
     args,
     cwd: input.projectRoot,
-    timeoutMs: definition.timeoutMs,
+    timeoutMs: input.timeoutMs,
     stdout,
     stderr,
     onStdout(chunk) {
@@ -71,13 +93,13 @@ async function runFrozenCheck(input: {
     `sha256:${stderrHash.digest('hex')}`,
     input.projectRoot,
   );
-  const status: CheckFact['status'] = result.exitCode === null
+  const status: CheckAttemptFact['status'] = result.exitCode === null
     ? 'unavailable'
     : result.exitCode === 0 && !result.failed
       ? 'passed'
       : 'failed';
   const reason = result.timedOut
-    ? `Check timed out after ${definition.timeoutMs} ms.`
+    ? `Check timed out after ${input.timeoutMs} ms.`
     : result.executionError
       ? `Check could not start: ${result.message ?? result.code ?? 'unknown execution error'}`
       : status === 'unavailable'
@@ -85,22 +107,38 @@ async function runFrozenCheck(input: {
         : status === 'failed'
           ? `Check exited with ${result.exitCode ?? result.signal ?? 'unknown status'}.`
           : undefined;
-  return {
-    id: definition.id,
+  const attempt: CheckAttemptFact = {
+    attempt: attemptNumber,
+    timeoutMs: input.timeoutMs,
     status,
-    argv: [...definition.argv],
     exitCode: Number.isInteger(result.exitCode) ? result.exitCode : null,
-    definitionFingerprint: stableFingerprint(definition),
+    timedOut: result.timedOut,
     outputDigest: stableFingerprint({
+      attempt: attemptNumber,
+      timeoutMs: input.timeoutMs,
       status,
       exitCode: Number.isInteger(result.exitCode) ? result.exitCode : null,
       signal: result.signal,
+      timedOut: result.timedOut,
       stdoutDigest: stdoutFact.digest,
       stderrDigest: stderrFact.digest,
     }),
     stdout: stdoutFact,
     stderr: stderrFact,
     ...(reason ? { reason } : {}),
+  };
+  return {
+    id: definition.id,
+    argv: [...definition.argv],
+    definitionFingerprint: stableFingerprint(definition),
+    attempts: [
+      ...previousAttempts.map((item) => ({
+        ...item,
+        stdout: { ...item.stdout },
+        stderr: { ...item.stderr },
+      })),
+      attempt,
+    ],
   };
 }
 
@@ -147,7 +185,7 @@ class BoundedLogWriter extends Writable {
     }
   }
 
-  fact(digest: string, projectRoot: string): CheckFact['stdout'] {
+  fact(digest: string, projectRoot: string): CheckStreamFact {
     return {
       digest,
       byteLength: this.observedBytes,

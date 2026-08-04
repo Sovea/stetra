@@ -114,7 +114,6 @@ input inside the project worktree.
         "id": "test",
         "rationale": "requested behavior or regression boundary",
         "argv": ["package-manager", "test"],
-        "timeoutMs": 120000,
         "source": "host-task",
         "commandDefinitionPaths": ["package.json"],
         "acceptanceSurfacePaths": ["test/public.test.ts"]
@@ -151,6 +150,12 @@ and acceptance-surface paths separately; use empty arrays when neither exists.
 Prepare resolves only the top-level executable; nested modules, services, and
 runtime prerequisites remain collect-time facts.
 
+Check identity is the frozen command and verifier boundary, not an estimated
+wall-clock timeout. Runtime owns a conservative initial execution budget. Pass
+\`--timeout-ms <milliseconds>\` to collect only when repository or environment
+evidence establishes a different budget; it does not change the Semantic
+Contract.
+
 Run the command with the document on stdin:
 
 \`\`\`sh
@@ -174,6 +179,19 @@ Inspect every returned changed path, check outcome, changed verifier surface,
 the returned \`assurancePlan\`, and the complete patch at \`patch.path\`.
 Runtime, not Host prose, owns those facts. If repair is needed, edit and collect
 again; recollection replaces the old facts and resets \`handoff.json\`.
+
+If a returned check has \`timedOut: true\`, do not run it separately and do not
+finalize merely to disclose a guessed budget. Follow the returned retry command
+and increase only that check's timeout in the same run:
+
+\`\`\`sh
+resonant-code change collect . --run <run-id> --retry-check <check-id>=<larger-milliseconds> --json
+\`\`\`
+
+Runtime preserves every attempt. Timeout retries are allowed only after the
+latest attempt actually timed out and only with a larger budget. A code edit,
+completed failure, or non-timeout unavailability uses normal collect instead,
+which reruns every frozen check against fresh change facts.
 
 ## 3. Author the Cognitive Handoff
 

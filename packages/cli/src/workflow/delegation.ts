@@ -18,17 +18,22 @@ import type { Readable } from 'node:stream';
 import {
   compileDelegation,
   evaluateHandoff,
+  type CheckFact,
   type CognitiveHandoff,
   type CompileDelegationInput,
   type FactBundle,
   type HandoffEvaluation,
   type HandoffValidationIssue,
   type SemanticContract,
+  type VerificationDefinition,
   type VerifierMutation,
 } from '@sovea/resonant-code-core';
 
 import { inputError, usageError } from '../errors.ts';
-import { runFrozenChecks } from '../facts/checks.ts';
+import {
+  DEFAULT_CHECK_TIMEOUT_MS,
+  runFrozenChecks,
+} from '../facts/checks.ts';
 import { materializeEvidenceWindows } from '../facts/evidence.ts';
 import {
   assertWorktreeSnapshot,
@@ -80,6 +85,11 @@ export interface DelegationRun {
     handoffFingerprint: string;
     evaluation: unknown;
   };
+}
+
+export interface CheckTimeoutRetry {
+  checkId: string;
+  timeoutMs: number;
 }
 
 export async function prepareDelegationTask(options: {
@@ -187,6 +197,8 @@ export async function collectDelegationFacts(options: {
   projectRoot: string;
   runId: string;
   productVersion: string;
+  timeoutMs?: number;
+  retryChecks?: CheckTimeoutRetry[];
 }) {
   const projectRoot = canonicalProjectRoot(options.projectRoot);
   const runId = requiredRunId(options.runId);
@@ -202,18 +214,75 @@ export async function collectDelegationFacts(options: {
   assertWorktreeObjectStore(runDirectory, runId);
 
   const checksDirectory = join(runDirectory, 'checks');
-  rmSync(checksDirectory, { recursive: true, force: true });
   const definitions = run.contract.verification.mode === 'checks'
     ? run.contract.verification.checks
     : [];
-  const checks = await runFrozenChecks({
-    projectRoot,
-    definitions,
-    outputDirectory: checksDirectory,
-  });
+  const retryChecks = options.retryChecks ?? [];
+  if (retryChecks.length && options.timeoutMs !== undefined) {
+    throw usageError('Use --timeout-ms for a full collection or --retry-check for timeout recovery, not both.');
+  }
+  if (options.timeoutMs !== undefined && !definitions.length) {
+    throw usageError('--timeout-ms applies only when the frozen contract contains checks.');
+  }
+
+  let collectionMode: 'full-collection' | 'timeout-retry';
+  let checks: CheckFact[];
+  if (retryChecks.length) {
+    if (run.state !== 'facts-collected' || !run.factBundle) {
+      throw usageError('Timeout retry requires an existing facts-collected run. Run change collect normally first.');
+    }
+    assertFactBundleIdentity(run.factBundle, run.contract.contractId);
+    const currentBeforeRetry = await captureGitWorktree(projectRoot, {
+      objectDirectory: worktreeObjectDirectory(runDirectory),
+    });
+    if (currentBeforeRetry.fingerprint !== run.factBundle.current.fingerprint) {
+      throw usageError(
+        `Run ${runId} changed after collection; run change collect without --retry-check to collect the new implementation and rerun all checks.`,
+      );
+    }
+    const retryPlan = validateTimeoutRetries(
+      retryChecks,
+      definitions,
+      run.factBundle.checks,
+    );
+    const retriedChecks = await runFrozenChecks({
+      projectRoot,
+      executions: retryPlan.map(({ definition, timeoutMs, previous }) => ({
+        definition,
+        timeoutMs,
+        previousAttempts: previous.attempts,
+      })),
+      outputDirectory: checksDirectory,
+    });
+    const retriedById = new Map(retriedChecks.map((check) => [check.id, check]));
+    const previousById = new Map(run.factBundle.checks.map((check) => [check.id, check]));
+    checks = definitions.map((definition) => {
+      const check = retriedById.get(definition.id) ?? previousById.get(definition.id);
+      if (!check) throw new Error(`Run ${runId} is missing check facts for ${definition.id}.`);
+      return check;
+    });
+    collectionMode = 'timeout-retry';
+  } else {
+    const timeoutMs = options.timeoutMs ?? DEFAULT_CHECK_TIMEOUT_MS;
+    assertCheckTimeout(timeoutMs, 'Collection timeout');
+    rmSync(checksDirectory, { recursive: true, force: true });
+    checks = await runFrozenChecks({
+      projectRoot,
+      executions: definitions.map((definition) => ({ definition, timeoutMs })),
+      outputDirectory: checksDirectory,
+    });
+    collectionMode = 'full-collection';
+  }
   const worktree = await collectGitWorktreeChange(projectRoot, run.worktreeBaseline, {
     objectDirectory: worktreeObjectDirectory(runDirectory),
   });
+  if (collectionMode === 'timeout-retry'
+    && run.factBundle
+    && worktree.current.fingerprint !== run.factBundle.current.fingerprint) {
+    throw usageError(
+      `A retried check changed the worktree for run ${runId}; run change collect without --retry-check so every check is rebound to the new facts.`,
+    );
+  }
   const verifierMutations = collectVerifierMutations(
     run.contract,
     worktree.changedFiles,
@@ -279,6 +348,7 @@ export async function collectDelegationFacts(options: {
     protocol: DELEGATION_PROTOCOL,
     schemaVersion: DELEGATION_SCHEMA_VERSION,
     status: 'facts-collected',
+    collectionMode,
     runId,
     factCollectionId,
     changedFiles: factBundle.changedFiles.map((file) => ({
@@ -287,14 +357,7 @@ export async function collectDelegationFacts(options: {
       operation: file.operation,
       representation: file.representation,
     })),
-    checks: factBundle.checks.map((check) => ({
-      id: check.id,
-      status: check.status,
-      exitCode: check.exitCode,
-      ...(check.reason ? { reason: check.reason } : {}),
-      stdout: compactCheckStream(check.stdout),
-      stderr: compactCheckStream(check.stderr),
-    })),
+    checks: factBundle.checks.map(compactCheckFact),
     verifierSurfaces: summarizeVerifierSurfaces(verifierMutations),
     assurancePlan: run.contract.assurancePlan,
     patch: factBundle.patch
@@ -307,7 +370,7 @@ export async function collectDelegationFacts(options: {
       runPath,
       explain: { runId, section: 'facts' as const },
     },
-    nextStep: `Inspect the complete facts and patch, fill ${handoffPath}, then run change finalize --run ${runId}.`,
+    nextStep: collectNextStep(factBundle, handoffPath, runId),
   };
 }
 
@@ -440,13 +503,22 @@ export async function finalizeDelegationHandoff(options: {
       runPath,
       handoffPath,
       patchPath: run.factBundle.patch?.path ?? null,
-      checkLogs: run.factBundle.checks.flatMap((check) => {
-        const logs = {
-          ...(check.stdout.logPath ? { stdout: check.stdout.logPath } : {}),
-          ...(check.stderr.logPath ? { stderr: check.stderr.logPath } : {}),
-        };
-        return Object.keys(logs).length ? [{ checkId: check.id, ...logs }] : [];
-      }),
+      checkLogs: run.factBundle.checks.flatMap((check) =>
+        check.attempts.flatMap((attempt) => {
+          const logs = {
+            ...(attempt.stdout.logPath ? { stdout: attempt.stdout.logPath } : {}),
+            ...(attempt.stderr.logPath ? { stderr: attempt.stderr.logPath } : {}),
+          };
+          return Object.keys(logs).length
+            ? [{
+                checkId: check.id,
+                attempt: attempt.attempt,
+                timeoutMs: attempt.timeoutMs,
+                status: attempt.status,
+                ...logs,
+              }]
+            : [];
+        })),
       explain: {
         runId: run.runId,
         sections: ['contract', 'facts', 'handoff', 'evaluation', 'presentation'] as const,
@@ -689,8 +761,6 @@ function validateFrozenContract(contract: SemanticContract): void {
     for (const definition of contract.verification.checks) {
       if (!definition.argv.length
         || definition.argv.some((item) => typeof item !== 'string' || !item)
-        || !Number.isInteger(definition.timeoutMs)
-        || definition.timeoutMs < 1
         || !Array.isArray(definition.verifierRefs)
         || definition.verifierRefs.some((item) =>
           !item
@@ -709,6 +779,97 @@ function projectRelativePathIsSafe(value: unknown): value is string {
     && !/^[A-Za-z]:[\\/]/.test(value)
     && !value.includes('\\')
     && value.split('/').every((segment) => Boolean(segment) && segment !== '.' && segment !== '..');
+}
+
+function assertFactBundleIdentity(bundle: FactBundle, contractId: string): void {
+  if (bundle.contractId !== contractId) {
+    throw new Error('Collected facts are bound to another Semantic Contract.');
+  }
+  const expectedCollectionId = stableFingerprint({
+    contractId: bundle.contractId,
+    baselineFingerprint: bundle.baseline.fingerprint,
+    currentFingerprint: bundle.current.fingerprint,
+    changeFingerprint: bundle.changeFingerprint,
+    changedFiles: bundle.changedFiles,
+    checks: bundle.checks,
+    verifierMutations: bundle.verifierMutations,
+    patch: bundle.patch ?? null,
+  });
+  if (bundle.factCollectionId !== expectedCollectionId) {
+    throw new Error('Collected machine facts were modified after collection.');
+  }
+  const { bundleFingerprint: _ignored, ...projection } = bundle;
+  if (bundle.bundleFingerprint !== stableFingerprint(projection)) {
+    throw new Error('Collected Fact Bundle fingerprint does not match its content.');
+  }
+}
+
+function validateTimeoutRetries(
+  retries: CheckTimeoutRetry[],
+  definitions: VerificationDefinition[],
+  previousChecks: CheckFact[],
+): Array<{
+  definition: VerificationDefinition;
+  timeoutMs: number;
+  previous: CheckFact;
+}> {
+  if (previousChecks.length !== definitions.length) {
+    throw new Error('Collected checks do not match the frozen verification definitions.');
+  }
+  const definitionsById = new Map(definitions.map((definition) => [definition.id, definition]));
+  const previousById = new Map(previousChecks.map((check) => [check.id, check]));
+  if (previousById.size !== previousChecks.length) {
+    throw new Error('Collected checks contain duplicate IDs.');
+  }
+  for (const definition of definitions) {
+    const previous = previousById.get(definition.id);
+    if (!previous
+      || JSON.stringify(previous.argv) !== JSON.stringify(definition.argv)
+      || previous.definitionFingerprint !== stableFingerprint(definition)
+      || !Array.isArray(previous.attempts)
+      || !previous.attempts.length) {
+      throw new Error(`Collected check ${definition.id} is not bound to its frozen definition.`);
+    }
+  }
+
+  const requested = new Map<string, number>();
+  for (const retry of retries) {
+    if (requested.has(retry.checkId)) {
+      throw usageError(`Duplicate --retry-check entry for ${retry.checkId}.`);
+    }
+    const definition = definitionsById.get(retry.checkId);
+    const previous = previousById.get(retry.checkId);
+    if (!definition || !previous) {
+      throw usageError(`Cannot retry unknown frozen check ${JSON.stringify(retry.checkId)}.`);
+    }
+    assertCheckTimeout(retry.timeoutMs, `Retry timeout for check ${retry.checkId}`);
+    const latest = latestCheckAttempt(previous);
+    if (!latest.timedOut || latest.status !== 'unavailable') {
+      throw usageError(
+        `Check ${retry.checkId} may use --retry-check only after its latest attempt timed out.`,
+      );
+    }
+    if (retry.timeoutMs <= latest.timeoutMs) {
+      throw usageError(
+        `Check ${retry.checkId} retry timeout must be greater than ${latest.timeoutMs} ms.`,
+      );
+    }
+    requested.set(retry.checkId, retry.timeoutMs);
+  }
+
+  return definitions.flatMap((definition) => {
+    const timeoutMs = requested.get(definition.id);
+    const previous = previousById.get(definition.id);
+    return timeoutMs !== undefined && previous
+      ? [{ definition, timeoutMs, previous }]
+      : [];
+  });
+}
+
+function assertCheckTimeout(value: number, label: string): void {
+  if (!Number.isSafeInteger(value) || value < 1) {
+    throw usageError(`${label} must be a positive safe integer in milliseconds.`);
+  }
 }
 
 function collectVerifierMutations(
@@ -764,7 +925,6 @@ function contractWorkPacket(contract: SemanticContract) {
             id: check.id,
             rationale: check.rationale,
             argv: check.argv,
-            timeoutMs: check.timeoutMs,
             source: check.source,
             commandDefinitionPaths: check.verifierRefs
               .filter((reference) => reference.role === 'command-definition')
@@ -777,12 +937,58 @@ function contractWorkPacket(contract: SemanticContract) {
   };
 }
 
-function compactCheckStream(stream: FactBundle['checks'][number]['stdout']) {
+function latestCheckAttempt(check: CheckFact): CheckFact['attempts'][number] {
+  const latest = check.attempts.at(-1);
+  if (!latest) throw new Error(`Check ${check.id} has no execution attempt.`);
+  return latest;
+}
+
+function compactCheckFact(check: CheckFact) {
+  const latest = latestCheckAttempt(check);
+  return {
+    id: check.id,
+    status: latest.status,
+    exitCode: latest.exitCode,
+    timedOut: latest.timedOut,
+    timeoutMs: latest.timeoutMs,
+    attemptCount: check.attempts.length,
+    ...(latest.reason ? { reason: latest.reason } : {}),
+    stdout: compactCheckStream(latest.stdout),
+    stderr: compactCheckStream(latest.stderr),
+  };
+}
+
+function compactCheckStream(stream: CheckFact['attempts'][number]['stdout']) {
   return {
     byteLength: stream.byteLength,
     truncated: stream.truncated,
     ...(stream.logPath ? { logPath: stream.logPath } : {}),
   };
+}
+
+function collectNextStep(
+  facts: FactBundle,
+  handoffPath: string,
+  runId: string,
+): string {
+  const timedOut = facts.checks.filter((check) => latestCheckAttempt(check).timedOut);
+  if (timedOut.length) {
+    const retryFlags = timedOut.map((check) => {
+      const latest = latestCheckAttempt(check);
+      return `--retry-check ${check.id}=<integer-greater-than-${latest.timeoutMs}>`;
+    }).join(' ');
+    return `One or more checks timed out. Do not run them outside Runtime or finalize yet; retry this run with change collect --run ${runId} ${retryFlags}.`;
+  }
+  const unavailable = facts.checks.filter((check) =>
+    latestCheckAttempt(check).status === 'unavailable');
+  if (unavailable.length) {
+    return `Restore the unavailable check environment, then run change collect --run ${runId} again before authoring the handoff.`;
+  }
+  const failed = facts.checks.filter((check) => latestCheckAttempt(check).status === 'failed');
+  if (failed.length) {
+    return `Repair the failed verification inside the Semantic Contract, then run change collect --run ${runId} again.`;
+  }
+  return `Inspect the complete facts and patch, fill ${handoffPath}, then run change finalize --run ${runId}.`;
 }
 
 function cleanupCompletedRuns(projectRoot: string, currentRunId: string): string[] {

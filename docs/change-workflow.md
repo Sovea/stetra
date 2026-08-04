@@ -56,11 +56,11 @@ The input identifies the `semantic-delegation` protocol and supplies:
 - explicit argv check definitions, or a concrete no-command rationale;
 - an optional unresolved material fork.
 
-Each check includes an ID, rationale, timeout, source, and separate paths for
-files that define the command and files that define what passing means. The
-CLI resolves the top-level executable before creating a run. This preflight
-does not claim nested modules, services, or other runtime prerequisites are
-available.
+Each check includes an ID, rationale, source, and separate paths for files that
+define the command and files that define what passing means. A timeout is not
+part of the Semantic Contract or frozen check identity. The CLI resolves the
+top-level executable before creating a run. This preflight does not claim
+nested modules, services, or other runtime prerequisites are available.
 
 Consequence is adoption impact, not implementation complexity. The host does
 not derive it or assurance dimensions from file counts, diff size, dependency
@@ -106,9 +106,17 @@ resonant-code change collect . --run <run-id> --json
 ```
 
 Collect executes every frozen check as an argv array without a shell, then
-captures the complete baseline-to-current worktree change. The order matters:
-the facts describe the check results and repository state from the same
-collection.
+captures the complete baseline-to-current worktree change. The CLI owns a
+300,000 ms initial timeout budget. When repository or environment evidence
+establishes a different budget, the host may set it for a full collection:
+
+```sh
+resonant-code change collect . --run <run-id> --timeout-ms <milliseconds> --json
+```
+
+The budget is recorded on the resulting attempt but does not change contract
+identity. The order matters: the facts describe the check attempts and
+repository state from the same collection.
 
 The resulting Fact Bundle contains:
 
@@ -116,7 +124,8 @@ The resulting Fact Bundle contains:
 - before/after file kind, mode, and digest;
 - a complete patch when text changes are representable;
 - explicit binary or metadata-only facts otherwise;
-- `passed`, `failed`, or `unavailable` check outcomes;
+- ordered attempts for each check, each with its timeout budget, timeout marker,
+  `passed`, `failed`, or `unavailable` outcome, and exit code;
 - exact argv, exit code, complete stdout/stderr digests, bounded log references,
   and truncation state;
 - command-definition and acceptance-surface mutations with affected check IDs;
@@ -126,9 +135,25 @@ Persisted stdout and stderr are capped independently at 1 MiB. Their digests
 cover the complete streams, and empty streams create no log file.
 
 Collect writes or resets `handoff.json`. If the agent repairs the code after a
-collection, it runs collect again; the new Fact Bundle replaces the prior one
-for that run. The collect packet repeats the frozen Assurance Plan so the host
-does not reconstruct its obligations from the original input.
+collection, it runs normal collect again; the new Fact Bundle replaces prior
+attempts and reruns every check against the new worktree. The collect packet
+repeats the frozen Assurance Plan so the host does not reconstruct its
+obligations from the original input.
+
+If the latest attempt actually timed out, the host may retry only that check in
+the same run with a strictly larger budget:
+
+```sh
+resonant-code change collect . --run <run-id> \
+  --retry-check <check-id>=<larger-milliseconds> --json
+```
+
+This is still the collect stage. It requires an unchanged worktree, appends an
+attempt, preserves earlier output facts, creates a new collection identity, and
+resets the handoff. Multiple `--retry-check` options may retry multiple current
+timeouts. Completed failures and non-timeout unavailability cannot use this
+path. Do not run the command directly outside Runtime: that result cannot
+replace the collected attempt.
 
 ## 3. Write the handoff
 
@@ -191,9 +216,10 @@ It returns `facts-stale` before reading or evaluating the handoff if any
 post-collection edit is present.
 
 For current facts, Core validates handoff structure, exact evidence references,
-mechanical contradictions, critical falsification, unknown coverage, and
-Review Map coverage. It does not decide whether the agent's semantic reasoning
-is correct.
+mechanical contradictions, monotonic timeout-attempt history, critical
+falsification, unknown coverage, and Review Map coverage. Evaluation uses the
+latest attempt while earlier timeouts remain inspectable. It does not decide
+whether the agent's semantic reasoning is correct.
 
 | Status | Meaning |
 |---|---|
@@ -235,7 +261,7 @@ One runnable task uses one directory:
 |-- run.json
 |-- handoff.json
 |-- change.patch              # when a representable patch exists
-`-- checks/                   # non-empty bounded streams only
+`-- checks/                   # non-empty bounded streams keyed by attempt
 ```
 
 The states are `prepared`, `facts-collected`, and `completed`. Only whole

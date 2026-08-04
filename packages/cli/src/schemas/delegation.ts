@@ -143,7 +143,6 @@ export const VerificationDefinitionSchema = z.strictObject({
   id: StableIdSchema,
   rationale: NonEmptyStringSchema,
   argv: z.array(z.string().min(1)).min(1),
-  timeoutMs: z.number().int().positive(),
   source: z.enum(['team-default', 'host-task']),
   commandDefinitionPaths: z.array(SafeRepositoryPathSchema),
   acceptanceSurfacePaths: z.array(SafeRepositoryPathSchema),

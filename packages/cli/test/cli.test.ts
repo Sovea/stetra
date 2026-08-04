@@ -175,6 +175,68 @@ test('CLI exposes the complete prepare, collect, finalize, and explain lifecycle
   }
 });
 
+test('CLI collect exposes same-run timeout retry without changing the contract', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'resonant-cli-timeout-'));
+  const inputRoot = mkdtempSync(join(tmpdir(), 'resonant-cli-input-'));
+  try {
+    initializeRepository(root);
+    writeFileSync(join(root, 'source.txt'), 'before\n', 'utf8');
+    git(root, ['add', '.']);
+    git(root, ['commit', '-qm', 'initial']);
+    const inputPath = join(inputRoot, 'prepare.json');
+    writePrepareInput(inputPath, true, [
+      process.execPath,
+      '-e',
+      'setTimeout(()=>process.exit(0),150)',
+    ]);
+    const prepared = (await runCli([
+      'change', 'prepare', root, '--input', inputPath, '--json',
+    ])).output as { status: string; runId: string };
+    assert.equal(prepared.status, 'prepared');
+
+    writeFileSync(join(root, 'source.txt'), 'after\n', 'utf8');
+    const first = (await runCli([
+      'change', 'collect', root, '--run', prepared.runId, '--timeout-ms', '25', '--json',
+    ])).output as {
+      collectionMode: string;
+      checks: Array<{ status: string; timedOut: boolean; attemptCount: number }>;
+    };
+    assert.equal(first.collectionMode, 'full-collection');
+    assert.deepEqual(first.checks[0], {
+      id: 'fixture-check',
+      status: 'unavailable',
+      exitCode: null,
+      timedOut: true,
+      timeoutMs: 25,
+      attemptCount: 1,
+      reason: 'Check timed out after 25 ms.',
+      stdout: { byteLength: 0, truncated: false },
+      stderr: { byteLength: 0, truncated: false },
+    });
+
+    const retried = (await runCli([
+      'change',
+      'collect',
+      root,
+      '--run',
+      prepared.runId,
+      '--retry-check',
+      'fixture-check=1000',
+      '--json',
+    ])).output as {
+      collectionMode: string;
+      checks: Array<{ status: string; timedOut: boolean; attemptCount: number }>;
+    };
+    assert.equal(retried.collectionMode, 'timeout-retry');
+    assert.equal(retried.checks[0].status, 'passed');
+    assert.equal(retried.checks[0].timedOut, false);
+    assert.equal(retried.checks[0].attemptCount, 2);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+    rmSync(inputRoot, { recursive: true, force: true });
+  }
+});
+
 test('human finalize renders stale-fact attention without pretending completion', () => {
   const rendered = formatCliOutput({
     command: 'change finalize',
@@ -408,11 +470,11 @@ test('change prepare reports legacy artifacts without mutating them', async () =
 
 const TASK = 'Implement the Semantic Handoff change without legacy compatibility.';
 
-function writePrepareInput(path: string, withCheck: boolean): void {
-  writeFileSync(path, `${JSON.stringify(prepareInput(withCheck), null, 2)}\n`, 'utf8');
+function writePrepareInput(path: string, withCheck: boolean, checkArgv?: string[]): void {
+  writeFileSync(path, `${JSON.stringify(prepareInput(withCheck, checkArgv), null, 2)}\n`, 'utf8');
 }
 
-function prepareInput(withCheck: boolean) {
+function prepareInput(withCheck: boolean, checkArgv?: string[]) {
   return {
     protocol: 'semantic-delegation',
     schemaVersion: '1',
@@ -441,8 +503,7 @@ function prepareInput(withCheck: boolean) {
           checks: [{
             id: 'fixture-check',
             rationale: 'Run the explicit fixture acceptance command.',
-            argv: [process.execPath, '-e', 'process.exit(0)'],
-            timeoutMs: 10_000,
+            argv: checkArgv ?? [process.execPath, '-e', 'process.exit(0)'],
             source: 'host-task',
             commandDefinitionPaths: [],
             acceptanceSurfacePaths: [],

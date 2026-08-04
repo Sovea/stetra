@@ -21,7 +21,10 @@ resonant-code change finalize . --run <run-id> --json
 - `prepare` compiles the task contract and proportional Assurance Plan,
   captures the dirty/untracked worktree baseline, and freezes explicit checks.
 - `collect` executes those checks without a shell and records the complete
-  actual change, patch, output integrity, and verifier-surface mutations.
+  actual change, patch, ordered check attempts, output integrity, and
+  verifier-surface mutations. Runtime supplies the normal timeout budget; an
+  actually timed-out check can retry in the same run with
+  `--retry-check <id>=<larger-milliseconds>`.
 - `finalize` rejects stale facts and binds the agent's claims, unknowns,
   falsification, and Review Map to the current collection.
 

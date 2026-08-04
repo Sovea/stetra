@@ -111,7 +111,6 @@ try {
         id: 'fixture-check',
         rationale: 'Exercise the packed CLI check runner.',
         argv: [process.execPath, '-e', 'process.exit(0)'],
-        timeoutMs: 10_000,
         source: 'host-task',
         commandDefinitionPaths: ['package.json'],
         acceptanceSurfacePaths: [],

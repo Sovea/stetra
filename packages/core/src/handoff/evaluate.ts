@@ -122,7 +122,8 @@ function buildAttention(
 ): HandoffAttentionItem[] {
   const output: HandoffAttentionItem[] = [];
   for (const check of facts.checks) {
-    if (check.status === 'failed') {
+    const latest = check.attempts.at(-1)!;
+    if (latest.status === 'failed') {
       output.push({
         code: 'check-failed',
         summary: `Configured check ${check.id} failed.`,
@@ -133,10 +134,10 @@ function buildAttention(
           action: 'Inspect the exact check output, repair inside the Semantic Contract, and collect again; realign if the repair changes long-lived meaning.',
         },
       });
-    } else if (check.status === 'unavailable') {
+    } else if (latest.status === 'unavailable') {
       output.push({
         code: 'check-unavailable',
-        summary: `Configured check ${check.id} was unavailable${check.reason ? `: ${check.reason}` : '.'}`,
+        summary: `Configured check ${check.id} was unavailable${latest.reason ? `: ${latest.reason}` : '.'}`,
         adoptionImpact: 'A selected verification boundary produced no completed outcome, so its intended evidence is missing.',
         references: { checks: [check.id] },
         resolution: {

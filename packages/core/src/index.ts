@@ -37,6 +37,7 @@ export type {
 export type {
   ChangedFileFact,
   ChangeRepresentation,
+  CheckAttemptFact,
   CheckFact,
   CheckStatus,
   CheckStreamFact,
