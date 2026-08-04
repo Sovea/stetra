@@ -68,6 +68,8 @@ assert.deepEqual(presentTrackedDist, [], 'Generated dist files must not remain t
 assert.match(readFileSync(resolve(root, '.gitignore'), 'utf8'), /^\*\*\/dist\/$/m);
 
 for (const file of [
+  'docs/architecture.md',
+  'docs/change-workflow.md',
   'evaluation/paired-agent/PROTOCOL.md',
   'evaluation/paired-agent/ledger.json',
 ]) {

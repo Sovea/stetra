@@ -1,350 +1,245 @@
 # AGENTS.md
 
-## Product boundary
+## What this repository builds
 
-`resonant-code` is an AI coding change harness. It exists to make task-specific engineering guidance stable, inspectable, evidence-aware, and reusable across host agents.
+`resonant-code` is a change-adoption harness for production coding agents. It
+lets an agent own the local implementation loop while keeping task meaning,
+observed facts, and the adoption decision separately inspectable.
 
-It is not a repository wiki, a general agent framework, or a collection of static prompt rules. Its differentiator is a small deterministic kernel around the part text-only workflows cannot reliably own: activating project policy, qualifying repository observations, budgeting delivered guidance, collecting machine facts, and evaluating the actual change.
+The product objective is to reduce the total cost from a developer request to
+a confidently adopted change without weakening the developer's system
+understanding or decision quality. It is not a coding agent, repository wiki,
+planning framework, prompt library, transcript store, or automated approver.
 
-## Product thesis
+Read `docs/architecture.md` before changing product boundaries, lifecycle,
+authority, persistence, public APIs, or host interaction. Read
+`docs/change-workflow.md` before changing CLI protocol or task-run behavior.
+Describe current implementation separately from future architecture and from
+measured product evidence.
 
-The target is code a developer or team wants to adopt and keep, not merely plausible output. The primary failure modes are disproportionate changes, generic advice, poor repository fit, weak compatibility judgment, noisy review, and unverifiable claims that guidance was followed.
+## Product kernel
 
-The collaboration contract has three distinct authorities:
+The architecture is three task cores and one longitudinal loop:
 
-- Humans own semantic authority over goals, constraints, and long-lived
-  tradeoffs, but do not overrule contradictory repository or check facts.
-- Runtime owns factual authority over collected changes and checks, but does
-  not decide product intent or adoption.
-- Host agents own interpretation, judgment, and execution, but must not present
-  their inference as a human decision or a machine fact.
+1. **Semantic Contract** — what one change is intended and authorized to mean.
+2. **Fact Spine** — what the workflow observed before and after implementation.
+3. **Cognitive Handoff** — what the actual change means, what remains unknown,
+   and where direct review has the highest value.
+4. **Decision Continuity** — how adopted decisions and observed outcomes may
+   reduce repeated semantic work in later tasks.
 
-Full-access operation means low-interruption execution inside the aligned
-semantic contract, not broader semantic authority. A concrete user task is
-standing authorization for necessary local, reversible inspection, edits,
-verification, and repair. Ask only for necessary missing information, material
-clarification or decision, an exact exception or verification relaxation, or
-an external/irreversible effect outside that authority; consolidate questions
-and never turn them into generic permission prompts.
+The current MVP implements one task-scoped loop across the first three cores.
+Decision Continuity is not implemented. Do not add adoption history, durable
+decision records, preference learning, a delegation frontier, a global memory
+store, or another cross-task lifecycle without a concrete consumer and evidence
+that it improves a real decision over a simpler workflow.
 
-Use host-agent judgment for task understanding and semantic relations. Admit that judgment through narrow structured inputs. Do not create multi-stage artifacts merely because a typed contract can be defined.
+Every persistent field or state must answer:
 
-Every persistent field or lifecycle stage must answer at least one of these questions:
+1. Which compile, collection, review, recovery, adoption, or future activation
+   decision can it change?
+2. Can the developer inspect that decision and its authority or evidence?
+3. Can its value be tested against a simpler baseline?
 
-1. Can it change a compile or evaluation decision?
-2. Can a developer inspect the decision it changed?
-3. Can its benefit be tested against a simpler baseline?
+Remove it when those questions have no concrete answer.
 
-If not, remove it.
+## Responsibility boundary
 
-## Accepted product direction during upgrade
+- Developers own desired outcomes, constraints, non-goals, long-lived
+  tradeoffs, exceptions, and adoption.
+- Coding agents own repository investigation, interpretation, recommendation,
+  local reversible engineering judgment, implementation, diagnosis, repair,
+  falsification, and handoff claims.
+- The runtime owns only facts collected by the workflow: baselines, frozen check
+  definitions, actual changes, check outcomes, output integrity, and related
+  reproducible observations.
 
-The accepted target direction is
-`docs/cognitive-semantic-delegation.md`. The current migration sequence is
-tracked separately in `docs/semantic-delegation-upgrade-plan.md`.
+The harness binds provenance, facts, ordering, and presentation; it is not a
+fourth authority. A developer decision cannot erase a contradictory collected
+fact. A fact cannot decide product meaning. Agent prose cannot become a
+developer decision or machine fact through a label.
 
-Before proposing or implementing a change to product architecture, lifecycle,
-persistence, authority, evaluation, or Host interaction:
+Exact developer messages and decisions use `HumanEvent`. Structured outcomes,
+constraints, focus, consequence, and recommendations remain agent
+interpretations with exact event or evidence bases. The runtime validates identity
+and references, not whether the interpretation is semantically faithful.
 
-- read both documents;
-- distinguish current implementation behavior from accepted target behavior;
-- identify which accepted capability the change advances and what a developer
-  will observe differently;
-- do not silently contradict or amend an accepted principle;
-- surface contrary repository or Runtime evidence before proposing an
-  amendment.
+A concrete task authorizes necessary local, reversible inspection, edits,
+checks, documentation, and safe repair within the compiled task meaning. Ask
+only when necessary information is missing, a material long-lived choice or
+semantic drift remains, an exact exception or verification relaxation is
+needed, or an external or irreversible effect is proposed. Consolidate such
+questions.
 
-`docs/trustworthy-mvp-contract.md` continues to govern existing behavior until
-an individual boundary is explicitly superseded by an implemented, tested
-migration change. Target direction alone is not evidence that a capability is
-already implemented.
+## Change lifecycle
 
-## Architecture
+The normal path is:
 
-The execution loop has five parts:
+```text
+prepare -> agent implementation -> collect -> agent handoff -> finalize
+```
 
-1. Playbook — prescriptive built-in, repository-committed team, and
-   user-scoped personal directives.
-2. RCCL — observational repository context with separate evidence, semantic-confidence, and review signals.
-3. Runtime — the deterministic `compileChange` / `evaluateChange` hard kernel.
-4. CLI — the distributable deterministic control plane for assets, project
-   initialization, IO, lifecycle sequencing, machine-fact collection, and
-   presentation.
-5. Host adapters — generated thin Codex/Claude skills that preserve native host
-   judgment and invoke the CLI's stable JSON protocol.
+`change explain` is on-demand inspection, not a mandatory successful-path
+stage.
 
-The workspace has exactly two publishable packages:
+### Prepare
 
-- `packages/core/` → `@sovea/resonant-code-core`
-- `packages/cli/` → `@sovea/resonant-code`
+The host supplies exact developer events, basis-bearing semantic values,
+optional exact repository evidence, and explicit verification commands or a
+concrete no-command rationale. It resolves repository-discoverable details
+before asking the developer.
 
-Runtime, RCCL, and Playbook sources are separate modules inside Core. Workflow,
-machine-fact collection, project initialization, and generated Host Adapters
-are modules inside CLI. Do not create another package without an independent
-consumer, public API, version, and release need.
+Focus paths guide investigation and review; they are not write permissions or
+a prediction of final changed files. The runtime does not infer task meaning,
+verification commands, or semantic importance from keywords, path counts,
+dependencies, or framework filename lists.
 
-### Public Core API
+Only `delegation-compiled` creates a run. Authority, unresolved-decision, and
+verification results write nothing. Prepare captures the complete dirty and
+non-ignored untracked baseline, freezes checks, keeps synthetic Git objects in
+the task run, and rejects a transient input file inside the worktree. Executable
+preflight checks only the top-level command and does not claim nested runtime
+dependencies are available.
 
-The Core root exposes exactly two value entrypoints:
+### Collect
 
-- `compileChange(input)`
-- `evaluateChange(input)`
+Collect executes every frozen argv definition without a shell and records the
+complete baseline-to-current change. Preserve file operations, kinds, modes,
+digests, representable patch content, binary markers, exact check outcomes,
+full-stream digests, bounded logs, and command-definition or
+acceptance-surface mutations.
 
-RCCL lifecycle operations are exported only from
-`@sovea/resonant-code-core/rccl`. Do not expose task helpers, parsers, merge
-functions or CLI workflow APIs from
-`packages/core/src/index.ts`.
+The host cannot supply changed files, check outcomes, patch facts, or collection
+identity. A passing check is a machine fact about that command, not proof of a
+semantic conclusion. An unavailable command and a completed failing command
+remain distinct.
 
-### Compile boundary
+### Handoff and finalize
 
-`compileChange` accepts a canonical task context, the team Playbook, an
-optional personal overlay, optional bounded directive/observation relation
-proposals, and optional task/team verification proposals. It owns:
+The host writes the Cognitive Handoff only after inspecting the complete
+collected change. It supplies a system-meaning update, applicable material
+claims, residual unknowns, a consequence-directed Review Map, and optional
+material alternatives.
 
-- structural task validation, mechanical path/technology normalization, and
-  explicit semantic-alignment gates
-- per-value task provenance for human statements and confirmations, Agent
-  inference, repository-derived facts, and deterministic normalization
-- Playbook loading, validation, local override, scope selection, and explicit
-  authority ordering
-- symmetric target/directive scope overlap and canonical lowercase technology
-  IDs; directory targets are intended scope roots, not predicted changed files
-- task-relevant RCCL evidence re-verification
-- semantic relation validation and execution-mode adjudication
-- compact EGO budgets and Decision Trace
-- verification-plan generation
-- inspectable activation and attention-only attestation plans
+Claims use one basis: `repository-evidence`, `agent-judgment`,
+`human-decision`, or `unverified`. Runtime-collected facts remain a separately generated
+surface. Every adoption-critical agent, repository-evidence, or unverified
+claim includes a concrete failure hypothesis and falsification attempt.
+Contradicted, partial, and unverified conclusions remain visible.
 
-Standard tasks compile directly. Do not reintroduce mandatory task-model, semantic-graph, capability-profile, cache, or evolution-proposal round trips.
+Attention and the Review Map have different jobs. Attention states why evidence
+is insufficient, its adoption impact, exact references, and a concrete next
+action. The Review Map orders direct inspection by consequence; do not create
+one item per changed file.
 
-Guidance budgeting is hard product behavior:
+Finalize checks worktree currency before evaluating handoff input. Any edit
+after collection returns `facts-stale` and requires collection again.
+`handoff-ready` means ready for developer review, never adopted.
 
-- no per-section item limits
-- one configurable UTF-8 byte ceiling, 6 KB by default
-- the ceiling applies to normative agent-facing guidance, not source,
-  verification, evidence, or Decision Trace metadata
-- required, avoid, and unresolved-tension guidance is never silently omitted
-- optional omissions require an explicit host selection and rationale
-- overflow returns an actionable result instead of truncating guidance
+Generated adapters relay the CLI-owned `presentationMarkdown` unchanged.
+Additional host investigation stays explicitly labeled as agent evidence.
 
-Only delivered guidance IDs may be evaluated later.
+## Package and API boundary
 
-Verification proposals contain an explicit check ID, rationale, and source
-(`team-default` or `host-task`). Runtime merges them with checks required by
-delivered guidance. It does not discover commands or silently discard a
-selected definition; the CLI freezes and executes every definition in the
-selected team-default or task configuration.
+The dependency direction is:
 
-The team Playbook is the shared authority. A personal overlay may add only
-`should`-level preferences, conventions, architecture guidance, and examples.
-It may not extend layers, override, suppress, weight-rank, create constraints or
-anti-patterns, or revive team-suppressed guidance. Runtime surfaces both base
-and overlay contributors in Decision Trace.
+```text
+Generated host adapter -> CLI -> Core
+```
 
-### RCCL boundary
+The workspace has two publishable packages:
 
-RCCL stores observations only when omitting one could cause a different and worse code or review decision. Each observation requires:
+- `packages/core/` -> `@sovea/resonant-code-core`
+- `packages/cli/` -> `@sovea/resonant-code`
 
-- stable ID, category, scope, and statement
-- one or more affected decision dimensions
-- explicit decision impact
-- semantic confidence and review status
-- non-empty exact source evidence
-- RCCL-owned evidence verification and lifecycle state
+Do not create another package without an independent consumer, public API,
+version, and release need.
 
-Evidence verification checks safe repository-relative paths, file existence, line ranges, and snippet similarity. It proves evidence currency, not semantic truth or representativeness.
+Core owns deterministic authority validation, Semantic Contract compilation,
+fact schemas and binding, and Cognitive Handoff evaluation. Its root exposes
+exactly two runtime values: `compileDelegation` and `evaluateHandoff`.
 
-Calibration never ranks repository files or guesses meaningful syntax windows.
-The host selects exact file/line windows, and proposals may reference only the
-window IDs in that prepare contract. A proposal cannot mark itself reviewed.
-Approval is a separate action with reviewer, timestamp, and content-fingerprint
-provenance; changing observation content invalidates approval.
+CLI owns commands, validation at the IO boundary, task-run sequencing, Git and
+check collection, patch materialization, project initialization, generated
+adapters, and presentation. Core does not run Git or commands, format CLI
+output, know host-specific files, or call an LLM. CLI and adapters do not decide
+semantic truth or invent facts.
 
-Only a task-relevant observation with current fully matched evidence, high semantic confidence, reviewed status, and an accepted host semantic relation may change directive execution. Partial, stale, broken, low-confidence, or unreviewed observations are ambient at most. Token overlap may not create a relation, conflict, enforcement, or delivery decision.
+Core and CLI versions move together. The CLI archive pins the exact matching
+Core version after `workspace:*` is rewritten during pack. Unsupported protocol
+or schema shapes fail with actionable errors; do not add translators, aliases,
+dual-read, or dual-write paths unless explicitly requested.
 
-Relation proposals use explicit IDs, relation kind, rationale, and exact
-evidence references. Do not accept numeric host self-confidence or use a
-numeric threshold to adjudicate semantic relations. Task provenance records
-source categories without decorative confidence scores. Agent-inferred values
-do not require alignment merely because they are inferred; only an explicitly
-remaining material uncertainty does.
+The source repository does not ship installed `.codex`, `.codex-plugin`,
+`.claude-plugin`, or repository-native `skills/` entrypoints. Project
+initialization generates host workflows in the target repository.
 
-### Evaluation boundary
+## Persistence and project ownership
 
-`evaluateChange` evaluates workflow-collected changed-file/check facts, host
-attestations, and approved exceptions. It infers file operation after
-implementation; preflight does not guess it.
+Task state lives only under `.resonant-code/runs/<runId>/`. One run owns its
+contract, baseline, facts, handoff, evaluation, optional patch, and non-empty
+bounded check logs. It is never authoritative state for another task.
 
-The normal workflow owns machine facts. `prepare` snapshots the Git worktree,
-including pre-existing dirty and non-ignored untracked files. `complete` runs
-the exact check definitions captured at prepare and compares the current
-worktree to that baseline. Host artifacts may supply semantic attestations and
-exceptions only; they may not supply changed files or check outcomes.
+The run states are `prepared`, `facts-collected`, and `completed`. Retention may
+remove only whole completed runs; prepared and facts-collected runs remain
+recoverable. Persisted stdout and stderr are each capped at 1 MiB while their
+digests cover the complete stream.
 
-Attestation evidence must be structurally tied to collected facts:
-
-- diff/file evidence names a supplied changed file
-- check evidence names a supplied passing check
-- semantic evidence contains a concrete explanation
-
-Before writing attestations, the Host workflow must inspect the complete actual
-diff and try to falsify each required, avoid, and tension claim. Contradictory
-or insufficient evidence must produce a repair, `violated`, `partial`, or
-`unverified`, never a confirmatory `satisfied` assertion.
-
-Unverified required, avoid, or tension guidance produces
-`needs-attention`; a requested but unapproved exception produces
-`exception-required`. Hard required/avoid violations reject the evaluation.
-An exact check that cannot start or finish is `unavailable` and needs
-attention; a completed non-zero check is `failed` and rejects the evaluation.
-Unverified optional `consider` guidance remains informational and must not
-force an attention state or completion retry. Runtime, not the adapter, identifies the
-required/avoid/tension items that need attestations.
-
-Each guidance conclusion exposes its basis as `runtime-fact`,
-`agent-attested`, `human-approved`, or `unverified`. Runtime may validate the
-structure and factual references of an Agent attestation without claiming its
-semantic conclusion as machine-proven truth. The successful terminal status is
-`ready-for-adoption`: evidence is ready for human review, but the change has
-not been accepted on the human's behalf. Actual changed files are classified
-against task targets for inspection; outside-target work is not automatically
-rejected because targets are activation scopes, not permissions.
-
-Runtime persistence is task-scoped. A runnable prepare creates exactly one
-`.resonant-code/runs/<runId>/` directory containing `run.json` and the Host
-evaluation input. Completion stores its check logs and evaluation inside that
-same run and must not duplicate the full current worktree snapshot.
-Alignment, guidance-overflow, and verification-required outcomes create no run.
-Cleanup may remove only whole completed runs; prepared runs remain untouched.
-Persisted check stdout/stderr is capped at 1 MiB per stream; the digest covers
-the complete stream and truncation remains explicit in the collected facts. An
-empty stream creates neither a log file nor an output reference.
-Do not add a global feedback ledger, aggregate store, or policy-proposal
-lifecycle until it has a concrete compile/evaluation consumer and measurable
-benefit over inspecting task runs.
-
-Do not infer product effectiveness from passing deterministic tests. A claim
-that the harness reduces correction cost or improves adoption requires
-completed paired-agent results under `evaluation/paired-agent/PROTOCOL.md`;
-the machine-validated ledger may explicitly leave that claim unverified for the
-technical MVP.
-
-### CLI and host-adapter boundary
-
-CLI may parse flags, orchestrate prepare/complete steps, read and write
-artifacts, and present Core results. It depends on the exact same published
-Core version. Core ships the built-in Playbook assets, so installed workflows
-never depend on a source-checkout path.
-
-Generated host adapters contain workflow instructions only. They invoke CLI
-JSON commands and use host judgment to interpret and encode human task
-semantics, select exact evidence windows, propose relations, implement, and
-attest. They must not
-parse Playbook data to make policy decisions, rank directives, adjudicate
-relations, decide execution modes, or invent evaluation facts. The source
-repository does not ship `.claude-plugin`,
-`.codex-plugin`, `.codex`, or repository-native `skills/` entrypoints.
-Before prepare, the Host performs a transient semantic alignment step. It resolves
-repository-discoverable details itself and asks one consolidated question only
-when materially different choices change the goal, public behavior,
-compatibility, architectural ownership, irreversible migration strategy, or
-another long-lived tradeoff. Confirmed decisions use the existing task,
-constraint, avoid, target, and uncertainty inputs; do not persist a separate
-design artifact. The same prepare protocol declares whether each semantic
-value is human-stated, human-confirmed, agent-inferred, or
-repository-derived; Runtime alone assigns deterministic provenance.
-
-Task targets focus policy activation and are not file write permissions. The
-Host may change necessary adjacent implementation, tests, types, and
-documentation while the aligned semantic contract remains intact. Re-align
-only when the discovered work changes that contract.
-Do not request approval for necessary local files, commands, checks, transient
-inputs, or safe repairs within that contract.
-
-The normal code lifecycle is:
-
-1. Host aligns material design choices, encodes the semantic task contract,
-   and selects an explicit task verification configuration
-2. `resonant-code change prepare --json` → compile compact task guidance
-3. Host implements the aligned change and challenges the complete actual diff
-4. `resonant-code change complete --json` → collect actual change/check facts,
-   attribute evaluation conclusions, and return a ready-for-adoption handoff
-
-## Data separation
-
-Keep these concepts distinct:
-
-- Playbook says what should be done.
-- RCCL says what repository reality appears to be.
-- Host relation proposals say how a specific observation relates to an active directive.
-- Runtime decides what is delivered and how it executes.
-- Task provenance says whose statement, inference, or fact each semantic value
-  represents.
-- Evaluation says what the actual change evidence supports and identifies the
-  authority behind each conclusion.
-
-Do not collapse them into one score, one prose prompt, or one “verified truth” flag.
+Project initialization owns its manifest, generated host files, and marked
+blocks in `AGENTS.md`, `CLAUDE.md`, and `.gitignore`. It plans writes before
+mutation, protects owner-modified generated content, and never silently
+deletes, translates, or overwrites unknown owner data.
 
 ## Engineering rules
 
-- Use TypeScript for Core and new CLI control-plane logic.
+- Use TypeScript for Core and CLI control-plane logic.
 - Prefer narrow modules and explicit input/output types.
-- Keep output deterministic enough to diff; timestamps may appear only in lifecycle records.
-- Reject unsupported schema versions with actionable errors. The project is a prototype; do not add compatibility adapters unless explicitly requested.
-- Preserve existing user changes in a dirty worktree.
-- Use `rg` for search and `apply_patch` for edits.
-- Keep task runtime state under `.resonant-code/runs/<runId>/`; do not use one
-  run as an authoritative cache for another task.
-- Keep project adapter ownership in `.resonant-code/manifest.json`. Never
-  overwrite Team Playbook, RCCL, checks, or owner-modified generated
-  adapter content as an upgrade.
-- Project initialization is the sole owner of generated host files and marked
-  blocks in `AGENTS.md`, `CLAUDE.md`, and `.gitignore`; Bootstrap must not
-  mutate those paths.
-- Bootstrap may enumerate available Playbook layers, but the host selects
-  concrete repository evidence. Do not maintain framework filename lists,
-  rank candidate files, or cap the repository evidence visible to the host.
-- Bootstrap prepare returns its prompt and schema without persisting debug or
-  candidate artifacts in the project.
-- CLI runs record CLI/Core package identity, not an absolute installation
-  path.
-- Core and CLI versions move together. CLI package archives must pin Core to
-  the exact matching version after `workspace:*` is rewritten during pack.
-- `dist/` is generated by build/prepack, ignored by Git, and never reviewed as
-  source. Both public npm archives contain their own `dist/`.
-- Avoid direct LLM API calls from Runtime. The host agent already has task context and repository tools.
+- Keep content-derived output deterministic and diffable. Timestamps belong
+  only in lifecycle records.
+- Preserve unrelated user changes in a dirty worktree.
+- Use `rg` for search and `apply_patch` for source edits.
+- Use safe repository-relative paths and argv process execution without a
+  shell.
+- Do not rank repository files or infer semantic meaning from token overlap,
+  filenames, dependencies, or path counts.
+- Do not call an LLM from Core or CLI. The host agent already owns semantic
+  reasoning and repository tools.
+- Record package and protocol identity in runs, never absolute installation
+  paths.
+- Keep `dist/` generated, ignored, deterministic, and out of source review.
+- Keep exact schemas in TypeScript and generated adapter examples; avoid
+  duplicating full schemas across prose documents.
+- Do not add scalar trust, readiness, or confidence scores.
 
-## Verification
+## Verification and evidence
 
-Run the full gate before handoff:
+Run the technical gate before handoff:
 
 ```sh
 corepack pnpm verify
 ```
 
-Tests must cover the behavior that justifies the harness:
+CI also runs:
 
-- task and scope activation
-- canonical technology IDs, directory/exact scope overlap, and activation
-  diagnostics
-- local directive precedence
-- byte-ceiling overflow, explicit delivery selection, and delivered-ID
-  boundaries
-- current versus stale RCCL evidence
-- exact RCCL prepare-contract evidence and independent approval provenance
-- accepted, rejected, and downgraded semantic relations
-- human semantic authority, per-value task provenance, alignment gates, and
-  unified exception behavior
-- evaluation against actual diff/check evidence
-- Runtime/Agent/human evaluation basis and ready-for-adoption semantics
-- attention-only attestations and optional informational guidance
-- verification-required no-write behavior and task-run isolation
-- isolated Core npm-tarball API smoke behavior
-- paired Core/CLI npm-tarball installation and binary smoke behavior
-- paired-evaluation protocol and claim/ledger consistency
+```sh
+corepack pnpm audit --audit-level high
+```
 
-When changing architecture, report complexity movement and observable behavior, not only passing tests.
+Tests must cover the observable behavior changed by the work, including failure
+and recovery paths where material. Distribution changes must exercise isolated
+Core and paired Core/CLI package archives. Architecture changes must report
+complexity removed and added, persistent-state movement, and user-visible
+behavior rather than only test results.
 
-## Non-negotiable regressions
+Passing deterministic tests establishes internal consistency and
+distributability, not product effectiveness. Claims about lower adoption cost
+or preserved developer cognition require paired results under
+`evaluation/paired-agent/PROTOCOL.md` and an explicit scoped product-owner
+conclusion. Keep effectiveness `unverified` while committed evidence does not
+meet that contract.
 
-Do not regress to raw prompt concatenation, skill-local policy engines, trusting an RCCL semantic claim because its snippet matched, evaluating directives the agent never received, omitting Decision Trace, or introducing persistent lifecycle data without a decision-changing or inspectable consumer.
+Do not regress to host-supplied machine facts, handoff claims written before
+actual fact collection, facts presented as semantic truth, checks presented as
+adoption, blanket review noise, focus paths treated as permissions, generated
+memory treated as developer decisions, or persistent state without a concrete
+decision-changing consumer.

@@ -1,35 +1,25 @@
 # @sovea/resonant-code-core
 
-Programmatic hard kernel for the resonant-code AI coding change harness.
-
-The root export intentionally exposes only:
+Deterministic kernel for the `resonant-code` change-adoption protocol.
 
 ```ts
 import {
-  compileChange,
-  evaluateChange,
+  compileDelegation,
+  evaluateHandoff,
 } from '@sovea/resonant-code-core';
 ```
 
-RCCL calibration and evidence lifecycle operations are available from the
-explicit subpath:
+`compileDelegation` validates one pre-change Semantic Contract. It keeps exact
+developer events separate from agent interpretations, validates their bases and
+repository evidence, and requires explicit verification commands or a concrete
+no-command rationale before returning a runnable contract.
 
-```ts
-import {
-  approveContext,
-  commitCalibration,
-  prepareCalibration,
-  validateContext,
-} from '@sovea/resonant-code-core/rccl';
-```
+`evaluateHandoff` binds a post-change Cognitive Handoff to one collected Fact
+Bundle. It validates evidence references, critical-claim falsification,
+residual-unknown coverage, actionable attention, and the Review Map. It does
+not turn agent judgment into a machine fact or record adoption.
 
-Normal host-agent usage should use the `@sovea/resonant-code` CLI.
-
-`compileChange` returns compact execution guidance together with an inspectable
-activation trace, Runtime-owned verification plan, and an attention-only
-attestation plan. Its task contract preserves whether each semantic value came
-from a human statement or confirmation, Agent inference, repository evidence,
-or deterministic normalization. `evaluateChange` keeps unverified optional
-`consider` guidance informational while preserving hard required/avoid
-violations, actual diff/check ownership, explicit conclusion basis, and
-`ready-for-adoption` semantics that leave adoption to the human.
+The package exports these two runtime values plus their public TypeScript types.
+It does not read repositories, execute commands, format CLI output, or call an
+LLM. Normal coding-agent workflows should use the `@sovea/resonant-code` CLI,
+which collects facts and supplies them to Core.

@@ -1,316 +1,131 @@
 # resonant-code
 
-`resonant-code` is a change harness for AI coding agents. It gives Codex,
-Claude Code, and future hosts a small deterministic control plane around the
-parts that should not depend on model improvisation: project policy, current
-repository evidence, delivered-guidance budgets, actual diff/check facts, and
-task-scoped evaluation records.
+`resonant-code` is a change-adoption harness for production coding agents. It
+lets an agent own the local implementation loop while keeping task meaning,
+observed facts, and the adoption decision separately inspectable.
 
-Its goal is to expand the work developers can safely delegate while preserving
-their understanding, participation, and control. Human intent is the semantic
-authority, Runtime evidence is the factual authority, and Agent interpretation
-remains explicitly identifiable judgment.
+The goal is to reduce the total cost from a developer request to a confidently
+adopted change without weakening the developer's understanding of the system or
+the quality of their decisions.
 
-The normal user experience is still a natural-language coding request. The
-generated Host Adapter runs the lifecycle in the background.
+## Why it exists
 
-## Quickstart
+Production coding is not finished when an agent produces a plausible patch.
+The developer still needs to know:
 
-The registry packages are not published yet. Once published:
+- what behavior or invariant actually changed;
+- whether the implementation fits the repository and the requested tradeoffs;
+- what the checks established and what they did not;
+- which conclusions are observed facts and which are agent judgment;
+- what remains uncertain and where direct review is worth the time.
 
-```sh
-npm install --global @sovea/resonant-code
-cd /path/to/project
-resonant-code init .
-```
+Ordinary agent transcripts make that reconstruction expensive. `resonant-code`
+wraps a coding task with a small deterministic protocol so the implementation
+and its handoff are tied to the same task meaning and actual change.
 
-`init` asks which Host Adapters to install and generates one logical
-`resonant-code` skill for each selected host. It does not overwrite project
-policy or team verification defaults. Confirm installation integrity:
-
-```sh
-resonant-code doctor . --strict
-```
-
-No repository-wide check setup is required. For each change, the Host selects
-the smallest relevant verification plan from authoritative project scripts,
-CI, and documentation. It passes a transient exact configuration to the CLI;
-the task run freezes those definitions before implementation. A team may
-optionally commit `.resonant-code/checks.json` as its shared default plan.
-
-Then use the coding agent normally:
-
-> Fix the parser boundary and add a regression test.
-
-You do not need to run `change prepare`, manage run files, or write
-evaluation JSON yourself. Those are Host-to-CLI protocol details. Routine Host
-updates report the semantic design, any deviation, verification outcome, and
-remaining tradeoff—not run IDs, fingerprints, or temporary paths.
-
-## What happens during a change
+## Workflow
 
 ```text
-Developer request
-      |
-      v
-Host Agent + generated resonant-code skill
-      |
-      +--> Host aligns only material design choices
-      |      Goal, non-goals, ownership, compatibility, and lasting tradeoffs
-      |      Human statements, Agent inferences, and repository facts remain
-      |      distinguishable in the task contract
-      |
-      +--> change prepare --json
-      |      Runtime normalizes targets/technology, activates overlapping policy,
-      |      verifies relevant RCCL evidence, merges explicit verification
-      |      proposals, and budgets delivered guidance
-      |      CLI freezes selected commands and snapshots the worktree
-      |
-      +--> Host implements the requested change
-      |
-      +--> Host challenges attestations against the complete actual diff
-      |
-      `--> change complete --json
-             CLI collects the actual diff and runs every selected check
-             Runtime evaluates only delivered guidance and attributes each
-             conclusion to machine fact, Agent attestation, human exception,
-             or an unverified state
-             Host reports a ready-for-adoption handoff
+Developer request and material decisions
+                  |
+                  v
+          Semantic Contract
+                  |
+                  v
+ agent investigation, implementation, repair
+                  |
+                  v
+              Fact Spine
+                  |
+                  v
+          Cognitive Handoff
+                  |
+                  v
+       Developer review and adoption
 ```
 
-Ordinary repository-discoverable and implementation decisions stay with the
-Host Agent. The user is interrupted only when materially different choices
-change the goal, public behavior, compatibility, architectural ownership,
-irreversible migration strategy, persistent team authority, or acceptance of
-an unresolved tradeoff. A concrete coding request is standing authorization
-for necessary local, reversible inspection, implementation, verification, and
-repair within that aligned contract; it is not a reason to request permission
-for each action.
+The generated host workflow runs three commands around a normal coding change:
 
-The Host may automatically:
-
-- fill task fields supported by the request and repository
-- inspect the repository read-only before prepare and supply the smallest
-  justified file or directory scope roots
-- select task-relevant optional guidance when it exceeds the attention budget
-- use already-reviewed RCCL observations
-- edit necessary adjacent implementation, tests, types, configuration, and
-  documentation without per-file approval
-- select and run a task-scoped exact check plan and provide evidence-backed
-  attestations for required, avoid, and tension guidance
-
-The Host must pause before:
-
-- changing Team Playbook, RCCL, or persistent team verification defaults
-- approving an RCCL observation or policy exception
-- choosing between materially different goals, public behavior, compatibility,
-  ownership, migration, or other long-lived tradeoffs
-- accepting a failed check, hard violation, exception, or unresolved outcome
-
-These pauses request missing information, clarification, a semantic decision,
-or an exact exception. They are not generic requests for permission to
-continue.
-
-## Readiness levels
-
-`status` and `doctor` separate setup by consequence:
-
-- **Required** — Core/Adapter integrity and validity of sources that are
-  present. `doctor --strict` fails while any required item is unresolved.
-- **Recommended** — repository-specific Team Playbook guidance.
-- **Optional** — team check defaults, RCCL, and personal preferences.
-
-Built-in guidance works without a Team Playbook, team check defaults, or RCCL.
-Their absence is not a blocker.
-
-Task and team check definitions use explicit non-shell argv and an inspectable
-rationale:
-
-```json
-{
-  "version": "1.0",
-  "checks": [
-    {
-      "id": "typecheck",
-      "rationale": "Validate workspace types and public TypeScript contracts.",
-      "command": ["corepack", "pnpm", "typecheck"],
-      "timeoutMs": 120000
-    }
-  ]
-}
+```sh
+resonant-code change prepare . --input - --json
+resonant-code change collect . --run <run-id> --json
+resonant-code change finalize . --run <run-id> --json
 ```
 
-The CLI never guesses commands from filenames or dependencies. The Host uses
-project-owned sources to select a task plan autonomously, while Runtime records
-why each check was selected and whether it came from delivered guidance, a
-team default, or the Host task plan. Every definition in the selected
-configuration executes. Creating persistent team defaults is a separate,
-user-confirmed semantic decision about future verification—not a prerequisite
-for normal tasks.
+- `prepare` compiles the task's Semantic Contract, freezes checks, and captures
+  the pre-change worktree.
+- `collect` runs those checks and records the complete actual change.
+- `finalize` binds the agent's explanation, counterevidence search, unknowns,
+  and Review Map to the collected facts.
 
-`prepare` makes activation inspectable: it returns normalized targets and
-technology IDs, active built-in/team/personal contributors, local directives
-whose scopes did not overlap, selected check sources and rationales, and any
-policy-required check IDs missing from the selected configuration. A directory
-target includes its descendants; it is not a prediction of the final
-changed-file list.
+The successful status is `handoff-ready`: ready for developer review, never
+automatically adopted. Failed checks, stale facts, contradictions, and missing
+evidence remain visible and actionable.
 
-The task contract also records each supplied value as `human-stated`,
-`human-confirmed`, `agent-inferred`, or `repository-derived`; mechanical
-normalization is `deterministic`. This provenance has no numeric confidence
-score. Being Agent-inferred does not itself trigger a question: only a
-remaining material uncertainty does.
-
-Runtime also returns an `attestationPlan`. Required, avoid, and unresolved
-tension items are the attention checklist. Unverified optional `consider`
-guidance remains visible as information but does not turn an otherwise
-`ready-for-adoption` change into `needs-attention` or require another
-completion run.
-Before declaring an attention item satisfied, the Host reviews every changed
-file for contradictory evidence; Runtime continues to validate narrow
-evidence bindings rather than guessing semantic truth.
-
-`ready-for-adoption` means the selected checks and evidence are ready for human
-review. It does not mean Runtime or the Agent accepted the change for the
-developer. Normal review, commit, or merge remains the human adoption point.
-
-## Optional team capabilities
-
-These workflows are not part of the everyday Quickstart.
-
-| Need | Command family |
-|---|---|
-| Inspect installation and readiness | `status`, `doctor` |
-| Add repository-specific Playbook layers | `bootstrap prepare/commit` |
-| Inspect a prepared or completed run | `change explain` |
-| Calibrate durable repository observations | `context prepare/commit/approve` |
-| Validate or refresh RCCL evidence | `context validate/refresh-stale` |
-
-### Team Playbook
-
-The Team Playbook is shared prescriptive policy. `bootstrap prepare` gives the
-Host a bounded layer-selection contract. The Host inspects the repository and
-must show the user its selected layers, exact evidence paths, and rationale
-before `bootstrap commit` writes
-`.resonant-code/playbook/local-augment.yaml`. Prepare itself writes no project
-artifact; the candidate can be passed to commit over stdin or through a
-temporary file.
-
-### Repository context
-
-RCCL is optional observational context, not a repository summary. Calibrate it
-only for durable facts such as compatibility, public API, architecture,
-data-flow, migration, or module-format boundaries whose omission could cause a
-different and worse future decision.
-
-The Host selects exact evidence windows. RCCL verifies their currency and
-stores generated observations separately from human review. Approval requires
-the exact current content fingerprint; changing the observation invalidates
-the approval. Existing reviewed RCCL is loaded and reverified automatically
-during relevant changes.
+Exact contract, fact, handoff, evaluation, and presentation data is available
+on demand through `resonant-code change explain`.
 
 ## Architecture
 
-The project publishes two lockstep packages:
+The long-term design is three task cores and one loop:
 
-- `@sovea/resonant-code` — CLI, machine facts, lifecycle IO, presentation, and
-  generated Host Adapters
-- `@sovea/resonant-code-core` — Playbook, RCCL, deterministic compilation, and
-  evaluation
+1. **Semantic Contract** — what this change is intended and authorized to mean.
+2. **Fact Spine** — what the workflow observed before and after implementation.
+3. **Cognitive Handoff** — what the actual change means, what remains unknown,
+   and where review has the highest value.
+4. **Decision Continuity** — how adopted decisions and observed outcomes may
+   reduce repeated semantic work in later tasks.
 
-The dependency direction is:
+The current implementation closes one task-scoped loop across the first three
+cores. It does not yet store adoption outcomes, cross-task decisions, learned
+preferences, or a delegation frontier.
 
-```text
-Host Adapter -> CLI -> Core
-```
+The workspace contains two lockstep packages:
 
-Core exposes exactly two root value operations:
-
-- `compileChange(input)`
-- `evaluateChange(input)`
-
-RCCL lifecycle operations use the explicit
-`@sovea/resonant-code-core/rccl` subpath. Neither package calls an LLM.
-
-The generated adapter is one logical skill with progressive workflow
-references:
+- `@sovea/resonant-code-core` — deterministic contract compilation, fact
+  binding, and handoff evaluation;
+- `@sovea/resonant-code` — CLI lifecycle, Git and check collection, run IO,
+  presentation, initialization, and generated Codex/Claude workflows.
 
 ```text
-resonant-code/
-├── SKILL.md
-└── references/
-    ├── change.md
-    ├── setup.md
-    └── context.md
+Generated host adapter -> CLI -> Core
 ```
 
-This leaves room for a future review workflow without loading review
-instructions into ordinary coding tasks or creating competing top-level
-skills. Standalone review is not claimed by the current release.
+Neither package calls an LLM. The coding agent keeps responsibility for
+repository investigation and semantic judgment; the runtime owns only facts it
+collects.
 
-See [CLI-first architecture](docs/cli-first-architecture.md) and the
-[trustworthy MVP contract](docs/trustworthy-mvp-contract.md) for the detailed
-boundaries.
+See [Architecture](docs/architecture.md) for the product kernel and
+[Change workflow](docs/change-workflow.md) for the executable protocol.
 
-## Generated and durable project state
+## Current state
 
-CLI-owned generated artifacts:
+The repository implements the complete technical workflow and verifies it
+through unit, lifecycle, archive, and isolated-installation tests. The protocol
+is still a `0.0.1` prototype: unsupported shapes are rejected, and obsolete
+owner data is never automatically translated or deleted.
 
-- `.resonant-code/manifest.json`
-- `.agents/skills/resonant-code/` for Codex
-- `.claude/skills/resonant-code/` for Claude Code
-- marked pointer blocks in `AGENTS.md`, `CLAUDE.md`, and `.gitignore`
+Technical verification is not evidence that the product lowers adoption cost.
+That claim remains unverified until committed paired-agent evidence satisfies
+[`evaluation/paired-agent/PROTOCOL.md`](evaluation/paired-agent/PROTOCOL.md)
+and supports a scoped developer decision.
 
-Durable team-owned state:
-
-- `.resonant-code/playbook/local-augment.yaml`
-- `.resonant-code/checks.json`
-- `.resonant-code/rccl.yaml`
-
-Task runtime state is isolated and ignored:
-
-```text
-.resonant-code/runs/<runId>/
-├── run.json          # decision, baseline, and completed evaluation
-├── evaluation.json   # Host attestations and approved exceptions
-└── checks/           # bounded stdout/stderr from the exact prepared checks
-```
-
-A run is created only after every selected or policy-required task check has an
-exact definition. Alignment, guidance-overflow, and `verification-required`
-results do not write runtime state.
-Prepared runs are never pruned automatically; completion removes only
-completed runs older than the most recent 50. Each persisted check stream is
-capped at 1 MiB, with an explicit truncation marker while its digest still
-covers the complete output. There is no repository-global feedback event log
-or aggregate database in the initial release.
-
-Owner content outside marked blocks is preserved. Modified generated files are
-not replaced unless `--force` is explicit.
-
-## Effectiveness evidence
-
-Deterministic and lifecycle verification gates run in CI. The separate product
-effectiveness claim remains **unverified** until paired coding-agent trials are
-recorded. The [paired evaluation protocol](evaluation/paired-agent/PROTOCOL.md)
-defines the control/treatment boundary and correction-cost measures; the
-[ledger](evaluation/paired-agent/ledger.json) prevents a measured-improvement
-claim while it remains `not-run`.
-
-## Development
-
-Requires Node.js 22.12 or newer and pnpm:
+The npm packages are not published yet. From a source checkout:
 
 ```sh
 corepack pnpm install --frozen-lockfile
 corepack pnpm build
 node packages/cli/dist/index.mjs --help
+```
+
+## Development
+
+Use Node.js 22 and pnpm 10.33.0:
+
+```sh
+corepack pnpm install --frozen-lockfile
 corepack pnpm verify
 ```
 
-The full gate covers types, tests, coverage, deterministic builds, isolated
-package installation, binary workflows, and evaluation-ledger consistency.
-
-## License
-
-MIT
+Read [CONTRIBUTING.md](CONTRIBUTING.md) before changing public behavior. Core
+and CLI versions move together, and generated `dist/` files are not committed.

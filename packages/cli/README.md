@@ -1,6 +1,6 @@
 # @sovea/resonant-code
 
-CLI-first control plane for the resonant-code AI coding change harness.
+CLI for running a fact-bound change handoff around a production coding task.
 
 ```sh
 npm install --global @sovea/resonant-code
@@ -9,53 +9,41 @@ resonant-code init .
 resonant-code doctor . --strict
 ```
 
-`init` generates a thin Host Adapter for Codex, Claude Code, or both. No
-persistent check setup is required: the Host selects a task-scoped exact check
-plan from authoritative repository sources. A team may explicitly adopt
-`.resonant-code/checks.json` as shared defaults.
+`init` generates a thin Codex and/or Claude Code workflow. The normal agent path
+uses three JSON commands:
 
-After setup, use the Host Agent normally:
+```sh
+resonant-code change prepare . --input - --json
+resonant-code change collect . --run <run-id> --json
+resonant-code change finalize . --run <run-id> --json
+```
 
-> Fix the parser boundary and add a regression test.
+- `prepare` compiles the task contract, captures the dirty/untracked worktree
+  baseline, and freezes explicit checks.
+- `collect` executes those checks without a shell and records the complete
+  actual change, patch, output integrity, and verifier-surface mutations.
+- `finalize` rejects stale facts and binds the agent's claims, unknowns,
+  falsification, and Review Map to the current collection.
 
-The generated adapter runs `change prepare` before implementation and
-`change complete` afterward. Human users do not need to manage task runs,
-selection, relation, or evaluation artifacts.
+Exact canonical detail is available on demand:
 
-Before prepare, the Host aligns only material choices about goals, public
-behavior, compatibility, architectural ownership, migrations, or other
-long-lived tradeoffs. Repository-discoverable details and necessary adjacent
-file changes remain autonomous. A concrete task authorizes necessary local,
-reversible inspection, edits, checks, and repair without per-action approval.
-No separate design artifact is created.
+```sh
+resonant-code change explain . --run <run-id> --section contract --json
+resonant-code change explain . --run <run-id> --section facts --json
+resonant-code change explain . --run <run-id> --section handoff --json
+resonant-code change explain . --run <run-id> --section evaluation --json
+resonant-code change explain . --run <run-id> --section presentation --json
+```
 
-The Host may inspect the repository read-only before prepare. It supplies
-intended file or directory scope roots, canonical technology IDs, and
-per-value provenance that distinguishes human statements, Agent inference,
-repository facts, and deterministic normalization. Runtime then reports
-exactly which Team Playbook guidance activated and why each selected check
-belongs to the task. Every definition in the selected transient or
-team-default configuration executes.
-Completion asks for attestations only for required, avoid, and tension
-attention items. Optional `consider` guidance may remain unverified without
-creating an attention state or retry loop. Before attesting satisfaction, the Host
-reviews the complete actual diff for contradictory evidence. Check stdout and
-stderr logs are created only for streams that produced output.
+The CLI owns project initialization, task-run IO, exact repository-evidence
+windows, Git and check collection, bounded logs with complete-stream digests,
+fact-staleness detection, retention, and the final presentation. The host agent
+cannot submit changed-file or check facts.
 
-Completion labels conclusions as Runtime facts, Agent attestations,
-human-approved exceptions, or unverified. `ready-for-adoption` returns the
-change to human review; it does not claim that the system accepted it for the
-developer.
+`handoff-ready` means ready for developer review, never adopted.
+`needs-attention` and `rejected` results identify the adoption impact, exact
+references, and the next repair, evidence, validation, recollection, or direct
+review action.
 
-Human-readable output is the default. Host Adapters use `--json`; JSON mode
-never prompts or emits ANSI. Required readiness issues block
-`doctor --strict`, while absent Team Playbook, team check defaults, and RCCL
-sources remain recommended or optional.
-
-The package exposes one binary, `resonant-code`, and pins the exact matching
-`@sovea/resonant-code-core` version. Core owns Playbook, RCCL, compilation,
-and evaluation decisions. CLI owns reproducible workflow IO, task-scoped run
-state, machine facts, presentation, and generated adapters. Neither package
-calls an LLM.
-
-Use `resonant-code --help` for the complete advanced command surface.
+The CLI pins the exact matching `@sovea/resonant-code-core` version. Neither
+package calls an LLM.
