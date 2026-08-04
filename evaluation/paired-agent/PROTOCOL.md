@@ -1,144 +1,176 @@
-# Paired Coding-Agent Evaluation Protocol
+# Semantic Handoff Paired-Agent Evaluation Protocol
 
 ## Purpose
 
-This protocol tests the product claim that `resonant-code` helps a demanding
-developer obtain more adoptable changes with fewer corrections than the same
-coding agent working from repository instructions alone.
+This protocol tests whether the Semantic Handoff MVP lowers the total cost from
+a developer request to a confidently adoptable change without degrading the
+developer's system understanding or decision quality.
 
-It does not create a composite quality score or infer that a policy is useful
-from an event count. It records raw machine facts and blinded reviewer
-judgments per task.
+It is this repository's effectiveness-test contract. It is not Runtime, a
+distributable benchmark harness, or a registry of candidate tasks.
 
-The current result state is recorded in `ledger.json`. A technical MVP release
-may use an `unverified` effectiveness claim. No release material may claim a
-measured improvement until the ledger references completed, protocol-conformant
-pairs.
+Deterministic tests establish protocol consistency, not product effectiveness.
+No measured-effectiveness claim is allowed until `ledger.json` references at
+least three preregistered, protocol-conformant pairs across at least two task
+types and a Human product owner accepts a scoped conclusion from the raw data.
 
-## Unit Of Comparison
+## Pair
 
-One pair is one preregistered task run twice from the same repository commit:
+One pair runs the same task twice from the same immutable repository state:
 
-- `control` — a fresh instance of the coding agent receives the task,
-  repository instructions, and ordinary repository tools. It does not run or
-  receive artifacts from the resonant-code lifecycle.
-- `treatment` — a fresh instance of the same agent receives the same task,
-  instructions, tools, and limits, and uses resonant-code `prepare` and
-  `complete`.
+- `control`: a fresh instance of the coding agent receives the task,
+  repository instructions, and ordinary repository tools.
+- `treatment`: a fresh instance of the same agent receives the same inputs and
+  uses `change prepare`, `change collect`, and `change finalize` under the
+  `semantic-delegation` protocol.
 
-The model identifier and build, host surface, tool permissions, reasoning
-settings, time limit, and starting Git state must match. Each run uses a new
-context and worktree. Knowledge, patches, messages, and tool output from one run
-must not enter the other.
+Model/build, Host surface, tool policy, reasoning settings, time limit,
+dependencies, and starting Git state must match. Context, patches, messages,
+and tool output from one condition must not leak into the other.
+
+If a task has a preregistered clarification, both conditions receive the exact
+same response only after satisfying the same delivery rule. A clarification
+must not be volunteered to rescue one condition after observing its solution.
+
+The pilot requires:
+
+- at least three completed pairs;
+- at least two of bugfix, feature, refactor, migration, maintenance, docs, or test;
+- one compatibility- or ownership-sensitive task;
+- one treatment run containing repair followed by recollection.
+
+## Historical replay boundary
+
+A historical task may use an already merged change as a sealed behavioral
+reference. Historical replay is one task-selection method, not a required
+evaluation lifecycle or a product feature.
+
+Before either condition:
+
+- pin the exact pre-change commit, not a moving branch;
+- keep the known implementation, discussion, and oracle-only checks outside
+  both Agent contexts;
+- expose only the registered prompt, repository state, and clarifications
+  delivered by their preregistered rules;
+- record public-solution memory risk and any possible leakage.
+
+Reveal the historical oracle only after both condition outputs are archived.
+Judge externally visible behavior, invariants, compatibility, checks, and
+adoptability. Patch similarity may be reported descriptively but cannot be an
+acceptance criterion. Historical results should be paired with prospective
+work before supporting a broad production-effectiveness conclusion.
+
+Candidate pools, source checkouts, dependency trees, raw transcripts, and
+sealed oracles are not part of this protocol. A selected preregistration and a
+compact completed result may be committed when the ledger uses them as
+inspectable claim evidence; raw working data remains outside the source tree.
+
+## Third-party source boundary
+
+When a task replays work from an uninvolved third-party project, that repository
+is a read-only source. Do not create a fork, remote branch, pull request, issue,
+comment, review, reaction, release, or any other upstream state. Local commits
+are allowed only inside disposable evaluation workspaces. Record an attempted
+or actual external mutation as a protocol deviation.
+
+The evaluator chooses local isolation and resource controls appropriate to the
+Host and records any limit or deviation that could affect comparability. Those
+controls are run configuration, not persistent product architecture.
 
 ## Preregistration
 
-Before either run, write a task record from `task.template.json` containing:
+Before either condition, create a task record from `task.template.json` with:
 
-- immutable repository commit and submodule state;
-- exact task prompt;
-- allowed change paths and explicit scope exclusions;
-- acceptance checks and their exact commands;
-- agent configuration and run limit;
-- condition order;
-- reviewer rubric and reviewer identity or blinded reviewer pool.
+- immutable commit and submodule state;
+- exact task prompt and task type;
+- expected behavior and review-relevant invariants;
+- compatibility, ownership, and failure-entry questions where applicable;
+- any clarification delivery rules and exact registered responses;
+- allowed paths only for measuring unexpected scope, not as Agent permissions;
+- acceptance checks and exact argv;
+- matched Agent configuration and limits;
+- assigned condition order and seed;
+- reviewer identity/pool and rubric.
 
-Task selection must not depend on knowing how either condition solves the task.
-Use real maintenance, bugfix, feature, refactor, or migration work for which the
-reviewer can state their taste and acceptance boundary in advance.
+Do not select tasks after seeing either solution. Alternate or randomly assign
+condition order. Never rerun only the weaker condition.
 
-Condition order is assigned before execution and recorded. Across a multi-task
-pilot, alternate or randomly assign order and retain the assignment seed. Do
-not rerun only the condition that performed poorly.
+## Execution
 
-## Run Procedure
+1. Materialize a clean workspace at the registered state for each condition;
+   the workspaces may run sequentially when resources are constrained.
+2. Apply identical fixtures, dependencies, and environment.
+3. Run each condition in a fresh context in registered order.
+4. Preserve initial/final patches, commands, elapsed time, and Agent messages.
+5. Run registered acceptance checks outside the Agent context.
+6. For treatment, preserve prepare/collect/finalize JSON, patch, checks,
+   handoff, and any stale/recollection transition.
+7. Record harness overhead separately from task and review time.
+8. For historical replay, reveal the sealed reference only after both
+   condition outputs are archived.
 
-1. Create two clean worktrees at the preregistered commit.
-2. Apply the same task-specific fixtures, dependencies, and environment.
-3. Start a fresh agent context for the assigned first condition.
-4. Preserve its initial patch, command facts, elapsed time, and agent messages.
-5. Repeat from a fresh worktree and context for the second condition.
-6. Run every preregistered acceptance check outside the agent context.
-7. Record treatment lifecycle overhead separately from total task time.
+Retain timeouts, infrastructure failures, and protocol deviations with an
+explicit validity note. Do not silently replace them.
 
-If a run exceeds its registered time limit, fails infrastructure setup, or
-deviates from the assigned condition, retain it and mark the registered
-exclusion reason. Never silently replace it.
+## Condition-neutral review
 
-## Blind Review
+Before review, render both conditions as `left` and `right`:
 
-Before review:
+- remove condition names, harness paths, IDs, timestamps, and identifying metadata;
+- include the full changed-file set, complete patch, check facts, and a compact
+  system explanation for each output;
+- preserve semantic differences and unknowns without polishing one condition;
+- present treatment Review Map information in a neutral review-attention form;
+- commit the randomized mapping before review.
 
-- remove condition names, harness paths, session IDs, timestamps, and other
-  condition-revealing metadata from the presentation;
-- label outputs `left` and `right` using a recorded random mapping;
-- present the full changed-file set, diff, checks, and user-visible behavior;
-- preserve semantic differences; do not rewrite or clean either patch.
+The reviewer records raw judgments for each side:
 
-The reviewer records:
+- adoption: `accept`, `needs-correction`, or `reject`;
+- time to a confident adoption decision;
+- concrete correction requests and evidence references;
+- compatibility/behavior defects and unnecessary abstraction;
+- whether changed behavior was understood correctly;
+- whether important invariants were understood correctly;
+- whether state/architecture ownership was understood correctly;
+- whether failure and recovery entry points were understood correctly;
+- whether the supplied review-attention map directed attention to risks the
+  reviewer independently considered material.
 
-- forced preference: `left`, `right`, `tie`, or `reject-both`;
-- adoption decision for each output: `accept`, `needs-correction`, or `reject`;
-- concrete correction requests with file/evidence references;
-- unnecessary abstractions with evidence references;
-- compatibility or behavior defects with evidence references;
-- whether the implementation matches the reviewer’s declared taste.
+Understanding fields use `correct`, `partial`, `incorrect`, or
+`not-applicable`, always with a concrete explanation. Do not create a weighted
+or composite score.
 
 Reveal the condition mapping only after the initial review is committed.
 
-## Correction Rounds
+## Corrections
 
-When an output needs correction, return the reviewer’s exact correction request
-to a fresh continuation of that condition and record every round. Stop when the
-reviewer accepts the result, rejects it, or the preregistered round/time limit
-is reached.
-
-Correction count is the number of reviewer-to-agent correction messages after
-the initial output. Do not count infrastructure retries as correction rounds;
-record them separately.
-
-## Machine Facts
-
-Record without subjective weighting:
-
-- initial and final changed files;
-- changed files outside preregistered allowed paths;
-- acceptance-check command, exit code, and output digest;
-- initial-output time, final accepted/rejected time, and treatment harness
-  overhead;
-- number of correction rounds;
-- final patch fingerprint.
-
-Reviewer findings remain semantic judgments and require explanations and
-evidence references.
+When correction is required, send the exact reviewer request to a continuation
+of that condition and record each round. Stop at acceptance, rejection, or the
+registered limit. Infrastructure retries are recorded separately and never
+counted as correction rounds.
 
 ## Reporting
 
-Report every registered pair, exclusions included. Present:
+Report every registered pair, including excluded or adverse results. For each
+pair publish:
 
-- per-task blinded preference and adoption decisions;
-- paired difference in correction rounds;
-- paired difference in out-of-scope file counts;
-- paired duration and treatment overhead;
-- check failures and reviewer-cited defects;
-- reviewer-cited unnecessary abstractions.
+- blinded preference and per-side adoption decision;
+- adoption-decision time;
+- correction rounds and total task time;
+- treatment harness overhead;
+- changed/out-of-scope files and acceptance checks;
+- raw cognition findings for behavior, invariants, ownership, and failure entry;
+- Review Map usefulness finding;
+- defects, unnecessary abstraction, contrary evidence, and protocol
+  deviations.
 
-Do not collapse these into a weighted score. A narrative conclusion must cite
-the individual pairs it relies on and retain contrary results.
+A narrative conclusion must cite individual pairs, state its repository/Agent/
+task/reviewer scope, preserve contrary results, and avoid a composite score.
+Inconclusive or adverse results return the MVP to iteration.
 
-## Validity Boundaries
+## Human acceptance boundary
 
-The protocol measures one registered agent configuration, repository, policy
-state, task set, and reviewer population. It does not establish universal agent
-or language performance.
-
-The evaluator must disclose:
-
-- tasks or policies authored with knowledge of expected solutions;
-- agent version drift between conditions;
-- condition leakage;
-- reviewer unblinding;
-- missing artifacts or checks;
-- any post-registration change.
-
-Such pairs remain in the ledger with an explicit validity note.
+After the minimum pilot, the Human product owner reviews raw results and records
+whether the scoped evidence supports that the MVP is useful without degrading
+system understanding or decision quality. This is an explicit human product
+decision, not a Runtime status. Until then, effectiveness remains `unverified`.

@@ -1,6 +1,7 @@
 {
-  "schemaVersion": "1.0",
-  "protocolVersion": "1.0",
+  "protocol": "semantic-handoff-paired-evaluation",
+  "schemaVersion": "1",
+  "treatmentProtocol": "semantic-delegation",
   "pairId": "pair-kebab-case",
   "taskId": "task-kebab-case",
   "taskRecord": "tasks/task-kebab-case.json",
@@ -13,11 +14,13 @@
       "finalChangedFiles": [],
       "outOfScopeFiles": [],
       "checks": [],
+      "clarificationsDelivered": [],
       "initialOutputDurationMs": 0,
       "totalDurationMs": 0,
       "harnessOverheadMs": 0,
       "correctionRounds": [],
-      "infrastructureRetries": 0
+      "infrastructureRetries": 0,
+      "lifecycle": null
     },
     "treatment": {
       "initialPatchFingerprint": "sha256",
@@ -26,25 +29,52 @@
       "finalChangedFiles": [],
       "outOfScopeFiles": [],
       "checks": [],
+      "clarificationsDelivered": [],
       "initialOutputDurationMs": 0,
       "totalDurationMs": 0,
       "harnessOverheadMs": 0,
       "correctionRounds": [],
-      "infrastructureRetries": 0
+      "infrastructureRetries": 0,
+      "lifecycle": {
+        "prepareStatus": "prepared",
+        "collectionIds": ["sha256"],
+        "finalizeStatus": "handoff-ready",
+        "repairRecollectionOccurred": false
+      }
     }
   },
   "blindReview": {
     "reviewerId": "reviewer-identity",
-    "mappingCommittedAt": "2026-07-25T00:00:00.000Z",
+    "mappingCommittedAt": "2026-08-03T00:00:00.000Z",
     "preference": "tie",
-    "leftAdoption": "needs-correction",
-    "rightAdoption": "needs-correction",
+    "left": {
+      "adoption": "needs-correction",
+      "decisionDurationMs": 0,
+      "understanding": {
+        "behavior": { "verdict": "partial", "explanation": "raw finding" },
+        "invariants": { "verdict": "partial", "explanation": "raw finding" },
+        "ownership": { "verdict": "partial", "explanation": "raw finding" },
+        "failureRecovery": { "verdict": "not-applicable", "explanation": "raw finding" }
+      },
+      "reviewAttention": { "verdict": "partial", "explanation": "raw finding" }
+    },
+    "right": {
+      "adoption": "needs-correction",
+      "decisionDurationMs": 0,
+      "understanding": {
+        "behavior": { "verdict": "partial", "explanation": "raw finding" },
+        "invariants": { "verdict": "partial", "explanation": "raw finding" },
+        "ownership": { "verdict": "partial", "explanation": "raw finding" },
+        "failureRecovery": { "verdict": "not-applicable", "explanation": "raw finding" }
+      },
+      "reviewAttention": { "verdict": "partial", "explanation": "raw finding" }
+    },
     "findings": []
   },
   "revealedMapping": {
     "left": "control",
     "right": "treatment",
-    "revealedAt": "2026-07-25T00:00:00.000Z"
+    "revealedAt": "2026-08-03T00:00:00.000Z"
   },
   "validity": {
     "included": true,

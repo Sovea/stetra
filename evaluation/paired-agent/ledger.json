@@ -1,9 +1,12 @@
 {
-  "schemaVersion": "1.0",
-  "protocolVersion": "1.0",
+  "protocol": "semantic-handoff-paired-evaluation",
+  "schemaVersion": "1",
+  "treatmentProtocol": "semantic-delegation",
   "status": "not-run",
   "effectivenessClaim": "unverified",
-  "updatedAt": "2026-07-25T00:00:00.000Z",
+  "minimumCompletedPairs": 3,
+  "updatedAt": "2026-08-03T00:00:00.000Z",
   "resultFiles": [],
-  "conclusion": "No paired coding-agent trials have been recorded. The technical MVP is not evidence that the harness reduces correction cost."
+  "productOwnerConclusion": null,
+  "conclusion": "No paired Semantic Handoff trials have been recorded. The technical implementation is not evidence that the harness lowers adoption cost or preserves developer cognition."
 }

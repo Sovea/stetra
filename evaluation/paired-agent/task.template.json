@@ -1,7 +1,9 @@
 {
-  "schemaVersion": "1.0",
+  "protocol": "semantic-handoff-paired-evaluation",
+  "schemaVersion": "1",
   "taskId": "task-kebab-case",
-  "registeredAt": "2026-07-25T00:00:00.000Z",
+  "taskType": "bugfix",
+  "registeredAt": "2026-08-03T00:00:00.000Z",
   "registeredBy": "reviewer-identity",
   "repository": {
     "url": "repository-reference",
@@ -9,19 +11,24 @@
     "submodulesFingerprint": null
   },
   "taskPrompt": "Exact prompt shown in both conditions.",
-  "allowedPaths": [
-    "src/example.ts"
-  ],
-  "scopeExclusions": [
-    "Do not change public APIs outside the requested module."
-  ],
+  "interactionPolicy": {
+    "mode": "initial-prompt-only",
+    "registeredClarifications": []
+  },
+  "expectedUnderstanding": {
+    "behavior": ["Behavior the reviewer should be able to identify."],
+    "invariants": ["Important invariant or not-applicable."],
+    "ownership": ["State or architecture owner or not-applicable."],
+    "failureRecovery": ["Failure/recovery entry point or not-applicable."]
+  },
+  "compatibilityOrOwnershipSensitive": true,
+  "treatmentRepairRecollectionRequired": false,
+  "allowedPaths": ["src/example.ts"],
+  "scopeExclusions": ["Do not change public APIs outside the requested module."],
   "acceptanceChecks": [
     {
       "id": "test",
-      "command": [
-        "pnpm",
-        "test"
-      ]
+      "argv": ["pnpm", "test"]
     }
   ],
   "agent": {
@@ -33,13 +40,10 @@
     "timeLimitSeconds": 1800,
     "correctionRoundLimit": 3
   },
-  "conditionOrder": [
-    "control",
-    "treatment"
-  ],
+  "conditionOrder": ["control", "treatment"],
   "assignmentSeed": "recorded-seed-or-manual-alternation-id",
   "review": {
     "reviewerId": "blinded-reviewer",
-    "rubricVersion": "1.0"
+    "rubricVersion": "1"
   }
 }
