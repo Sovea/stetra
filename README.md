@@ -68,6 +68,22 @@ evidence remain visible and actionable.
 Exact contract, fact, handoff, evaluation, and presentation data is available
 on demand through `resonant-code change explain`.
 
+## Dynamic Host projection
+
+Runtime keeps the same deterministic `prepare -> collect -> finalize` kernel,
+but the generated Host workflow no longer loads one fixed instruction bundle.
+Each stage returns a structured `hostAction` with the next argv command and at
+most one reference: routine, assurance, or recovery. The Host progressively
+loads only that page.
+
+This removes fixed protocol reading from routine work without delegating path
+selection to the agent. The Assurance Plan and actual facts select the
+projection. Any requirement, failed or unavailable check, retry history,
+verifier change, non-text file, unknown, critical claim, or attention
+condition expands the path again. A clean routine completion is presented as a
+compact evidence-first adoption summary; canonical detail remains inspectable
+in the task run.
+
 ## Proportional assurance
 
 The lifecycle stays fixed, but handoff cost follows adoption consequence.

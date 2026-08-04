@@ -13,11 +13,40 @@ prepare -> agent implementation -> collect -> agent handoff -> finalize
 `change explain` is an inspection command used only when the compact stage
 output is insufficient.
 
+Every stage result includes a structured `hostAction` instead of a prose
+next-step field. Its shape is deliberately small:
+
+```json
+{
+  "kind": "implement-and-collect",
+  "reference": "routine",
+  "reason": "why this is the next bounded action",
+  "command": {"argv": ["resonant-code", "change", "collect", ".", "--run", "<run-id>", "--json"]}
+}
+```
+
+`command` is absent when the next action is a Human decision or review rather
+than a CLI operation. `reference` is `routine`, `assurance`, `recovery`, or
+`null`. It selects Host instructions but does not add a run mode, state, or
+semantic decision.
+
 ## Project setup
 
 `resonant-code init` generates a thin workflow for Codex, Claude Code, or both.
 The generated files invoke the JSON CLI protocol and instruct the host agent;
 they do not contain a second policy or evaluation engine.
+
+The generated skill progressively discloses four reference pages:
+
+- `change.md` for alignment and prepare;
+- `routine.md` for a Runtime-selected routine implementation and minimal
+  handoff;
+- `assurance.md` for standard/critical claims, challenge, and review coverage;
+- `recovery.md` for timeout, unavailable, failed, stale, rejected, or attention
+  outcomes.
+
+The Host reads `change.md` initially and then only the exact page named by
+`hostAction.reference`. It does not infer the profile or skip lifecycle stages.
 
 `resonant-code status` reports installation state. `doctor --strict` turns
 blocking installation or ownership issues into a failing process result.
@@ -84,13 +113,17 @@ Prepare can return:
 
 | Status | Meaning | Run created |
 |---|---|---|
-| `delegation-compiled` | Contract and verification are runnable | Yes |
+| `prepared` | Contract and verification are runnable | Yes |
 | `semantic-decision-required` | A material long-lived choice remains unresolved | No |
 | `verification-required` | Neither executable checks nor an adequate no-command rationale were supplied | No |
 | `authority-invalid` | Event, semantic, assurance, basis, or authority structure is invalid | No |
 
-The compact result includes the compiled contract decision surface and the run
-ID. Full canonical state is stored in the run.
+The compact result includes the compiled semantic values with their exact
+bases, authority and repository-evidence IDs, Assurance Plan, verification
+definitions, run ID, and a `hostAction`. It does not repeat Human Event content,
+interpretation identities, evidence digests, or the constant authorization
+text. Full canonical state is stored in the run and remains available through
+`change explain --section contract`.
 
 ## 2. Implement and collect
 
@@ -133,6 +166,12 @@ The resulting Fact Bundle contains:
 
 Persisted stdout and stderr are capped independently at 1 MiB. Their digests
 cover the complete streams, and empty streams create no log file.
+
+The collect packet contains the latest outcome and stream sizes needed for the
+next decision. A passing check with one attempt omits its log paths from this
+compact packet; failed or unavailable checks and any multi-attempt history keep
+their relevant log paths visible. Canonical attempt facts and logs remain in
+the run.
 
 Collect writes or resets `handoff.json`. If the agent repairs the code after a
 collection, it runs normal collect again; the new Fact Bundle replaces prior
@@ -236,6 +275,14 @@ Map remains a separate inspection order.
 Completed JSON results include one CLI-rendered `presentationMarkdown`. A host
 adapter relays it unchanged. Any extra investigation added by the host remains
 separately labeled agent evidence and cannot be added to runtime facts.
+
+A clean routine result is rendered as a short evidence-first handoff: exact
+changed paths and operations, passing check IDs, system meaning, absence of
+unknowns/direct-review needs, and the Human adoption notice. The full handoff
+is retained whenever a requirement, claim, unknown, alternative, attention,
+Review Map entry, changed verifier surface, non-text change, or multiple check
+attempt exists. This presentation choice is derived at finalize time and
+is not persisted as another mode.
 
 `handoff-ready` never records or implies adoption.
 

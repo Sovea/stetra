@@ -144,6 +144,57 @@ escalates review even on a routine task. No second plan or effective-profile
 artifact is persisted; Core evaluates the union directly from the contract,
 facts, and handoff.
 
+## Fixed kernel, dynamic Host projection
+
+The Runtime state machine remains deliberately fixed:
+
+```text
+prepare -> implement -> collect -> author handoff -> finalize
+```
+
+What varies is the Host's cognitive surface. Each CLI stage derives a transient
+`hostAction` from the already-decided Assurance Plan, collected facts, or
+evaluation status:
+
+```text
+                         +-> routine.md ----+
+prepare -> hostAction ---+                  +-> collect
+                         +-> assurance.md --+
+                                                |
+collect -> facts -> hostAction -----------------+
+                  |          |
+                  |          +-> routine/assurance -> author handoff
+                  `------------> recovery.md -> retry, repair, or recollect
+
+finalize -> ready for Human review
+         `-> recovery.md for stale, rejected, or attention outcomes
+```
+
+`hostAction` contains a machine-readable action kind, a short reason, an exact
+argv command when one is runnable, and the one generated reference page needed
+for that action. It replaces prose next-step instructions. The generated Host
+skill initially loads only the prepare reference and follows the returned
+reference thereafter; standard and critical guidance does not occupy a clean
+routine task's context, and recovery guidance is loaded only after an actual
+recovery condition.
+
+This is dynamic projection, not a general dynamic workflow engine. Runtime
+does not let the Host choose stages, invent a cheaper route, or branch on a
+heuristic score. The projector has no semantic authority and uses no new
+persistent mode: it renders decisions already present in the contract, facts,
+and evaluation. Canonical detail remains in the task run and is available with
+`change explain`; compact stage packets omit duplicate authority content and
+successful one-attempt log paths.
+
+A completed routine handoff uses an evidence-first compact presentation only
+when all of these facts are true: the evaluation is `handoff-ready`, the plan
+has no requirements, no material claim, unknown, alternative, Review Map, or
+attention exists, no verifier surface changed, every changed file has a text
+representation, and every configured check passed in one attempt. Any semantic
+or factual escalation, including timeout history, selects the full handoff
+presentation. Presentation can therefore reduce fixed reading cost without
+hiding a condition that changes adoption judgment.
+
 ## Fact Spine
 
 The CLI owns fact collection. It captures a complete worktree baseline before
@@ -284,6 +335,9 @@ If it cannot, it does not belong in the kernel.
 14. Timeout recovery preserves prior Runtime attempts and cannot retry a
     completed failure or non-timeout unavailability as if it merely needed more
     time.
+15. Host instructions may be projected dynamically only from deterministic
+    Runtime decisions; projection never changes lifecycle state or semantic
+    authority.
 
 ## Evidence boundary
 

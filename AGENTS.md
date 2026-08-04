@@ -42,6 +42,14 @@ The executable policy is the exact basis-bearing requirements in the Semantic
 Contract plus fact-triggered and host-disclosed escalation. Do not add a fourth
 core, a general workflow engine, or repository heuristics for this behavior.
 
+Dynamic Host Projection is the transient presentation layer over that fixed
+kernel. Every stage derives a structured `hostAction` from the compiled plan,
+collected facts, or evaluation status. Generated adapters load only the named
+routine, assurance, or recovery reference. Projection may reduce Host reading
+and authoring cost, but it must not add lifecycle state, persist a mode, infer
+semantic importance, let the Host choose a cheaper path, or hide any condition
+that changes adoption judgment.
+
 Every persistent field or state must answer:
 
 1. Which compile, collection, review, recovery, adoption, or future activation
@@ -90,6 +98,11 @@ prepare -> agent implementation -> collect -> agent handoff -> finalize
 
 `change explain` is on-demand inspection, not a mandatory successful-path
 stage.
+
+CLI stage output uses a structured `hostAction` with an action kind, reason,
+optional exact argv command, and optional generated-reference name. Do not
+reintroduce prose-only next-step routing. The action is derived output and is
+never persisted as task authority or state.
 
 ### Prepare
 
@@ -171,6 +184,9 @@ after collection returns `facts-stale` and requires collection again.
 
 Generated adapters relay the CLI-owned `presentationMarkdown` unchanged.
 Additional host investigation stays explicitly labeled as agent evidence.
+Clean routine results may use the compact evidence-first renderer only when no
+requirement, material claim, unknown, alternative, Review Map, attention,
+verifier mutation, non-text file, or multiple check attempt exists.
 
 ## Package and API boundary
 
