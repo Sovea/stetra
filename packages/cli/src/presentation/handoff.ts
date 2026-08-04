@@ -15,6 +15,9 @@ export function renderCognitiveHandoffMarkdown(input: {
   assurancePlan: AssurancePlan;
 }): string {
   const { evaluation, facts, handoff, assurancePlan } = input;
+  if (isCleanRoutineHandoff(input)) {
+    return renderCleanRoutineHandoff(evaluation, facts, handoff, assurancePlan);
+  }
   const lines = [
     '## Cognitive Handoff',
     '',
@@ -152,6 +155,75 @@ export function renderCognitiveHandoffMarkdown(input: {
   }
 
   lines.push('', '### Adoption authority', '', evaluation.humanAuthorityNotice);
+  return lines.join('\n');
+}
+
+function isCleanRoutineHandoff(input: {
+  evaluation: HandoffEvaluation;
+  facts: FactBundle;
+  handoff: CognitiveHandoff;
+  assurancePlan: AssurancePlan;
+}): boolean {
+  const { evaluation, facts, handoff, assurancePlan } = input;
+  return evaluation.status === 'handoff-ready'
+    && assurancePlan.profile === 'routine'
+    && assurancePlan.requirements.length === 0
+    && evaluation.attention.length === 0
+    && handoff.materialClaims.length === 0
+    && handoff.residualUnknowns.length === 0
+    && handoff.reviewMap.length === 0
+    && !handoff.materialAlternatives?.length
+    && !handoff.repositoryEvidence?.length
+    && facts.verifierMutations.length === 0
+    && facts.changedFiles.every((file) => file.representation === 'text')
+    && facts.checks.every((check) =>
+      check.attempts.length === 1 && check.attempts[0]?.status === 'passed');
+}
+
+function renderCleanRoutineHandoff(
+  evaluation: HandoffEvaluation,
+  facts: FactBundle,
+  handoff: CognitiveHandoff,
+  assurancePlan: AssurancePlan,
+): string {
+  const lines = [
+    '## Cognitive Handoff',
+    '',
+    `Status: \`${evaluation.status}\``,
+    '',
+    `Assurance: \`${assurancePlan.profile}\` — no predeclared material-claim requirement.`,
+    '',
+    '### Adoption evidence',
+    '',
+    `Changed files (${facts.changedFiles.length}):`,
+  ];
+  if (!facts.changedFiles.length) lines.push('- None.');
+  for (const file of facts.changedFiles) {
+    const previous = file.previousPath ? ` from ${inlineCode(file.previousPath)}` : '';
+    lines.push(`- ${inlineCode(file.path)} — ${file.operation}${previous}; ${file.representation}.`);
+  }
+
+  lines.push('', `Checks (${facts.checks.length}):`);
+  if (!facts.checks.length) lines.push('- None configured.');
+  for (const check of facts.checks) {
+    lines.push(`- \`${check.id}\` — passed.`);
+  }
+
+  lines.push(
+    '',
+    '### System meaning update',
+    '',
+    blockquote(handoff.systemMeaningUpdate),
+    '',
+    '### Adoption gaps',
+    '',
+    '- Residual unknowns: none disclosed.',
+    '- Direct review: none required.',
+    '',
+    '### Adoption authority',
+    '',
+    evaluation.humanAuthorityNotice,
+  );
   return lines.join('\n');
 }
 
