@@ -59,6 +59,14 @@ import {
   type DelegationPrepareDocument,
 } from '../schemas/delegation.ts';
 import { parseArtifact } from '../validation.ts';
+import {
+  collectedHostAction,
+  compileProblemHostAction,
+  finalizedHostAction,
+  preparedHostAction,
+  staleFactsHostAction,
+  unavailableVerificationHostAction,
+} from './host-action.ts';
 
 const RUN_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const MAX_COMPLETED_RUNS = 50;
@@ -121,7 +129,7 @@ export async function prepareDelegationTask(options: {
     return {
       ...compiled,
       runCreated: false,
-      nextStep: compileNextStep(compiled.status),
+      hostAction: compileProblemHostAction(compiled.status),
     };
   }
   const unavailableExecutables = compiled.contract.verification.mode === 'checks'
@@ -145,7 +153,7 @@ export async function prepareDelegationTask(options: {
         remediation: 'Restore the executable in the configured command environment or select a different explicit verification command.',
       })),
       runCreated: false,
-      nextStep: 'Restore each exact top-level executable or select a runnable explicit check, then prepare again.',
+      hostAction: unavailableVerificationHostAction(),
     };
   }
 
@@ -185,7 +193,7 @@ export async function prepareDelegationTask(options: {
         explain: { runId, section: 'contract' as const },
       },
       runCreated: true,
-      nextStep: `Implement inside the Semantic Contract, then run change collect --run ${runId}.`,
+      hostAction: preparedHostAction(compiled.contract.assurancePlan, runId),
     };
   } catch (error) {
     rmSync(runDirectory, { recursive: true, force: true });
@@ -370,7 +378,7 @@ export async function collectDelegationFacts(options: {
       runPath,
       explain: { runId, section: 'facts' as const },
     },
-    nextStep: collectNextStep(factBundle, handoffPath, runId),
+    hostAction: collectedHostAction(factBundle, run.contract.assurancePlan, runId),
   };
 }
 
@@ -421,7 +429,7 @@ export async function finalizeDelegationHandoff(options: {
       ...stale,
       runId: run.runId,
       state: run.state,
-      nextStep: `Repository facts changed after collect. Run change collect --run ${run.runId} again before finalizing.`,
+      hostAction: staleFactsHostAction(run.runId),
     };
   }
 
@@ -525,7 +533,7 @@ export async function finalizeDelegationHandoff(options: {
       },
     },
     retention: { removedCompletedRunIds },
-    nextStep: finalizeNextStep(evaluation.status),
+    hostAction: finalizedHostAction(evaluation.status, run.runId),
   };
 }
 
@@ -899,24 +907,27 @@ function collectVerifierMutations(
 function contractWorkPacket(contract: SemanticContract) {
   return {
     contractId: contract.contractId,
-    humanEvents: contract.authority.humanEvents,
-    interpretations: contract.interpretationTrace,
+    authority: {
+      humanEventIds: contract.authority.humanEvents.map((event) => event.id),
+      repositoryEvidenceIds: contract.repositoryEvidence.map((evidence) => evidence.id),
+    },
     assurancePlan: contract.assurancePlan,
     semantic: {
-      desiredOutcome: contract.semantic.desiredOutcome.value,
-      constraints: contract.semantic.constraints.map((item) => item.value),
-      nonGoals: contract.semantic.nonGoals.map((item) => item.value),
-      focus: contract.semantic.focus.map((item) => item.value),
-      consequence: contract.semantic.consequence,
+      desiredOutcome: compactSemanticValue(contract.semantic.desiredOutcome),
+      constraints: contract.semantic.constraints.map(compactSemanticValue),
+      nonGoals: contract.semantic.nonGoals.map(compactSemanticValue),
+      focus: contract.semantic.focus.map(compactSemanticValue),
+      consequence: {
+        value: contract.semantic.consequence,
+        basis: contract.semantic.consequenceInterpretation.basis,
+      },
     },
     repositoryEvidence: contract.repositoryEvidence.map((evidence) => ({
       id: evidence.id,
       path: evidence.path,
       startLine: evidence.startLine,
       endLine: evidence.endLine,
-      digest: evidence.digest,
     })),
-    authorization: contract.authorization,
     verification: contract.verification.mode === 'no-command'
       ? contract.verification
       : {
@@ -937,6 +948,15 @@ function contractWorkPacket(contract: SemanticContract) {
   };
 }
 
+function compactSemanticValue(
+  value: SemanticContract['semantic']['desiredOutcome'],
+) {
+  return {
+    value: value.value,
+    basis: value.basis,
+  };
+}
+
 function latestCheckAttempt(check: CheckFact): CheckFact['attempts'][number] {
   const latest = check.attempts.at(-1);
   if (!latest) throw new Error(`Check ${check.id} has no execution attempt.`);
@@ -945,6 +965,7 @@ function latestCheckAttempt(check: CheckFact): CheckFact['attempts'][number] {
 
 function compactCheckFact(check: CheckFact) {
   const latest = latestCheckAttempt(check);
+  const includeLogPaths = latest.status !== 'passed' || check.attempts.length > 1;
   return {
     id: check.id,
     status: latest.status,
@@ -953,42 +974,20 @@ function compactCheckFact(check: CheckFact) {
     timeoutMs: latest.timeoutMs,
     attemptCount: check.attempts.length,
     ...(latest.reason ? { reason: latest.reason } : {}),
-    stdout: compactCheckStream(latest.stdout),
-    stderr: compactCheckStream(latest.stderr),
+    stdout: compactCheckStream(latest.stdout, includeLogPaths),
+    stderr: compactCheckStream(latest.stderr, includeLogPaths),
   };
 }
 
-function compactCheckStream(stream: CheckFact['attempts'][number]['stdout']) {
+function compactCheckStream(
+  stream: CheckFact['attempts'][number]['stdout'],
+  includeLogPath: boolean,
+) {
   return {
     byteLength: stream.byteLength,
     truncated: stream.truncated,
-    ...(stream.logPath ? { logPath: stream.logPath } : {}),
+    ...(includeLogPath && stream.logPath ? { logPath: stream.logPath } : {}),
   };
-}
-
-function collectNextStep(
-  facts: FactBundle,
-  handoffPath: string,
-  runId: string,
-): string {
-  const timedOut = facts.checks.filter((check) => latestCheckAttempt(check).timedOut);
-  if (timedOut.length) {
-    const retryFlags = timedOut.map((check) => {
-      const latest = latestCheckAttempt(check);
-      return `--retry-check ${check.id}=<integer-greater-than-${latest.timeoutMs}>`;
-    }).join(' ');
-    return `One or more checks timed out. Do not run them outside Runtime or finalize yet; retry this run with change collect --run ${runId} ${retryFlags}.`;
-  }
-  const unavailable = facts.checks.filter((check) =>
-    latestCheckAttempt(check).status === 'unavailable');
-  if (unavailable.length) {
-    return `Restore the unavailable check environment, then run change collect --run ${runId} again before authoring the handoff.`;
-  }
-  const failed = facts.checks.filter((check) => latestCheckAttempt(check).status === 'failed');
-  if (failed.length) {
-    return `Repair the failed verification inside the Semantic Contract, then run change collect --run ${runId} again.`;
-  }
-  return `Inspect the complete facts and patch, fill ${handoffPath}, then run change finalize --run ${runId}.`;
 }
 
 function cleanupCompletedRuns(projectRoot: string, currentRunId: string): string[] {
@@ -1044,29 +1043,6 @@ function emptyHandoff() {
     residualUnknowns: [],
     reviewMap: [],
   };
-}
-
-function compileNextStep(status: string): string {
-  if (status === 'semantic-decision-required') {
-    return 'Resolve the material semantic fork with the human, update the input, and prepare again.';
-  }
-  if (status === 'verification-required') {
-    return 'Add explicit checks or a concrete no-command rationale, then prepare again.';
-  }
-  return 'Correct the authority/event references and prepare again.';
-}
-
-function finalizeNextStep(status: string): string {
-  if (status === 'handoff-ready') {
-    return 'Review the Runtime facts, bounded claims, and Review Map; adoption remains a human decision.';
-  }
-  if (status === 'rejected') {
-    return 'Do not adopt this change. Prepare a new run before repairing or revising the rejected boundary, then collect fresh facts.';
-  }
-  if (status === 'needs-attention') {
-    return 'Follow every Attention action and directly inspect its Review Map surface before deciding whether the disclosed gap is acceptable.';
-  }
-  return 'Collect fresh Runtime facts before relying on this handoff.';
 }
 
 function canonicalProjectRoot(input: string): string {

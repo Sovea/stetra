@@ -11,6 +11,7 @@ import {
   formatReadiness,
 } from './human/setup.ts';
 import {
+  appendHostAction,
   appendReasons,
   isRecord,
   statusLine,
@@ -48,9 +49,7 @@ function formatStructured(output: JsonObject, colors: Colors): string {
   }
   appendReasons(lines, output.reasons, colors);
   if (typeof output.message === 'string') lines.push(output.message);
-  if (typeof output.nextStep === 'string') {
-    lines.push(`${colors.bold('Next:')} ${output.nextStep}`);
-  }
+  appendHostAction(lines, output.hostAction, colors);
   if ('evaluation' in output) {
     lines.push(colors.dim('Use --json for the complete machine-readable result.'));
   }

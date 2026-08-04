@@ -29,6 +29,24 @@ export function appendStringList(
   for (const value of values) lines.push(`${colors.cyan('•')} ${String(value)}`);
 }
 
+export function appendHostAction(
+  lines: string[],
+  value: unknown,
+  colors: Colors,
+): void {
+  if (!isRecord(value) || typeof value.kind !== 'string') return;
+  lines.push('', `${colors.bold('Next action:')} ${value.kind}`);
+  if (typeof value.reason === 'string') lines.push(value.reason);
+  if (typeof value.reference === 'string') {
+    lines.push(`${colors.bold('Reference:')} ${value.reference}`);
+  }
+  if (isRecord(value.command) && Array.isArray(value.command.argv)) {
+    const argv = value.command.argv.filter((argument): argument is string =>
+      typeof argument === 'string');
+    lines.push(`${colors.bold('Command argv:')} ${JSON.stringify(argv)}`);
+  }
+}
+
 export function countValues(values: string[]): Map<string, number> {
   const counts = new Map<string, number>();
   for (const value of values) counts.set(value, (counts.get(value) ?? 0) + 1);

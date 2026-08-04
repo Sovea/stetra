@@ -39,18 +39,25 @@ test('CLI exposes the complete prepare, collect, finalize, and explain lifecycle
     const prepared = prepareExecution.output as {
       status: string;
       runId: string;
-      semanticContract: { humanEvents: Array<{ content: string }> };
+      semanticContract: {
+        authority: { humanEventIds: string[] };
+        semantic: { desiredOutcome: { value: string } };
+      };
       details: { runPath: string };
     };
     assert.equal(prepared.status, 'prepared');
-    assert.equal(prepared.semanticContract.humanEvents[0].content, TASK);
+    assert.deepEqual(prepared.semanticContract.authority.humanEventIds, ['event:task']);
+    assert.equal(
+      prepared.semanticContract.semantic.desiredOutcome.value,
+      'Produce an inspectable fact-bound handoff.',
+    );
     assert.equal(existsSync(prepared.details.runPath), true);
     assert.equal(Object.hasOwn(prepared, 'contract'), false);
     assert.ok(Buffer.byteLength(JSON.stringify(prepared), 'utf8') < 10_000);
     const humanPrepare = formatCliOutput({ ...prepareExecution, json: false, color: false });
-    assert.match(humanPrepare, /Exact Human Events/);
-    assert.match(humanPrepare, /Agent interpretations/);
-    assert.match(humanPrepare, /Delegation boundary/);
+    assert.match(humanPrepare, /Compiled semantics/);
+    assert.match(humanPrepare, /Authority references/);
+    assert.match(humanPrepare, /Next action: implement-and-collect/);
     assert.match(humanPrepare, /Frozen verification/);
 
     writeFileSync(join(root, 'source.txt'), 'after\n', 'utf8');
@@ -255,7 +262,12 @@ test('human finalize renders stale-fact attention without pretending completion'
           action: 'Collect fresh facts before finalizing.',
         },
       }],
-      nextStep: 'Collect again.',
+      hostAction: {
+        kind: 'recollect-stale',
+        reference: 'recovery',
+        reason: 'Collect again.',
+        command: { argv: ['resonant-code', 'change', 'collect'] },
+      },
     },
   });
 
@@ -279,7 +291,11 @@ test('human prepare presents executable preflight as an actionable preparation i
         message: 'Check test cannot resolve executable "missing".',
         remediation: 'Restore the executable or select a runnable explicit check.',
       }],
-      nextStep: 'Prepare again.',
+      hostAction: {
+        kind: 'configure-verification',
+        reference: 'recovery',
+        reason: 'Prepare again.',
+      },
     },
   });
 

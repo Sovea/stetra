@@ -1,6 +1,7 @@
 import type { Colors } from 'picocolors/types';
 
 import {
+  appendHostAction,
   countValues,
   formatCounts,
   heading,
@@ -46,7 +47,7 @@ export function formatChangePrepare(output: JsonObject, colors: Colors): string 
       `${colors.bold('Baseline:')} ${String(output.baseline.entryCount ?? 0)} files; ${String(output.baseline.fingerprint ?? 'unknown fingerprint')}`,
     );
   }
-  appendNext(lines, output.nextStep, colors);
+  appendHostAction(lines, output.hostAction, colors);
   return lines.join('\n');
 }
 
@@ -95,14 +96,14 @@ export function formatChangeCollect(output: JsonObject, colors: Colors): string 
   if (isRecord(output.patch)) {
     lines.push('', `${colors.bold('Patch:')} ${String(output.patch.byteLength)} bytes; ${String(output.patch.digest)}`);
   }
-  appendNext(lines, output.nextStep, colors);
+  appendHostAction(lines, output.hostAction, colors);
   return lines.join('\n');
 }
 
 export function formatChangeFinalize(output: JsonObject, colors: Colors): string {
   if (typeof output.presentationMarkdown === 'string') {
     const lines = [output.presentationMarkdown];
-    appendNext(lines, output.nextStep, colors);
+    appendHostAction(lines, output.hostAction, colors);
     return lines.join('\n');
   }
   const status = String(output.status ?? 'unknown');
@@ -130,7 +131,7 @@ export function formatChangeFinalize(output: JsonObject, colors: Colors): string
   if (typeof output.humanAuthorityNotice === 'string') {
     lines.push('', colors.bold('Adoption authority'), output.humanAuthorityNotice);
   }
-  appendNext(lines, output.nextStep, colors);
+  appendHostAction(lines, output.hostAction, colors);
   return lines.join('\n');
 }
 
@@ -187,35 +188,23 @@ export function formatChangeExplain(output: JsonObject, colors: Colors): string 
 }
 
 function appendContract(lines: string[], contract: JsonObject, colors: Colors): void {
-  if (Array.isArray(contract.humanEvents)) {
-    lines.push('', colors.bold('Exact Human Events'));
-    for (const event of contract.humanEvents) {
-      if (!isRecord(event)) continue;
-      lines.push(`${colors.cyan('•')} ${String(event.id)}: ${String(event.content)}`);
-    }
-  }
-  if (Array.isArray(contract.interpretations)) {
-    lines.push('', colors.bold('Agent interpretations'));
-    for (const interpretation of contract.interpretations) {
-      if (!isRecord(interpretation)) continue;
-      const basis = isRecord(interpretation.basis)
-        ? [...(Array.isArray(interpretation.basis.humanEventIds) ? interpretation.basis.humanEventIds : []),
-            ...(Array.isArray(interpretation.basis.repositoryEvidenceIds) ? interpretation.basis.repositoryEvidenceIds : [])]
-        : [];
-      lines.push(`${colors.cyan('•')} ${String(interpretation.field)}: ${String(interpretation.value)} <- ${basis.join(', ')}`);
-    }
+  if (isRecord(contract.semantic)) {
+    lines.push('', colors.bold('Compiled semantics'));
+    appendSemanticValue(lines, 'Desired outcome', contract.semantic.desiredOutcome, colors);
+    appendSemanticValues(lines, 'Constraint', contract.semantic.constraints, colors);
+    appendSemanticValues(lines, 'Non-goal', contract.semantic.nonGoals, colors);
+    appendSemanticValues(lines, 'Focus', contract.semantic.focus, colors);
+    appendSemanticValue(lines, 'Consequence', contract.semantic.consequence, colors);
   }
   if (isRecord(contract.assurancePlan)) {
     appendAssurancePlan(lines, contract.assurancePlan, colors);
   }
-  if (isRecord(contract.authorization)) {
-    lines.push('', colors.bold('Delegation boundary'));
-    lines.push(String(contract.authorization.standingAuthorization));
-    if (Array.isArray(contract.authorization.escalationBoundary)) {
-      for (const boundary of contract.authorization.escalationBoundary) {
-        lines.push(`${colors.yellow('•')} ${String(boundary)}`);
-      }
-    }
+  if (isRecord(contract.authority)) {
+    const eventIds = stringArray(contract.authority.humanEventIds);
+    const evidenceIds = stringArray(contract.authority.repositoryEvidenceIds);
+    lines.push('', colors.bold('Authority references'));
+    lines.push(`Human Events: ${eventIds.length ? eventIds.join(', ') : 'none'}`);
+    lines.push(`Repository evidence: ${evidenceIds.length ? evidenceIds.join(', ') : 'none'}`);
   }
   if (isRecord(contract.verification)) {
     lines.push('', colors.bold('Frozen verification'));
@@ -230,6 +219,33 @@ function appendContract(lines: string[], contract: JsonObject, colors: Colors): 
   }
 }
 
+function appendSemanticValues(
+  lines: string[],
+  label: string,
+  values: unknown,
+  colors: Colors,
+): void {
+  if (!Array.isArray(values)) return;
+  for (const value of values) appendSemanticValue(lines, label, value, colors);
+}
+
+function appendSemanticValue(
+  lines: string[],
+  label: string,
+  value: unknown,
+  colors: Colors,
+): void {
+  if (!isRecord(value)) return;
+  const basis = isRecord(value.basis)
+    ? [
+        ...stringArray(value.basis.humanEventIds),
+        ...stringArray(value.basis.repositoryEvidenceIds),
+      ]
+    : [];
+  const source = basis.length ? ` <- ${basis.join(', ')}` : '';
+  lines.push(`${colors.cyan('•')} ${label}: ${String(value.value)}${source}`);
+}
+
 function appendAssurancePlan(lines: string[], plan: JsonObject, colors: Colors): void {
   lines.push('', colors.bold(`Assurance: ${String(plan.profile ?? 'unknown')}`));
   const requirements = plan.requirements;
@@ -241,8 +257,4 @@ function appendAssurancePlan(lines: string[], plan: JsonObject, colors: Colors):
     if (!isRecord(requirement)) continue;
     lines.push(`${colors.cyan('•')} ${String(requirement.value)} [${String(requirement.criticality)}] — ${String(requirement.rationale)}`);
   }
-}
-
-function appendNext(lines: string[], value: unknown, colors: Colors): void {
-  if (typeof value === 'string') lines.push('', `${colors.bold('Next:')} ${value}`);
 }

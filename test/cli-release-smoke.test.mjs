@@ -121,7 +121,11 @@ try {
     'change', 'prepare', project, '--input', inputPath, '--json',
   ]);
   assert.equal(prepared.status, 'prepared');
-  assert.equal(prepared.semanticContract.humanEvents[0].content, task);
+  assert.deepEqual(prepared.semanticContract.authority.humanEventIds, ['event:task']);
+  assert.equal(
+    prepared.semanticContract.semantic.desiredOutcome.value,
+    'Change the exported fixture value with a fact-bound handoff.',
+  );
   assert.equal(Object.hasOwn(prepared, 'contract'), false);
   const preparedRun = JSON.parse(readFileSync(prepared.details.runPath, 'utf8'));
   assert.equal(preparedRun.workflow, 'semantic-handoff');

@@ -110,6 +110,8 @@ test('routine assurance completes with system meaning and Runtime facts only', a
     if (prepared.status !== 'prepared') return;
     assert.equal(prepared.semanticContract.assurancePlan.profile, 'routine');
     assert.deepEqual(prepared.semanticContract.assurancePlan.requirements, []);
+    assert.equal(prepared.hostAction.kind, 'implement-and-collect');
+    assert.equal(prepared.hostAction.reference, 'routine');
 
     writeFileSync(join(root, 'source.txt'), 'after\n', 'utf8');
     const collected = await collectDelegationFacts({
@@ -118,6 +120,8 @@ test('routine assurance completes with system meaning and Runtime facts only', a
       productVersion: VERSION,
     });
     assert.equal(collected.assurancePlan.profile, 'routine');
+    assert.equal(collected.hostAction.kind, 'author-handoff');
+    assert.equal(collected.hostAction.reference, 'routine');
     writeFileSync(collected.handoffPath, `${JSON.stringify({
       protocol: 'semantic-delegation',
       schemaVersion: '1',
@@ -184,13 +188,21 @@ test('prepare and collect bind dirty-baseline changes, checks, patch, and verifi
     });
     assert.equal(prepared.status, 'prepared');
     if (prepared.status !== 'prepared') return;
-    assert.equal(prepared.semanticContract.humanEvents[0].contentFingerprint, sha256(TASK));
+    assert.deepEqual(prepared.semanticContract.authority.humanEventIds, ['event:task']);
     assert.equal(prepared.semanticContract.assurancePlan.profile, 'critical');
-    assert.match(prepared.semanticContract.repositoryEvidence[0].digest, /^sha256:/);
+    assert.deepEqual(prepared.semanticContract.semantic.desiredOutcome.basis, {
+      humanEventIds: ['event:task'],
+      repositoryEvidenceIds: ['evidence:package'],
+    });
+    assert.equal(
+      Object.hasOwn(prepared.semanticContract.repositoryEvidence[0], 'digest'),
+      false,
+    );
     assert.equal(Object.hasOwn(prepared, 'contract'), false);
     assert.equal(existsSync(join(dirname(prepared.details.runPath), 'handoff.json')), false);
     const preparedRun = JSON.parse(readFileSync(prepared.details.runPath, 'utf8'));
     assert.equal(preparedRun.state, 'prepared');
+    assert.equal(Object.hasOwn(preparedRun, 'hostAction'), false);
     assert.equal(preparedRun.contract.repositoryEvidence[0].text, '{"name":"fixture"}\n');
     assert.ok(preparedRun.worktreeBaseline.entries.some(
       (entry: { path: string }) => entry.path === 'src/preexisting.txt',
@@ -214,7 +226,7 @@ test('prepare and collect bind dirty-baseline changes, checks, patch, and verifi
     assert.match(collected.factCollectionId, /^sha256:[a-f0-9]{64}$/);
     assert.equal(collected.checks[0].status, 'passed');
     assert.equal(Object.hasOwn(collected.checks[0], 'definitionFingerprint'), false);
-    assert.ok(collected.checks[0].stdout.logPath);
+    assert.equal(Object.hasOwn(collected.checks[0].stdout, 'logPath'), false);
     assert.equal(collected.verifierSurfaces.length, 1);
     assert.equal(collected.verifierSurfaces[0].path, 'package.json');
     assert.equal(collected.verifierSurfaces[0].role, 'command-definition');
@@ -237,6 +249,7 @@ test('prepare and collect bind dirty-baseline changes, checks, patch, and verifi
     assert.match(patch.toString('utf8'), /implemented/);
     const collectedRun = JSON.parse(readFileSync(prepared.details.runPath, 'utf8'));
     assert.equal(collectedRun.state, 'facts-collected');
+    assert.equal(Object.hasOwn(collectedRun, 'hostAction'), false);
     assert.equal(Object.hasOwn(collectedRun, 'worktreeCurrent'), false);
     assert.equal(collectedRun.factBundle.factCollectionId, collected.factCollectionId);
     assert.equal(
@@ -271,7 +284,8 @@ test('prepare and collect bind dirty-baseline changes, checks, patch, and verifi
     }
     assert.match(finalized.presentationMarkdown, /### Runtime facts/);
     assert.match(finalized.presentationMarkdown, /package\.json.*command-definition/);
-    assert.match(finalized.nextStep, /Attention action/);
+    assert.equal(finalized.hostAction.kind, 'inspect-attention');
+    assert.equal(finalized.hostAction.reference, 'recovery');
   } finally {
     rmSync(root, { recursive: true, force: true });
     rmSync(inputRoot, { recursive: true, force: true });
@@ -357,8 +371,13 @@ test('a timed-out check retries with a larger budget in the same run and preserv
     assert.equal(first.checks[0].timedOut, true);
     assert.equal(first.checks[0].timeoutMs, 25);
     assert.equal(first.checks[0].attemptCount, 1);
-    assert.match(first.nextStep, /--retry-check slow-check=/);
-    assert.match(first.nextStep, /Do not run them outside Runtime or finalize yet/);
+    assert.equal(first.hostAction.kind, 'retry-timeout');
+    assert.equal(first.hostAction.reference, 'recovery');
+    assert.deepEqual(first.hostAction.command.argv.slice(-3), [
+      '--retry-check',
+      'slow-check=<integer-greater-than-25>',
+      '--json',
+    ]);
 
     await assert.rejects(
       collectDelegationFacts({
@@ -467,6 +486,8 @@ test('non-runnable compile outcomes create no run directory', async () => {
     const result = await prepareDelegationTask({ projectRoot: root, inputPath, productVersion: VERSION });
     assert.equal(result.status, 'verification-required');
     assert.equal(result.runCreated, false);
+    assert.equal(result.hostAction.kind, 'configure-verification');
+    assert.equal(result.hostAction.reference, null);
     assert.equal(existsSync(join(root, '.resonant-code', 'runs')), false);
   } finally {
     rmSync(root, { recursive: true, force: true });
@@ -500,6 +521,8 @@ test('prepare rejects unavailable top-level executables without claiming nested 
     });
     assert.equal(missing.status, 'verification-required');
     assert.equal(missing.runCreated, false);
+    assert.equal(missing.hostAction.kind, 'configure-verification');
+    assert.equal(missing.hostAction.reference, 'recovery');
     const missingIssues = 'issues' in missing && Array.isArray(missing.issues)
       ? missing.issues
       : [];
@@ -666,6 +689,8 @@ test('finalize detects repository edits before parsing Host claims and requires 
     const stale = await finalizeDelegationHandoff({ projectRoot: root, runId: prepared.runId });
     assert.equal(stale.status, 'facts-stale');
     assert.equal(stale.state, 'facts-collected');
+    assert.equal(stale.hostAction.kind, 'recollect-stale');
+    assert.equal(stale.hostAction.reference, 'recovery');
     assert.equal(explainDelegationRun({ projectRoot: root, runId: prepared.runId }).state, 'facts-collected');
 
     const recollected = await collectDelegationFacts({ projectRoot: root, runId: prepared.runId, productVersion: VERSION });
