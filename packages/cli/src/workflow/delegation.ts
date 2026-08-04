@@ -296,6 +296,7 @@ export async function collectDelegationFacts(options: {
       stderr: compactCheckStream(check.stderr),
     })),
     verifierSurfaces: summarizeVerifierSurfaces(verifierMutations),
+    assurancePlan: run.contract.assurancePlan,
     patch: factBundle.patch
       ? {
           ...factBundle.patch,
@@ -409,6 +410,7 @@ export async function finalizeDelegationHandoff(options: {
     evaluation,
     facts: run.factBundle,
     handoff,
+    assurancePlan: run.contract.assurancePlan,
   });
   const completedRun: DelegationRun = {
     ...run,
@@ -560,6 +562,7 @@ export function explainDelegationRun(options: {
         evaluation: run.completion.evaluation as HandoffEvaluation,
         facts: run.factBundle,
         handoff: handoff as CognitiveHandoff,
+        assurancePlan: run.contract.assurancePlan,
       }),
     };
   }
@@ -737,6 +740,7 @@ function contractWorkPacket(contract: SemanticContract) {
     contractId: contract.contractId,
     humanEvents: contract.authority.humanEvents,
     interpretations: contract.interpretationTrace,
+    assurancePlan: contract.assurancePlan,
     semantic: {
       desiredOutcome: contract.semantic.desiredOutcome.value,
       constraints: contract.semantic.constraints.map((item) => item.value),

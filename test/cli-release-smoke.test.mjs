@@ -99,6 +99,12 @@ try {
         value: 'medium',
         basis: { humanEventIds: ['event:task'], repositoryEvidenceIds: [] },
       },
+      assuranceDimensions: [{
+        dimension: 'behavior',
+        criticality: 'adoption-critical',
+        rationale: 'The packed fixture behavior determines whether the change can be adopted.',
+        basis: { humanEventIds: ['event:task'], repositoryEvidenceIds: [] },
+      }],
     },
     verification: {
       checks: [{

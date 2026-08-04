@@ -88,6 +88,63 @@ test('worktree snapshots keep Git objects task-scoped and tolerate read-only met
   }
 });
 
+test('routine assurance completes with system meaning and Runtime facts only', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'resonant-routine-'));
+  const inputRoot = mkdtempSync(join(tmpdir(), 'resonant-input-'));
+  try {
+    initializeRepository(root);
+    writeFileSync(join(root, 'source.txt'), 'before\n', 'utf8');
+    git(root, ['add', '.']);
+    git(root, ['commit', '-qm', 'initial']);
+    const inputPath = join(inputRoot, 'prepare.json');
+    writePrepareInput(inputPath, {
+      routine: true,
+      noCommandRationale: 'The isolated text fixture has no executable acceptance command.',
+    });
+    const prepared = await prepareDelegationTask({
+      projectRoot: root,
+      inputPath,
+      productVersion: VERSION,
+    });
+    assert.equal(prepared.status, 'prepared');
+    if (prepared.status !== 'prepared') return;
+    assert.equal(prepared.semanticContract.assurancePlan.profile, 'routine');
+    assert.deepEqual(prepared.semanticContract.assurancePlan.requirements, []);
+
+    writeFileSync(join(root, 'source.txt'), 'after\n', 'utf8');
+    const collected = await collectDelegationFacts({
+      projectRoot: root,
+      runId: prepared.runId,
+      productVersion: VERSION,
+    });
+    assert.equal(collected.assurancePlan.profile, 'routine');
+    writeFileSync(collected.handoffPath, `${JSON.stringify({
+      protocol: 'semantic-delegation',
+      schemaVersion: '1',
+      systemMeaningUpdate: 'The bounded text fixture now contains the requested after state.',
+      materialClaims: [],
+      residualUnknowns: [],
+      reviewMap: [],
+    }, null, 2)}\n`, 'utf8');
+
+    const finalized = await finalizeDelegationHandoff({
+      projectRoot: root,
+      runId: prepared.runId,
+    });
+    assert.equal(finalized.status, 'handoff-ready');
+    assert.deepEqual(finalized.attention, []);
+    if (typeof finalized.presentationMarkdown !== 'string') {
+      assert.fail('routine finalization must include the rendered handoff');
+    }
+    assert.match(finalized.presentationMarkdown, /Assurance: `routine`/);
+    assert.match(finalized.presentationMarkdown, /None required or disclosed/);
+    assert.match(finalized.presentationMarkdown, /source\.txt.*modified/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+    rmSync(inputRoot, { recursive: true, force: true });
+  }
+});
+
 test('prepare and collect bind dirty-baseline changes, checks, patch, and verifier mutations', async () => {
   const root = mkdtempSync(join(tmpdir(), 'resonant-delegation-'));
   const inputRoot = mkdtempSync(join(tmpdir(), 'resonant-input-'));
@@ -129,6 +186,7 @@ test('prepare and collect bind dirty-baseline changes, checks, patch, and verifi
     assert.equal(prepared.status, 'prepared');
     if (prepared.status !== 'prepared') return;
     assert.equal(prepared.semanticContract.humanEvents[0].contentFingerprint, sha256(TASK));
+    assert.equal(prepared.semanticContract.assurancePlan.profile, 'critical');
     assert.match(prepared.semanticContract.repositoryEvidence[0].digest, /^sha256:/);
     assert.equal(Object.hasOwn(prepared, 'contract'), false);
     assert.equal(existsSync(join(dirname(prepared.details.runPath), 'handoff.json')), false);
@@ -153,6 +211,7 @@ test('prepare and collect bind dirty-baseline changes, checks, patch, and verifi
       productVersion: VERSION,
     });
     assert.equal(collected.status, 'facts-collected');
+    assert.equal(collected.assurancePlan.profile, 'critical');
     assert.match(collected.factCollectionId, /^sha256:[a-f0-9]{64}$/);
     assert.equal(collected.checks[0].status, 'passed');
     assert.equal(Object.hasOwn(collected.checks[0], 'definitionFingerprint'), false);
@@ -629,6 +688,7 @@ function writePrepareInput(
       acceptanceSurfacePaths: string[];
     }>;
     noCommandRationale?: string;
+    routine?: boolean;
     repositoryEvidence?: Array<{
       id: string;
       path: string;
@@ -655,9 +715,17 @@ function writePrepareInput(
       nonGoals: [],
       focus: [],
       consequence: {
-        value: 'high',
+        value: verification.routine ? 'low' : 'high',
         basis: { humanEventIds: ['event:task'], repositoryEvidenceIds: [] },
       },
+      assuranceDimensions: verification.routine
+        ? []
+        : [{
+            dimension: 'behavior',
+            criticality: 'adoption-critical',
+            rationale: 'The fixture behavior determines whether the handoff can be adopted.',
+            basis: { humanEventIds: ['event:task'], repositoryEvidenceIds: [] },
+          }],
     },
     ...(verification.repositoryEvidence
       ? { repositoryEvidence: verification.repositoryEvidence }

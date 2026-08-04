@@ -55,6 +55,9 @@ export function formatChangeCollect(output: JsonObject, colors: Colors): string 
     heading('Actual change collected', colors),
     statusLine(String(output.status ?? 'unknown'), colors),
   ];
+  if (isRecord(output.assurancePlan)) {
+    appendAssurancePlan(lines, output.assurancePlan, colors);
+  }
   if (Array.isArray(output.changedFiles)) {
     const counts = countValues(output.changedFiles
       .filter(isRecord)
@@ -197,6 +200,9 @@ function appendContract(lines: string[], contract: JsonObject, colors: Colors): 
       lines.push(`${colors.cyan('•')} ${String(interpretation.field)}: ${String(interpretation.value)} <- ${basis.join(', ')}`);
     }
   }
+  if (isRecord(contract.assurancePlan)) {
+    appendAssurancePlan(lines, contract.assurancePlan, colors);
+  }
   if (isRecord(contract.authorization)) {
     lines.push('', colors.bold('Delegation boundary'));
     lines.push(String(contract.authorization.standingAuthorization));
@@ -216,6 +222,19 @@ function appendContract(lines: string[], contract: JsonObject, colors: Colors): 
     } else {
       lines.push(`No command: ${String(contract.verification.rationale ?? '')}`);
     }
+  }
+}
+
+function appendAssurancePlan(lines: string[], plan: JsonObject, colors: Colors): void {
+  lines.push('', colors.bold(`Assurance: ${String(plan.profile ?? 'unknown')}`));
+  const requirements = plan.requirements;
+  if (!Array.isArray(requirements) || !requirements.length) {
+    lines.push('No predeclared material-claim requirement.');
+    return;
+  }
+  for (const requirement of requirements) {
+    if (!isRecord(requirement)) continue;
+    lines.push(`${colors.cyan('•')} ${String(requirement.value)} [${String(requirement.criticality)}] — ${String(requirement.rationale)}`);
   }
 }
 

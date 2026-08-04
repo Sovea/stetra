@@ -1,4 +1,5 @@
 import type {
+  AssurancePlan,
   CognitiveHandoff,
   FactBundle,
   HandoffEvaluation,
@@ -11,12 +12,25 @@ export function renderCognitiveHandoffMarkdown(input: {
   evaluation: HandoffEvaluation;
   facts: FactBundle;
   handoff: CognitiveHandoff;
+  assurancePlan: AssurancePlan;
 }): string {
-  const { evaluation, facts, handoff } = input;
+  const { evaluation, facts, handoff, assurancePlan } = input;
   const lines = [
     '## Cognitive Handoff',
     '',
     `Status: \`${evaluation.status}\``,
+    '',
+    `Assurance: \`${assurancePlan.profile}\``,
+  ];
+  if (!assurancePlan.requirements.length) {
+    lines.push('', 'No predeclared material-claim requirement. Runtime fact triggers and Host-disclosed critical risks still escalate review.');
+  } else {
+    lines.push('', 'Required assurance dimensions:');
+    for (const requirement of assurancePlan.requirements) {
+      lines.push(`- \`${requirement.value}\` [${requirement.criticality}] — ${singleLine(requirement.rationale)}`);
+    }
+  }
+  lines.push(
     '',
     '### System meaning update',
     '',
@@ -27,7 +41,7 @@ export function renderCognitiveHandoffMarkdown(input: {
     `Fact collection: \`${facts.factCollectionId}\``,
     '',
     `Changed files (${facts.changedFiles.length}):`,
-  ];
+  );
   if (!facts.changedFiles.length) lines.push('- None.');
   for (const file of facts.changedFiles) {
     const previous = file.previousPath ? ` from ${inlineCode(file.previousPath)}` : '';
@@ -58,6 +72,7 @@ export function renderCognitiveHandoffMarkdown(input: {
   }
 
   lines.push('', '### Material claims');
+  if (!handoff.materialClaims.length) lines.push('', 'None required or disclosed.');
   for (const basis of [
     'repository-evidence',
     'agent-judgment',

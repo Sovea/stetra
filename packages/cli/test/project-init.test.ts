@@ -43,7 +43,10 @@ test('project init generates only the Semantic Handoff adapter and manifest', ()
     assert.match(change, /resolves only the top-level executable/);
     assert.match(change, /Attention explains adoption impact/);
     assert.match(change, /Review Map.*never substitutes/s);
-    assert.match(change, /failed\/unavailable checks, changed verifier surfaces/);
+    assert.match(change, /failed\/unavailable\s+checks,\s+changed verifier surfaces/);
+    assert.match(change, /assuranceDimensions.*adoption-critical dimension/s);
+    assert.match(change, /routine plan.*materialClaims.*empty/s);
+    assert.match(change, /no score or repository heuristic can\s+downgrade/i);
     assert.match(change, /state ownership.*every writer.*later participant/s);
     assert.match(change, /control flow.*cleanup.*async\s+timing boundary/s);
     assert.match(change, /compatibility.*generic implementation owner.*environments/s);

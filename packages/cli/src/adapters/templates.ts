@@ -98,7 +98,15 @@ input inside the project worktree.
     "consequence": {
       "value": "medium",
       "basis": {"humanEventIds": ["event:task"], "repositoryEvidenceIds": []}
-    }
+    },
+    "assuranceDimensions": [
+      {
+        "dimension": "behavior",
+        "criticality": "material",
+        "rationale": "The requested behavior is the bounded adoption decision surface.",
+        "basis": {"humanEventIds": ["event:task"], "repositoryEvidenceIds": []}
+      }
+    ]
   },
   "verification": {
     "checks": [
@@ -117,9 +125,25 @@ input inside the project worktree.
 \`\`\`
 
 Each semantic value contains \`value\` and \`basis\`; Runtime generates the
-interpretation identity. Consequence is \`low\`, \`medium\`, or \`high\` and
-changes review depth only. Evidence windows contain \`id\`, repository-relative
-\`path\`, \`startLine\`, and \`endLine\`; matching proves currency, not truth.
+interpretation identity. Consequence describes the adoption impact if the
+change or its explanation is wrong, not implementation effort, diff size, or
+file count:
+
+- low: a bounded, reversible change with no material compatibility, ownership,
+  migration, security, recovery, or long-lived decision consequence;
+- medium: adoption depends on at least one explicit material dimension;
+- high: adoption depends on at least one explicit adoption-critical dimension.
+
+\`assuranceDimensions\` is empty only for low-consequence routine work. Medium
+work declares at least one material or adoption-critical dimension. High work
+declares at least one adoption-critical dimension. Use only dimensions that can
+change adoption or direct review; do not manufacture coverage. Runtime compiles
+an inspectable routine, standard, or critical \`assurancePlan\`. A critical
+dimension can escalate a low/medium label; no score or repository heuristic can
+downgrade it.
+
+Evidence windows contain \`id\`, repository-relative \`path\`, \`startLine\`,
+and \`endLine\`; matching proves currency, not truth.
 
 Checks use argv arrays without a shell. If no executable check applies, replace
 \`checks\` with a concrete \`noCommandRationale\`. Declare command-definition
@@ -133,8 +157,9 @@ Run the command with the document on stdin:
 resonant-code change prepare . --input - --json
 \`\`\`
 
-Inspect the returned \`semanticContract\`. Non-runnable results create no run;
-correct the exact issue without bypassing it.
+Inspect the returned \`semanticContract\`, especially its exact
+\`assurancePlan.requirements\`. Non-runnable results create no run; correct the
+exact issue without bypassing it.
 
 ## 2. Implement and collect facts
 
@@ -146,9 +171,9 @@ resonant-code change collect . --run <run-id> --json
 \`\`\`
 
 Inspect every returned changed path, check outcome, changed verifier surface,
-and the complete patch at \`patch.path\`. Runtime, not Host prose, owns those
-facts. If repair is needed, edit and collect again; recollection replaces the
-old facts and resets \`handoff.json\`.
+the returned \`assurancePlan\`, and the complete patch at \`patch.path\`.
+Runtime, not Host prose, owns those facts. If repair is needed, edit and collect
+again; recollection replaces the old facts and resets \`handoff.json\`.
 
 ## 3. Author the Cognitive Handoff
 
@@ -167,63 +192,51 @@ check results, patch content, confidence, or adoption.
       "dimension": "behavior",
       "statement": "concrete adoption-relevant conclusion",
       "adoptionConsequence": "what accepting this conclusion changes",
-      "adoptionCritical": true,
+      "adoptionCritical": false,
       "basis": "agent-judgment",
       "evidence": {
         "changedFiles": ["exact/path.ts"],
         "checks": ["test"],
         "patch": true
-      },
-      "falsification": {
-        "failureHypothesis": "specific way the conclusion could be false",
-        "attempt": "specific attempt to find that failure",
-        "status": "supported",
-        "supportingEvidence": {"changedFiles": ["exact/path.ts"], "checks": ["test"]},
-        "counterEvidence": {},
-        "conclusion": "bounded conclusion from the challenge"
       }
     }
   ],
-  "residualUnknowns": [
-    {
-      "id": "unknown:example",
-      "statement": "what cannot currently be established",
-      "adoptionImpact": "why it could affect adoption or operation",
-      "validationPath": "exact validation or takeover action",
-      "references": {"claims": ["claim:behavior"], "changedFiles": ["exact/path.ts"]}
-    }
-  ],
-  "reviewMap": [
-    {
-      "id": "review:behavior",
-      "priority": "must-read",
-      "changedFiles": ["exact/path.ts"],
-      "checkIds": ["test"],
-      "claimIds": ["claim:behavior"],
-      "unknownIds": ["unknown:example"],
-      "rationale": "why direct attention belongs here",
-      "prevents": "failure or misunderstanding this review prevents"
-    }
-  ]
+  "residualUnknowns": [],
+  "reviewMap": []
 }
 \`\`\`
 
-Use an empty \`residualUnknowns\` array when none remains. Claim dimensions are
-behavior, invariant, state-ownership, data-flow, control-flow, compatibility,
-migration, failure-recovery, security, operations, maintenance, and
-important-non-change. Bases are repository-evidence, agent-judgment,
-human-decision, and unverified. A passing check supports Agent judgment; it
-does not create a Runtime semantic fact.
+For a routine plan with no required dimension, keep \`materialClaims\` empty
+unless the actual change exposes a material conclusion. For every compiled
+requirement, provide at least one claim with the same dimension. A compiled
+adoption-critical requirement must be covered by an adoption-critical claim.
+Do not add claims merely to restate changed files, checks, or the requested
+outcome.
+
+Use an empty \`residualUnknowns\` array when none remains and an empty
+\`reviewMap\` when neither the Assurance Plan nor collected facts require direct
+review. Claim dimensions are behavior, invariant, state-ownership, data-flow,
+control-flow, compatibility, migration, failure-recovery, security, operations,
+maintenance, and important-non-change. Bases are repository-evidence,
+agent-judgment, human-decision, and unverified. A passing check supports Agent
+judgment; it does not create a Runtime semantic fact.
 
 Every adoption-critical Agent/repository/unverified claim requires
 falsification. Inspect the complete patch and actively seek counterevidence.
 Use supported, contradicted, partial, or unverified; never hide counterevidence.
-Non-critical claims must omit falsification. Put unresolved critical claims,
-unknowns, failed/unavailable checks, changed verifier surfaces, and
-unrepresentable files in a must-read or unresolved Review Map entry.
+Non-critical claims must omit falsification. Every adoption-critical claim,
+including a newly discovered Host escalation, requires must-read or unresolved
+Review Map coverage even when supported. Also cover unknowns, failed/unavailable
+checks, changed verifier surfaces, and unrepresentable files there.
 Attention explains adoption impact, exact evidence, and a concrete action. The
 Review Map only orders inspection surfaces and never substitutes for attention.
 A passing happy path alone is not a falsification attempt.
+
+When needed, use these exact nested shapes:
+
+- falsification: \`{"failureHypothesis":"...","attempt":"...","status":"unverified","supportingEvidence":{},"counterEvidence":{},"conclusion":"..."}\` (or use supported, contradicted, or partial with the evidence each result requires);
+- residual unknown: \`{"id":"unknown:id","statement":"...","adoptionImpact":"...","validationPath":"...","references":{"claims":[],"changedFiles":[]}}\`;
+- Review Map entry: \`{"id":"review:id","priority":"must-read|useful-to-sample|mechanically-covered|unresolved","changedFiles":[],"checkIds":[],"claimIds":[],"unknownIds":[],"rationale":"...","prevents":"..."}\`.
 
 Choose challenge depth by the actual dimension:
 

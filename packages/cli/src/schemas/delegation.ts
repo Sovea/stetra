@@ -39,6 +39,28 @@ const ConsequenceValueSchema = SemanticValueSchema.extend({
   value: z.enum(['low', 'medium', 'high']),
 });
 
+const ClaimDimensionSchema = z.enum([
+  'behavior',
+  'invariant',
+  'state-ownership',
+  'data-flow',
+  'control-flow',
+  'compatibility',
+  'migration',
+  'failure-recovery',
+  'security',
+  'operations',
+  'maintenance',
+  'important-non-change',
+]);
+
+const AssuranceDimensionSchema = z.strictObject({
+  dimension: ClaimDimensionSchema,
+  criticality: z.enum(['material', 'adoption-critical']),
+  rationale: NonEmptyStringSchema,
+  basis: InterpretationBasisSchema,
+});
+
 const EvidenceWindowSchema = z.strictObject({
   id: StableIdSchema,
   path: SafeRepositoryPathSchema,
@@ -68,20 +90,7 @@ const ClaimFalsificationSchema = z.strictObject({
 
 const MaterialClaimSchema = z.strictObject({
   id: StableIdSchema,
-  dimension: z.enum([
-    'behavior',
-    'invariant',
-    'state-ownership',
-    'data-flow',
-    'control-flow',
-    'compatibility',
-    'migration',
-    'failure-recovery',
-    'security',
-    'operations',
-    'maintenance',
-    'important-non-change',
-  ]),
+  dimension: ClaimDimensionSchema,
   statement: NonEmptyStringSchema,
   adoptionConsequence: NonEmptyStringSchema,
   adoptionCritical: z.boolean(),
@@ -151,6 +160,7 @@ export const DelegationPrepareDocumentSchema = z.strictObject({
     nonGoals: z.array(SemanticValueSchema),
     focus: z.array(SemanticValueSchema.extend({ value: SafeRepositoryPathSchema })),
     consequence: ConsequenceValueSchema,
+    assuranceDimensions: z.array(AssuranceDimensionSchema),
     unresolvedMaterialFork: z.strictObject({
       question: NonEmptyStringSchema,
       alternatives: z.array(NonEmptyStringSchema).min(2),
@@ -167,7 +177,7 @@ export const CognitiveHandoffDocumentSchema = z.strictObject({
   protocol: z.literal(DELEGATION_PROTOCOL),
   schemaVersion: z.literal(DELEGATION_SCHEMA_VERSION),
   systemMeaningUpdate: NonEmptyStringSchema,
-  materialClaims: z.array(MaterialClaimSchema).min(1),
+  materialClaims: z.array(MaterialClaimSchema),
   residualUnknowns: z.array(ResidualUnknownSchema),
   reviewMap: z.array(ReviewMapEntrySchema),
   materialAlternatives: z.array(MaterialAlternativeSchema).optional(),

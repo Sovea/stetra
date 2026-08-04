@@ -429,6 +429,12 @@ function prepareInput(withCheck: boolean) {
         value: 'high',
         basis: { humanEventIds: ['event:task'], repositoryEvidenceIds: [] },
       },
+      assuranceDimensions: [{
+        dimension: 'behavior',
+        criticality: 'adoption-critical',
+        rationale: 'The fixture behavior determines whether the change is adoptable.',
+        basis: { humanEventIds: ['event:task'], repositoryEvidenceIds: [] },
+      }],
     },
     verification: withCheck
       ? {
