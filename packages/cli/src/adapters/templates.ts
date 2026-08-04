@@ -2,7 +2,12 @@
 
 export type HostAdapter = 'codex' | 'claude';
 
-export const HOST_WORKFLOW_REFERENCES = ['change'] as const;
+export const HOST_WORKFLOW_REFERENCES = [
+  'change',
+  'routine',
+  'assurance',
+  'recovery',
+] as const;
 export type HostWorkflowReference = typeof HOST_WORKFLOW_REFERENCES[number];
 
 export function renderHostSkill(adapter: HostAdapter): string {
@@ -14,17 +19,16 @@ description: Run an authority-visible, fact-bound Semantic Handoff for productio
 
 # resonant-code
 
-Use this workflow for production coding changes where a developer needs an
-inspectable model of the actual change before deciding whether to adopt it.
-
-${host} owns investigation, interpretation, implementation, falsification,
+Use this workflow when a production change needs an inspectable adoption
+package. ${host} owns investigation, interpretation, implementation, challenge,
 and repair. Humans own goals, long-lived tradeoffs, exceptions, and adoption.
-Runtime owns only collected Git and check facts. Never relabel Agent judgment
-as a Human Event or Runtime fact.
+Runtime owns collected Git and check facts.
 
-Read [references/change.md](references/change.md) completely before preparing
-a change. Invoke every lifecycle command with \`--json\`. The CLI never calls
-an LLM.
+Read [references/change.md](references/change.md) before prepare. After every
+JSON result, follow its structured **hostAction**. When **hostAction.reference**
+is non-null, read only the matching file under **references/** before acting.
+Do not choose a cheaper path yourself, skip a Runtime stage, or relabel Agent
+judgment as a Human Event or Runtime fact. The CLI never calls an LLM.
 `;
 }
 
@@ -32,8 +36,7 @@ export function renderHostWorkflowReference(
   _adapter: HostAdapter,
   workflow: HostWorkflowReference,
 ): string {
-  if (workflow !== 'change') throw new Error(`Unsupported Host workflow: ${workflow}`);
-  return CHANGE_REFERENCE;
+  return WORKFLOW_REFERENCES[workflow];
 }
 
 export function renderHostPointerBlock(
@@ -48,248 +51,210 @@ For production coding changes, read and follow [the generated resonant-code skil
 ${markers.end}`;
 }
 
-const CHANGE_REFERENCE = `# Semantic Handoff change workflow
+const CHANGE_REFERENCE = `# Prepare a Semantic Handoff
 
-## Authority and autonomy
+The Runtime lifecycle is always **prepare -> collect -> finalize**. Dynamic Host
+projection changes only which instructions are shown; it never changes the
+kernel, evidence requirements, or Human adoption authority.
+
+## Align authority
 
 - Preserve exact user messages and explicit decisions as Human Events.
-- Structured outcomes, constraints, focus, consequence, claims, and
-  recommendations remain Agent interpretations with exact event/evidence
-  references.
-- Resolve repository facts yourself. Ask one consolidated question only when
-  viable choices differ on public behavior, compatibility, ownership,
-  irreversible migration, security/reliability burden, or another long-lived
-  human-owned tradeoff.
-- The task authorizes necessary local reversible investigation, edits, checks,
-  diagnosis, and repair. Focus paths are not write permissions.
-- Do not prepare while a material semantic fork remains.
+- Outcomes, constraints, focus, consequence, and assurance dimensions are
+  Agent interpretations with exact event/evidence references.
+- Resolve repository-discoverable facts yourself. Ask one consolidated
+  question only when viable choices differ on public behavior, compatibility,
+  ownership, irreversible migration, security/reliability burden, or another
+  long-lived tradeoff. Do not prepare with a material fork unresolved.
+- The task authorizes necessary local reversible inspection, edits, checks,
+  diagnosis, and repair. Focus paths activate attention; they are not write
+  permissions.
 
-The normal path is exactly \`prepare -> collect -> finalize\`. Repeat collect
-after a repair. Explain is an on-demand inspection command, not a normal final
-step.
+## Prepare
 
-## 1. Prepare the Semantic Contract
+Send transient JSON on stdin; never save it in the worktree:
 
-Send the JSON on stdin with \`--input -\`. Never store this transient task
-input inside the project worktree.
-
-\`\`\`json
+~~~json
 {
   "protocol": "semantic-delegation",
   "schemaVersion": "1",
-  "humanEvents": [
-    {
-      "id": "event:task",
-      "kind": "task",
-      "content": "exact human message",
-      "provider": "host name",
-      "nativeId": "optional native event id"
-    }
-  ],
+  "humanEvents": [{"id":"event:task","kind":"task","content":"exact human message","provider":"host name"}],
   "repositoryEvidence": [],
   "semantic": {
-    "desiredOutcome": {
-      "value": "concrete requested outcome",
-      "basis": {"humanEventIds": ["event:task"], "repositoryEvidenceIds": []}
-    },
+    "desiredOutcome": {"value":"concrete outcome","basis":{"humanEventIds":["event:task"],"repositoryEvidenceIds":[]}},
     "constraints": [],
     "nonGoals": [],
     "focus": [],
-    "consequence": {
-      "value": "medium",
-      "basis": {"humanEventIds": ["event:task"], "repositoryEvidenceIds": []}
-    },
-    "assuranceDimensions": [
-      {
-        "dimension": "behavior",
-        "criticality": "material",
-        "rationale": "The requested behavior is the bounded adoption decision surface.",
-        "basis": {"humanEventIds": ["event:task"], "repositoryEvidenceIds": []}
-      }
-    ]
+    "consequence": {"value":"low","basis":{"humanEventIds":["event:task"],"repositoryEvidenceIds":[]}},
+    "assuranceDimensions": []
   },
-  "verification": {
-    "checks": [
-      {
-        "id": "test",
-        "rationale": "requested behavior or regression boundary",
-        "argv": ["package-manager", "test"],
-        "source": "host-task",
-        "commandDefinitionPaths": ["package.json"],
-        "acceptanceSurfacePaths": ["test/public.test.ts"]
-      }
-    ]
-  }
+  "verification": {"checks":[{"id":"test","rationale":"acceptance boundary","argv":["package-manager","test"],"source":"host-task","commandDefinitionPaths":["package.json"],"acceptanceSurfacePaths":[]}]}
 }
-\`\`\`
+~~~
 
-Each semantic value contains \`value\` and \`basis\`; Runtime generates the
-interpretation identity. Consequence describes the adoption impact if the
-change or its explanation is wrong, not implementation effort, diff size, or
-file count:
+Each semantic value needs **value** and **basis**. Evidence windows use **id**,
+repository-relative **path**, **startLine**, and **endLine**; matching establishes
+currency, not semantic truth. Checks are argv arrays without a shell. If no
+command applies, use a concrete **noCommandRationale** instead of **checks**.
 
-- low: a bounded, reversible change with no material compatibility, ownership,
-  migration, security, recovery, or long-lived decision consequence;
-- medium: adoption depends on at least one explicit material dimension;
-- high: adoption depends on at least one explicit adoption-critical dimension.
+Consequence is adoption impact if implementation or explanation is wrong:
 
-\`assuranceDimensions\` is empty only for low-consequence routine work. Medium
-work declares at least one material or adoption-critical dimension. High work
-declares at least one adoption-critical dimension. Use only dimensions that can
-change adoption or direct review; do not manufacture coverage. Runtime compiles
-an inspectable routine, standard, or critical \`assurancePlan\`. A critical
-dimension can escalate a low/medium label; no score or repository heuristic can
-downgrade it.
+- **low**: bounded and reversible, without material compatibility, ownership,
+  migration, security, recovery, or long-lived consequence;
+- **medium**: at least one explicit material dimension;
+- **high**: at least one adoption-critical dimension.
 
-Evidence windows contain \`id\`, repository-relative \`path\`, \`startLine\`,
-and \`endLine\`; matching proves currency, not truth.
+Use an empty **assuranceDimensions** only for low-consequence routine work.
+Otherwise declare only dimensions that can change adoption or direct review,
+with **dimension**, **criticality**, **rationale**, and **basis**. Runtime compiles
+the routine, standard, or critical assurance profile.
 
-Checks use argv arrays without a shell. If no executable check applies, replace
-\`checks\` with a concrete \`noCommandRationale\`. Declare command-definition
-and acceptance-surface paths separately; use empty arrays when neither exists.
-Prepare resolves only the top-level executable; nested modules, services, and
-runtime prerequisites remain collect-time facts.
-
-Check identity is the frozen command and verifier boundary, not an estimated
-wall-clock timeout. Runtime owns a conservative initial execution budget. Pass
-\`--timeout-ms <milliseconds>\` to collect only when repository or environment
-evidence establishes a different budget; it does not change the Semantic
-Contract.
-
-Run the command with the document on stdin:
-
-\`\`\`sh
+~~~sh
 resonant-code change prepare . --input - --json
-\`\`\`
+~~~
 
-Inspect the returned \`semanticContract\`, especially its exact
-\`assurancePlan.requirements\`. Non-runnable results create no run; correct the
-exact issue without bypassing it.
+Inspect the compact **semanticContract** and its **assurancePlan**. Full authority
+content remains inspectable with **change explain --section contract**. A
+non-runnable result creates no run. Otherwise follow **hostAction.command.argv**
+and load only **references/<hostAction.reference>.md**.
+`;
 
-## 2. Implement and collect facts
+const ROUTINE_REFERENCE = `# Routine Host path
 
-Implement and safely repair inside the compiled contract. Re-align only if the
-discovered work changes a long-lived semantic value. Then run:
+Use this page only when Runtime returns **hostAction.reference: "routine"**.
+Routine means fewer Host obligations, not weaker machine facts or a skipped
+lifecycle stage.
 
-\`\`\`sh
-resonant-code change collect . --run <run-id> --json
-\`\`\`
+## Implement and collect
 
-Inspect every returned changed path, check outcome, changed verifier surface,
-the returned \`assurancePlan\`, and the complete patch at \`patch.path\`.
-Runtime, not Host prose, owns those facts. If repair is needed, edit and collect
-again; recollection replaces the old facts and resets \`handoff.json\`.
+Implement the compiled bounded change. Re-align only if discovered work changes
+a long-lived semantic value. Run the exact returned **hostAction.command.argv**.
+On **facts-collected**, inspect every changed path and the complete patch once.
+Confirm that the implementation matches the compact Semantic Contract and try
+to find a concrete contradiction. Treat checks and operations only as Runtime
+facts. If the next reference is **recovery**, stop here and read that page.
 
-If a returned check has \`timedOut: true\`, do not run it separately and do not
-finalize merely to disclose a guessed budget. Follow the returned retry command
-and increase only that check's timeout in the same run:
+## Minimal handoff
 
-\`\`\`sh
-resonant-code change collect . --run <run-id> --retry-check <check-id>=<larger-milliseconds> --json
-\`\`\`
+When the routine plan has no required dimension and the change exposes no new
+material conclusion, fill the returned **handoffPath** with:
 
-Runtime preserves every attempt. Timeout retries are allowed only after the
-latest attempt actually timed out and only with a larger budget. A code edit,
-completed failure, or non-timeout unavailability uses normal collect instead,
-which reruns every frozen check against fresh change facts.
-
-## 3. Author the Cognitive Handoff
-
-Fill the returned \`handoffPath\`. Select only changed paths and check IDs from
-the current collect packet. Do not declare collection identity, operations,
-check results, patch content, confidence, or adoption.
-
-\`\`\`json
+~~~json
 {
   "protocol": "semantic-delegation",
   "schemaVersion": "1",
   "systemMeaningUpdate": "compact description of the implemented system",
-  "materialClaims": [
-    {
-      "id": "claim:behavior",
-      "dimension": "behavior",
-      "statement": "concrete adoption-relevant conclusion",
-      "adoptionConsequence": "what accepting this conclusion changes",
-      "adoptionCritical": false,
-      "basis": "agent-judgment",
-      "evidence": {
-        "changedFiles": ["exact/path.ts"],
-        "checks": ["test"],
-        "patch": true
-      }
-    }
-  ],
+  "materialClaims": [],
   "residualUnknowns": [],
   "reviewMap": []
 }
-\`\`\`
+~~~
 
-For a routine plan with no required dimension, keep \`materialClaims\` empty
-unless the actual change exposes a material conclusion. For every compiled
-requirement, provide at least one claim with the same dimension. A compiled
-adoption-critical requirement must be covered by an adoption-critical claim.
-Do not add claims merely to restate changed files, checks, or the requested
-outcome.
+Do not restate changed files, check results, collection identity, confidence,
+or adoption in Agent-authored fields. If inspection reveals a material claim,
+unknown, verifier change, unrepresentable file, or direct-review need, use
+[assurance.md](assurance.md) before authoring instead of hiding it.
 
-Use an empty \`residualUnknowns\` array when none remains and an empty
-\`reviewMap\` when neither the Assurance Plan nor collected facts require direct
-review. Claim dimensions are behavior, invariant, state-ownership, data-flow,
+Run the exact finalize argv from **hostAction**. Return completed
+**presentationMarkdown** unchanged; it is the CLI-owned authority partition.
+**handoff-ready** means ready for Human review, never adopted. If the result
+references **recovery**, read that page and surface its exact attention.
+`;
+
+const ASSURANCE_REFERENCE = `# Assured Host path
+
+Use this page when Runtime returns **hostAction.reference: "assurance"**, or when
+routine inspection discovers a material adoption conclusion.
+
+## Implement, collect, and challenge
+
+Implement against every compiled **assurancePlan.requirements** item, then run
+the exact **hostAction.command.argv**. Inspect every changed path, check outcome,
+changed verifier surface, and the complete patch. Recollect after any repair.
+
+Fill **handoffPath** without declaring machine facts. For every compiled
+requirement, add a claim of the same dimension; adoption-critical requirements
+need adoption-critical claims. Add no claim merely to repeat the request,
+changed files, or checks.
+
+~~~json
+{
+  "protocol":"semantic-delegation",
+  "schemaVersion":"1",
+  "systemMeaningUpdate":"implemented system meaning",
+  "materialClaims":[{
+    "id":"claim:behavior",
+    "dimension":"behavior",
+    "statement":"bounded adoption-relevant conclusion",
+    "adoptionConsequence":"what accepting it changes",
+    "adoptionCritical":true,
+    "basis":"agent-judgment",
+    "evidence":{"changedFiles":["exact/path.ts"],"checks":["test"],"patch":true},
+    "falsification":{"failureHypothesis":"concrete failure","attempt":"how the complete diff was challenged","status":"supported","supportingEvidence":{"changedFiles":["exact/path.ts"],"checks":["test"]},"counterEvidence":{},"conclusion":"bounded result"}
+  }],
+  "residualUnknowns":[],
+  "reviewMap":[]
+}
+~~~
+
+Claim dimensions are behavior, invariant, state-ownership, data-flow,
 control-flow, compatibility, migration, failure-recovery, security, operations,
 maintenance, and important-non-change. Bases are repository-evidence,
-agent-judgment, human-decision, and unverified. A passing check supports Agent
-judgment; it does not create a Runtime semantic fact.
+agent-judgment, human-decision, and unverified. A passing check can support
+Agent judgment; it does not prove a semantic claim as a Runtime fact.
 
-Every adoption-critical Agent/repository/unverified claim requires
-falsification. Inspect the complete patch and actively seek counterevidence.
-Use supported, contradicted, partial, or unverified; never hide counterevidence.
-Non-critical claims must omit falsification. Every adoption-critical claim,
-including a newly discovered Host escalation, requires must-read or unresolved
-Review Map coverage even when supported. Also cover unknowns, failed/unavailable
-checks, changed verifier surfaces, and unrepresentable files there.
-Attention explains adoption impact, exact evidence, and a concrete action. The
-Review Map only orders inspection surfaces and never substitutes for attention.
-A passing happy path alone is not a falsification attempt.
+Every adoption-critical Agent/repository/unverified claim requires active
+falsification against the complete diff. Use supported, contradicted, partial,
+or unverified and disclose counterevidence. Such claims also require must-read
+or unresolved Review Map coverage. Cover residual unknowns, failed/unavailable
+checks, changed verifier surfaces, and unrepresentable files. A Review Map
+orders inspection; it never substitutes for an Attention explanation.
 
-When needed, use these exact nested shapes:
+When needed:
 
-- falsification: \`{"failureHypothesis":"...","attempt":"...","status":"unverified","supportingEvidence":{},"counterEvidence":{},"conclusion":"..."}\` (or use supported, contradicted, or partial with the evidence each result requires);
-- residual unknown: \`{"id":"unknown:id","statement":"...","adoptionImpact":"...","validationPath":"...","references":{"claims":[],"changedFiles":[]}}\`;
-- Review Map entry: \`{"id":"review:id","priority":"must-read|useful-to-sample|mechanically-covered|unresolved","changedFiles":[],"checkIds":[],"claimIds":[],"unknownIds":[],"rationale":"...","prevents":"..."}\`.
+- unknown: {"id":"unknown:id","statement":"...","adoptionImpact":"...","validationPath":"...","references":{"claims":[],"changedFiles":[]}};
+- review entry: {"id":"review:id","priority":"must-read|useful-to-sample|mechanically-covered|unresolved","changedFiles":[],"checkIds":[],"claimIds":[],"unknownIds":[],"rationale":"...","prevents":"..."}.
 
-Choose challenge depth by the actual dimension:
-
-- state ownership: trace every writer, coupled field, early return, failure,
-  execution order, repeated operation, and later participant;
-- control flow: trace every material branch, cleanup, callback, and async
-  timing boundary;
-- compatibility: probe the promised scope at the generic implementation owner
-  across applicable environments and preserved inputs/state;
-- failure/recovery: force partial execution, retry, duplicate invocation,
-  rollback, cleanup, and idempotency boundaries.
-
-## 4. Finalize and hand off
-
-\`\`\`sh
-resonant-code change finalize . --run <run-id> --json
-\`\`\`
-
-Repository edits after collect return \`facts-stale\`. Failed checks or a
-contradicted critical claim reject. Missing evidence, changed verifier
-surfaces, residual unknowns, and partial/unverified critical claims need
-attention. \`handoff-ready\` means ready for human review, never adopted.
-
-For a completed result, return \`presentationMarkdown\` to the developer
-unchanged. It is the CLI-owned authority partition. If supplemental Host-only
-probes materially help, append them under a separate **Agent supplemental
-evidence** heading; never add them to Runtime facts.
-
-Only when exact underlying detail is needed, use one of:
-
-\`\`\`sh
-resonant-code change explain . --run <run-id> --section contract --json
-resonant-code change explain . --run <run-id> --section facts --json
-resonant-code change explain . --run <run-id> --section handoff --json
-resonant-code change explain . --run <run-id> --section evaluation --json
-resonant-code change explain . --run <run-id> --section presentation --json
-\`\`\`
+Challenge the actual dimension: trace ownership and every writer, control-flow
+branches and cleanup, promised compatibility at its generic owner, or
+failure/retry/rollback/idempotency boundaries. Run the returned finalize argv.
+Return completed **presentationMarkdown** unchanged. Load recovery when the next
+action references it.
 `;
+
+const RECOVERY_REFERENCE = `# Recovery and attention
+
+Follow the structured **hostAction.kind**; do not invent a parallel workflow.
+
+- **retry-timeout**: keep the worktree unchanged and run the exact returned argv.
+  Runtime retries only the named latest timed-out checks with larger budgets
+  and preserves every attempt. Do not run those checks outside Runtime.
+- **restore-and-recollect**: restore the unavailable environment, then run the
+  returned full collect command.
+- **repair-and-recollect**: repair inside the compiled contract, then run the
+  returned full collect command. A code edit or completed failure never uses
+  timeout retry.
+- **recollect-stale**: the worktree changed after collection; recollect before
+  relying on or authoring the handoff.
+- **restart-rejected**: do not adopt or mutate the rejected run. Repair under a
+  newly prepared run and fresh baseline.
+- **inspect-attention**: preserve every reported Attention item. Inspect its
+  exact file, check, claim, unknown, evidence, or patch references and follow
+  the concrete resolution before the Human adoption decision.
+
+Failed checks or contradicted critical claims reject. Missing evidence,
+changed verifier surfaces, residual unknowns, and partial/unverified critical
+claims need attention. If exact detail is needed, use the returned run ID with
+**resonant-code change explain . --run <run-id> --section contract|facts|handoff|evaluation|presentation --json**.
+
+Completed **presentationMarkdown** is the CLI-owned authority partition; return
+it unchanged. Supplemental Host-only probes, if materially useful, go under a
+separate **Agent supplemental evidence** heading and never under Runtime facts.
+`;
+
+const WORKFLOW_REFERENCES: Record<HostWorkflowReference, string> = {
+  change: CHANGE_REFERENCE,
+  routine: ROUTINE_REFERENCE,
+  assurance: ASSURANCE_REFERENCE,
+  recovery: RECOVERY_REFERENCE,
+};

@@ -72,8 +72,18 @@ try {
     'references',
     'change.md',
   );
-  assert.match(readFileSync(changeReference, 'utf8'), /change collect/);
-  assert.match(readFileSync(changeReference, 'utf8'), /human review, never adopted/);
+  const routineReference = join(
+    project,
+    '.agents',
+    'skills',
+    'resonant-code',
+    'references',
+    'routine.md',
+  );
+  assert.match(readFileSync(changeReference, 'utf8'), /change prepare/);
+  assert.match(readFileSync(routineReference, 'utf8'), /Human review, never adopted/);
+  assert.equal(existsSync(join(project, '.agents', 'skills', 'resonant-code', 'references', 'assurance.md')), true);
+  assert.equal(existsSync(join(project, '.agents', 'skills', 'resonant-code', 'references', 'recovery.md')), true);
   assert.equal(existsSync(join(project, '.agents', 'skills', 'resonant-code', 'references', 'bootstrap.md')), false);
 
   git(project, ['init', '-q']);

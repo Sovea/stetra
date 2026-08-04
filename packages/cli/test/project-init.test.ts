@@ -27,33 +27,40 @@ test('project init generates only the Semantic Handoff adapter and manifest', ()
     assert.deepEqual(initialized.readiness, { required: [], recommended: [], optional: [] });
 
     const skillPath = join(root, '.agents', 'skills', 'resonant-code', 'SKILL.md');
-    const changePath = join(root, '.agents', 'skills', 'resonant-code', 'references', 'change.md');
+    const referencesPath = join(root, '.agents', 'skills', 'resonant-code', 'references');
+    const changePath = join(referencesPath, 'change.md');
+    const routinePath = join(referencesPath, 'routine.md');
+    const assurancePath = join(referencesPath, 'assurance.md');
+    const recoveryPath = join(referencesPath, 'recovery.md');
     assert.equal(existsSync(skillPath), true);
     assert.equal(existsSync(changePath), true);
+    assert.equal(existsSync(routinePath), true);
+    assert.equal(existsSync(assurancePath), true);
+    assert.equal(existsSync(recoveryPath), true);
     assert.equal(existsSync(join(root, '.agents', 'skills', 'resonant-code', 'references', 'bootstrap.md')), false);
     assert.equal(existsSync(join(root, '.agents', 'skills', 'resonant-code', 'references', 'context.md')), false);
     const skill = readFileSync(skillPath, 'utf8');
     const change = readFileSync(changePath, 'utf8');
+    const routine = readFileSync(routinePath, 'utf8');
+    const assurance = readFileSync(assurancePath, 'utf8');
+    const recovery = readFileSync(recoveryPath, 'utf8');
     assert.match(skill, /Humans own goals, long-lived tradeoffs, exceptions/);
+    assert.match(skill, /read only the matching file/);
     assert.match(change, /change prepare/);
-    assert.match(change, /change collect/);
-    assert.match(change, /change finalize/);
-    assert.match(change, /handoff-ready.*human review/s);
     assert.match(change, /commandDefinitionPaths.*acceptanceSurfacePaths/s);
-    assert.match(change, /resolves only the top-level executable/);
-    assert.match(change, /Attention explains adoption impact/);
-    assert.match(change, /Review Map.*never substitutes/s);
-    assert.match(change, /failed\/unavailable\s+checks,\s+changed verifier surfaces/);
     assert.match(change, /assuranceDimensions.*adoption-critical dimension/s);
-    assert.match(change, /routine plan.*materialClaims.*empty/s);
-    assert.match(change, /no score or repository heuristic can\s+downgrade/i);
-    assert.match(change, /state ownership.*every writer.*later participant/s);
-    assert.match(change, /control flow.*cleanup.*async\s+timing boundary/s);
-    assert.match(change, /compatibility.*generic implementation owner.*environments/s);
-    assert.match(change, /failure\/recovery.*partial execution.*idempotency/s);
-    assert.match(change, /passing happy path alone is not a falsification attempt/i);
-    assert.match(change, /presentationMarkdown.*unchanged/s);
-    assert.doesNotMatch(change, /Playbook|RCCL|ready-for-adoption/);
+    assert.match(routine, /"materialClaims": \[\]/);
+    assert.match(routine, /presentationMarkdown.*unchanged/s);
+    assert.match(assurance, /Review Map.*never substitutes/s);
+    assert.match(assurance, /trace ownership and every writer/);
+    assert.match(assurance, /failure\/retry\/rollback\/idempotency/);
+    assert.match(recovery, /retry-timeout/);
+    assert.match(recovery, /inspect-attention/);
+    assert.ok(
+      Buffer.byteLength(skill) + Buffer.byteLength(change) + Buffer.byteLength(routine) <= 6_000,
+      'the complete routine instruction projection must stay within 6 KB',
+    );
+    assert.doesNotMatch(`${change}${routine}${assurance}${recovery}`, /Playbook|RCCL|ready-for-adoption/);
     const manifest = JSON.parse(readFileSync(join(root, '.resonant-code', 'manifest.json'), 'utf8'));
     assert.equal(manifest.protocol, 'semantic-delegation');
     assert.equal(manifest.schemaVersion, '1');
@@ -61,7 +68,10 @@ test('project init generates only the Semantic Handoff adapter and manifest', ()
     assert.deepEqual(
       manifest.artifacts.map((artifact: { path: string }) => artifact.path),
       [
+        '.agents/skills/resonant-code/references/assurance.md',
         '.agents/skills/resonant-code/references/change.md',
+        '.agents/skills/resonant-code/references/recovery.md',
+        '.agents/skills/resonant-code/references/routine.md',
         '.agents/skills/resonant-code/SKILL.md',
         '.gitignore',
         'AGENTS.md',
@@ -71,7 +81,7 @@ test('project init generates only the Semantic Handoff adapter and manifest', ()
 
     const unchanged = initializeProject({ projectRoot: root, adapters: ['codex'] });
     assert.equal(unchanged.status, 'initialized');
-    assert.equal(unchanged.counts.unchanged, 4);
+    assert.equal(unchanged.counts.unchanged, 7);
 
     writeFileSync(skillPath, `${skill}\nowner note\n`, 'utf8');
     const blocked = initializeProject({ projectRoot: root, adapters: ['codex'] });
