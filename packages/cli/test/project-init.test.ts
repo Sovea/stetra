@@ -45,12 +45,15 @@ test('project init generates only the Semantic Handoff adapter and manifest', ()
     const assurance = readFileSync(assurancePath, 'utf8');
     const recovery = readFileSync(recoveryPath, 'utf8');
     assert.match(skill, /Humans own goals, long-lived tradeoffs, exceptions/);
-    assert.match(skill, /read only the matching file/);
+    assert.match(skill, /read\s+it only when absent or after context resumed/);
+    assert.match(skill, /do not reread an unchanged\s+reference/);
     assert.match(change, /change prepare/);
     assert.match(change, /commandDefinitionPaths.*acceptanceSurfacePaths/s);
     assert.match(change, /assuranceDimensions.*adoption-critical dimension/s);
     assert.match(routine, /"materialClaims": \[\]/);
     assert.match(routine, /presentationMarkdown.*unchanged/s);
+    assert.match(routine, /Do not repeat paths, checks, system meaning/);
+    assert.match(routine, /Host observations remain Agent evidence/);
     assert.match(assurance, /Review Map.*never substitutes/s);
     assert.match(assurance, /trace ownership and every writer/);
     assert.match(assurance, /failure\/retry\/rollback\/idempotency/);

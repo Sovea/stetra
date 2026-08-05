@@ -26,9 +26,11 @@ Runtime owns collected Git and check facts.
 
 Read [references/change.md](references/change.md) before prepare. After every
 JSON result, follow its structured **hostAction**. When **hostAction.reference**
-is non-null, read only the matching file under **references/** before acting.
-Do not choose a cheaper path yourself, skip a Runtime stage, or relabel Agent
-judgment as a Human Event or Runtime fact. The CLI never calls an LLM.
+is non-null, ensure the matching file under **references/** is in context: read
+it only when absent or after context resumed, and do not reread an unchanged
+reference already loaded for this task. Do not choose a cheaper path yourself,
+skip a Runtime stage, or relabel Agent judgment as a Human Event or Runtime
+fact. The CLI never calls an LLM.
 `;
 }
 
@@ -123,7 +125,8 @@ const ROUTINE_REFERENCE = `# Routine Host path
 
 Use this page only when Runtime returns **hostAction.reference: "routine"**.
 Routine means fewer Host obligations, not weaker machine facts or a skipped
-lifecycle stage.
+lifecycle stage. This page covers both routine actions; if already loaded,
+continue at the matching section without rereading it.
 
 ## Implement and collect
 
@@ -158,7 +161,10 @@ unknown, verifier change, unrepresentable file, or direct-review need, use
 Run the exact finalize argv from **hostAction**. Return completed
 **presentationMarkdown** unchanged; it is the CLI-owned authority partition.
 **handoff-ready** means ready for Human review, never adopted. If the result
-references **recovery**, read that page and surface its exact attention.
+references **recovery**, read that page and surface its exact attention. Append
+only task-requested Host evidence absent from the presentation under **Agent
+supplemental evidence**. Do not repeat paths, checks, system meaning, or the
+adoption notice; Host observations remain Agent evidence.
 `;
 
 const ASSURANCE_REFERENCE = `# Assured Host path
