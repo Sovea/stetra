@@ -193,7 +193,7 @@ function renderCleanRoutineHandoff(
     '',
     `Assurance: \`${assurancePlan.profile}\` — no predeclared material-claim requirement.`,
     '',
-    '### Adoption evidence',
+    '### Runtime facts',
     '',
     `Changed files (${facts.changedFiles.length}):`,
   ];
@@ -206,17 +206,20 @@ function renderCleanRoutineHandoff(
   lines.push('', `Checks (${facts.checks.length}):`);
   if (!facts.checks.length) lines.push('- None configured.');
   for (const check of facts.checks) {
-    lines.push(`- \`${check.id}\` — passed.`);
+    const attempt = check.attempts[0]!;
+    const exit = attempt.exitCode === null ? '' : `; exit ${attempt.exitCode}`;
+    lines.push(`- \`${check.id}\` — passed on first attempt${exit}.`);
   }
 
   lines.push(
     '',
-    '### System meaning update',
+    '### System meaning update (Agent-authored)',
     '',
     blockquote(handoff.systemMeaningUpdate),
     '',
-    '### Adoption gaps',
+    '### Remaining review burden',
     '',
+    '- Material claims: none disclosed.',
     '- Residual unknowns: none disclosed.',
     '- Direct review: none required.',
     '',

@@ -99,7 +99,14 @@ test('routine assurance completes with system meaning and Runtime facts only', a
     const inputPath = join(inputRoot, 'prepare.json');
     writePrepareInput(inputPath, {
       routine: true,
-      noCommandRationale: 'The isolated text fixture has no executable acceptance command.',
+      checks: [{
+        id: 'fixture-check',
+        rationale: 'The fixture process must complete successfully.',
+        argv: [process.execPath, '-e', 'process.exit(0)'],
+        source: 'host-task',
+        commandDefinitionPaths: [],
+        acceptanceSurfacePaths: [],
+      }],
     });
     const prepared = await prepareDelegationTask({
       projectRoot: root,
@@ -141,14 +148,18 @@ test('routine assurance completes with system meaning and Runtime facts only', a
       assert.fail('routine finalization must include the rendered handoff');
     }
     assert.match(finalized.presentationMarkdown, /Assurance: `routine`/);
-    assert.match(finalized.presentationMarkdown, /### Adoption evidence/);
+    assert.match(finalized.presentationMarkdown, /### Runtime facts/);
+    assert.match(finalized.presentationMarkdown, /fixture-check.*passed on first attempt; exit 0/);
+    assert.match(finalized.presentationMarkdown, /### System meaning update \(Agent-authored\)/);
+    assert.match(finalized.presentationMarkdown, /### Remaining review burden/);
+    assert.match(finalized.presentationMarkdown, /Material claims: none disclosed/);
     assert.match(finalized.presentationMarkdown, /Residual unknowns: none disclosed/);
     assert.match(finalized.presentationMarkdown, /source\.txt.*modified/);
     assert.ok(
-      finalized.presentationMarkdown.indexOf('### Adoption evidence')
-        < finalized.presentationMarkdown.indexOf('### System meaning update'),
+      finalized.presentationMarkdown.indexOf('### Runtime facts')
+        < finalized.presentationMarkdown.indexOf('### System meaning update (Agent-authored)'),
     );
-    assert.doesNotMatch(finalized.presentationMarkdown, /Fact collection|timeout budget|### Runtime facts|### Material claims|### Review Map/);
+    assert.doesNotMatch(finalized.presentationMarkdown, /Fact collection|timeout budget|### Material claims|### Review Map|### Adoption evidence/);
     assert.equal(finalized.hostAction.kind, 'review-for-adoption');
     assert.equal(finalized.hostAction.reference, null);
   } finally {
@@ -201,6 +212,55 @@ test('routine presentation expands for a non-text change', async () => {
     assert.equal(finalized.status, 'handoff-ready');
     assert.match(finalized.presentationMarkdown ?? '', /### Runtime facts/);
     assert.doesNotMatch(finalized.presentationMarkdown ?? '', /### Adoption evidence/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+    rmSync(inputRoot, { recursive: true, force: true });
+  }
+});
+
+test('clean routine presentation keeps no-command verification visible', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'resonant-routine-no-command-'));
+  const inputRoot = mkdtempSync(join(tmpdir(), 'resonant-input-'));
+  try {
+    initializeRepository(root);
+    writeFileSync(join(root, 'source.txt'), 'before\n', 'utf8');
+    git(root, ['add', '.']);
+    git(root, ['commit', '-qm', 'initial']);
+    const inputPath = join(inputRoot, 'prepare.json');
+    writePrepareInput(inputPath, {
+      routine: true,
+      noCommandRationale: 'The isolated text fixture has no executable acceptance command.',
+    });
+    const prepared = await prepareDelegationTask({
+      projectRoot: root,
+      inputPath,
+      productVersion: VERSION,
+    });
+    assert.equal(prepared.status, 'prepared');
+    if (prepared.status !== 'prepared') return;
+
+    writeFileSync(join(root, 'source.txt'), 'after\n', 'utf8');
+    const collected = await collectDelegationFacts({
+      projectRoot: root,
+      runId: prepared.runId,
+      productVersion: VERSION,
+    });
+    writeFileSync(collected.handoffPath, `${JSON.stringify({
+      protocol: 'semantic-delegation',
+      schemaVersion: '1',
+      systemMeaningUpdate: 'The bounded text fixture now contains the requested after state.',
+      materialClaims: [],
+      residualUnknowns: [],
+      reviewMap: [],
+    }, null, 2)}\n`, 'utf8');
+
+    const finalized = await finalizeDelegationHandoff({
+      projectRoot: root,
+      runId: prepared.runId,
+    });
+    assert.equal(finalized.status, 'handoff-ready');
+    assert.match(finalized.presentationMarkdown ?? '', /Checks \(0\):\n- None configured\./);
+    assert.match(finalized.presentationMarkdown ?? '', /### Runtime facts/);
   } finally {
     rmSync(root, { recursive: true, force: true });
     rmSync(inputRoot, { recursive: true, force: true });
