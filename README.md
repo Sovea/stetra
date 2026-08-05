@@ -1,17 +1,22 @@
 # resonant-code
 
-`resonant-code` is a change-adoption harness for production coding agents. It
-lets an agent own the local implementation loop while keeping task meaning,
-observed facts, and the adoption decision separately inspectable.
+**Let the agent implement. Keep the thread and the final say.**
 
-The goal is to reduce the total cost from a developer request to a confidently
-adopted change without weakening the developer's understanding of the system or
-the quality of their decisions.
+`resonant-code` is an engineering harness for coding agents, designed to keep
+the engineering thread intact when implementation is delegated.
+
+It connects developer intent, Runtime-collected repository and verification
+facts, Agent execution and explanation, and the Human adoption decision in an
+inspectable engineering loop.
+
+Its objective is to reduce the total cost from a developer request to a
+confident adoption decision without weakening the developer's system
+understanding or engineering judgment.
 
 ## Why it exists
 
-Production coding is not finished when an agent produces a plausible patch.
-The developer still needs to know:
+A coding task is not finished when an agent produces a plausible patch. The
+developer still needs to know:
 
 - what behavior or invariant actually changed;
 - whether the implementation fits the repository and the requested tradeoffs;
@@ -41,7 +46,7 @@ Developer request and material decisions
           Cognitive Handoff
                   |
                   v
-       Developer review and adoption
+    Developer review and adoption decision
 ```
 
 The generated host workflow runs three commands around a normal coding change:
@@ -81,8 +86,8 @@ selection to the agent. The Assurance Plan and actual facts select the
 projection. Any requirement, failed or unavailable check, retry history,
 verifier change, non-text file, unknown, critical claim, or attention
 condition expands the path again. A clean routine completion is presented as a
-compact evidence-first adoption summary; canonical detail remains inspectable
-in the task run.
+compact authority-separated handoff; canonical detail remains inspectable in
+the task run.
 
 ## Proportional assurance
 

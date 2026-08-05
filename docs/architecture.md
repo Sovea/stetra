@@ -1,13 +1,16 @@
 # Architecture
 
-`resonant-code` is a change-adoption harness for production coding agents. It
-lets an agent own the local implementation loop while keeping task meaning,
-collected facts, and the adoption decision separately inspectable.
+`resonant-code` is an engineering harness for coding agents, designed to keep
+the engineering thread intact when implementation is delegated.
+
+It connects developer intent, Runtime-collected repository and verification
+facts, Agent execution and explanation, and the Human adoption decision in an
+inspectable engineering loop.
 
 The product is successful when it lowers the total cost from a developer
-request to a confidently adopted change without weakening the developer's
-understanding of the system or the quality of their decisions. Generation
-speed and passing checks matter only as parts of that outcome.
+request to a confident adoption decision without weakening the developer's
+understanding of the system or their engineering judgment. Generation speed
+and passing checks matter only as parts of that outcome.
 
 It is not a coding agent, repository wiki, planning framework, prompt library,
 or automated code approver.
@@ -43,7 +46,7 @@ Developer request and long-lived decisions
           Cognitive Handoff
                   |
                   v
-       Developer review and adoption
+    Developer review and adoption decision
                   |
                   `------> Decision Continuity (future)
 ```
@@ -57,9 +60,9 @@ The workflow keeps three kinds of authority distinct:
 
 | Participant | Owns | Does not own |
 |---|---|---|
-| Developer | Desired outcome, constraints, non-goals, long-lived tradeoffs, exceptions, and adoption | Repository or check facts contradicted by observation |
+| Developer | Desired outcome, constraints, non-goals, long-lived tradeoffs, exceptions, and adoption decisions | Repository or check facts contradicted by observation |
 | Coding agent | Investigation, interpretation, local engineering judgment, implementation, diagnosis, repair, and handoff claims | The developer's decisions or machine-observed facts |
-| Runtime process | Baselines, frozen check definitions, actual changes, ordered check attempts and execution budgets, output integrity, and other collected facts | Product intent, semantic tradeoffs, or adoption |
+| Runtime process | Baselines, frozen check definitions, actual changes, ordered check attempts and execution budgets, output integrity, and other collected facts | Product intent, semantic tradeoffs, or adoption decisions |
 
 The harness is not another authority. It binds provenance, controls lifecycle
 ordering, collects or validates facts, preserves contradictions, and presents

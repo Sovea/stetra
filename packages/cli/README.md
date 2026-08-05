@@ -1,6 +1,7 @@
 # @sovea/resonant-code
 
-CLI for running a fact-bound change handoff around a production coding task.
+CLI for carrying a coding change from developer intent through
+Runtime-collected facts to an inspectable handoff.
 
 ```sh
 npm install --global @sovea/resonant-code

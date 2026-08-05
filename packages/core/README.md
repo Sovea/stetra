@@ -1,6 +1,7 @@
 # @sovea/resonant-code-core
 
-Deterministic kernel for the `resonant-code` change-adoption protocol.
+Deterministic Semantic Contract and Cognitive Handoff kernel for the
+task-scoped `resonant-code` engineering loop.
 
 ```ts
 import {

@@ -2,14 +2,18 @@
 
 ## What this repository builds
 
-`resonant-code` is a change-adoption harness for production coding agents. It
-lets an agent own the local implementation loop while keeping task meaning,
-observed facts, and the adoption decision separately inspectable.
+`resonant-code` is an engineering harness for coding agents, designed to keep
+the engineering thread intact when implementation is delegated.
 
-The product objective is to reduce the total cost from a developer request to
-a confidently adopted change without weakening the developer's system
-understanding or decision quality. It is not a coding agent, repository wiki,
-planning framework, prompt library, transcript store, or automated approver.
+It connects developer intent, Runtime-collected repository and verification
+facts, Agent execution and explanation, and the Human adoption decision in an
+inspectable engineering loop.
+
+Its objective is to reduce the total cost from a developer request to a
+confident adoption decision without weakening the developer's system
+understanding or engineering judgment. It is not a coding agent, repository
+wiki, planning framework, prompt library, transcript store, or automated
+approver.
 
 Read `docs/architecture.md` before changing product boundaries, lifecycle,
 authority, persistence, public APIs, or host interaction. Read

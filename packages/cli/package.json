@@ -1,7 +1,7 @@
 {
   "name": "@sovea/resonant-code",
   "version": "0.0.1",
-  "description": "Publishable CLI-first control plane for the resonant-code AI coding change harness.",
+  "description": "CLI for the resonant-code engineering harness for coding agents.",
   "type": "module",
   "license": "MIT",
   "repository": {
