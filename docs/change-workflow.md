@@ -27,8 +27,10 @@ next-step field. Its shape is deliberately small:
 
 `command` is absent when the next action is a Human decision or review rather
 than a CLI operation. `reference` is `routine`, `assurance`, `recovery`, or
-`null`. It selects Host instructions but does not add a run mode, state, or
-semantic decision.
+`null`. It is an idempotent ensure-loaded instruction: read the named page when
+it is absent from the current Host context, but do not reread an unchanged page
+already loaded for the task. A fresh or resumed context reads it again. The
+reference does not add a run mode, state, or semantic decision.
 
 ## Project setup
 
@@ -45,8 +47,9 @@ The generated skill progressively discloses four reference pages:
 - `recovery.md` for timeout, unavailable, failed, stale, rejected, or attention
   outcomes.
 
-The Host reads `change.md` initially and then only the exact page named by
-`hostAction.reference`. It does not infer the profile or skip lifecycle stages.
+The Host reads `change.md` initially and then ensures that only the exact page
+named by `hostAction.reference` is available. It does not reload that page in a
+continuous context, infer the profile, or skip lifecycle stages.
 
 `resonant-code status` reports installation state. `doctor --strict` turns
 blocking installation or ownership issues into a failing process result.
@@ -274,15 +277,19 @@ Map remains a separate inspection order.
 
 Completed JSON results include one CLI-rendered `presentationMarkdown`. A host
 adapter relays it unchanged. Any extra investigation added by the host remains
-separately labeled agent evidence and cannot be added to runtime facts.
+separately labeled agent evidence, cannot be added to runtime facts, and adds
+only task-requested observations absent from the rendered handoff. It does not
+repeat changed paths, checks, system meaning, or the adoption notice.
 
 A clean routine result is rendered as a short evidence-first handoff: exact
-changed paths and operations, passing check IDs, system meaning, absence of
-unknowns/direct-review needs, and the Human adoption notice. The full handoff
-is retained whenever a requirement, claim, unknown, alternative, attention,
-Review Map entry, changed verifier surface, non-text change, or multiple check
-attempt exists. This presentation choice is derived at finalize time and
-is not persisted as another mode.
+changed paths and operations, passing check IDs with their one-attempt exit
+facts, an explicitly Agent-authored system-meaning update, absence of
+claims/unknowns/direct-review needs, and the Human adoption notice. Collected
+facts are not labeled adoption evidence. The full handoff is retained whenever
+a requirement, claim, unknown, alternative, attention, Review Map entry,
+changed verifier surface, non-text change, or multiple check attempt exists.
+This presentation choice is derived at finalize time and is not persisted as
+another mode.
 
 `handoff-ready` never records or implies adoption.
 

@@ -45,10 +45,12 @@ core, a general workflow engine, or repository heuristics for this behavior.
 Dynamic Host Projection is the transient presentation layer over that fixed
 kernel. Every stage derives a structured `hostAction` from the compiled plan,
 collected facts, or evaluation status. Generated adapters load only the named
-routine, assurance, or recovery reference. Projection may reduce Host reading
-and authoring cost, but it must not add lifecycle state, persist a mode, infer
-semantic importance, let the Host choose a cheaper path, or hide any condition
-that changes adoption judgment.
+routine, assurance, or recovery reference. A repeated reference means ensure
+that page remains available, not reread an unchanged page already present in a
+continuous Host context. Projection may reduce Host reading and authoring cost,
+but it must not add lifecycle state, persist a mode, infer semantic importance,
+let the Host choose a cheaper path, or hide any condition that changes adoption
+judgment.
 
 Every persistent field or state must answer:
 
@@ -183,8 +185,9 @@ after collection returns `facts-stale` and requires collection again.
 `handoff-ready` means ready for developer review, never adopted.
 
 Generated adapters relay the CLI-owned `presentationMarkdown` unchanged.
-Additional host investigation stays explicitly labeled as agent evidence.
-Clean routine results may use the compact evidence-first renderer only when no
+Additional host investigation stays explicitly labeled as agent evidence and
+must not repeat facts or conclusions already present in that Markdown. Clean
+routine results may use the compact evidence-first renderer only when no
 requirement, material claim, unknown, alternative, Review Map, attention,
 verifier mutation, non-text file, or multiple check attempt exists.
 

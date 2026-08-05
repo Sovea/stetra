@@ -172,11 +172,13 @@ finalize -> ready for Human review
 
 `hostAction` contains a machine-readable action kind, a short reason, an exact
 argv command when one is runnable, and the one generated reference page needed
-for that action. It replaces prose next-step instructions. The generated Host
-skill initially loads only the prepare reference and follows the returned
-reference thereafter; standard and critical guidance does not occupy a clean
-routine task's context, and recovery guidance is loaded only after an actual
-recovery condition.
+for that action. It replaces prose next-step instructions. A reference is an
+idempotent ensure-loaded handle: a continuous Host context does not reread an
+unchanged page it already has, while a fresh or resumed context can load the
+same page safely. The generated Host skill initially loads only the prepare
+reference and follows the returned reference thereafter; standard and critical
+guidance does not occupy a clean routine task's context, and recovery guidance
+is loaded only after an actual recovery condition.
 
 This is dynamic projection, not a general dynamic workflow engine. Runtime
 does not let the Host choose stages, invent a cheaper route, or branch on a
@@ -192,8 +194,10 @@ has no requirements, no material claim, unknown, alternative, Review Map, or
 attention exists, no verifier surface changed, every changed file has a text
 representation, and every configured check passed in one attempt. Any semantic
 or factual escalation, including timeout history, selects the full handoff
-presentation. Presentation can therefore reduce fixed reading cost without
-hiding a condition that changes adoption judgment.
+presentation. The compact form labels collected Runtime facts separately from
+the Agent-authored system-meaning update and Human adoption authority; it does
+not call passing checks adoption evidence. Presentation can therefore reduce
+fixed reading cost without hiding a condition that changes adoption judgment.
 
 ## Fact Spine
 
