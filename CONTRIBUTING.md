@@ -26,7 +26,8 @@ reasoning to the host agent.
 
 Preserve unrelated changes in dirty worktrees. Keep `dist/` generated and
 untracked. Changes to release behavior must pass the isolated Core archive and
-paired Core/CLI archive smoke workflows.
+paired Core/CLI archive smoke workflows. Maintainer publication follows the
+[trusted release process](docs/releasing.md).
 
 Technical verification does not establish product effectiveness. Any claim
 about adoption cost or developer cognition must follow

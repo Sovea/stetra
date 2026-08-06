@@ -149,7 +149,7 @@ That claim remains unverified until committed paired-agent evidence satisfies
 [`evaluation/paired-agent/PROTOCOL.md`](evaluation/paired-agent/PROTOCOL.md)
 and supports a scoped developer decision.
 
-The npm packages are not published yet. From a source checkout:
+To run the current source checkout:
 
 ```sh
 corepack pnpm install --frozen-lockfile
@@ -168,3 +168,4 @@ corepack pnpm verify
 
 Read [CONTRIBUTING.md](CONTRIBUTING.md) before changing public behavior. Core
 and CLI versions move together, and generated `dist/` files are not committed.
+Maintainer releases follow the [trusted publishing process](docs/releasing.md).
