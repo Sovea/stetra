@@ -22,7 +22,7 @@
   },
   "publishConfig": {
     "access": "public",
-    "provenance": true
+    "registry": "https://registry.npmjs.org/"
   },
   "scripts": {
     "build": "tsdown --config ./tsdown.config.ts",

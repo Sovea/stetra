@@ -15,6 +15,9 @@ import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 const workspace = resolve(import.meta.dirname, '..');
+const expectedVersion = JSON.parse(
+  readFileSync(resolve(workspace, 'packages', 'core', 'package.json'), 'utf8'),
+).version;
 const temporary = mkdtempSync(join(tmpdir(), 'resonant-core-release-'));
 try {
   const packDirectory = join(temporary, 'pack');
@@ -34,7 +37,7 @@ try {
   const installedCore = join(consumer, 'node_modules', '@sovea', 'resonant-code-core');
   const manifest = JSON.parse(readFileSync(join(installedCore, 'package.json'), 'utf8'));
   assert.equal(manifest.name, '@sovea/resonant-code-core');
-  assert.equal(manifest.version, '0.0.1');
+  assert.equal(manifest.version, expectedVersion);
   assert.deepEqual(Object.keys(manifest.exports).sort(), ['.', './package.json']);
   assert.equal(existsSync(join(installedCore, 'assets')), false);
   assert.equal(existsSync(join(installedCore, 'dist', 'rccl.mjs')), false);
@@ -113,8 +116,8 @@ try {
     },
     provenance: {
       collector: 'resonant-code-cli',
-      cliVersion: '0.0.1',
-      coreVersion: '0.0.1',
+      cliVersion: expectedVersion,
+      coreVersion: expectedVersion,
     },
   };
   const factCollectionId = stableFingerprint({

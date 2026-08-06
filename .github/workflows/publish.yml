@@ -1,0 +1,127 @@
+name: Publish
+
+on:
+  release:
+    types: [published]
+
+permissions: {}
+
+concurrency:
+  group: publish-${{ github.event.release.tag_name }}
+  cancel-in-progress: false
+
+env:
+  CI: true
+  NODE_VERSION: 24.15.0
+  NPM_VERSION: 11.18.0
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: npm
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Checkout release tag
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.release.tag_name }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
+        with:
+          version: 10.33.0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          registry-url: https://registry.npmjs.org/
+          package-manager-cache: false
+
+      - name: Pin npm for trusted publishing
+        shell: bash
+        run: |
+          npm install --global "npm@$NPM_VERSION" --ignore-scripts
+          [[ "$(npm --version)" == "$NPM_VERSION" ]]
+
+      - name: Validate release contract
+        id: release
+        env:
+          RELEASE_IS_PRERELEASE: ${{ github.event.release.prerelease }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          REPOSITORY_PRIVATE: ${{ github.event.repository.private }}
+        run: node scripts/release-contract.mjs
+
+      - name: Require a main-reachable release commit
+        shell: bash
+        run: |
+          if ! git merge-base --is-ancestor HEAD refs/remotes/origin/main; then
+            echo "Release tag is not reachable from origin/main." >&2
+            exit 1
+          fi
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile --ignore-scripts
+
+      - name: Verify source and dependency audit
+        run: |
+          pnpm verify
+          pnpm audit --audit-level high
+
+      - name: Pack exact release artifacts
+        shell: bash
+        run: |
+          mkdir release-artifacts
+          pnpm --dir packages/core pack --out "$GITHUB_WORKSPACE/release-artifacts/core.tgz"
+          pnpm --dir packages/cli pack --out "$GITHUB_WORKSPACE/release-artifacts/cli.tgz"
+
+      - name: Verify exact release artifacts
+        shell: bash
+        env:
+          RELEASE_VERSION: ${{ steps.release.outputs.version }}
+        run: |
+          artifact_install=$(mktemp -d)
+          npm install \
+            --prefix "$artifact_install" \
+            "$GITHUB_WORKSPACE/release-artifacts/core.tgz" \
+            "$GITHUB_WORKSPACE/release-artifacts/cli.tgz" \
+            --ignore-scripts \
+            --no-audit \
+            --no-fund \
+            --package-lock=false
+          node scripts/verify-release-install.mjs \
+            --root "$artifact_install" \
+            --version "$RELEASE_VERSION"
+
+      - name: Publish Core and CLI with trusted publishing
+        env:
+          DIST_TAG: ${{ steps.release.outputs.dist_tag }}
+          RELEASE_VERSION: ${{ steps.release.outputs.version }}
+        run: |
+          node scripts/publish-release.mjs \
+            --version "$RELEASE_VERSION" \
+            --dist-tag "$DIST_TAG" \
+            --core-tarball release-artifacts/core.tgz \
+            --cli-tarball release-artifacts/cli.tgz
+
+      - name: Verify the public installation and attestations
+        shell: bash
+        env:
+          RELEASE_VERSION: ${{ steps.release.outputs.version }}
+        run: |
+          published_install=$(mktemp -d)
+          npm install \
+            --prefix "$published_install" \
+            "@sovea/resonant-code@$RELEASE_VERSION" \
+            --ignore-scripts \
+            --no-audit \
+            --no-fund
+          node scripts/verify-release-install.mjs \
+            --root "$published_install" \
+            --version "$RELEASE_VERSION"
+          npm audit signatures --prefix "$published_install"

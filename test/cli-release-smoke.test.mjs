@@ -12,7 +12,17 @@ import {
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
+import { verifyReleaseInstallation } from '../scripts/verify-release-install.mjs';
+
 const workspace = resolve(import.meta.dirname, '..');
+const sourceCoreManifest = JSON.parse(
+  readFileSync(resolve(workspace, 'packages', 'core', 'package.json'), 'utf8'),
+);
+const sourceCliManifest = JSON.parse(
+  readFileSync(resolve(workspace, 'packages', 'cli', 'package.json'), 'utf8'),
+);
+assert.equal(sourceCoreManifest.version, sourceCliManifest.version);
+const expectedVersion = sourceCoreManifest.version;
 const temporary = mkdtempSync(join(tmpdir(), 'resonant-cli-release-'));
 
 try {
@@ -35,14 +45,15 @@ try {
     },
   }, null, 2)}\n`, 'utf8');
   run(npmCommand(), ['install', '--ignore-scripts', '--no-audit', '--no-fund'], consumer);
+  await verifyReleaseInstallation(consumer, expectedVersion);
 
   const installedCore = join(consumer, 'node_modules', '@sovea', 'resonant-code-core');
   const installedCli = join(consumer, 'node_modules', '@sovea', 'resonant-code');
   const coreManifest = JSON.parse(readFileSync(join(installedCore, 'package.json'), 'utf8'));
   const cliManifest = JSON.parse(readFileSync(join(installedCli, 'package.json'), 'utf8'));
-  assert.equal(coreManifest.version, '0.0.1');
-  assert.equal(cliManifest.version, '0.0.1');
-  assert.equal(cliManifest.dependencies['@sovea/resonant-code-core'], '0.0.1');
+  assert.equal(coreManifest.version, expectedVersion);
+  assert.equal(cliManifest.version, expectedVersion);
+  assert.equal(cliManifest.dependencies['@sovea/resonant-code-core'], expectedVersion);
   assert.equal(cliManifest.bin['resonant-code'], './dist/index.mjs');
   assert.equal(existsSync(join(installedCore, 'assets')), false);
   const cliEntrypoint = resolve(installedCli, cliManifest.bin['resonant-code']);
@@ -52,7 +63,7 @@ try {
     '.bin',
     process.platform === 'win32' ? 'resonant-code.cmd' : 'resonant-code',
   );
-  assert.equal(run(binary, ['--version'], consumer).stdout.trim(), '0.0.1');
+  assert.equal(run(binary, ['--version'], consumer).stdout.trim(), expectedVersion);
   const runInstalledCli = (args) => runJson(
     process.execPath,
     [cliEntrypoint, ...args],
@@ -140,7 +151,7 @@ try {
   const preparedRun = JSON.parse(readFileSync(prepared.details.runPath, 'utf8'));
   assert.equal(preparedRun.workflow, 'semantic-handoff');
   assert.equal(preparedRun.state, 'prepared');
-  assert.equal(preparedRun.packageIdentity.core.version, '0.0.1');
+  assert.equal(preparedRun.packageIdentity.core.version, expectedVersion);
   assert.equal(Object.hasOwn(preparedRun, 'pluginRoot'), false);
 
   writeFileSync(join(project, 'src', 'example.ts'), 'export const value = 2;\n', 'utf8');

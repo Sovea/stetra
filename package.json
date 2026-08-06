@@ -11,9 +11,10 @@
     "verify:dist": "node test/verify-dist.test.mjs",
     "verify:evaluation": "node test/verify-evaluation.test.mjs",
     "verify:packages": "node test/verify-packages.test.mjs",
+    "verify:release": "node --test test/release-contract.test.mjs && node test/verify-release-workflow.test.mjs",
     "verify:smoke": "node test/release-smoke.test.mjs && node test/cli-release-smoke.test.mjs",
     "verify:cli": "node packages/cli/dist/index.mjs --version && node packages/cli/dist/index.mjs status . --json",
-    "verify": "corepack pnpm typecheck && corepack pnpm test:coverage && corepack pnpm build && corepack pnpm verify:dist && corepack pnpm verify:packages && corepack pnpm verify:smoke && corepack pnpm verify:evaluation && corepack pnpm verify:cli"
+    "verify": "corepack pnpm typecheck && corepack pnpm test:coverage && corepack pnpm build && corepack pnpm verify:dist && corepack pnpm verify:packages && corepack pnpm verify:release && corepack pnpm verify:smoke && corepack pnpm verify:evaluation && corepack pnpm verify:cli"
   },
   "devDependencies": {
     "c8": "^11.0.0",

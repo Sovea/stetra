@@ -11,11 +11,14 @@ const cli = JSON.parse(readFileSync(resolve(root, 'packages/cli/package.json'), 
 assert.equal(core.name, '@sovea/resonant-code-core');
 assert.equal(cli.name, '@sovea/resonant-code');
 assert.equal(core.version, cli.version, 'Core and CLI versions must move together.');
-assert.equal(core.version, '0.0.1');
 assert.equal(core.private, undefined);
 assert.equal(cli.private, undefined);
 assert.equal(core.publishConfig?.access, 'public');
 assert.equal(cli.publishConfig?.access, 'public');
+assert.equal(core.publishConfig?.registry, 'https://registry.npmjs.org/');
+assert.equal(cli.publishConfig?.registry, 'https://registry.npmjs.org/');
+assert.equal(core.publishConfig?.provenance, undefined);
+assert.equal(cli.publishConfig?.provenance, undefined);
 assert.equal(cli.dependencies?.[core.name], 'workspace:*');
 assert.deepEqual(cli.bin, { 'resonant-code': './dist/index.mjs' });
 assert.deepEqual(Object.keys(core.exports).sort(), ['.', './package.json']);
