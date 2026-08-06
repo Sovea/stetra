@@ -15,6 +15,32 @@ import {
   initializeProject,
   inspectProjectInstallation,
 } from '../src/project/init.ts';
+import {
+  compareSemanticVersions,
+  PRODUCT_VERSION,
+} from '../src/version.ts';
+
+test('generator versions follow semantic prerelease precedence', () => {
+  const ordered = [
+    '0.0.1-alpha',
+    '0.0.1-alpha.0',
+    '0.0.1-alpha.2',
+    '0.0.1-alpha.10',
+    '0.0.1-beta.0',
+    '0.0.1-rc.0',
+    '0.0.1',
+    '0.0.2-alpha.0',
+  ];
+  for (let index = 1; index < ordered.length; index += 1) {
+    assert.ok(compareSemanticVersions(ordered[index - 1], ordered[index]) < 0);
+    assert.ok(compareSemanticVersions(ordered[index], ordered[index - 1]) > 0);
+  }
+  assert.equal(
+    compareSemanticVersions('0.0.1-alpha.0+build.1', '0.0.1-alpha.0+build.2'),
+    0,
+  );
+  assert.throws(() => compareSemanticVersions('0.0.1-alpha.01', '0.0.1'));
+});
 
 test('project init generates only the Semantic Handoff adapter and manifest', () => {
   const root = mkdtempSync(join(tmpdir(), 'resonant-init-'));
@@ -67,6 +93,7 @@ test('project init generates only the Semantic Handoff adapter and manifest', ()
     const manifest = JSON.parse(readFileSync(join(root, '.resonant-code', 'manifest.json'), 'utf8'));
     assert.equal(manifest.protocol, 'semantic-delegation');
     assert.equal(manifest.schemaVersion, '1');
+    assert.equal(manifest.generatorVersion, PRODUCT_VERSION);
     assert.equal(manifest.adapterProtocolVersion, '1');
     assert.deepEqual(
       manifest.artifacts.map((artifact: { path: string }) => artifact.path),
@@ -161,7 +188,10 @@ test('new manifest rejects unknown fields and newer generators', () => {
     writeFileSync(manifestPath, `${JSON.stringify({ ...manifest, unknown: true })}\n`, 'utf8');
     assert.throws(() => initializeProject({ projectRoot: root }), /unrecognized key|unknown/i);
 
-    writeFileSync(manifestPath, `${JSON.stringify({ ...manifest, generatorVersion: '99.0.0' })}\n`, 'utf8');
+    writeFileSync(manifestPath, `${JSON.stringify({
+      ...manifest,
+      generatorVersion: '99.0.0-alpha.0',
+    })}\n`, 'utf8');
     assert.throws(() => initializeProject({ projectRoot: root }), /newer CLI/);
   } finally {
     rmSync(root, { recursive: true, force: true });

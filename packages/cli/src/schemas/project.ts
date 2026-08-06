@@ -4,6 +4,7 @@ import {
   DELEGATION_PROTOCOL,
   DELEGATION_SCHEMA_VERSION,
 } from '../protocol.ts';
+import { SEMANTIC_VERSION_PATTERN } from '../version.ts';
 
 export const HostAdapterSchema = z.enum(['codex', 'claude']);
 
@@ -17,7 +18,10 @@ export const ManifestArtifactSchema = z.strictObject({
 export const ProjectManifestSchema = z.strictObject({
   protocol: z.literal(DELEGATION_PROTOCOL),
   schemaVersion: z.literal(DELEGATION_SCHEMA_VERSION),
-  generatorVersion: z.string().regex(/^\d+\.\d+\.\d+$/),
+  generatorVersion: z.string().regex(
+    SEMANTIC_VERSION_PATTERN,
+    'must be a valid semantic version',
+  ),
   adapterProtocolVersion: z.literal(DELEGATION_SCHEMA_VERSION),
   adapters: z.array(HostAdapterSchema),
   artifacts: z.array(ManifestArtifactSchema),

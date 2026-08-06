@@ -15,6 +15,7 @@ import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 
 import {
   ADAPTER_PROTOCOL_VERSION,
+  compareSemanticVersions,
   MANIFEST_SCHEMA_VERSION,
   PRODUCT_VERSION,
 } from '../version.ts';
@@ -441,7 +442,7 @@ function readManifest(projectRoot: string): ProjectManifest | null {
       `UNSUPPORTED_ADAPTER_PROTOCOL: ${MANIFEST_PATH} requires ${manifest.adapterProtocolVersion}; this CLI supports ${ADAPTER_PROTOCOL_VERSION}.`,
     );
   }
-  if (compareVersions(manifest.generatorVersion, PRODUCT_VERSION) > 0) {
+  if (compareSemanticVersions(manifest.generatorVersion, PRODUCT_VERSION) > 0) {
     throw new Error(
       `UNSUPPORTED_GENERATOR_VERSION: ${MANIFEST_PATH} was written by newer CLI ${manifest.generatorVersion}; installed CLI is ${PRODUCT_VERSION}.`,
     );
@@ -619,23 +620,6 @@ function sha256(value: string): string {
 
 function canonicalGeneratedContent(value: string): string {
   return value.replace(/\r\n/g, '\n');
-}
-
-function compareVersions(left: string, right: string): number {
-  const leftParts = parseVersion(left);
-  const rightParts = parseVersion(right);
-  for (let index = 0; index < leftParts.length; index += 1) {
-    if (leftParts[index] !== rightParts[index]) {
-      return leftParts[index] - rightParts[index];
-    }
-  }
-  return 0;
-}
-
-function parseVersion(value: string): [number, number, number] {
-  const match = /^(\d+)\.(\d+)\.(\d+)$/.exec(value);
-  if (!match) throw new Error(`Invalid generator version in ${MANIFEST_PATH}: ${value}`);
-  return [Number(match[1]), Number(match[2]), Number(match[3])];
 }
 
 function artifactNewlines(value: string, newline: string): string {
