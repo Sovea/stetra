@@ -38,7 +38,6 @@ const ENVELOPE = {
   protocol: SEMANTIC_DELEGATION_PROTOCOL,
   schemaVersion: SEMANTIC_DELEGATION_SCHEMA_VERSION,
 } as const;
-const HUMAN_AUTHORITY_NOTICE = 'This handoff is ready for human review only. Runtime and Host conclusions do not record adoption.';
 const CLAIM_BASES = new Set<ClaimBasis>([
   'repository-evidence',
   'agent-judgment',
@@ -73,15 +72,12 @@ export function evaluateHandoff(input: EvaluateHandoffInput): HandoffEvaluation 
       factCollectionId: input.factBundle.factCollectionId,
       attention: [{
         code: 'facts-stale',
-        summary: 'The worktree changed after fact collection.',
-        adoptionImpact: 'The collected patch and checks no longer describe the repository being handed off.',
         references: {},
         resolution: {
           kind: 'recollect',
-          action: 'Run collect again before evaluating or presenting any semantic conclusion.',
         },
       }],
-      humanAuthorityNotice: HUMAN_AUTHORITY_NOTICE,
+      adoption: { authority: 'human', decisionRecorded: false },
     };
   }
 
@@ -112,7 +108,7 @@ export function evaluateHandoff(input: EvaluateHandoffInput): HandoffEvaluation 
     })),
     attention,
     reviewMap: handoff.reviewMap,
-    humanAuthorityNotice: HUMAN_AUTHORITY_NOTICE,
+    adoption: { authority: 'human', decisionRecorded: false },
   };
 }
 
@@ -126,23 +122,20 @@ function buildAttention(
     if (latest.status === 'failed') {
       output.push({
         code: 'check-failed',
-        summary: `Configured check ${check.id} failed.`,
-        adoptionImpact: 'The selected verification boundary contradicts readiness of the current implementation.',
+        checkId: check.id,
         references: { checks: [check.id] },
         resolution: {
           kind: 'repair-or-revise',
-          action: 'Inspect the exact check output, repair inside the Semantic Contract, and collect again; realign if the repair changes long-lived meaning.',
         },
       });
     } else if (latest.status === 'unavailable') {
       output.push({
         code: 'check-unavailable',
-        summary: `Configured check ${check.id} was unavailable${latest.reason ? `: ${latest.reason}` : '.'}`,
-        adoptionImpact: 'A selected verification boundary produced no completed outcome, so its intended evidence is missing.',
+        checkId: check.id,
+        ...(latest.reason ? { reason: latest.reason } : {}),
         references: { checks: [check.id] },
         resolution: {
           kind: 'supply-evidence',
-          action: 'Restore the configured command environment and collect again, or directly review the disclosed evidence gap before adoption.',
         },
       });
     }
@@ -171,14 +164,12 @@ function buildAttention(
     const checkIds = [...group.checkIds].sort((left, right) => left.localeCompare(right));
     output.push({
       code: 'verifier-surface-changed',
-      summary: `Verification ${group.role} ${group.path} changed for ${checkIds.length === 1 ? 'check' : 'checks'} ${checkIds.join(', ')}.`,
-      adoptionImpact: group.role === 'command-definition'
-        ? 'The executed check definition changed with the implementation, so the result is not independent of that change.'
-        : 'The acceptance surface changed with the implementation, so a passing result may reflect revised expectations rather than preserved behavior.',
+      path: group.path,
+      role: group.role,
+      checkIds,
       references: { changedFiles: [group.changedPath], checks: checkIds },
       resolution: {
         kind: 'direct-review',
-        action: 'Review the changed verifier surface directly and add independent evidence when it could mask a regression.',
       },
     });
   }
@@ -186,12 +177,10 @@ function buildAttention(
     if (file.representation !== 'unrepresentable') continue;
     output.push({
       code: 'change-unrepresentable',
-      summary: `Change details for ${file.path} are not representable in the collected patch.`,
-      adoptionImpact: 'The normal text patch cannot show the complete changed content for direct inspection.',
+      path: file.path,
       references: { changedFiles: [file.path] },
       resolution: {
         kind: 'direct-review',
-        action: 'Inspect the exact file or metadata change with an appropriate repository-native tool before adoption.',
       },
     });
   }
@@ -201,8 +190,8 @@ function buildAttention(
     if (falsification.status === 'contradicted') {
       output.push({
         code: 'critical-claim-contradicted',
-        summary: `Adoption-critical claim ${claim.id} is contradicted: ${falsification.conclusion}`,
-        adoptionImpact: claim.adoptionConsequence,
+        claimId: claim.id,
+        falsification: 'contradicted',
         references: mergeAttentionReferences(
           { claims: [claim.id] },
           evidenceAttentionReferences(claim.evidence),
@@ -210,32 +199,36 @@ function buildAttention(
         ),
         resolution: {
           kind: 'repair-or-revise',
-          action: 'Do not adopt this conclusion; repair the implementation or revise the claim and collect fresh evidence.',
         },
       });
     } else if (falsification.status === 'partial' || falsification.status === 'unverified') {
-      output.push({
-        code: `critical-claim-${falsification.status}`,
-        summary: `Adoption-critical claim ${claim.id} is ${falsification.status}: ${falsification.conclusion}`,
-        adoptionImpact: claim.adoptionConsequence,
-        references: mergeAttentionReferences(
-          { claims: [claim.id] },
-          evidenceAttentionReferences(claim.evidence),
-          evidenceAttentionReferences(falsification.supportingEvidence),
-          evidenceAttentionReferences(falsification.counterEvidence),
-        ),
-        resolution: {
-          kind: 'supply-evidence',
-          action: 'Execute the missing validation, narrow the claim, or review the unresolved boundary directly before adoption.',
-        },
-      });
+      const references = mergeAttentionReferences(
+        { claims: [claim.id] },
+        evidenceAttentionReferences(claim.evidence),
+        evidenceAttentionReferences(falsification.supportingEvidence),
+        evidenceAttentionReferences(falsification.counterEvidence),
+      );
+      output.push(falsification.status === 'partial'
+        ? {
+            code: 'critical-claim-partial',
+            claimId: claim.id,
+            falsification: 'partial',
+            references,
+            resolution: { kind: 'supply-evidence' },
+          }
+        : {
+            code: 'critical-claim-unverified',
+            claimId: claim.id,
+            falsification: 'unverified',
+            references,
+            resolution: { kind: 'supply-evidence' },
+          });
     }
   }
   for (const unknown of handoff.residualUnknowns) {
     output.push({
       code: 'residual-unknown',
-      summary: unknown.statement,
-      adoptionImpact: unknown.adoptionImpact,
+      unknownId: unknown.id,
       references: {
         ...(unknown.references.changedFiles.length
           ? { changedFiles: unknown.references.changedFiles }
@@ -245,7 +238,6 @@ function buildAttention(
       },
       resolution: {
         kind: 'execute-validation',
-        action: unknown.validationPath,
       },
     });
   }

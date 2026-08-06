@@ -74,13 +74,16 @@ test('project init generates only the Semantic Handoff adapter and manifest', ()
     assert.match(skill, /read\s+it only when absent or after context resumed/);
     assert.match(skill, /do not reread an unchanged\s+reference/);
     assert.match(change, /change prepare/);
+    assert.match(change, /current user's language/);
+    assert.match(change, /natural-language Semantic Contract and Cognitive Handoff fields/);
     assert.match(change, /commandDefinitionPaths.*acceptanceSurfacePaths/s);
     assert.match(change, /assuranceDimensions.*adoption-critical dimension/s);
     assert.match(routine, /"materialClaims": \[\]/);
-    assert.match(routine, /presentationMarkdown.*unchanged/s);
-    assert.match(routine, /Do not repeat paths, checks, system meaning/);
-    assert.match(routine, /Host observations remain Agent evidence/);
+    assert.match(routine, /Render its \*\*handoffPacket\*\*/);
+    assert.match(skill, /semanticContract.*runtimeFacts.*hostHandoff.*evaluation/s);
+    assert.match(skill, /Preserve paths, IDs, enums, commands, numeric facts/);
     assert.match(assurance, /Review Map.*never substitutes/s);
+    assert.match(assurance, /current user's language/);
     assert.match(assurance, /trace ownership and every writer/);
     assert.match(assurance, /failure\/retry\/rollback\/idempotency/);
     assert.match(recovery, /retry-timeout/);
@@ -90,6 +93,7 @@ test('project init generates only the Semantic Handoff adapter and manifest', ()
       'the complete routine instruction projection must stay within 6 KB',
     );
     assert.doesNotMatch(`${change}${routine}${assurance}${recovery}`, /Playbook|RCCL|ready-for-adoption/);
+    assert.doesNotMatch(`${skill}${change}${routine}${assurance}${recovery}`, /presentationLocale|presentationMarkdown/);
     const manifest = JSON.parse(readFileSync(join(root, '.resonant-code', 'manifest.json'), 'utf8'));
     assert.equal(manifest.protocol, 'semantic-delegation');
     assert.equal(manifest.schemaVersion, '1');

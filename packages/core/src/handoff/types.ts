@@ -1,6 +1,6 @@
 import type { RepositoryEvidence } from '../authority/types.ts';
 import type { ClaimDimension } from '../assurance/types.ts';
-import type { SemanticContract } from '../delegation/types.ts';
+import type { SemanticContract, VerifierRefRole } from '../delegation/types.ts';
 import type { FactBundle } from '../facts/types.ts';
 import type { ProtocolEnvelope, ValidationIssue } from '../shared/protocol.ts';
 
@@ -103,6 +103,17 @@ export type AttentionResolutionKind =
   | 'direct-review'
   | 'execute-validation';
 
+export type HandoffAttentionCode =
+  | 'facts-stale'
+  | 'check-failed'
+  | 'check-unavailable'
+  | 'verifier-surface-changed'
+  | 'change-unrepresentable'
+  | 'critical-claim-contradicted'
+  | 'critical-claim-partial'
+  | 'critical-claim-unverified'
+  | 'residual-unknown';
+
 export interface HandoffAttentionReferences {
   changedFiles?: string[];
   checks?: string[];
@@ -113,16 +124,54 @@ export interface HandoffAttentionReferences {
   patch?: boolean;
 }
 
-export interface HandoffAttentionItem {
-  code: string;
-  summary: string;
-  adoptionImpact: string;
+interface HandoffAttentionBase {
   references: HandoffAttentionReferences;
   resolution: {
     kind: AttentionResolutionKind;
-    action: string;
   };
 }
+
+export type HandoffAttentionItem = HandoffAttentionBase & (
+  | { code: 'facts-stale' }
+  | {
+      code: 'check-failed';
+      checkId: string;
+    }
+  | {
+      code: 'check-unavailable';
+      checkId: string;
+      reason?: string;
+    }
+  | {
+      code: 'verifier-surface-changed';
+      path: string;
+      role: VerifierRefRole;
+      checkIds: string[];
+    }
+  | {
+      code: 'change-unrepresentable';
+      path: string;
+    }
+  | {
+      code: 'critical-claim-contradicted';
+      claimId: string;
+      falsification: 'contradicted';
+    }
+  | {
+      code: 'critical-claim-partial';
+      claimId: string;
+      falsification: 'partial';
+    }
+  | {
+      code: 'critical-claim-unverified';
+      claimId: string;
+      falsification: 'unverified';
+    }
+  | {
+      code: 'residual-unknown';
+      unknownId: string;
+    }
+);
 
 export interface HandoffEvaluation extends ProtocolEnvelope {
   status: HandoffStatus;
@@ -138,7 +187,10 @@ export interface HandoffEvaluation extends ProtocolEnvelope {
   }>;
   attention: HandoffAttentionItem[];
   reviewMap?: ReviewMapEntry[];
-  humanAuthorityNotice: string;
+  adoption: {
+    authority: 'human';
+    decisionRecorded: false;
+  };
 }
 
 export interface HandoffValidationIssue extends ValidationIssue {

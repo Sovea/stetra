@@ -31,6 +31,15 @@ it only when absent or after context resumed, and do not reread an unchanged
 reference already loaded for this task. Do not choose a cheaper path yourself,
 skip a Runtime stage, or relabel Agent judgment as a Human Event or Runtime
 fact. The CLI never calls an LLM.
+
+When finalize returns **handoffPacket**, write the user-facing Cognitive
+Handoff in the current user's language. Treat **semanticContract**,
+**runtimeFacts**, **hostHandoff**, and **evaluation** as separate authority
+partitions. Preserve paths, IDs, enums, commands, numeric facts, and raw tool
+output exactly. Never promote Host prose to Runtime fact or record adoption for
+the Human. Include every Attention item and adoption-changing review surface;
+clean routine packets may collapse empty sections. The packet is source data,
+not prose to quote wholesale.
 `;
 }
 
@@ -55,22 +64,20 @@ ${markers.end}`;
 
 const CHANGE_REFERENCE = `# Prepare a Semantic Handoff
 
-The Runtime lifecycle is always **prepare -> collect -> finalize**. Dynamic Host
-projection changes only which instructions are shown; it never changes the
-kernel, evidence requirements, or Human adoption authority.
+Runtime always runs **prepare -> collect -> finalize**. Host projection changes
+loaded instructions, never evidence or Human adoption authority.
 
 ## Align authority
 
 - Preserve exact user messages and explicit decisions as Human Events.
-- Outcomes, constraints, focus, consequence, and assurance dimensions are
-  Agent interpretations with exact event/evidence references.
-- Resolve repository-discoverable facts yourself. Ask one consolidated
-  question only when viable choices differ on public behavior, compatibility,
-  ownership, irreversible migration, security/reliability burden, or another
-  long-lived tradeoff. Do not prepare with a material fork unresolved.
-- The task authorizes necessary local reversible inspection, edits, checks,
-  diagnosis, and repair. Focus paths activate attention; they are not write
-  permissions.
+- Outcomes, constraints, focus, consequence, and assurance dimensions are Agent
+  interpretations referencing exact events/evidence.
+- Resolve repository facts. Ask once only when viable choices differ on public
+  behavior, compatibility, ownership, irreversible migration, security,
+  reliability, or another long-lived tradeoff. Never prepare an unresolved fork.
+- The task authorizes necessary local reversible work. Focus is not permission.
+- Write natural-language Semantic Contract and Cognitive Handoff fields in the
+  current user's language. Preserve quoted Human Events and evidence exactly.
 
 ## Prepare
 
@@ -95,52 +102,47 @@ Send transient JSON on stdin; never save it in the worktree:
 ~~~
 
 Each semantic value needs **value** and **basis**. Evidence windows use **id**,
-repository-relative **path**, **startLine**, and **endLine**; matching establishes
-currency, not semantic truth. Checks are argv arrays without a shell. If no
-command applies, use a concrete **noCommandRationale** instead of **checks**.
+repository-relative **path**, **startLine**, and **endLine**; matching proves
+currency, not truth. Checks are shell-free argv arrays. If none applies, give a
+concrete **noCommandRationale**.
 
 Consequence is adoption impact if implementation or explanation is wrong:
 
-- **low**: bounded and reversible, without material compatibility, ownership,
-  migration, security, recovery, or long-lived consequence;
+- **low**: bounded and reversible without material long-lived consequence;
 - **medium**: at least one explicit material dimension;
 - **high**: at least one adoption-critical dimension.
 
 Use an empty **assuranceDimensions** only for low-consequence routine work.
-Otherwise declare only dimensions that can change adoption or direct review,
-with **dimension**, **criticality**, **rationale**, and **basis**. Runtime compiles
-the routine, standard, or critical assurance profile.
+Otherwise declare only adoption/review-changing dimensions with **dimension**,
+**criticality**, **rationale**, and **basis**. Runtime compiles the routine,
+standard, or critical profile.
 
 ~~~sh
 resonant-code change prepare . --input - --json
 ~~~
 
-Inspect the compact **semanticContract** and its **assurancePlan**. Full authority
-content remains inspectable with **change explain --section contract**. A
-non-runnable result creates no run. Otherwise follow **hostAction.command.argv**
-and load only **references/<hostAction.reference>.md**.
+Inspect **semanticContract** and **assurancePlan**; exact authority remains in
+**change explain --section contract**. A non-runnable result creates no run.
+Otherwise follow **hostAction.command.argv** and its one reference.
 `;
 
 const ROUTINE_REFERENCE = `# Routine Host path
 
-Use this page only when Runtime returns **hostAction.reference: "routine"**.
-Routine means fewer Host obligations, not weaker machine facts or a skipped
-lifecycle stage. This page covers both routine actions; if already loaded,
-continue at the matching section without rereading it.
+Use only for **hostAction.reference: "routine"**. Routine reduces Host
+obligations, not facts or lifecycle stages. Continue at the matching action.
 
 ## Implement and collect
 
-Implement the compiled bounded change. Re-align only if discovered work changes
-a long-lived semantic value. Run the exact returned **hostAction.command.argv**.
-On **facts-collected**, inspect every changed path and the complete patch once.
-Confirm that the implementation matches the compact Semantic Contract and try
-to find a concrete contradiction. Treat checks and operations only as Runtime
-facts. If the next reference is **recovery**, stop here and read that page.
+Implement the bounded change; re-align only if a long-lived semantic value
+changes. Run **hostAction.command.argv**. On **facts-collected**, inspect every
+changed path and the complete patch once, check the contract, and seek a
+concrete contradiction. Checks and operations are Runtime facts. Stop for a
+**recovery** reference.
 
 ## Minimal handoff
 
-When the routine plan has no required dimension and the change exposes no new
-material conclusion, fill the returned **handoffPath** with:
+With no required dimension or new material conclusion, fill **handoffPath**
+with prose in the current user's language:
 
 ~~~json
 {
@@ -153,18 +155,13 @@ material conclusion, fill the returned **handoffPath** with:
 }
 ~~~
 
-Do not restate changed files, check results, collection identity, confidence,
-or adoption in Agent-authored fields. If inspection reveals a material claim,
-unknown, verifier change, unrepresentable file, or direct-review need, use
-[assurance.md](assurance.md) before authoring instead of hiding it.
+Do not restate machine facts, confidence, or adoption. If inspection reveals a
+material claim, unknown, verifier change, unrepresentable file, or review need,
+use [assurance.md](assurance.md) instead of hiding it.
 
-Run the exact finalize argv from **hostAction**. Return completed
-**presentationMarkdown** unchanged; it is the CLI-owned authority partition.
-**handoff-ready** means ready for Human review, never adopted. If the result
-references **recovery**, read that page and surface its exact attention. Append
-only task-requested Host evidence absent from the presentation under **Agent
-supplemental evidence**. Do not repeat paths, checks, system meaning, or the
-adoption notice; Host observations remain Agent evidence.
+Run the finalize argv. Render its **handoffPacket** under the skill's authority
+and language contract. **handoff-ready** means ready for Human review, never
+adopted. Follow any **recovery** reference before recommending adoption.
 `;
 
 const ASSURANCE_REFERENCE = `# Assured Host path
@@ -181,7 +178,8 @@ changed verifier surface, and the complete patch. Recollect after any repair.
 Fill **handoffPath** without declaring machine facts. For every compiled
 requirement, add a claim of the same dimension; adoption-critical requirements
 need adoption-critical claims. Add no claim merely to repeat the request,
-changed files, or checks.
+changed files, or checks. Use the current user's language while preserving
+paths, IDs, and enum values exactly.
 
 ~~~json
 {
@@ -224,8 +222,8 @@ When needed:
 Challenge the actual dimension: trace ownership and every writer, control-flow
 branches and cleanup, promised compatibility at its generic owner, or
 failure/retry/rollback/idempotency boundaries. Run the returned finalize argv.
-Return completed **presentationMarkdown** unchanged. Load recovery when the next
-action references it.
+Render the returned **handoffPacket** under the skill's authority and language
+contract. Load recovery when the next action references it.
 `;
 
 const RECOVERY_REFERENCE = `# Recovery and attention
@@ -251,11 +249,12 @@ Follow the structured **hostAction.kind**; do not invent a parallel workflow.
 Failed checks or contradicted critical claims reject. Missing evidence,
 changed verifier surfaces, residual unknowns, and partial/unverified critical
 claims need attention. If exact detail is needed, use the returned run ID with
-**resonant-code change explain . --run <run-id> --section contract|facts|handoff|evaluation|presentation --json**.
+**resonant-code change explain . --run <run-id> --section contract|facts|handoff|evaluation|review --json**.
 
-Completed **presentationMarkdown** is the CLI-owned authority partition; return
-it unchanged. Supplemental Host-only probes, if materially useful, go under a
-separate **Agent supplemental evidence** heading and never under Runtime facts.
+For a current-fact result, render **handoffPacket** without hiding its Attention
+or rejection. A stale result has no packet: explain its structured Attention
+and next action in the current user's language. Supplemental Host-only probes,
+if materially useful, remain separately labeled Agent evidence.
 `;
 
 const WORKFLOW_REFERENCES: Record<HostWorkflowReference, string> = {

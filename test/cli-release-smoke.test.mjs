@@ -92,7 +92,10 @@ try {
     'routine.md',
   );
   assert.match(readFileSync(changeReference, 'utf8'), /change prepare/);
-  assert.match(readFileSync(routineReference, 'utf8'), /Human review, never adopted/);
+  assert.match(
+    readFileSync(routineReference, 'utf8'),
+    /ready for Human review, never\s+adopted/s,
+  );
   assert.equal(existsSync(join(project, '.agents', 'skills', 'resonant-code', 'references', 'assurance.md')), true);
   assert.equal(existsSync(join(project, '.agents', 'skills', 'resonant-code', 'references', 'recovery.md')), true);
   assert.equal(existsSync(join(project, '.agents', 'skills', 'resonant-code', 'references', 'bootstrap.md')), false);
@@ -204,8 +207,19 @@ try {
   ]);
   assert.equal(finalized.status, 'handoff-ready');
   assert.equal(finalized.state, 'completed');
-  assert.match(finalized.humanAuthorityNotice, /human review only/);
-  assert.match(finalized.presentationMarkdown, /### Runtime facts/);
+  assert.deepEqual(finalized.adoption, { authority: 'human', decisionRecorded: false });
+  assert.deepEqual(
+    finalized.handoffPacket.runtimeFacts.changedFiles.map((file) => [file.path, file.operation]),
+    [['src/example.ts', 'modified']],
+  );
+  assert.equal(finalized.handoffPacket.runtimeFacts.checks[0].attempts[0].status, 'passed');
+  assert.equal(
+    finalized.handoffPacket.hostHandoff.systemMeaningUpdate,
+    'The packed fixture now exports value 2 instead of value 1.',
+  );
+  assert.equal(finalized.handoffPacket.evaluation.status, 'handoff-ready');
+  assert.deepEqual(finalized.handoffPacket.evaluation.adoption, finalized.adoption);
+  assert.equal(Object.hasOwn(finalized, 'presentationMarkdown'), false);
   assert.equal(Object.hasOwn(finalized, 'runtimeFacts'), false);
   const explained = runInstalledCli([
     'change', 'explain', project, '--run', prepared.runId, '--json',

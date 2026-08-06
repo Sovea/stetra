@@ -20,7 +20,6 @@ next-step field. Its shape is deliberately small:
 {
   "kind": "implement-and-collect",
   "reference": "routine",
-  "reason": "why this is the next bounded action",
   "command": {"argv": ["resonant-code", "change", "collect", ".", "--run", "<run-id>", "--json"]}
 }
 ```
@@ -87,6 +86,12 @@ The input identifies the `semantic-delegation` protocol and supplies:
 - optional exact repository evidence windows;
 - explicit argv check definitions, or a concrete no-command rationale;
 - an optional unresolved material fork.
+
+The generated Host writes natural-language Semantic Contract and Cognitive
+Handoff fields in the current conversation language. Exact developer events,
+paths, IDs, enums, commands, and quoted evidence remain unchanged. Language is
+not a Runtime input or persisted run property because it cannot change task
+meaning, fact identity, evaluation, or adoption authority.
 
 Each check includes an ID, rationale, source, and separate paths for files that
 define the command and files that define what passing means. A timeout is not
@@ -210,7 +215,7 @@ The host reads the complete collected patch and check facts before filling
 
 For a routine plan with no declared requirement, `materialClaims` and
 `reviewMap` may both be empty. The system-meaning update and all Runtime facts
-remain mandatory presentation surfaces. Every compiled assurance dimension
+remain mandatory handoff sources. Every compiled assurance dimension
 requires a claim with the same dimension. An adoption-critical requirement
 requires an adoption-critical claim.
 
@@ -270,26 +275,36 @@ whether the agent's semantic reasoning is correct.
 | `rejected` | A configured check failed or a critical claim is contradicted |
 | `facts-stale` | The repository changed after collection and must be collected again |
 
-Every current-fact result includes structured attention where applicable. An
-attention item states the cause, adoption impact, exact references, and a
-recollect, repair, evidence, direct-review, or validation action. The Review
-Map remains a separate inspection order.
+Every current-fact result includes structured Attention where applicable. Core
+records its cause-specific fields, exact references, and a recollect, repair,
+evidence, direct-review, or validation resolution kind. The Review Map remains
+a separate inspection order.
 
-Completed JSON results include one CLI-rendered `presentationMarkdown`. A host
-adapter relays it unchanged. Any extra investigation added by the host remains
-separately labeled agent evidence, cannot be added to runtime facts, and adds
-only task-requested observations absent from the rendered handoff. It does not
-repeat changed paths, checks, system meaning, or the adoption notice.
+Completed current-fact JSON results include one `handoffPacket` with four
+authority partitions:
 
-A clean routine result is rendered as a short evidence-first handoff: exact
-changed paths and operations, passing check IDs with their one-attempt exit
-facts, an explicitly Agent-authored system-meaning update, absence of
-claims/unknowns/direct-review needs, and the Human adoption notice. Collected
-facts are not labeled adoption evidence. The full handoff is retained whenever
-a requirement, claim, unknown, alternative, attention, Review Map entry,
-changed verifier surface, non-text change, or multiple check attempt exists.
-This presentation choice is derived at finalize time and is not persisted as
-another mode.
+- `semanticContract`: compact intent, basis, assurance, evidence-window, and
+  verification data;
+- `runtimeFacts`: collection identity, actual changed files, every ordered
+  check attempt, verifier surfaces, and patch identity;
+- `hostHandoff`: the Agent-authored system meaning, claims, falsification,
+  unknowns, alternatives, and Review Map;
+- `evaluation`: status, structured Attention, claim conclusions, and the Human
+  adoption boundary.
+
+The packet is deterministic review source data, not user-facing prose. The
+generated Host renders it in the current conversation language, explains every
+Attention item and adoption-changing surface, and preserves the four authority
+partitions. It may collapse empty routine sections, but it must not omit retry
+history, verifier changes, non-text or unrepresentable changes, unknowns,
+critical claims, rejection, or Attention. Paths, IDs, enums, commands, numeric
+facts, quoted evidence, and raw tool output remain exact. Extra Host
+investigation stays separately labeled Agent evidence and cannot be promoted
+to Runtime facts.
+
+The CLI's non-JSON output is a control-plane summary of status, counts,
+Attention codes, adoption authority, and the next action. It is not the
+Cognitive Handoff and does not own localized narrative.
 
 `handoff-ready` never records or implies adoption.
 
@@ -303,8 +318,12 @@ resonant-code change explain . --run <run-id> --section contract --json
 resonant-code change explain . --run <run-id> --section facts --json
 resonant-code change explain . --run <run-id> --section handoff --json
 resonant-code change explain . --run <run-id> --section evaluation --json
-resonant-code change explain . --run <run-id> --section presentation --json
+resonant-code change explain . --run <run-id> --section review --json
 ```
+
+`review` reconstructs the same `handoffPacket` only while the persisted handoff
+still matches the fingerprint evaluated at completion. It returns no packet
+when that source changed after completion.
 
 ## Run storage and recovery
 

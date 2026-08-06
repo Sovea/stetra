@@ -88,7 +88,7 @@ test('worktree snapshots keep Git objects task-scoped and tolerate read-only met
   }
 });
 
-test('routine assurance completes with system meaning and Runtime facts only', async () => {
+test('routine assurance returns a self-contained review packet', async () => {
   const root = mkdtempSync(join(tmpdir(), 'resonant-routine-'));
   const inputRoot = mkdtempSync(join(tmpdir(), 'resonant-input-'));
   try {
@@ -144,22 +144,40 @@ test('routine assurance completes with system meaning and Runtime facts only', a
     });
     assert.equal(finalized.status, 'handoff-ready');
     assert.deepEqual(finalized.attention, []);
-    if (typeof finalized.presentationMarkdown !== 'string') {
-      assert.fail('routine finalization must include the rendered handoff');
+    if (!finalized.handoffPacket) {
+      assert.fail('routine finalization must include the structured review packet');
     }
-    assert.match(finalized.presentationMarkdown, /Assurance: `routine`/);
-    assert.match(finalized.presentationMarkdown, /### Runtime facts/);
-    assert.match(finalized.presentationMarkdown, /fixture-check.*passed on first attempt; exit 0/);
-    assert.match(finalized.presentationMarkdown, /### System meaning update \(Agent-authored\)/);
-    assert.match(finalized.presentationMarkdown, /### Remaining review burden/);
-    assert.match(finalized.presentationMarkdown, /Material claims: none disclosed/);
-    assert.match(finalized.presentationMarkdown, /Residual unknowns: none disclosed/);
-    assert.match(finalized.presentationMarkdown, /source\.txt.*modified/);
-    assert.ok(
-      finalized.presentationMarkdown.indexOf('### Runtime facts')
-        < finalized.presentationMarkdown.indexOf('### System meaning update (Agent-authored)'),
+    assert.equal(finalized.handoffPacket.semanticContract.assurancePlan.profile, 'routine');
+    assert.deepEqual(finalized.handoffPacket.runtimeFacts.changedFiles.map((file) => ({
+      path: file.path,
+      operation: file.operation,
+      representation: file.representation,
+    })), [{
+      path: 'source.txt',
+      operation: 'modified',
+      representation: 'text',
+    }]);
+    const check = finalized.handoffPacket.runtimeFacts.checks[0];
+    assert.equal(check.id, 'fixture-check');
+    assert.equal(check.attempts.length, 1);
+    assert.equal(check.attempts[0].status, 'passed');
+    assert.equal(check.attempts[0].exitCode, 0);
+    assert.equal(
+      finalized.handoffPacket.hostHandoff.systemMeaningUpdate,
+      'The bounded text fixture now contains the requested after state.',
     );
-    assert.doesNotMatch(finalized.presentationMarkdown, /Fact collection|timeout budget|### Material claims|### Review Map|### Adoption evidence/);
+    assert.deepEqual(finalized.handoffPacket.hostHandoff.materialClaims, []);
+    assert.deepEqual(finalized.handoffPacket.hostHandoff.residualUnknowns, []);
+    assert.deepEqual(finalized.handoffPacket.hostHandoff.reviewMap, []);
+    assert.equal(finalized.handoffPacket.evaluation.status, 'handoff-ready');
+    assert.deepEqual(finalized.handoffPacket.evaluation.adoption, {
+      authority: 'human',
+      decisionRecorded: false,
+    });
+    assert.equal(Object.hasOwn(finalized.handoffPacket.evaluation, 'systemMeaningUpdate'), false);
+    assert.equal(Object.hasOwn(finalized.handoffPacket.evaluation, 'reviewMap'), false);
+    assert.equal(Object.hasOwn(finalized, 'presentationMarkdown'), false);
+    assert.equal(Object.hasOwn(finalized, 'humanAuthorityNotice'), false);
     assert.equal(finalized.hostAction.kind, 'review-for-adoption');
     assert.equal(finalized.hostAction.reference, null);
   } finally {
@@ -168,7 +186,77 @@ test('routine assurance completes with system meaning and Runtime facts only', a
   }
 });
 
-test('routine presentation expands for a non-text change', async () => {
+test('review packet preserves Host-authored language without a Runtime locale', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'resonant-routine-zh-'));
+  const inputRoot = mkdtempSync(join(tmpdir(), 'resonant-input-'));
+  try {
+    initializeRepository(root);
+    writeFileSync(join(root, 'source.txt'), 'before\n', 'utf8');
+    git(root, ['add', '.']);
+    git(root, ['commit', '-qm', 'initial']);
+    const inputPath = join(inputRoot, 'prepare.json');
+    writePrepareInput(inputPath, {
+      routine: true,
+      noCommandRationale: '该文本夹具没有适用的可执行验收命令。',
+    });
+    const prepared = await prepareDelegationTask({
+      projectRoot: root,
+      inputPath,
+      productVersion: VERSION,
+    });
+    assert.equal(prepared.status, 'prepared');
+    if (prepared.status !== 'prepared') return;
+    assert.equal(Object.hasOwn(prepared, 'presentationLocale'), false);
+    assert.equal(Object.hasOwn(prepared.hostAction, 'reason'), false);
+
+    writeFileSync(join(root, 'source.txt'), 'after\n', 'utf8');
+    const collected = await collectDelegationFacts({
+      projectRoot: root,
+      runId: prepared.runId,
+      productVersion: VERSION,
+    });
+    assert.equal(Object.hasOwn(collected, 'presentationLocale'), false);
+    assert.equal(collected.changedFiles[0].operation, 'modified');
+    writeFileSync(collected.handoffPath, `${JSON.stringify({
+      protocol: 'semantic-delegation',
+      schemaVersion: '1',
+      systemMeaningUpdate: '文本夹具现在呈现请求的 after 状态。',
+      materialClaims: [],
+      residualUnknowns: [],
+      reviewMap: [],
+    }, null, 2)}\n`, 'utf8');
+
+    const finalized = await finalizeDelegationHandoff({
+      projectRoot: root,
+      runId: prepared.runId,
+    });
+    assert.equal(finalized.status, 'handoff-ready');
+    if (!finalized.handoffPacket) {
+      assert.fail('fresh finalization must include the structured review packet');
+    }
+    assert.equal(
+      finalized.handoffPacket.hostHandoff.systemMeaningUpdate,
+      '文本夹具现在呈现请求的 after 状态。',
+    );
+    assert.equal(finalized.handoffPacket.runtimeFacts.changedFiles[0].path, 'source.txt');
+    assert.equal(finalized.handoffPacket.evaluation.adoption.authority, 'human');
+    assert.equal(Object.hasOwn(finalized, 'presentationLocale'), false);
+    assert.equal(Object.hasOwn(finalized, 'presentationMarkdown'), false);
+    assert.equal(Object.hasOwn(finalized.hostAction, 'reason'), false);
+
+    const explained = explainDelegationRun({
+      projectRoot: root,
+      runId: prepared.runId,
+      section: 'review',
+    });
+    assert.deepEqual(explained.handoffPacket, finalized.handoffPacket);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+    rmSync(inputRoot, { recursive: true, force: true });
+  }
+});
+
+test('routine review packet keeps non-text change facts inspectable', async () => {
   const root = mkdtempSync(join(tmpdir(), 'resonant-routine-binary-'));
   const inputRoot = mkdtempSync(join(tmpdir(), 'resonant-input-'));
   try {
@@ -210,15 +298,16 @@ test('routine presentation expands for a non-text change', async () => {
       runId: prepared.runId,
     });
     assert.equal(finalized.status, 'handoff-ready');
-    assert.match(finalized.presentationMarkdown ?? '', /### Runtime facts/);
-    assert.doesNotMatch(finalized.presentationMarkdown ?? '', /### Adoption evidence/);
+    if (!finalized.handoffPacket) assert.fail('expected a structured review packet');
+    assert.equal(finalized.handoffPacket.runtimeFacts.changedFiles[0].representation, 'binary');
+    assert.deepEqual(finalized.handoffPacket.evaluation.attention, []);
   } finally {
     rmSync(root, { recursive: true, force: true });
     rmSync(inputRoot, { recursive: true, force: true });
   }
 });
 
-test('clean routine presentation keeps no-command verification visible', async () => {
+test('clean routine review packet keeps no-command verification visible', async () => {
   const root = mkdtempSync(join(tmpdir(), 'resonant-routine-no-command-'));
   const inputRoot = mkdtempSync(join(tmpdir(), 'resonant-input-'));
   try {
@@ -259,8 +348,12 @@ test('clean routine presentation keeps no-command verification visible', async (
       runId: prepared.runId,
     });
     assert.equal(finalized.status, 'handoff-ready');
-    assert.match(finalized.presentationMarkdown ?? '', /Checks \(0\):\n- None configured\./);
-    assert.match(finalized.presentationMarkdown ?? '', /### Runtime facts/);
+    if (!finalized.handoffPacket) assert.fail('expected a structured review packet');
+    assert.deepEqual(finalized.handoffPacket.semanticContract.verification, {
+      mode: 'no-command',
+      rationale: 'The isolated text fixture has no executable acceptance command.',
+    });
+    assert.deepEqual(finalized.handoffPacket.runtimeFacts.checks, []);
   } finally {
     rmSync(root, { recursive: true, force: true });
     rmSync(inputRoot, { recursive: true, force: true });
@@ -397,13 +490,27 @@ test('prepare and collect bind dirty-baseline changes, checks, patch, and verifi
       && item.resolution.kind === 'direct-review'));
     assert.equal(finalized.factCollectionId, collected.factCollectionId);
     assert.equal(Object.hasOwn(finalized, 'runtimeFacts'), false);
-    if (typeof finalized.presentationMarkdown !== 'string') {
-      assert.fail('fresh terminal finalization must include the rendered handoff');
+    if (!finalized.handoffPacket) {
+      assert.fail('fresh terminal finalization must include the structured review packet');
     }
-    assert.match(finalized.presentationMarkdown, /### Runtime facts/);
-    assert.match(finalized.presentationMarkdown, /package\.json.*command-definition/);
+    assert.deepEqual(finalized.handoffPacket.runtimeFacts.verifierSurfaces, [{
+      path: 'package.json',
+      role: 'command-definition',
+      checkIds: ['fixture-check'],
+    }]);
+    assert.ok(finalized.handoffPacket.evaluation.attention.some((item) =>
+      item.code === 'verifier-surface-changed'
+      && item.path === 'package.json'
+      && item.role === 'command-definition'
+      && item.checkIds.includes('fixture-check')));
+    assert.deepEqual(
+      finalized.handoffPacket.hostHandoff.reviewMap[0].changedFiles,
+      ['package.json'],
+    );
+    assert.equal(Object.hasOwn(finalized, 'presentationMarkdown'), false);
     assert.equal(finalized.hostAction.kind, 'inspect-attention');
     assert.equal(finalized.hostAction.reference, 'recovery');
+    assert.equal(Object.hasOwn(finalized.hostAction, 'reason'), false);
   } finally {
     rmSync(root, { recursive: true, force: true });
     rmSync(inputRoot, { recursive: true, force: true });
@@ -578,11 +685,18 @@ test('a timed-out check retries with a larger budget in the same run and preserv
       runId: prepared.runId,
     });
     assert.equal(finalized.status, 'handoff-ready');
-    if (typeof finalized.presentationMarkdown !== 'string' || !finalized.details) {
+    if (!finalized.handoffPacket || !finalized.details) {
       assert.fail('successful timeout retry must produce a completed handoff');
     }
-    assert.match(finalized.presentationMarkdown, /slow-check.*passed.*2 attempts/);
-    assert.match(finalized.presentationMarkdown, /Attempt 1: unavailable/);
+    const packetAttempts = finalized.handoffPacket.runtimeFacts.checks[0].attempts;
+    assert.deepEqual(packetAttempts.map((attempt) => ({
+      attempt: attempt.attempt,
+      status: attempt.status,
+      timedOut: attempt.timedOut,
+    })), [
+      { attempt: 1, status: 'unavailable', timedOut: true },
+      { attempt: 2, status: 'passed', timedOut: false },
+    ]);
     assert.ok(finalized.details.checkLogs.length >= 1);
     assert.ok(finalized.details.checkLogs.some((entry) => entry.attempt === 2));
   } finally {
@@ -765,7 +879,12 @@ test('finalize completes a fresh fact-bound handoff and explain preserves all au
     const finalized = await finalizeDelegationHandoff({ projectRoot: root, runId: prepared.runId });
     assert.equal(finalized.status, 'handoff-ready');
     assert.equal(finalized.state, 'completed');
-    assert.match(finalized.humanAuthorityNotice, /human review only/);
+    assert.deepEqual(finalized.adoption, {
+      authority: 'human',
+      decisionRecorded: false,
+    });
+    if (!finalized.handoffPacket) assert.fail('expected a structured review packet');
+    assert.deepEqual(finalized.handoffPacket.evaluation.adoption, finalized.adoption);
     const explained = explainDelegationRun({ projectRoot: root, runId: prepared.runId });
     assert.equal(explained.state, 'completed');
     assert.ok(explained.contract);

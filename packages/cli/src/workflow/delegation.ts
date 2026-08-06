@@ -43,7 +43,6 @@ import {
   type WorktreeSnapshot,
 } from '../facts/worktree.ts';
 import { resolveExecutable } from '../infrastructure/executable.ts';
-import { renderCognitiveHandoffMarkdown } from '../presentation/handoff.ts';
 import { summarizeVerifierSurfaces } from '../presentation/verifiers.ts';
 import {
   DELEGATION_PROTOCOL,
@@ -98,6 +97,32 @@ export interface DelegationRun {
 export interface CheckTimeoutRetry {
   checkId: string;
   timeoutMs: number;
+}
+
+export interface HandoffPacket {
+  semanticContract: ReturnType<typeof contractWorkPacket>;
+  runtimeFacts: {
+    factCollectionId: string;
+    collectedAt: string;
+    changeFingerprint: string;
+    changedFiles: FactBundle['changedFiles'];
+    checks: FactBundle['checks'];
+    verifierSurfaces: ReturnType<typeof summarizeVerifierSurfaces>;
+    patch: NonNullable<FactBundle['patch']> | null;
+  };
+  hostHandoff: CognitiveHandoff;
+  evaluation: Pick<
+    HandoffEvaluation,
+    | 'protocol'
+    | 'schemaVersion'
+    | 'status'
+    | 'contractId'
+    | 'factCollectionId'
+    | 'handoffFingerprint'
+    | 'claimConclusions'
+    | 'attention'
+    | 'adoption'
+  >;
 }
 
 export async function prepareDelegationTask(options: {
@@ -477,12 +502,12 @@ export async function finalizeDelegationHandoff(options: {
   if (evaluation.status === 'facts-stale' || !evaluation.handoffFingerprint) {
     throw new Error('Fresh fact validation unexpectedly returned a stale or unbound evaluation.');
   }
-  const presentationMarkdown = renderCognitiveHandoffMarkdown({
-    evaluation,
-    facts: run.factBundle,
+  const handoffPacket = buildHandoffPacket(
+    run.contract,
+    run.factBundle,
     handoff,
-    assurancePlan: run.contract.assurancePlan,
-  });
+    evaluation,
+  );
   const completedRun: DelegationRun = {
     ...run,
     state: 'completed',
@@ -505,8 +530,8 @@ export async function finalizeDelegationHandoff(options: {
     factCollectionId: run.factBundle.factCollectionId,
     handoffFingerprint: evaluation.handoffFingerprint,
     attention: evaluation.attention,
-    humanAuthorityNotice: evaluation.humanAuthorityNotice,
-    presentationMarkdown,
+    adoption: evaluation.adoption,
+    handoffPacket,
     details: {
       runPath,
       handoffPath,
@@ -529,7 +554,7 @@ export async function finalizeDelegationHandoff(options: {
         })),
       explain: {
         runId: run.runId,
-        sections: ['contract', 'facts', 'handoff', 'evaluation', 'presentation'] as const,
+        sections: ['contract', 'facts', 'handoff', 'evaluation', 'review'] as const,
       },
     },
     retention: { removedCompletedRunIds },
@@ -581,7 +606,7 @@ export function explainDelegationRun(options: {
   factBundle?: FactBundle | null;
   handoff?: unknown;
   evaluation?: unknown;
-  presentationMarkdown?: string | null;
+  handoffPacket?: HandoffPacket | null;
   issue?: string;
 } {
   const { run, runDirectory } = readDelegationRun(options.projectRoot, options.runId);
@@ -614,13 +639,13 @@ export function explainDelegationRun(options: {
   if (section === 'evaluation') {
     return { ...common, section, evaluation: run.completion?.evaluation ?? null };
   }
-  if (section === 'presentation') {
+  if (section === 'review') {
     if (!run.factBundle || !handoff || !run.completion) {
       return {
         ...common,
         section,
-        presentationMarkdown: null,
-        issue: 'The run has no completed Cognitive Handoff presentation.',
+        handoffPacket: null,
+        issue: 'The run has no completed Cognitive Handoff review packet.',
       };
     }
     const currentHandoffFingerprint = stableFingerprint({
@@ -631,24 +656,24 @@ export function explainDelegationRun(options: {
       return {
         ...common,
         section,
-        presentationMarkdown: null,
-        issue: 'The persisted handoff changed after completion; exact presentation recovery is unavailable.',
+        handoffPacket: null,
+        issue: 'The persisted handoff changed after completion; a bound review packet is unavailable.',
       };
     }
     return {
       ...common,
       section,
-      presentationMarkdown: renderCognitiveHandoffMarkdown({
-        evaluation: run.completion.evaluation as HandoffEvaluation,
-        facts: run.factBundle,
-        handoff: handoff as CognitiveHandoff,
-        assurancePlan: run.contract.assurancePlan,
-      }),
+      handoffPacket: buildHandoffPacket(
+        run.contract,
+        run.factBundle,
+        handoff as CognitiveHandoff,
+        run.completion.evaluation as HandoffEvaluation,
+      ),
     };
   }
   if (section !== 'all') {
     throw usageError(
-      `Invalid explain section ${JSON.stringify(section)}; use contract, facts, handoff, evaluation, presentation, or all.`,
+      `Invalid explain section ${JSON.stringify(section)}; use contract, facts, handoff, evaluation, review, or all.`,
     );
   }
   return {
@@ -902,6 +927,38 @@ function collectVerifierMutations(
           }]
         : [];
     }));
+}
+
+function buildHandoffPacket(
+  contract: SemanticContract,
+  facts: FactBundle,
+  handoff: CognitiveHandoff,
+  evaluation: HandoffEvaluation,
+): HandoffPacket {
+  return {
+    semanticContract: contractWorkPacket(contract),
+    runtimeFacts: {
+      factCollectionId: facts.factCollectionId,
+      collectedAt: facts.collectedAt,
+      changeFingerprint: facts.changeFingerprint,
+      changedFiles: facts.changedFiles,
+      checks: facts.checks,
+      verifierSurfaces: summarizeVerifierSurfaces(facts.verifierMutations),
+      patch: facts.patch ?? null,
+    },
+    hostHandoff: handoff,
+    evaluation: {
+      protocol: evaluation.protocol,
+      schemaVersion: evaluation.schemaVersion,
+      status: evaluation.status,
+      contractId: evaluation.contractId,
+      factCollectionId: evaluation.factCollectionId,
+      handoffFingerprint: evaluation.handoffFingerprint,
+      claimConclusions: evaluation.claimConclusions,
+      attention: evaluation.attention,
+      adoption: evaluation.adoption,
+    },
+  };
 }
 
 function contractWorkPacket(contract: SemanticContract) {

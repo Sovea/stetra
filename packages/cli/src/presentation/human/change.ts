@@ -101,56 +101,18 @@ export function formatChangeCollect(output: JsonObject, colors: Colors): string 
 }
 
 export function formatChangeFinalize(output: JsonObject, colors: Colors): string {
-  if (typeof output.presentationMarkdown === 'string') {
-    const lines = [output.presentationMarkdown];
-    appendHostAction(lines, output.hostAction, colors);
-    return lines.join('\n');
-  }
   const status = String(output.status ?? 'unknown');
   const lines = [
-    heading('Cognitive Handoff not completed', colors),
+    heading('Cognitive Handoff evaluated', colors),
     statusLine(status, colors),
   ];
-  if (Array.isArray(output.attention) && output.attention.length) {
-    lines.push('', colors.bold('Attention'));
-    for (const item of output.attention) {
-      if (!isRecord(item)) continue;
-      lines.push(`${colors.yellow('•')} ${String(item.summary ?? item.code)} [${String(item.code)}]`);
-      if (typeof item.adoptionImpact === 'string') {
-        lines.push(`  ${colors.bold('Impact:')} ${item.adoptionImpact}`);
-      }
-      if (isRecord(item.references)) {
-        const references = formatAttentionReferences(item.references);
-        if (references) lines.push(`  ${colors.bold('Inspect:')} ${references}`);
-      }
-      if (isRecord(item.resolution)) {
-        lines.push(`  ${colors.bold(`Action (${String(item.resolution.kind)}):`)} ${String(item.resolution.action)}`);
-      }
-    }
-  }
-  if (typeof output.humanAuthorityNotice === 'string') {
-    lines.push('', colors.bold('Adoption authority'), output.humanAuthorityNotice);
+  if (isRecord(output.handoffPacket)) {
+    appendHandoffPacketSummary(lines, output.handoffPacket, colors);
+  } else {
+    appendAttentionCodes(lines, output.attention, colors);
   }
   appendHostAction(lines, output.hostAction, colors);
   return lines.join('\n');
-}
-
-function formatAttentionReferences(value: JsonObject): string {
-  const references = [
-    listReference('files', value.changedFiles),
-    listReference('checks', value.checks),
-    listReference('claims', value.claims),
-    listReference('unknowns', value.unknowns),
-    listReference('repository evidence', value.repositoryEvidence),
-    listReference('Human Events', value.humanEvents),
-    value.patch === true ? 'complete patch' : '',
-  ].filter(Boolean);
-  return references.join('; ');
-}
-
-function listReference(label: string, value: unknown): string {
-  const values = stringArray(value);
-  return values.length ? `${label}: ${values.join(', ')}` : '';
 }
 
 function stringArray(value: unknown): string[] {
@@ -159,10 +121,47 @@ function stringArray(value: unknown): string[] {
     : [];
 }
 
-export function formatChangeExplain(output: JsonObject, colors: Colors): string {
-  if (typeof output.presentationMarkdown === 'string') {
-    return output.presentationMarkdown;
+function appendHandoffPacketSummary(
+  lines: string[],
+  packet: JsonObject,
+  colors: Colors,
+): void {
+  if (isRecord(packet.semanticContract) && isRecord(packet.semanticContract.assurancePlan)) {
+    lines.push(`${colors.bold('Assurance:')} ${String(packet.semanticContract.assurancePlan.profile ?? 'unknown')}`);
   }
+  if (isRecord(packet.runtimeFacts)) {
+    const changedFiles = Array.isArray(packet.runtimeFacts.changedFiles)
+      ? packet.runtimeFacts.changedFiles.length
+      : 0;
+    const checks = Array.isArray(packet.runtimeFacts.checks)
+      ? packet.runtimeFacts.checks.length
+      : 0;
+    lines.push(`${colors.bold('Review packet:')} ${changedFiles} changed files; ${checks} checks`);
+  }
+  if (isRecord(packet.evaluation)) {
+    appendAttentionCodes(lines, packet.evaluation.attention, colors);
+    if (isRecord(packet.evaluation.adoption)) {
+      lines.push(
+        `${colors.bold('Adoption:')} authority=${String(packet.evaluation.adoption.authority)}; decisionRecorded=${String(packet.evaluation.adoption.decisionRecorded)}`,
+      );
+    }
+  }
+  lines.push(colors.dim('Use --json for the structured review packet; the Host agent owns user-facing prose.'));
+}
+
+function appendAttentionCodes(
+  lines: string[],
+  value: unknown,
+  colors: Colors,
+): void {
+  if (!Array.isArray(value) || !value.length) return;
+  const codes = value
+    .filter(isRecord)
+    .map((item) => String(item.code ?? 'unknown'));
+  if (codes.length) lines.push(`${colors.bold('Attention:')} ${codes.join(', ')}`);
+}
+
+export function formatChangeExplain(output: JsonObject, colors: Colors): string {
   const lines = [
     heading('Semantic Handoff run', colors),
     statusLine(String(output.state ?? 'unknown'), colors),
@@ -179,6 +178,9 @@ export function formatChangeExplain(output: JsonObject, colors: Colors): string 
   }
   if (isRecord(output.evaluation)) {
     lines.push(`${colors.bold('Evaluation:')} ${String(output.evaluation.status ?? 'unknown')}`);
+  }
+  if (isRecord(output.handoffPacket)) {
+    appendHandoffPacketSummary(lines, output.handoffPacket, colors);
   }
   if (typeof output.issue === 'string') {
     lines.push('', `${colors.yellow('•')} ${output.issue}`);

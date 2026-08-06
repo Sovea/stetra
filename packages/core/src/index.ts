@@ -56,6 +56,7 @@ export type {
   CognitiveHandoff,
   EvaluateHandoffInput,
   FalsificationStatus,
+  HandoffAttentionCode,
   HandoffAttentionItem,
   HandoffAttentionReferences,
   HandoffEvaluation,

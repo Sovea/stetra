@@ -29,6 +29,12 @@ resonant-code change finalize . --run <run-id> --json
 - `finalize` rejects stale facts and binds the agent's claims, unknowns,
   falsification, and Review Map to the current collection.
 
+Finalize returns a structured `handoffPacket` containing the compact Semantic
+Contract, collected Runtime facts, Agent-authored handoff, and Core evaluation.
+The generated Host renders it in the current conversation language while
+keeping paths, IDs, statuses, commands, numeric facts, quoted evidence, and
+logs exact. No locale or rendered prose is persisted by Runtime.
+
 The Assurance Plan is explicit and inspectable. Routine work can omit claims
 and Review Map entries when no semantic or factual escalation applies.
 Standard and critical work must cover declared material or adoption-critical
@@ -42,18 +48,19 @@ resonant-code change explain . --run <run-id> --section contract --json
 resonant-code change explain . --run <run-id> --section facts --json
 resonant-code change explain . --run <run-id> --section handoff --json
 resonant-code change explain . --run <run-id> --section evaluation --json
-resonant-code change explain . --run <run-id> --section presentation --json
+resonant-code change explain . --run <run-id> --section review --json
 ```
 
 The CLI owns project initialization, task-run IO, exact repository-evidence
 windows, Git and check collection, bounded logs with complete-stream digests,
-fact-staleness detection, retention, and the final presentation. The host agent
-cannot submit changed-file or check facts.
+fact-staleness detection, retention, and deterministic review-packet assembly.
+The host agent cannot submit changed-file or check facts; it owns user-facing
+handoff prose.
 
 `handoff-ready` means ready for developer review, never adopted.
-`needs-attention` and `rejected` results identify the adoption impact, exact
-references, and the next repair, evidence, validation, recollection, or direct
-review action.
+`needs-attention` and `rejected` results identify exact references and the next
+repair, evidence, validation, recollection, or direct-review action. The Host
+explains their adoption impact to the developer.
 
 The CLI pins the exact matching `@sovea/resonant-code-core` version. Neither
 package calls an LLM.

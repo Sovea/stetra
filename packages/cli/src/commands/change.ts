@@ -105,7 +105,7 @@ export function registerChangeCommands(
     .description('Inspect the exact contract, facts, handoff, and evaluation')
     .argument('[project-root]', 'Git worktree root', '.')
     .requiredOption('--run <id>', 'run ID returned by prepare')
-    .option('--section <name>', 'contract, facts, handoff, evaluation, presentation, or all', 'all')
+    .option('--section <name>', 'contract, facts, handoff, evaluation, review, or all', 'all')
     .action((
       projectRoot: string,
       options: ExplainOptions,

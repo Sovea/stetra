@@ -70,8 +70,15 @@ The successful status is `handoff-ready`: ready for developer review, never
 automatically adopted. Failed checks, stale facts, contradictions, and missing
 evidence remain visible and actionable.
 
-Exact contract, fact, handoff, evaluation, and presentation data is available
+Exact contract, fact, handoff, evaluation, and review-packet data is available
 on demand through `resonant-code change explain`.
+
+Finalize returns a structured `handoffPacket` that keeps the Semantic
+Contract, Runtime facts, Agent-authored handoff, and evaluation separate. The
+Host renders that source data in the current conversation language. Paths,
+IDs, statuses, commands, numeric facts, quoted evidence, and collected output
+remain exact. Runtime therefore does not need a locale field or one hard-coded
+translation table per supported language.
 
 ## Dynamic Host projection
 
@@ -85,9 +92,9 @@ This removes fixed protocol reading from routine work without delegating path
 selection to the agent. The Assurance Plan and actual facts select the
 projection. Any requirement, failed or unavailable check, retry history,
 verifier change, non-text file, unknown, critical claim, or attention
-condition expands the path again. A clean routine completion is presented as a
-compact authority-separated handoff; canonical detail remains inspectable in
-the task run.
+condition expands the path again. A clean routine completion may collapse
+empty review sections, while canonical detail remains inspectable in the task
+run.
 
 ## Proportional assurance
 
@@ -124,7 +131,8 @@ The workspace contains two lockstep packages:
 - `@sovea/resonant-code-core` — deterministic contract compilation, fact
   binding, and handoff evaluation;
 - `@sovea/resonant-code` — CLI lifecycle, Git and check collection, run IO,
-  presentation, initialization, and generated Codex/Claude workflows.
+  review-packet assembly, initialization, and generated Codex/Claude
+  workflows.
 
 ```text
 Generated host adapter -> CLI -> Core

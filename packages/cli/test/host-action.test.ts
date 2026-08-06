@@ -71,6 +71,14 @@ test('Host projection keeps non-runnable and terminal authority boundaries expli
   assert.equal(finalizedHostAction('rejected', RUN_ID).kind, 'restart-rejected');
 });
 
+test('Host projection contains protocol actions without authored explanatory prose', () => {
+  const action = finalizedHostAction('handoff-ready', RUN_ID);
+
+  assert.equal(action.kind, 'review-for-adoption');
+  assert.equal(action.reference, null);
+  assert.equal(Object.hasOwn(action, 'reason'), false);
+});
+
 function facts(
   status: CheckStatus,
   timedOut = false,

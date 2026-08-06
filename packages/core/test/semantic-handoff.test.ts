@@ -232,7 +232,10 @@ test('evaluateHandoff accepts a fact-bound, falsified handoff for human review',
   assert.equal(evaluation.factCollectionId, facts.factCollectionId);
   assert.equal(evaluation.claimConclusions?.[0].basis, 'agent-judgment');
   assert.equal(evaluation.claimConclusions?.[0].falsification, 'supported');
-  assert.match(evaluation.humanAuthorityNotice, /human review only/);
+  assert.deepEqual(evaluation.adoption, {
+    authority: 'human',
+    decisionRecorded: false,
+  });
 });
 
 test('evaluateHandoff allows a clean routine handoff without claims or review boilerplate', () => {
@@ -342,9 +345,10 @@ test('evaluateHandoff rejects failed checks and surfaces unavailable checks', ()
   assert.equal(failedResult.status, 'rejected');
   const failedAttention = failedResult.attention.find((item) => item.code === 'check-failed');
   assert.ok(failedAttention);
+  assert.ok('checkId' in failedAttention);
+  assert.equal(failedAttention.checkId, 'test');
   assert.deepEqual(failedAttention.references, { checks: ['test'] });
   assert.equal(failedAttention.resolution.kind, 'repair-or-revise');
-  assert.match(failedAttention.adoptionImpact, /contradicts readiness/);
 
   const unavailable = factBundle(contract, 'unavailable');
   const unavailableHandoff = validHandoff(unavailable);
@@ -360,9 +364,11 @@ test('evaluateHandoff rejects failed checks and surfaces unavailable checks', ()
   assert.equal(unavailableResult.status, 'needs-attention');
   const unavailableAttention = unavailableResult.attention.find((item) => item.code === 'check-unavailable');
   assert.ok(unavailableAttention);
+  assert.ok('checkId' in unavailableAttention);
+  assert.equal(unavailableAttention.checkId, 'test');
   assert.deepEqual(unavailableAttention.references, { checks: ['test'] });
   assert.equal(unavailableAttention.resolution.kind, 'supply-evidence');
-  assert.match(unavailableAttention.summary, /Executable was not available/);
+  assert.equal(unavailableAttention.reason, 'Executable was not available.');
 });
 
 test('evaluateHandoff uses the latest monotonic timeout attempt without hiding history', () => {
@@ -501,9 +507,10 @@ test('evaluateHandoff makes residual unknowns first-class attention', () => {
   assert.equal(result.status, 'needs-attention');
   const attention = result.attention.find((item) => item.code === 'residual-unknown');
   assert.ok(attention);
+  assert.ok('unknownId' in attention);
+  assert.equal(attention.unknownId, 'unknown:operation');
   assert.deepEqual(attention.references.unknowns, ['unknown:operation']);
   assert.equal(attention.resolution.kind, 'execute-validation');
-  assert.equal(attention.resolution.action, 'Run the production-shaped benchmark before rollout.');
 });
 
 test('evaluateHandoff groups one changed verifier surface across checks', () => {
@@ -533,7 +540,9 @@ test('evaluateHandoff groups one changed verifier surface across checks', () => 
     changedFiles: ['src/index.ts'],
     checks: ['test', 'test:secondary'],
   });
-  assert.match(verifierAttention[0].summary, /checks test, test:secondary/);
+  assert.ok('path' in verifierAttention[0]);
+  assert.equal(verifierAttention[0].path, 'src/index.ts');
+  assert.deepEqual(verifierAttention[0].checkIds, ['test', 'test:secondary']);
 });
 
 function compileInput(): CompileDelegationInput {

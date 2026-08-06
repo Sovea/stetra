@@ -173,15 +173,16 @@ finalize -> ready for Human review
          `-> recovery.md for stale, rejected, or attention outcomes
 ```
 
-`hostAction` contains a machine-readable action kind, a short reason, an exact
-argv command when one is runnable, and the one generated reference page needed
-for that action. It replaces prose next-step instructions. A reference is an
-idempotent ensure-loaded handle: a continuous Host context does not reread an
-unchanged page it already has, while a fresh or resumed context can load the
-same page safely. The generated Host skill initially loads only the prepare
-reference and follows the returned reference thereafter; standard and critical
-guidance does not occupy a clean routine task's context, and recovery guidance
-is loaded only after an actual recovery condition.
+`hostAction` contains a machine-readable action kind, an exact argv command
+when one is runnable, and the one generated reference page needed for that
+action. It replaces prose next-step instructions without asking Runtime to
+author explanatory copy. A reference is an idempotent ensure-loaded handle: a
+continuous Host context does not reread an unchanged page it already has,
+while a fresh or resumed context can load the same page safely. The generated
+Host skill initially loads only the prepare reference and follows the returned
+reference thereafter; standard and critical guidance does not occupy a clean
+routine task's context, and recovery guidance is loaded only after an actual
+recovery condition.
 
 This is dynamic projection, not a general dynamic workflow engine. Runtime
 does not let the Host choose stages, invent a cheaper route, or branch on a
@@ -191,16 +192,23 @@ and evaluation. Canonical detail remains in the task run and is available with
 `change explain`; compact stage packets omit duplicate authority content and
 successful one-attempt log paths.
 
-A completed routine handoff uses an evidence-first compact presentation only
-when all of these facts are true: the evaluation is `handoff-ready`, the plan
-has no requirements, no material claim, unknown, alternative, Review Map, or
-attention exists, no verifier surface changed, every changed file has a text
-representation, and every configured check passed in one attempt. Any semantic
-or factual escalation, including timeout history, selects the full handoff
-presentation. The compact form labels collected Runtime facts separately from
-the Agent-authored system-meaning update and Human adoption authority; it does
-not call passing checks adoption evidence. Presentation can therefore reduce
-fixed reading cost without hiding a condition that changes adoption judgment.
+A current-fact finalization returns one structured `handoffPacket` with four
+authority partitions: the compact Semantic Contract, collected Runtime facts,
+the Agent-authored Cognitive Handoff, and Core evaluation. It includes the
+facts that materially affect review, including changed files, ordered check
+attempts, verifier-surface changes, patch identity, Attention, and the Human
+adoption boundary. It is deterministic source data for a handoff, not a
+prewritten handoff.
+
+The generated Host renders that packet for the developer in the current
+conversation language. It may collapse empty routine sections, but it must
+preserve every adoption-changing fact and Attention item and keep Runtime
+facts, Agent judgment, and Human authority visibly distinct. Paths, IDs,
+enums, commands, numeric facts, quoted evidence, and raw tool output remain
+exact. No presentation locale or rendered Markdown is persisted: replay
+reconstructs the same packet, while wording remains Host-owned. Determinism
+therefore protects facts, status, provenance, and authority rather than one
+language's copy.
 
 ## Fact Spine
 
@@ -256,10 +264,13 @@ attempt and a must-read or unresolved review surface. Contradicted, partial,
 and unverified results remain visible. The runtime checks their references and
 mechanical consistency; it does not reproduce the semantic investigation.
 
-Attention and review order are different outputs. An attention item explains
-why the evidence is insufficient, what adoption risk it creates, what exact
-facts to inspect, and the next action. The Review Map explains where direct
-code review is most valuable and what failure that review can prevent.
+Attention and review order are different outputs. Core emits a structural
+attention code, exact identifiers and references, and a resolution kind. The
+Host combines that structure with the fact-bound handoff to explain why the
+evidence is insufficient, what adoption risk it creates, what exact facts to
+inspect, and the next action in the current conversation language. The Review
+Map explains where direct code review is most valuable and what failure that
+review can prevent.
 
 `handoff-ready` means that the handoff is structurally and factually ready for
 developer review. It never means that the change has been adopted.
@@ -276,7 +287,7 @@ expand future autonomy.
 
 No cross-task decision store, preference learner, delegation frontier, or
 adoption history exists in the current MVP. Such state belongs in the product
-only when it has a concrete compile or presentation consumer and measurable
+only when it has a concrete compile or review consumer and measurable
 value over recovering context from the current task and repository.
 
 ## Package boundary
@@ -291,7 +302,8 @@ Generated host adapter -> CLI -> Core
   fact binding, and handoff evaluation through `compileDelegation` and
   `evaluateHandoff`.
 - `@sovea/resonant-code` provides the CLI lifecycle, Git and check collection,
-  task-run IO, presentation, project initialization, and generated adapters.
+  task-run IO, review-packet assembly, project initialization, and generated
+  adapters.
 
 Core does not read a repository, execute commands, format CLI output, know
 host-specific files, or call an LLM. The CLI does not decide semantic truth or
@@ -345,6 +357,9 @@ If it cannot, it does not belong in the kernel.
 15. Host instructions may be projected dynamically only from deterministic
     Runtime decisions; projection never changes lifecycle state or semantic
     authority.
+16. Runtime and CLI own handoff structure, not user-facing narrative; the Host
+    may change language and wording but not facts, status, provenance, or
+    adoption authority.
 
 ## Evidence boundary
 

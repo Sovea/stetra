@@ -176,7 +176,10 @@ try {
     },
   });
   assert.equal(evaluation.status, 'handoff-ready');
-  assert.match(evaluation.humanAuthorityNotice, /human review only/);
+  assert.deepEqual(evaluation.adoption, {
+    authority: 'human',
+    decisionRecorded: false,
+  });
 } finally {
   rmSync(temporary, { recursive: true, force: true });
 }

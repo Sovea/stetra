@@ -36,7 +36,6 @@ export function appendHostAction(
 ): void {
   if (!isRecord(value) || typeof value.kind !== 'string') return;
   lines.push('', `${colors.bold('Next action:')} ${value.kind}`);
-  if (typeof value.reason === 'string') lines.push(value.reason);
   if (typeof value.reference === 'string') {
     lines.push(`${colors.bold('Reference:')} ${value.reference}`);
   }

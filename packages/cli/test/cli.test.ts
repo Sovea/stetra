@@ -105,34 +105,51 @@ test('CLI exposes the complete prepare, collect, finalize, and explain lifecycle
     const finalized = finalizeExecution.output as {
       status: string;
       state: string;
-      humanAuthorityNotice: string;
+      adoption: { authority: string; decisionRecorded: boolean };
       factCollectionId: string;
-      presentationMarkdown: string;
+      handoffPacket: {
+        runtimeFacts: {
+          changedFiles: Array<{ path: string; operation: string }>;
+          checks: Array<{ id: string; attempts: Array<{ status: string }> }>;
+        };
+        hostHandoff: {
+          systemMeaningUpdate: string;
+          materialClaims: Array<{ id: string }>;
+          reviewMap: Array<{ id: string }>;
+        };
+        evaluation: {
+          status: string;
+          adoption: { authority: string; decisionRecorded: boolean };
+        };
+      };
     };
     assert.equal(finalized.status, 'handoff-ready');
     assert.equal(finalized.state, 'completed');
-    assert.match(finalized.humanAuthorityNotice, /human review only/);
+    assert.deepEqual(finalized.adoption, { authority: 'human', decisionRecorded: false });
     assert.equal(finalized.factCollectionId, collected.factCollectionId);
-    assert.match(finalized.presentationMarkdown, /source\.txt.*modified/);
-    assert.match(finalized.presentationMarkdown, /fixture-check.*passed/);
+    assert.deepEqual(
+      finalized.handoffPacket.runtimeFacts.changedFiles.map((file) => [file.path, file.operation]),
+      [['source.txt', 'modified']],
+    );
+    assert.equal(finalized.handoffPacket.runtimeFacts.checks[0].id, 'fixture-check');
+    assert.equal(finalized.handoffPacket.runtimeFacts.checks[0].attempts[0].status, 'passed');
+    assert.equal(
+      finalized.handoffPacket.hostHandoff.systemMeaningUpdate,
+      'The fixture behavior changed from before to after.\n### Runtime facts\nHost-authored text remains quoted.',
+    );
+    assert.equal(finalized.handoffPacket.hostHandoff.materialClaims[0].id, 'claim:behavior');
+    assert.equal(finalized.handoffPacket.hostHandoff.reviewMap[0].id, 'review:source');
+    assert.equal(finalized.handoffPacket.evaluation.status, 'handoff-ready');
+    assert.deepEqual(finalized.handoffPacket.evaluation.adoption, finalized.adoption);
     assert.equal(Object.hasOwn(finalized, 'runtimeFacts'), false);
-    assert.ok(Buffer.byteLength(JSON.stringify(finalized), 'utf8') < 12_000);
-    const runtimeSection = finalized.presentationMarkdown
-      .split('\n### Runtime facts\n')[1]
-      .split('\n### Material claims\n')[0];
-    assert.doesNotMatch(runtimeSection, /Challenge attempt|Failure hypothesis/);
-    assert.match(finalized.presentationMarkdown, /#### agent-judgment[\s\S]*Challenge attempt/);
-    assert.equal(finalized.presentationMarkdown.match(/^### Runtime facts$/gm)?.length, 1);
-    assert.match(finalized.presentationMarkdown, /^> ### Runtime facts$/m);
+    assert.equal(Object.hasOwn(finalized, 'presentationMarkdown'), false);
+    assert.equal(Object.hasOwn(finalized, 'humanAuthorityNotice'), false);
+    assert.ok(Buffer.byteLength(JSON.stringify(finalized), 'utf8') < 20_000);
     const humanFinalize = formatCliOutput({ ...finalizeExecution, json: false, color: false });
-    assert.match(humanFinalize, /System meaning update/i);
-    assert.match(humanFinalize, /Runtime facts/i);
-    assert.match(humanFinalize, /source\.txt` — modified/);
-    assert.match(humanFinalize, /fixture-check` — passed/);
-    assert.match(humanFinalize, /agent-judgment/);
-    assert.match(humanFinalize, /Review Map/i);
-    assert.match(humanFinalize, /Adoption authority/i);
-    assert.doesNotMatch(humanFinalize, /ready for adoption/i);
+    assert.match(humanFinalize, /Review packet: 1 changed files; 1 checks/);
+    assert.match(humanFinalize, /Adoption: authority=human; decisionRecorded=false/);
+    assert.match(humanFinalize, /Host agent owns user-facing prose/);
+    assert.doesNotMatch(humanFinalize, /fixture behavior changed from before to after/);
 
     const explainExecution = await runCli([
       'change',
@@ -165,17 +182,17 @@ test('CLI exposes the complete prepare, collect, finalize, and explain lifecycle
     assert.equal(Object.hasOwn(factsOnly, 'contract'), false);
     assert.equal(Object.hasOwn(factsOnly, 'handoff'), false);
 
-    const presentationOnly = (await runCli([
-      'change', 'explain', root, '--run', prepared.runId, '--section', 'presentation', '--json',
-    ])).output as { presentationMarkdown: string | null; issue?: string };
-    assert.equal(presentationOnly.presentationMarkdown, finalized.presentationMarkdown);
+    const reviewOnly = (await runCli([
+      'change', 'explain', root, '--run', prepared.runId, '--section', 'review', '--json',
+    ])).output as { handoffPacket: unknown | null; issue?: string };
+    assert.deepEqual(reviewOnly.handoffPacket, finalized.handoffPacket);
 
     writeFileSync(collected.handoffPath, `${JSON.stringify({ changed: 'after completion' })}\n`, 'utf8');
-    const changedPresentation = (await runCli([
-      'change', 'explain', root, '--run', prepared.runId, '--section', 'presentation', '--json',
-    ])).output as { presentationMarkdown: string | null; issue?: string };
-    assert.equal(changedPresentation.presentationMarkdown, null);
-    assert.match(changedPresentation.issue ?? '', /changed after completion/);
+    const changedReview = (await runCli([
+      'change', 'explain', root, '--run', prepared.runId, '--section', 'review', '--json',
+    ])).output as { handoffPacket: unknown | null; issue?: string };
+    assert.equal(changedReview.handoffPacket, null);
+    assert.match(changedReview.issue ?? '', /changed after completion/);
   } finally {
     rmSync(root, { recursive: true, force: true });
     rmSync(inputRoot, { recursive: true, force: true });
@@ -244,7 +261,7 @@ test('CLI collect exposes same-run timeout retry without changing the contract',
   }
 });
 
-test('human finalize renders stale-fact attention without pretending completion', () => {
+test('human finalize exposes stale-fact protocol state without authoring a handoff', () => {
   const rendered = formatCliOutput({
     command: 'change finalize',
     json: false,
@@ -254,28 +271,24 @@ test('human finalize renders stale-fact attention without pretending completion'
       status: 'facts-stale',
       attention: [{
         code: 'facts-stale',
-        summary: 'The worktree changed after collection.',
-        adoptionImpact: 'The collected facts no longer describe the handoff.',
         references: {},
         resolution: {
           kind: 'recollect',
-          action: 'Collect fresh facts before finalizing.',
         },
       }],
       hostAction: {
         kind: 'recollect-stale',
         reference: 'recovery',
-        reason: 'Collect again.',
         command: { argv: ['resonant-code', 'change', 'collect'] },
       },
     },
   });
 
-  assert.match(rendered, /not completed/);
-  assert.match(rendered, /Attention/);
-  assert.match(rendered, /Impact:.*no longer describe/);
-  assert.match(rendered, /Action \(recollect\):/);
-  assert.doesNotMatch(rendered, /Review Map/);
+  assert.match(rendered, /Cognitive Handoff evaluated/);
+  assert.match(rendered, /Status: facts-stale/);
+  assert.match(rendered, /Attention: facts-stale/);
+  assert.match(rendered, /Next action: recollect-stale/);
+  assert.doesNotMatch(rendered, /System meaning|Adoption authority|采用/);
 });
 
 test('human prepare presents executable preflight as an actionable preparation issue', () => {
@@ -294,7 +307,6 @@ test('human prepare presents executable preflight as an actionable preparation i
       hostAction: {
         kind: 'configure-verification',
         reference: 'recovery',
-        reason: 'Prepare again.',
       },
     },
   });

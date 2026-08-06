@@ -46,7 +46,7 @@ The executable policy is the exact basis-bearing requirements in the Semantic
 Contract plus fact-triggered and host-disclosed escalation. Do not add a fourth
 core, a general workflow engine, or repository heuristics for this behavior.
 
-Dynamic Host Projection is the transient presentation layer over that fixed
+Dynamic Host Projection is the transient instruction layer over that fixed
 kernel. Every stage derives a structured `hostAction` from the compiled plan,
 collected facts, or evaluation status. Generated adapters load only the named
 routine, assurance, or recovery reference. A repeated reference means ensure
@@ -76,10 +76,10 @@ Remove it when those questions have no concrete answer.
   semantic check definitions, actual changes, ordered check attempts and their
   execution budgets, output integrity, and related reproducible observations.
 
-The harness binds provenance, facts, ordering, and presentation; it is not a
-fourth authority. A developer decision cannot erase a contradictory collected
-fact. A fact cannot decide product meaning. Agent prose cannot become a
-developer decision or machine fact through a label.
+The harness binds provenance, facts, ordering, and review structure; it is not
+a fourth authority. A developer decision cannot erase a contradictory
+collected fact. A fact cannot decide product meaning. Agent prose cannot become
+a developer decision or machine fact through a label.
 
 Exact developer messages and decisions use `HumanEvent`. Structured outcomes,
 constraints, focus, consequence, assurance dimensions, and recommendations
@@ -105,19 +105,21 @@ prepare -> agent implementation -> collect -> agent handoff -> finalize
 `change explain` is on-demand inspection, not a mandatory successful-path
 stage.
 
-CLI stage output uses a structured `hostAction` with an action kind, reason,
-optional exact argv command, and optional generated-reference name. Do not
-reintroduce prose-only next-step routing. The action is derived output and is
-never persisted as task authority or state.
+CLI stage output uses a structured `hostAction` with an action kind, optional
+exact argv command, and optional generated-reference name. Do not reintroduce
+prose-only next-step routing or Runtime-authored next-action reasons. The action
+is derived output and is never persisted as task authority or state.
 
 ### Prepare
 
-The host supplies exact developer events, basis-bearing semantic values,
-an explicit assurance-dimension list, optional exact repository evidence, and
+The host supplies exact developer events, basis-bearing semantic values, an
+explicit assurance-dimension list, optional exact repository evidence, and
 explicit verification commands or a concrete no-command rationale. Each
 declared dimension has material or adoption-critical criticality, an adoption
-rationale, and an exact event or evidence basis. The host resolves
-repository-discoverable details before asking the developer.
+rationale, and an exact event or evidence basis. Natural-language semantic
+values use the current conversation language; language is not a Runtime input
+or persisted run property. The host resolves repository-discoverable details
+before asking the developer.
 
 Consequence means the adoption impact of a wrong change or explanation, not
 implementation effort. Low consequence with no dimension compiles to routine;
@@ -179,21 +181,27 @@ verifier surfaces, unrepresentable changes, and residual unknowns may only add
 obligations; they never lower the fixed contract, fact, currency, or authority
 invariants.
 
-Attention and the Review Map have different jobs. Attention states why evidence
-is insufficient, its adoption impact, exact references, and a concrete next
-action. The Review Map orders direct inspection by consequence; do not create
-one item per changed file.
+Attention and the Review Map have different jobs. Core emits structural
+attention codes, cause-specific identifiers, exact references, and resolution
+kinds. The Host explains the evidence gap, adoption impact, and next action in
+the current conversation language. The Review Map orders direct inspection by
+consequence; do not create one item per changed file.
 
 Finalize checks worktree currency before evaluating handoff input. Any edit
 after collection returns `facts-stale` and requires collection again.
 `handoff-ready` means ready for developer review, never adopted.
 
-Generated adapters relay the CLI-owned `presentationMarkdown` unchanged.
-Additional host investigation stays explicitly labeled as agent evidence and
-must not repeat facts or conclusions already present in that Markdown. Clean
-routine results may use the compact evidence-first renderer only when no
-requirement, material claim, unknown, alternative, Review Map, attention,
-verifier mutation, non-text file, or multiple check attempt exists.
+Current-fact finalization returns a structured `handoffPacket` containing the
+compact Semantic Contract, collected Runtime facts, Agent-authored handoff,
+and evaluation. Generated adapters render that packet for the developer in the
+current conversation language. They preserve paths, IDs, enum values,
+commands, numeric facts, quoted evidence, and raw tool output; keep Runtime
+facts, Agent judgment, and Human authority separate; include every Attention
+item and adoption-changing review surface; and may collapse only genuinely
+empty routine sections. Additional Host investigation stays explicitly
+labeled as Agent evidence and cannot be promoted to Runtime fact. Do not add a
+Runtime locale, localized copy table, persisted rendered Markdown, or
+language-specific protocol branch.
 
 ## Package and API boundary
 
@@ -217,9 +225,9 @@ exactly two runtime values: `compileDelegation` and `evaluateHandoff`.
 
 CLI owns commands, validation at the IO boundary, task-run sequencing, Git and
 check collection, patch materialization, project initialization, generated
-adapters, and presentation. Core does not run Git or commands, format CLI
-output, know host-specific files, or call an LLM. CLI and adapters do not decide
-semantic truth or invent facts.
+adapters, review-packet assembly, and terse control-plane presentation. Core
+does not run Git or commands, format CLI output, know host-specific files, or
+call an LLM. CLI and adapters do not decide semantic truth or invent facts.
 
 Core and CLI versions move together. The CLI archive pins the exact matching
 Core version after `workspace:*` is rewritten during pack. Unsupported protocol
@@ -250,8 +258,9 @@ deletes, translates, or overwrites unknown owner data.
 
 - Use TypeScript for Core and CLI control-plane logic.
 - Prefer narrow modules and explicit input/output types.
-- Keep content-derived output deterministic and diffable. Timestamps belong
-  only in lifecycle records.
+- Keep protocol facts, status, authority, and packet assembly deterministic and
+  diffable. User-facing Host wording is not a Runtime determinism boundary.
+  Timestamps belong only in lifecycle records.
 - Preserve unrelated user changes in a dirty worktree.
 - Use `rg` for search and `apply_patch` for source edits.
 - Use safe repository-relative paths and argv process execution without a
