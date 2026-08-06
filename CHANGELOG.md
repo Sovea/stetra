@@ -2,6 +2,17 @@
 
 ## 0.0.1
 
+- Renames the product to Stetra, the CLI package to `@sovea/stetra`, the Core
+  package to `@sovea/stetra-core`, and the executable to `stetra`.
+- Moves task state and generated Host adapters to the `.stetra/`,
+  `.agents/skills/stetra/`, and `.claude/skills/stetra/` namespaces without
+  adding aliases or automatic migration for the previous product identity.
+- Preserves the `semantic-delegation` protocol, three-core architecture,
+  lifecycle, authority model, and schema versions; this is a product-identity
+  cutover rather than a protocol redesign.
+- Moves release metadata and Trusted Publisher configuration to
+  `Sovea/stetra`, `@sovea/stetra-core`, and `@sovea/stetra`.
+
 - Adds the separately publishable, version-locked
   `@sovea/resonant-code-core` SDK and `@sovea/resonant-code` CLI.
 - Exposes a single `resonant-code` binary, with no legacy command alias.

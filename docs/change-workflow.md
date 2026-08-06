@@ -1,7 +1,7 @@
 # Change workflow
 
 This document describes the current `semantic-delegation` protocol implemented
-by `@sovea/resonant-code`. It is a reference for developers integrating the CLI
+by `@sovea/stetra`. It is a reference for developers integrating the CLI
 and for contributors changing lifecycle behavior.
 
 The normal coding path is:
@@ -20,7 +20,7 @@ next-step field. Its shape is deliberately small:
 {
   "kind": "implement-and-collect",
   "reference": "routine",
-  "command": {"argv": ["resonant-code", "change", "collect", ".", "--run", "<run-id>", "--json"]}
+  "command": {"argv": ["stetra", "change", "collect", ".", "--run", "<run-id>", "--json"]}
 }
 ```
 
@@ -33,7 +33,7 @@ reference does not add a run mode, state, or semantic decision.
 
 ## Project setup
 
-`resonant-code init` generates a thin workflow for Codex, Claude Code, or both.
+`stetra init` generates a thin workflow for Codex, Claude Code, or both.
 The generated files invoke the JSON CLI protocol and instruct the host agent;
 they do not contain a second policy or evaluation engine.
 
@@ -50,25 +50,27 @@ The Host reads `change.md` initially and then ensures that only the exact page
 named by `hostAction.reference` is available. It does not reload that page in a
 continuous context, infer the profile, or skip lifecycle stages.
 
-`resonant-code status` reports installation state. `doctor --strict` turns
+`stetra status` reports installation state. `doctor --strict` turns
 blocking installation or ownership issues into a failing process result.
 
 Project initialization owns only:
 
-- `.resonant-code/manifest.json`;
-- generated files under `.agents/skills/resonant-code/` and/or
-  `.claude/skills/resonant-code/`;
+- `.stetra/manifest.json`;
+- generated files under `.agents/skills/stetra/` and/or
+  `.claude/skills/stetra/`;
 - marked pointer blocks in `AGENTS.md`, `CLAUDE.md`, and `.gitignore`.
 
 Owner-modified generated content is not overwritten unless the caller
 explicitly forces the operation. Unknown or obsolete project artifacts are
 reported with their exact paths and are never automatically migrated or
-deleted.
+deleted. A previous `.resonant-code/` installation, generated skill, or
+managed block is treated as a legacy artifact and must be archived or removed
+explicitly before Stetra initialization.
 
 ## 1. Prepare
 
 ```sh
-resonant-code change prepare . --input - --json
+stetra change prepare . --input - --json
 ```
 
 The host sends transient JSON on stdin. A prepare input located inside the
@@ -143,7 +145,7 @@ be resolved before continuing.
 After implementation:
 
 ```sh
-resonant-code change collect . --run <run-id> --json
+stetra change collect . --run <run-id> --json
 ```
 
 Collect executes every frozen check as an argv array without a shell, then
@@ -152,7 +154,7 @@ captures the complete baseline-to-current worktree change. The CLI owns a
 establishes a different budget, the host may set it for a full collection:
 
 ```sh
-resonant-code change collect . --run <run-id> --timeout-ms <milliseconds> --json
+stetra change collect . --run <run-id> --timeout-ms <milliseconds> --json
 ```
 
 The budget is recorded on the resulting attempt but does not change contract
@@ -191,7 +193,7 @@ If the latest attempt actually timed out, the host may retry only that check in
 the same run with a strictly larger budget:
 
 ```sh
-resonant-code change collect . --run <run-id> \
+stetra change collect . --run <run-id> \
   --retry-check <check-id>=<larger-milliseconds> --json
 ```
 
@@ -255,7 +257,7 @@ downgrade those facts or the fixed authority and currency checks.
 ## 4. Finalize
 
 ```sh
-resonant-code change finalize . --run <run-id> --json
+stetra change finalize . --run <run-id> --json
 ```
 
 Finalize first checks whether the worktree still matches the collected facts.
@@ -314,11 +316,11 @@ Canonical details remain available without expanding every normal lifecycle
 packet:
 
 ```sh
-resonant-code change explain . --run <run-id> --section contract --json
-resonant-code change explain . --run <run-id> --section facts --json
-resonant-code change explain . --run <run-id> --section handoff --json
-resonant-code change explain . --run <run-id> --section evaluation --json
-resonant-code change explain . --run <run-id> --section review --json
+stetra change explain . --run <run-id> --section contract --json
+stetra change explain . --run <run-id> --section facts --json
+stetra change explain . --run <run-id> --section handoff --json
+stetra change explain . --run <run-id> --section evaluation --json
+stetra change explain . --run <run-id> --section review --json
 ```
 
 `review` reconstructs the same `handoffPacket` only while the persisted handoff
@@ -330,7 +332,7 @@ when that source changed after completion.
 One runnable task uses one directory:
 
 ```text
-.resonant-code/runs/<runId>/
+.stetra/runs/<runId>/
 |-- run.json
 |-- handoff.json
 |-- change.patch              # when a representable patch exists

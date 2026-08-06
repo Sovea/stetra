@@ -1,22 +1,22 @@
-# @sovea/resonant-code
+# @sovea/stetra
 
 CLI for carrying a coding change from developer intent through
 Runtime-collected facts to an inspectable handoff.
 
 ```sh
-npm install --global @sovea/resonant-code
+npm install --global @sovea/stetra
 cd /path/to/project
-resonant-code init .
-resonant-code doctor . --strict
+stetra init .
+stetra doctor . --strict
 ```
 
 `init` generates a thin Codex and/or Claude Code workflow. The normal agent path
 uses three JSON commands:
 
 ```sh
-resonant-code change prepare . --input - --json
-resonant-code change collect . --run <run-id> --json
-resonant-code change finalize . --run <run-id> --json
+stetra change prepare . --input - --json
+stetra change collect . --run <run-id> --json
+stetra change finalize . --run <run-id> --json
 ```
 
 - `prepare` compiles the task contract and proportional Assurance Plan,
@@ -44,11 +44,11 @@ unknowns, and Host-disclosed critical claims can only add obligations.
 Exact canonical detail is available on demand:
 
 ```sh
-resonant-code change explain . --run <run-id> --section contract --json
-resonant-code change explain . --run <run-id> --section facts --json
-resonant-code change explain . --run <run-id> --section handoff --json
-resonant-code change explain . --run <run-id> --section evaluation --json
-resonant-code change explain . --run <run-id> --section review --json
+stetra change explain . --run <run-id> --section contract --json
+stetra change explain . --run <run-id> --section facts --json
+stetra change explain . --run <run-id> --section handoff --json
+stetra change explain . --run <run-id> --section evaluation --json
+stetra change explain . --run <run-id> --section review --json
 ```
 
 The CLI owns project initialization, task-run IO, exact repository-evidence
@@ -62,5 +62,5 @@ handoff prose.
 repair, evidence, validation, recollection, or direct-review action. The Host
 explains their adoption impact to the developer.
 
-The CLI pins the exact matching `@sovea/resonant-code-core` version. Neither
+The CLI pins the exact matching `@sovea/stetra-core` version. Neither
 package calls an LLM.

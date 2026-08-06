@@ -1,6 +1,6 @@
 # Architecture
 
-`resonant-code` is an engineering harness for coding agents, designed to keep
+Stetra is an engineering harness for coding agents, designed to keep
 the engineering thread intact when implementation is delegated.
 
 It connects developer intent, Runtime-collected repository and verification
@@ -298,10 +298,10 @@ The dependency direction is intentionally narrow:
 Generated host adapter -> CLI -> Core
 ```
 
-- `@sovea/resonant-code-core` provides deterministic contract compilation,
+- `@sovea/stetra-core` provides deterministic contract compilation,
   fact binding, and handoff evaluation through `compileDelegation` and
   `evaluateHandoff`.
-- `@sovea/resonant-code` provides the CLI lifecycle, Git and check collection,
+- `@sovea/stetra` provides the CLI lifecycle, Git and check collection,
   task-run IO, review-packet assembly, project initialization, and generated
   adapters.
 
@@ -315,7 +315,7 @@ an independent consumer, public API, version, and release boundary.
 
 ## Persistent aggregate
 
-One `.resonant-code/runs/<runId>/` directory owns the contract, baseline,
+One `.stetra/runs/<runId>/` directory owns the contract, baseline,
 facts, handoff, evaluation, patch, and bounded non-empty check logs for one
 task. The minimum states are `prepared`, `facts-collected`, and `completed`.
 

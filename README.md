@@ -1,8 +1,8 @@
-# resonant-code
+# Stetra
 
 **Let the agent implement. Keep the thread and the final say.**
 
-`resonant-code` is an engineering harness for coding agents, designed to keep
+Stetra is an engineering harness for coding agents, designed to keep
 the engineering thread intact when implementation is delegated.
 
 It connects developer intent, Runtime-collected repository and verification
@@ -24,7 +24,7 @@ developer still needs to know:
 - which conclusions are observed facts and which are agent judgment;
 - what remains uncertain and where direct review is worth the time.
 
-Ordinary agent transcripts make that reconstruction expensive. `resonant-code`
+Ordinary agent transcripts make that reconstruction expensive. Stetra
 wraps a coding task with a small deterministic protocol so the implementation
 and its handoff are tied to the same task meaning and actual change.
 
@@ -52,9 +52,9 @@ Developer request and material decisions
 The generated host workflow runs three commands around a normal coding change:
 
 ```sh
-resonant-code change prepare . --input - --json
-resonant-code change collect . --run <run-id> --json
-resonant-code change finalize . --run <run-id> --json
+stetra change prepare . --input - --json
+stetra change collect . --run <run-id> --json
+stetra change finalize . --run <run-id> --json
 ```
 
 - `prepare` compiles the task's Semantic Contract and proportional Assurance
@@ -71,7 +71,7 @@ automatically adopted. Failed checks, stale facts, contradictions, and missing
 evidence remain visible and actionable.
 
 Exact contract, fact, handoff, evaluation, and review-packet data is available
-on demand through `resonant-code change explain`.
+on demand through `stetra change explain`.
 
 Finalize returns a structured `handoffPacket` that keeps the Semantic
 Contract, Runtime facts, Agent-authored handoff, and evaluation separate. The
@@ -128,9 +128,9 @@ frontier.
 
 The workspace contains two lockstep packages:
 
-- `@sovea/resonant-code-core` — deterministic contract compilation, fact
+- `@sovea/stetra-core` — deterministic contract compilation, fact
   binding, and handoff evaluation;
-- `@sovea/resonant-code` — CLI lifecycle, Git and check collection, run IO,
+- `@sovea/stetra` — CLI lifecycle, Git and check collection, run IO,
   review-packet assembly, initialization, and generated Codex/Claude
   workflows.
 

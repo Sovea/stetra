@@ -1,13 +1,13 @@
-# @sovea/resonant-code-core
+# @sovea/stetra-core
 
 Deterministic Semantic Contract and Cognitive Handoff kernel for the
-task-scoped `resonant-code` engineering loop.
+task-scoped Stetra engineering loop.
 
 ```ts
 import {
   compileDelegation,
   evaluateHandoff,
-} from '@sovea/resonant-code-core';
+} from '@sovea/stetra-core';
 ```
 
 `compileDelegation` validates one pre-change Semantic Contract. It keeps exact
@@ -26,5 +26,5 @@ turn agent judgment into a machine fact or record adoption.
 
 The package exports these two runtime values plus their public TypeScript types.
 It does not read repositories, execute commands, format CLI output, or call an
-LLM. Normal coding-agent workflows should use the `@sovea/resonant-code` CLI,
+LLM. Normal coding-agent workflows should use the `@sovea/stetra` CLI,
 which collects facts and supplies them to Core.

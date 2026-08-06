@@ -2,7 +2,7 @@
 
 ## What this repository builds
 
-`resonant-code` is an engineering harness for coding agents, designed to keep
+Stetra is an engineering harness for coding agents, designed to keep
 the engineering thread intact when implementation is delegated.
 
 It connects developer intent, Runtime-collected repository and verification
@@ -213,8 +213,8 @@ Generated host adapter -> CLI -> Core
 
 The workspace has two publishable packages:
 
-- `packages/core/` -> `@sovea/resonant-code-core`
-- `packages/cli/` -> `@sovea/resonant-code`
+- `packages/core/` -> `@sovea/stetra-core`
+- `packages/cli/` -> `@sovea/stetra`
 
 Do not create another package without an independent consumer, public API,
 version, and release need.
@@ -240,7 +240,7 @@ initialization generates host workflows in the target repository.
 
 ## Persistence and project ownership
 
-Task state lives only under `.resonant-code/runs/<runId>/`. One run owns its
+Task state lives only under `.stetra/runs/<runId>/`. One run owns its
 contract, baseline, facts, handoff, evaluation, optional patch, and non-empty
 bounded check logs. It is never authoritative state for another task.
 
