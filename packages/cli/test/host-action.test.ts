@@ -5,7 +5,7 @@ import type {
   AssurancePlan,
   CheckStatus,
   FactBundle,
-} from '@sovea/resonant-code-core';
+} from '@sovea/stetra-core';
 
 import {
   collectedHostAction,
@@ -27,7 +27,7 @@ test('Host projection selects routine or assurance guidance from the compiled pl
   assert.equal(routine.kind, 'implement-and-collect');
   assert.equal(routine.reference, 'routine');
   assert.deepEqual(commandArgv(routine), [
-    'resonant-code', 'change', 'collect', '.', '--run', RUN_ID, '--json',
+    'stetra', 'change', 'collect', '.', '--run', RUN_ID, '--json',
   ]);
   assert.equal(critical.kind, 'implement-and-collect');
   assert.equal(critical.reference, 'assurance');

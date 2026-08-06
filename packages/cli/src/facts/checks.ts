@@ -14,7 +14,7 @@ import type {
   CheckFact,
   CheckStreamFact,
   VerificationDefinition,
-} from '@sovea/resonant-code-core';
+} from '@sovea/stetra-core';
 
 import { runStreamingCommand } from '../infrastructure/process.ts';
 import { sha256, stableFingerprint } from '../protocol.ts';

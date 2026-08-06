@@ -1,4 +1,4 @@
-import type { VerifierMutation } from '@sovea/resonant-code-core';
+import type { VerifierMutation } from '@sovea/stetra-core';
 
 export interface VerifierSurfaceSummary {
   path: string;

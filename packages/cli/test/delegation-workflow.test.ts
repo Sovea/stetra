@@ -32,8 +32,8 @@ import {
 const VERSION = '0.0.1-test';
 
 test('worktree snapshots keep Git objects task-scoped and tolerate read-only metadata', async () => {
-  const root = mkdtempSync(join(tmpdir(), 'resonant-readonly-git-'));
-  const inputRoot = mkdtempSync(join(tmpdir(), 'resonant-input-'));
+  const root = mkdtempSync(join(tmpdir(), 'stetra-readonly-git-'));
+  const inputRoot = mkdtempSync(join(tmpdir(), 'stetra-input-'));
   let restoreGitPermissions: (() => void) | undefined;
   try {
     initializeRepository(root);
@@ -89,8 +89,8 @@ test('worktree snapshots keep Git objects task-scoped and tolerate read-only met
 });
 
 test('routine assurance returns a self-contained review packet', async () => {
-  const root = mkdtempSync(join(tmpdir(), 'resonant-routine-'));
-  const inputRoot = mkdtempSync(join(tmpdir(), 'resonant-input-'));
+  const root = mkdtempSync(join(tmpdir(), 'stetra-routine-'));
+  const inputRoot = mkdtempSync(join(tmpdir(), 'stetra-input-'));
   try {
     initializeRepository(root);
     writeFileSync(join(root, 'source.txt'), 'before\n', 'utf8');
@@ -187,8 +187,8 @@ test('routine assurance returns a self-contained review packet', async () => {
 });
 
 test('review packet preserves Host-authored language without a Runtime locale', async () => {
-  const root = mkdtempSync(join(tmpdir(), 'resonant-routine-zh-'));
-  const inputRoot = mkdtempSync(join(tmpdir(), 'resonant-input-'));
+  const root = mkdtempSync(join(tmpdir(), 'stetra-routine-zh-'));
+  const inputRoot = mkdtempSync(join(tmpdir(), 'stetra-input-'));
   try {
     initializeRepository(root);
     writeFileSync(join(root, 'source.txt'), 'before\n', 'utf8');
@@ -257,8 +257,8 @@ test('review packet preserves Host-authored language without a Runtime locale', 
 });
 
 test('routine review packet keeps non-text change facts inspectable', async () => {
-  const root = mkdtempSync(join(tmpdir(), 'resonant-routine-binary-'));
-  const inputRoot = mkdtempSync(join(tmpdir(), 'resonant-input-'));
+  const root = mkdtempSync(join(tmpdir(), 'stetra-routine-binary-'));
+  const inputRoot = mkdtempSync(join(tmpdir(), 'stetra-input-'));
   try {
     initializeRepository(root);
     writeFileSync(join(root, 'asset.bin'), Buffer.from([0, 1, 2]));
@@ -308,8 +308,8 @@ test('routine review packet keeps non-text change facts inspectable', async () =
 });
 
 test('clean routine review packet keeps no-command verification visible', async () => {
-  const root = mkdtempSync(join(tmpdir(), 'resonant-routine-no-command-'));
-  const inputRoot = mkdtempSync(join(tmpdir(), 'resonant-input-'));
+  const root = mkdtempSync(join(tmpdir(), 'stetra-routine-no-command-'));
+  const inputRoot = mkdtempSync(join(tmpdir(), 'stetra-input-'));
   try {
     initializeRepository(root);
     writeFileSync(join(root, 'source.txt'), 'before\n', 'utf8');
@@ -361,8 +361,8 @@ test('clean routine review packet keeps no-command verification visible', async 
 });
 
 test('prepare and collect bind dirty-baseline changes, checks, patch, and verifier mutations', async () => {
-  const root = mkdtempSync(join(tmpdir(), 'resonant-delegation-'));
-  const inputRoot = mkdtempSync(join(tmpdir(), 'resonant-input-'));
+  const root = mkdtempSync(join(tmpdir(), 'stetra-delegation-'));
+  const inputRoot = mkdtempSync(join(tmpdir(), 'stetra-input-'));
   try {
     initializeRepository(root);
     mkdirSync(join(root, 'src'));
@@ -518,8 +518,8 @@ test('prepare and collect bind dirty-baseline changes, checks, patch, and verifi
 });
 
 test('recollection replaces stale fact binding and resets the handoff input', async () => {
-  const root = mkdtempSync(join(tmpdir(), 'resonant-recollect-'));
-  const inputRoot = mkdtempSync(join(tmpdir(), 'resonant-input-'));
+  const root = mkdtempSync(join(tmpdir(), 'stetra-recollect-'));
+  const inputRoot = mkdtempSync(join(tmpdir(), 'stetra-input-'));
   try {
     initializeRepository(root);
     writeFileSync(join(root, 'source.txt'), 'one\n', 'utf8');
@@ -547,8 +547,8 @@ test('recollection replaces stale fact binding and resets the handoff input', as
 });
 
 test('a timed-out check retries with a larger budget in the same run and preserves attempts', async () => {
-  const root = mkdtempSync(join(tmpdir(), 'resonant-timeout-retry-'));
-  const inputRoot = mkdtempSync(join(tmpdir(), 'resonant-input-'));
+  const root = mkdtempSync(join(tmpdir(), 'stetra-timeout-retry-'));
+  const inputRoot = mkdtempSync(join(tmpdir(), 'stetra-input-'));
   try {
     initializeRepository(root);
     writeFileSync(join(root, 'source.txt'), 'before\n', 'utf8');
@@ -706,8 +706,8 @@ test('a timed-out check retries with a larger budget in the same run and preserv
 });
 
 test('non-runnable compile outcomes create no run directory', async () => {
-  const root = mkdtempSync(join(tmpdir(), 'resonant-no-run-'));
-  const inputRoot = mkdtempSync(join(tmpdir(), 'resonant-input-'));
+  const root = mkdtempSync(join(tmpdir(), 'stetra-no-run-'));
+  const inputRoot = mkdtempSync(join(tmpdir(), 'stetra-input-'));
   try {
     initializeRepository(root);
     writeFileSync(join(root, 'source.txt'), 'one\n', 'utf8');
@@ -720,7 +720,7 @@ test('non-runnable compile outcomes create no run directory', async () => {
     assert.equal(result.runCreated, false);
     assert.equal(result.hostAction.kind, 'configure-verification');
     assert.equal(result.hostAction.reference, null);
-    assert.equal(existsSync(join(root, '.resonant-code', 'runs')), false);
+    assert.equal(existsSync(join(root, '.stetra', 'runs')), false);
   } finally {
     rmSync(root, { recursive: true, force: true });
     rmSync(inputRoot, { recursive: true, force: true });
@@ -728,8 +728,8 @@ test('non-runnable compile outcomes create no run directory', async () => {
 });
 
 test('prepare rejects unavailable top-level executables without claiming nested readiness', async () => {
-  const root = mkdtempSync(join(tmpdir(), 'resonant-preflight-'));
-  const inputRoot = mkdtempSync(join(tmpdir(), 'resonant-input-'));
+  const root = mkdtempSync(join(tmpdir(), 'stetra-preflight-'));
+  const inputRoot = mkdtempSync(join(tmpdir(), 'stetra-input-'));
   try {
     initializeRepository(root);
     writeFileSync(join(root, 'source.txt'), 'one\n', 'utf8');
@@ -740,7 +740,7 @@ test('prepare rejects unavailable top-level executables without claiming nested 
       checks: [{
         id: 'missing-check',
         rationale: 'Prove unavailable command preflight.',
-        argv: ['resonant-code-certainly-missing-executable', '--version'],
+        argv: ['stetra-certainly-missing-executable', '--version'],
         source: 'host-task',
         commandDefinitionPaths: [],
         acceptanceSurfacePaths: [],
@@ -761,14 +761,14 @@ test('prepare rejects unavailable top-level executables without claiming nested 
     assert.ok(missingIssues.some((item) =>
       item.code === 'verification-executable-unavailable'
       && item.path === 'verification.checks[0].argv[0]'));
-    assert.equal(existsSync(join(root, '.resonant-code', 'runs')), false);
+    assert.equal(existsSync(join(root, '.stetra', 'runs')), false);
 
     const nestedPath = join(inputRoot, 'nested.json');
     writePrepareInput(nestedPath, {
       checks: [{
         id: 'nested-check',
         rationale: 'Top-level Node is runnable while nested prerequisites remain an execution fact.',
-        argv: [process.execPath, '-e', 'require("resonant-code-certainly-missing-module")'],
+        argv: [process.execPath, '-e', 'require("stetra-certainly-missing-module")'],
         source: 'host-task',
         commandDefinitionPaths: [],
         acceptanceSurfacePaths: [],
@@ -787,7 +787,7 @@ test('prepare rejects unavailable top-level executables without claiming nested 
 });
 
 test('frozen checks distinguish failed and unavailable and cap persisted output', async () => {
-  const root = mkdtempSync(join(tmpdir(), 'resonant-checks-'));
+  const root = mkdtempSync(join(tmpdir(), 'stetra-checks-'));
   try {
     const results = await runFrozenChecks({
       projectRoot: root,
@@ -818,7 +818,7 @@ test('frozen checks distinguish failed and unavailable and cap persisted output'
           definition: {
             id: 'missing',
             rationale: 'Exercise unavailable execution.',
-            argv: ['resonant-code-command-that-does-not-exist'],
+            argv: ['stetra-command-that-does-not-exist'],
             source: 'host-task',
             verifierRefs: [],
           },
@@ -842,7 +842,7 @@ test('frozen checks distinguish failed and unavailable and cap persisted output'
           definition: {
             id: 'missing',
             rationale: 'Exercise unavailable execution.',
-            argv: ['resonant-code-command-that-does-not-exist'],
+            argv: ['stetra-command-that-does-not-exist'],
             source: 'host-task',
             verifierRefs: [],
           },
@@ -858,8 +858,8 @@ test('frozen checks distinguish failed and unavailable and cap persisted output'
 });
 
 test('finalize completes a fresh fact-bound handoff and explain preserves all authorities', async () => {
-  const root = mkdtempSync(join(tmpdir(), 'resonant-finalize-'));
-  const inputRoot = mkdtempSync(join(tmpdir(), 'resonant-input-'));
+  const root = mkdtempSync(join(tmpdir(), 'stetra-finalize-'));
+  const inputRoot = mkdtempSync(join(tmpdir(), 'stetra-input-'));
   try {
     initializeRepository(root);
     writeFileSync(join(root, 'source.txt'), 'before\n', 'utf8');
@@ -905,8 +905,8 @@ test('finalize completes a fresh fact-bound handoff and explain preserves all au
 });
 
 test('finalize detects repository edits before parsing Host claims and requires recollection', async () => {
-  const root = mkdtempSync(join(tmpdir(), 'resonant-stale-'));
-  const inputRoot = mkdtempSync(join(tmpdir(), 'resonant-input-'));
+  const root = mkdtempSync(join(tmpdir(), 'stetra-stale-'));
+  const inputRoot = mkdtempSync(join(tmpdir(), 'stetra-input-'));
   try {
     initializeRepository(root);
     writeFileSync(join(root, 'source.txt'), 'before\n', 'utf8');
@@ -944,8 +944,8 @@ test('finalize detects repository edits before parsing Host claims and requires 
 });
 
 test('finalize rejects Host-declared machine facts before Core evaluation', async () => {
-  const root = mkdtempSync(join(tmpdir(), 'resonant-host-facts-'));
-  const inputRoot = mkdtempSync(join(tmpdir(), 'resonant-input-'));
+  const root = mkdtempSync(join(tmpdir(), 'stetra-host-facts-'));
+  const inputRoot = mkdtempSync(join(tmpdir(), 'stetra-input-'));
   try {
     initializeRepository(root);
     writeFileSync(join(root, 'source.txt'), 'before\n', 'utf8');
@@ -974,8 +974,8 @@ test('finalize rejects Host-declared machine facts before Core evaluation', asyn
 });
 
 test('finalize reports independent semantic authoring issues together and remains retryable', async () => {
-  const root = mkdtempSync(join(tmpdir(), 'resonant-handoff-issues-'));
-  const inputRoot = mkdtempSync(join(tmpdir(), 'resonant-input-'));
+  const root = mkdtempSync(join(tmpdir(), 'stetra-handoff-issues-'));
+  const inputRoot = mkdtempSync(join(tmpdir(), 'stetra-input-'));
   try {
     initializeRepository(root);
     writeFileSync(join(root, 'source.txt'), 'before\n', 'utf8');
@@ -1033,8 +1033,8 @@ test('finalize reports independent semantic authoring issues together and remain
 });
 
 test('retention removes only whole old completed runs and preserves prepared runs', async () => {
-  const root = mkdtempSync(join(tmpdir(), 'resonant-retention-'));
-  const inputRoot = mkdtempSync(join(tmpdir(), 'resonant-input-'));
+  const root = mkdtempSync(join(tmpdir(), 'stetra-retention-'));
+  const inputRoot = mkdtempSync(join(tmpdir(), 'stetra-input-'));
   try {
     initializeRepository(root);
     writeFileSync(join(root, 'source.txt'), 'before\n', 'utf8');
@@ -1059,7 +1059,7 @@ test('retention removes only whole old completed runs and preserves prepared run
     const clonedRunIds: string[] = [];
     for (let index = 0; index < 50; index += 1) {
       const runId = randomUUID();
-      const runDirectory = join(root, '.resonant-code', 'runs', runId);
+      const runDirectory = join(root, '.stetra', 'runs', runId);
       const cloned = structuredClone(completedFixture);
       cloned.runId = runId;
       cloned.createdAt = new Date(Date.UTC(2025, 0, index + 1)).toISOString();
@@ -1092,7 +1092,7 @@ test('retention removes only whole old completed runs and preserves prepared run
     assert.equal(existsSync(current.details.runPath), true);
     const remainingCompleted = [first.runId, current.runId, ...clonedRunIds]
       .filter((runId) => {
-        const runPath = join(root, '.resonant-code', 'runs', runId, 'run.json');
+        const runPath = join(root, '.stetra', 'runs', runId, 'run.json');
         return existsSync(runPath)
           && JSON.parse(readFileSync(runPath, 'utf8')).state === 'completed';
       });

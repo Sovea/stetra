@@ -2,7 +2,7 @@ import type {
   AssurancePlan,
   FactBundle,
   HandoffStatus,
-} from '@sovea/resonant-code-core';
+} from '@sovea/stetra-core';
 
 export type HostWorkflowReference = 'routine' | 'assurance' | 'recovery';
 
@@ -122,13 +122,13 @@ export function finalizedHostAction(status: HandoffStatus, runId: string): HostA
 
 function command(stage: 'collect' | 'finalize', runId: string): { argv: string[] } {
   return {
-    argv: ['resonant-code', 'change', stage, '.', '--run', runId, '--json'],
+    argv: ['stetra', 'change', stage, '.', '--run', runId, '--json'],
   };
 }
 
 function prepareCommand(): { argv: string[] } {
   return {
-    argv: ['resonant-code', 'change', 'prepare', '.', '--input', '-', '--json'],
+    argv: ['stetra', 'change', 'prepare', '.', '--input', '-', '--json'],
   };
 }
 

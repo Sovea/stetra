@@ -68,15 +68,15 @@ export interface InitializeProjectOptions {
   dryRun?: boolean;
 }
 
-const MANIFEST_PATH = '.resonant-code/manifest.json';
+const MANIFEST_PATH = '.stetra/manifest.json';
 const TEMPLATE_REVISION = 1;
 const DOC_MARKERS = {
-  start: '<!-- resonant-code:begin -->',
-  end: '<!-- resonant-code:end -->',
+  start: '<!-- stetra:begin -->',
+  end: '<!-- stetra:end -->',
 };
 const GITIGNORE_MARKERS = {
-  start: '# resonant-code:begin',
-  end: '# resonant-code:end',
+  start: '# stetra:begin',
+  end: '# stetra:end',
 };
 
 export function initializeProject(options: InitializeProjectOptions = {}) {
@@ -284,15 +284,15 @@ function buildDesiredArtifacts(adapters: HostAdapter[]): DesiredArtifact[] {
     markers: GITIGNORE_MARKERS,
     content: [
       GITIGNORE_MARKERS.start,
-      '.resonant-code/runs/',
+      '.stetra/runs/',
       GITIGNORE_MARKERS.end,
     ].join('\n'),
   }];
 
   for (const adapter of adapters) {
     const skillRoot = adapter === 'codex'
-      ? '.agents/skills/resonant-code'
-      : '.claude/skills/resonant-code';
+      ? '.agents/skills/stetra'
+      : '.claude/skills/stetra';
     artifacts.push({
       path: `${skillRoot}/SKILL.md`,
       kind: 'file',
@@ -353,7 +353,7 @@ function planArtifact(
     return {
       artifact,
       action: 'blocked',
-      reason: 'The generated adapter file was modified outside resonant-code; use --force to replace this managed file.',
+      reason: 'The generated adapter file was modified outside stetra; use --force to replace this managed file.',
     };
   }
 
@@ -387,7 +387,7 @@ function planArtifact(
   return {
     artifact,
     action: 'blocked',
-    reason: 'The resonant-code managed block was modified; use --force to replace only that block.',
+    reason: 'The stetra managed block was modified; use --force to replace only that block.',
   };
 }
 

@@ -82,7 +82,7 @@ export interface FactBundle extends ProtocolEnvelope {
   verifierMutations: VerifierMutation[];
   patch?: PatchFact;
   provenance: {
-    collector: 'resonant-code-cli';
+    collector: 'stetra-cli';
     cliVersion: string;
     coreVersion: string;
   };

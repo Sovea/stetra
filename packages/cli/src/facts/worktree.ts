@@ -15,12 +15,12 @@ import type {
   ChangedFileFact,
   FileContentFact,
   WorktreeSummary,
-} from '@sovea/resonant-code-core';
+} from '@sovea/stetra-core';
 
 import { runBufferedCommand } from '../infrastructure/process.ts';
 import { sha256, stableFingerprint } from '../protocol.ts';
 
-const WORKFLOW_OUTPUT_PREFIX = '.resonant-code/runs/';
+const WORKFLOW_OUTPUT_PREFIX = '.stetra/runs/';
 const GIT_OUTPUT_LIMIT = 256 * 1024 * 1024;
 const GITLINK_MODE = '160000';
 const GIT_OBJECT_ID_PATTERN = /^[0-9a-f]{40}(?:[0-9a-f]{24})?$/;
@@ -60,7 +60,7 @@ export async function captureGitWorktree(
   await assertGitRoot(projectRoot);
   const ephemeralRoot = options.objectDirectory
     ? undefined
-    : mkdtempSync(join(tmpdir(), 'resonant-code-objects-'));
+    : mkdtempSync(join(tmpdir(), 'stetra-objects-'));
   const objectDirectory = realpathOrResolved(options.objectDirectory ?? ephemeralRoot!);
   mkdirSync(objectDirectory, { recursive: true });
   try {
@@ -277,7 +277,7 @@ async function createWorktreeTree(
   head: string | null,
   objectEnv: NodeJS.ProcessEnv,
 ): Promise<string> {
-  const temporaryRoot = mkdtempSync(join(tmpdir(), 'resonant-code-index-'));
+  const temporaryRoot = mkdtempSync(join(tmpdir(), 'stetra-index-'));
   const indexPath = join(temporaryRoot, 'index');
   const env = { ...objectEnv, GIT_INDEX_FILE: indexPath };
   try {
@@ -289,7 +289,7 @@ async function createWorktreeTree(
       '--cached',
       '--ignore-unmatch',
       '--',
-      '.resonant-code/runs',
+      '.stetra/runs',
     ], env);
     const treeId = (await runGitBuffer(projectRoot, ['write-tree'], env)).toString('ascii').trim();
     if (!GIT_OBJECT_ID_PATTERN.test(treeId)) {

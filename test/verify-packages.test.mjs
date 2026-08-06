@@ -8,8 +8,8 @@ const root = resolve(import.meta.dirname, '..');
 const core = JSON.parse(readFileSync(resolve(root, 'packages/core/package.json'), 'utf8'));
 const cli = JSON.parse(readFileSync(resolve(root, 'packages/cli/package.json'), 'utf8'));
 
-assert.equal(core.name, '@sovea/resonant-code-core');
-assert.equal(cli.name, '@sovea/resonant-code');
+assert.equal(core.name, '@sovea/stetra-core');
+assert.equal(cli.name, '@sovea/stetra');
 assert.equal(core.version, cli.version, 'Core and CLI versions must move together.');
 assert.equal(core.private, undefined);
 assert.equal(cli.private, undefined);
@@ -20,7 +20,7 @@ assert.equal(cli.publishConfig?.registry, 'https://registry.npmjs.org/');
 assert.equal(core.publishConfig?.provenance, undefined);
 assert.equal(cli.publishConfig?.provenance, undefined);
 assert.equal(cli.dependencies?.[core.name], 'workspace:*');
-assert.deepEqual(cli.bin, { 'resonant-code': './dist/index.mjs' });
+assert.deepEqual(cli.bin, { 'stetra': './dist/index.mjs' });
 assert.deepEqual(Object.keys(core.exports).sort(), ['.', './package.json']);
 assert.deepEqual(core.files, ['dist', 'LICENSE', 'README.md']);
 

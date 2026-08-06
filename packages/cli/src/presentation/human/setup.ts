@@ -10,7 +10,7 @@ import {
 
 export function formatInit(output: JsonObject, colors: Colors): string {
   const lines = [
-    heading('Resonant Code project setup', colors),
+    heading('Stetra project setup', colors),
     statusLine(String(output.status ?? 'unknown'), colors),
   ];
   if (Array.isArray(output.adapters)) {
@@ -40,7 +40,7 @@ export function formatInit(output: JsonObject, colors: Colors): string {
 export function formatReadiness(output: JsonObject, colors: Colors): string {
   const command = String(output.command ?? 'status');
   const lines = [
-    heading(`Resonant Code ${command}`, colors),
+    heading(`Stetra ${command}`, colors),
     statusLine(String(output.status ?? 'unknown'), colors),
   ];
   if (typeof output.version === 'string') {

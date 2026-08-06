@@ -48,7 +48,7 @@ export function validateFactBundle(bundle: FactBundle, contract: SemanticContrac
   if (bundle.changedFiles.some((file) => file.representation === 'text') && !bundle.patch) {
     throw new Error('evaluateHandoff text changes require an inspectable patch fact.');
   }
-  if (bundle.provenance?.collector !== 'resonant-code-cli'
+  if (bundle.provenance?.collector !== 'stetra-cli'
     || !isNonEmptyString(bundle.provenance.cliVersion)
     || !isNonEmptyString(bundle.provenance.coreVersion)) {
     throw new Error('evaluateHandoff Fact Bundle provenance is invalid.');

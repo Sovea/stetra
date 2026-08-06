@@ -192,8 +192,8 @@ export const DelegationRunSchema = z.strictObject({
   projectRoot: NonEmptyStringSchema,
   createdAt: z.iso.datetime(),
   packageIdentity: z.strictObject({
-    cli: z.strictObject({ name: z.literal('@sovea/resonant-code'), version: NonEmptyStringSchema }),
-    core: z.strictObject({ name: z.literal('@sovea/resonant-code-core'), version: NonEmptyStringSchema }),
+    cli: z.strictObject({ name: z.literal('@sovea/stetra'), version: NonEmptyStringSchema }),
+    core: z.strictObject({ name: z.literal('@sovea/stetra-core'), version: NonEmptyStringSchema }),
   }),
   contract: z.unknown(),
   worktreeBaseline: z.unknown(),

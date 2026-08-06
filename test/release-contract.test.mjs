@@ -196,10 +196,11 @@ test('registry recovery requires identical artifacts and provenance', () => {
     .update(readFileSync(fixture))
     .digest('base64')}`;
   assert.equal(tarballIntegrity(fixture), integrity);
+  const version = `${source.productVersion}-alpha.1`;
   const record = {
-    name: '@sovea/resonant-code',
-    version: '0.0.1-alpha.1',
-    dependencies: { '@sovea/resonant-code-core': '0.0.1-alpha.1' },
+    name: '@sovea/stetra',
+    version,
+    dependencies: { '@sovea/stetra-core': version },
     dist: {
       integrity,
       attestations: {
@@ -247,7 +248,7 @@ function nextPatch(version) {
 }
 
 function createReleaseFixture(context) {
-  const fixture = mkdtempSync(join(tmpdir(), 'resonant-release-'));
+  const fixture = mkdtempSync(join(tmpdir(), 'stetra-release-'));
   context.after(() => rmSync(fixture, { recursive: true, force: true }));
   mkdirSync(resolve(fixture, 'packages/core'), { recursive: true });
   mkdirSync(resolve(fixture, 'packages/cli/src'), { recursive: true });

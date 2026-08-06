@@ -25,8 +25,8 @@ export function createProgram(
 ): Command {
   const program = new Command();
   program
-    .name('resonant-code')
-    .description('CLI-first control plane for the resonant-code change harness')
+    .name('stetra')
+    .description('CLI-first control plane for the Stetra change harness')
     .version(PRODUCT_VERSION)
     .option('--json', 'emit a deterministic machine-readable decision packet')
     .option('--no-interactive', 'disable all human prompts')

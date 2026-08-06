@@ -55,12 +55,12 @@ function registerStatusCommand(
     } else if (installation.status === 'absent') {
       required.push({
         code: 'host-adapter-absent',
-        message: 'Run `resonant-code init .` to install a generated Host adapter.',
+        message: 'Run `stetra init .` to install a generated Host adapter.',
       });
     } else if (installation.status !== 'current') {
       required.push({
         code: 'host-adapter-drifted',
-        message: 'Run `resonant-code init .`; use --force only for owner-modified generated content you intend to replace.',
+        message: 'Run `stetra init .`; use --force only for owner-modified generated content you intend to replace.',
       });
     }
     let worktree: 'not-checked' | 'supported' | 'unsupported' = 'not-checked';
@@ -98,8 +98,8 @@ function registerStatusCommand(
         schemaVersion: DELEGATION_SCHEMA_VERSION,
       },
       paths: {
-        manifest: join(projectRoot, '.resonant-code', 'manifest.json'),
-        runs: join(projectRoot, '.resonant-code', 'runs'),
+        manifest: join(projectRoot, '.stetra', 'manifest.json'),
+        runs: join(projectRoot, '.stetra', 'runs'),
       },
     }, source);
   });

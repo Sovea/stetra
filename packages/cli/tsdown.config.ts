@@ -12,7 +12,7 @@ export default {
   tsconfig: './tsconfig.json',
   hash: false,
   deps: {
-    neverBundle: [/^@sovea\/resonant-code-core(?:\/.*)?$/],
+    neverBundle: [/^@sovea\/stetra-core(?:\/.*)?$/],
     onlyBundle: false,
   },
 };

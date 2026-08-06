@@ -2,7 +2,7 @@ import { appendFileSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
-const REPOSITORY_URL = 'https://github.com/Sovea/resonant-code.git';
+const REPOSITORY_URL = 'https://github.com/Sovea/stetra.git';
 const REGISTRY_URL = 'https://registry.npmjs.org/';
 const SEMANTIC_VERSION_PATTERN = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-((?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*))*))?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/;
 
@@ -37,10 +37,10 @@ export function createReleasePlan({
   }
 
   assertPackageManifest(coreManifest, {
-    name: '@sovea/resonant-code-core',
+    name: '@sovea/stetra-core',
   });
   assertPackageManifest(cliManifest, {
-    name: '@sovea/resonant-code',
+    name: '@sovea/stetra',
   });
   const sourceVersion = coreManifest.version;
   if (cliManifest.version !== sourceVersion) {
@@ -53,7 +53,7 @@ export function createReleasePlan({
       `CLI product version ${productVersion} does not match source version ${sourceVersion}.`,
     );
   }
-  if (cliManifest.dependencies?.['@sovea/resonant-code-core'] !== 'workspace:*') {
+  if (cliManifest.dependencies?.['@sovea/stetra-core'] !== 'workspace:*') {
     throw new Error('CLI source dependency on Core must remain workspace:* before packing.');
   }
 

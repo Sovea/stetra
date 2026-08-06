@@ -18,7 +18,7 @@ const workspace = resolve(import.meta.dirname, '..');
 const expectedVersion = JSON.parse(
   readFileSync(resolve(workspace, 'packages', 'core', 'package.json'), 'utf8'),
 ).version;
-const temporary = mkdtempSync(join(tmpdir(), 'resonant-core-release-'));
+const temporary = mkdtempSync(join(tmpdir(), 'stetra-core-release-'));
 try {
   const packDirectory = join(temporary, 'pack');
   const consumer = join(temporary, 'consumer');
@@ -34,9 +34,9 @@ try {
     '--no-audit',
     '--no-fund',
   ], consumer);
-  const installedCore = join(consumer, 'node_modules', '@sovea', 'resonant-code-core');
+  const installedCore = join(consumer, 'node_modules', '@sovea', 'stetra-core');
   const manifest = JSON.parse(readFileSync(join(installedCore, 'package.json'), 'utf8'));
-  assert.equal(manifest.name, '@sovea/resonant-code-core');
+  assert.equal(manifest.name, '@sovea/stetra-core');
   assert.equal(manifest.version, expectedVersion);
   assert.deepEqual(Object.keys(manifest.exports).sort(), ['.', './package.json']);
   assert.equal(existsSync(join(installedCore, 'assets')), false);
@@ -115,7 +115,7 @@ try {
       byteLength: 5,
     },
     provenance: {
-      collector: 'resonant-code-cli',
+      collector: 'stetra-cli',
       cliVersion: expectedVersion,
       coreVersion: expectedVersion,
     },

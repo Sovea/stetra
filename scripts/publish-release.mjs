@@ -6,8 +6,8 @@ import { pathToFileURL } from 'node:url';
 
 const REGISTRY_URL = 'https://registry.npmjs.org/';
 const PROVENANCE_PREDICATE = 'https://slsa.dev/provenance/v1';
-const CORE_NAME = '@sovea/resonant-code-core';
-const CLI_NAME = '@sovea/resonant-code';
+const CORE_NAME = '@sovea/stetra-core';
+const CLI_NAME = '@sovea/stetra';
 const DIST_TAGS = new Set(['alpha', 'beta', 'rc', 'next', 'latest']);
 
 export function tarballIntegrity(path) {

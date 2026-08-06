@@ -27,7 +27,7 @@ import {
   type SemanticContract,
   type VerificationDefinition,
   type VerifierMutation,
-} from '@sovea/resonant-code-core';
+} from '@sovea/stetra-core';
 
 import { inputError, usageError } from '../errors.ts';
 import {
@@ -80,8 +80,8 @@ export interface DelegationRun {
   projectRoot: string;
   createdAt: string;
   packageIdentity: {
-    cli: { name: '@sovea/resonant-code'; version: string };
-    core: { name: '@sovea/resonant-code-core'; version: string };
+    cli: { name: '@sovea/stetra'; version: string };
+    core: { name: '@sovea/stetra-core'; version: string };
   };
   contract: SemanticContract;
   worktreeBaseline: WorktreeSnapshot;
@@ -199,8 +199,8 @@ export async function prepareDelegationTask(options: {
       projectRoot,
       createdAt: new Date().toISOString(),
       packageIdentity: {
-        cli: { name: '@sovea/resonant-code', version: options.productVersion },
-        core: { name: '@sovea/resonant-code-core', version: options.productVersion },
+        cli: { name: '@sovea/stetra', version: options.productVersion },
+        core: { name: '@sovea/stetra-core', version: options.productVersion },
       },
       contract: compiled.contract,
       worktreeBaseline,
@@ -347,7 +347,7 @@ export async function collectDelegationFacts(options: {
     verifierMutations,
     ...(patchFact ? { patch: patchFact } : {}),
     provenance: {
-      collector: 'resonant-code-cli' as const,
+      collector: 'stetra-cli' as const,
       cliVersion: options.productVersion,
       coreVersion: options.productVersion,
     },
@@ -1048,7 +1048,7 @@ function compactCheckStream(
 }
 
 function cleanupCompletedRuns(projectRoot: string, currentRunId: string): string[] {
-  const runsRoot = join(projectRoot, '.resonant-code', 'runs');
+  const runsRoot = join(projectRoot, '.stetra', 'runs');
   if (!existsSync(runsRoot)) return [];
   const completed = readdirSync(runsRoot, { withFileTypes: true })
     .filter((entry) => entry.isDirectory() && RUN_ID_PATTERN.test(entry.name))
@@ -1111,7 +1111,7 @@ function canonicalProjectRoot(input: string): string {
 }
 
 function resolveRunDirectory(projectRoot: string, runId: string): string {
-  const relativePath = `.resonant-code/runs/${runId}`;
+  const relativePath = `.stetra/runs/${runId}`;
   assertNoSymlinkTraversal(projectRoot, relativePath);
   const path = resolve(projectRoot, relativePath);
   const rel = relative(projectRoot, path);

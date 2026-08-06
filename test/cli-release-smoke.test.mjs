@@ -23,7 +23,7 @@ const sourceCliManifest = JSON.parse(
 );
 assert.equal(sourceCoreManifest.version, sourceCliManifest.version);
 const expectedVersion = sourceCoreManifest.version;
-const temporary = mkdtempSync(join(tmpdir(), 'resonant-cli-release-'));
+const temporary = mkdtempSync(join(tmpdir(), 'stetra-cli-release-'));
 
 try {
   const packDirectory = join(temporary, 'pack');
@@ -40,28 +40,28 @@ try {
   writeFileSync(join(consumer, 'package.json'), `${JSON.stringify({
     private: true,
     dependencies: {
-      '@sovea/resonant-code-core': `file:${coreTarball.replace(/\\/g, '/')}`,
-      '@sovea/resonant-code': `file:${cliTarball.replace(/\\/g, '/')}`,
+      '@sovea/stetra-core': `file:${coreTarball.replace(/\\/g, '/')}`,
+      '@sovea/stetra': `file:${cliTarball.replace(/\\/g, '/')}`,
     },
   }, null, 2)}\n`, 'utf8');
   run(npmCommand(), ['install', '--ignore-scripts', '--no-audit', '--no-fund'], consumer);
   await verifyReleaseInstallation(consumer, expectedVersion);
 
-  const installedCore = join(consumer, 'node_modules', '@sovea', 'resonant-code-core');
-  const installedCli = join(consumer, 'node_modules', '@sovea', 'resonant-code');
+  const installedCore = join(consumer, 'node_modules', '@sovea', 'stetra-core');
+  const installedCli = join(consumer, 'node_modules', '@sovea', 'stetra');
   const coreManifest = JSON.parse(readFileSync(join(installedCore, 'package.json'), 'utf8'));
   const cliManifest = JSON.parse(readFileSync(join(installedCli, 'package.json'), 'utf8'));
   assert.equal(coreManifest.version, expectedVersion);
   assert.equal(cliManifest.version, expectedVersion);
-  assert.equal(cliManifest.dependencies['@sovea/resonant-code-core'], expectedVersion);
-  assert.equal(cliManifest.bin['resonant-code'], './dist/index.mjs');
+  assert.equal(cliManifest.dependencies['@sovea/stetra-core'], expectedVersion);
+  assert.equal(cliManifest.bin['stetra'], './dist/index.mjs');
   assert.equal(existsSync(join(installedCore, 'assets')), false);
-  const cliEntrypoint = resolve(installedCli, cliManifest.bin['resonant-code']);
+  const cliEntrypoint = resolve(installedCli, cliManifest.bin['stetra']);
   const binary = join(
     consumer,
     'node_modules',
     '.bin',
-    process.platform === 'win32' ? 'resonant-code.cmd' : 'resonant-code',
+    process.platform === 'win32' ? 'stetra.cmd' : 'stetra',
   );
   assert.equal(run(binary, ['--version'], consumer).stdout.trim(), expectedVersion);
   const runInstalledCli = (args) => runJson(
@@ -79,7 +79,7 @@ try {
     project,
     '.agents',
     'skills',
-    'resonant-code',
+    'stetra',
     'references',
     'change.md',
   );
@@ -87,7 +87,7 @@ try {
     project,
     '.agents',
     'skills',
-    'resonant-code',
+    'stetra',
     'references',
     'routine.md',
   );
@@ -96,9 +96,9 @@ try {
     readFileSync(routineReference, 'utf8'),
     /ready for Human review, never\s+adopted/s,
   );
-  assert.equal(existsSync(join(project, '.agents', 'skills', 'resonant-code', 'references', 'assurance.md')), true);
-  assert.equal(existsSync(join(project, '.agents', 'skills', 'resonant-code', 'references', 'recovery.md')), true);
-  assert.equal(existsSync(join(project, '.agents', 'skills', 'resonant-code', 'references', 'bootstrap.md')), false);
+  assert.equal(existsSync(join(project, '.agents', 'skills', 'stetra', 'references', 'assurance.md')), true);
+  assert.equal(existsSync(join(project, '.agents', 'skills', 'stetra', 'references', 'recovery.md')), true);
+  assert.equal(existsSync(join(project, '.agents', 'skills', 'stetra', 'references', 'bootstrap.md')), false);
 
   git(project, ['init', '-q']);
   git(project, ['config', 'user.email', 'release@example.invalid']);

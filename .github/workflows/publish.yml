@@ -144,7 +144,7 @@ jobs:
           published_install=$(mktemp -d)
           npm install \
             --prefix "$published_install" \
-            "@sovea/resonant-code@$RELEASE_VERSION" \
+            "@sovea/stetra@$RELEASE_VERSION" \
             --ignore-scripts \
             --no-audit \
             --no-fund

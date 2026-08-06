@@ -1,12 +1,12 @@
 {
-  "name": "@sovea/resonant-code-core",
+  "name": "@sovea/stetra-core",
   "version": "0.0.1",
-  "description": "Deterministic Semantic Contract and Cognitive Handoff kernel for resonant-code.",
+  "description": "Deterministic Semantic Contract and Cognitive Handoff kernel for Stetra.",
   "type": "module",
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/Sovea/resonant-code.git",
+    "url": "https://github.com/Sovea/stetra.git",
     "directory": "packages/core"
   },
   "main": "./dist/index.mjs",

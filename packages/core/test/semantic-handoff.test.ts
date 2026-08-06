@@ -681,7 +681,7 @@ function factBundle(
       byteLength: Buffer.byteLength('complete patch'),
     },
     provenance: {
-      collector: 'resonant-code-cli' as const,
+      collector: 'stetra-cli' as const,
       cliVersion: '0.0.1',
       coreVersion: '0.0.1',
     },

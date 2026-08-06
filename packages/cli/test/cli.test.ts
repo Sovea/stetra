@@ -18,8 +18,8 @@ import { formatCliOutput, runCli } from '../src/cli.ts';
 import { CliError } from '../src/errors.ts';
 
 test('CLI exposes the complete prepare, collect, finalize, and explain lifecycle', async () => {
-  const root = mkdtempSync(join(tmpdir(), 'resonant-cli-lifecycle-'));
-  const inputRoot = mkdtempSync(join(tmpdir(), 'resonant-cli-input-'));
+  const root = mkdtempSync(join(tmpdir(), 'stetra-cli-lifecycle-'));
+  const inputRoot = mkdtempSync(join(tmpdir(), 'stetra-cli-input-'));
   try {
     initializeRepository(root);
     writeFileSync(join(root, 'source.txt'), 'before\n', 'utf8');
@@ -200,8 +200,8 @@ test('CLI exposes the complete prepare, collect, finalize, and explain lifecycle
 });
 
 test('CLI collect exposes same-run timeout retry without changing the contract', async () => {
-  const root = mkdtempSync(join(tmpdir(), 'resonant-cli-timeout-'));
-  const inputRoot = mkdtempSync(join(tmpdir(), 'resonant-cli-input-'));
+  const root = mkdtempSync(join(tmpdir(), 'stetra-cli-timeout-'));
+  const inputRoot = mkdtempSync(join(tmpdir(), 'stetra-cli-input-'));
   try {
     initializeRepository(root);
     writeFileSync(join(root, 'source.txt'), 'before\n', 'utf8');
@@ -279,7 +279,7 @@ test('human finalize exposes stale-fact protocol state without authoring a hando
       hostAction: {
         kind: 'recollect-stale',
         reference: 'recovery',
-        command: { argv: ['resonant-code', 'change', 'collect'] },
+        command: { argv: ['stetra', 'change', 'collect'] },
       },
     },
   });
@@ -318,8 +318,8 @@ test('human prepare presents executable preflight as an actionable preparation i
 });
 
 test('CLI non-runnable outcomes write no run and JSON mode stays prompt- and ANSI-free', async () => {
-  const root = mkdtempSync(join(tmpdir(), 'resonant-cli-no-run-'));
-  const inputRoot = mkdtempSync(join(tmpdir(), 'resonant-cli-input-'));
+  const root = mkdtempSync(join(tmpdir(), 'stetra-cli-no-run-'));
+  const inputRoot = mkdtempSync(join(tmpdir(), 'stetra-cli-input-'));
   try {
     initializeRepository(root);
     writeFileSync(join(root, 'source.txt'), 'before\n', 'utf8');
@@ -340,7 +340,7 @@ test('CLI non-runnable outcomes write no run and JSON mode stays prompt- and ANS
     });
     assert.equal((execution.output as { status: string }).status, 'verification-required');
     assert.equal(execution.exitCode, 0);
-    assert.equal(existsSync(join(root, '.resonant-code', 'runs')), false);
+    assert.equal(existsSync(join(root, '.stetra', 'runs')), false);
     const rendered = formatCliOutput(execution);
     assert.deepEqual(JSON.parse(rendered), execution.output);
     assert.doesNotMatch(rendered, /\u001B\[/);
@@ -351,7 +351,7 @@ test('CLI non-runnable outcomes write no run and JSON mode stays prompt- and ANS
 });
 
 test('prepare reads stdin by default and rejects worktree-local task input before creating a run', async () => {
-  const root = mkdtempSync(join(tmpdir(), 'resonant-cli-safe-input-'));
+  const root = mkdtempSync(join(tmpdir(), 'stetra-cli-safe-input-'));
   try {
     initializeRepository(root);
     writeFileSync(join(root, 'source.txt'), 'before\n', 'utf8');
@@ -383,7 +383,7 @@ test('prepare reads stdin by default and rejects worktree-local task input befor
         return true;
       },
     );
-    const runIds = readdirSync(join(root, '.resonant-code', 'runs'));
+    const runIds = readdirSync(join(root, '.stetra', 'runs'));
     assert.equal(runIds.length, 1);
   } finally {
     rmSync(root, { recursive: true, force: true });
@@ -391,8 +391,8 @@ test('prepare reads stdin by default and rejects worktree-local task input befor
 });
 
 test('CLI finalize reports facts-stale before parsing the Host handoff', async () => {
-  const root = mkdtempSync(join(tmpdir(), 'resonant-cli-stale-'));
-  const inputRoot = mkdtempSync(join(tmpdir(), 'resonant-cli-input-'));
+  const root = mkdtempSync(join(tmpdir(), 'stetra-cli-stale-'));
+  const inputRoot = mkdtempSync(join(tmpdir(), 'stetra-cli-input-'));
   try {
     initializeRepository(root);
     writeFileSync(join(root, 'source.txt'), 'before\n', 'utf8');
@@ -448,7 +448,7 @@ test('Commander exposes only the new change lifecycle and classifies usage error
 });
 
 test('status and strict doctor report only adapter, legacy, and Git readiness', async () => {
-  const root = mkdtempSync(join(tmpdir(), 'resonant-cli-status-'));
+  const root = mkdtempSync(join(tmpdir(), 'stetra-cli-status-'));
   try {
     const absent = await runCli(['status', root, '--json']);
     assert.equal((absent.output as {
@@ -472,24 +472,24 @@ test('status and strict doctor report only adapter, legacy, and Git readiness', 
 });
 
 test('change prepare reports legacy artifacts without mutating them', async () => {
-  const root = mkdtempSync(join(tmpdir(), 'resonant-cli-legacy-'));
-  const inputRoot = mkdtempSync(join(tmpdir(), 'resonant-cli-input-'));
+  const root = mkdtempSync(join(tmpdir(), 'stetra-cli-legacy-'));
+  const inputRoot = mkdtempSync(join(tmpdir(), 'stetra-cli-input-'));
   try {
     initializeRepository(root);
     writeFileSync(join(root, 'source.txt'), 'before\n', 'utf8');
-    const legacyRoot = join(root, '.resonant-code', 'playbook');
+    const legacyRoot = join(root, '.resonant-code', 'runs', 'old-run');
     mkdirSync(legacyRoot, { recursive: true });
-    writeFileSync(join(legacyRoot, 'local-augment.yaml'), 'legacy\n', 'utf8');
+    writeFileSync(join(legacyRoot, 'run.json'), 'legacy\n', 'utf8');
     git(root, ['add', '.']);
     git(root, ['commit', '-qm', 'legacy']);
     const inputPath = join(inputRoot, 'prepare.json');
     writePrepareInput(inputPath, true);
     await assert.rejects(
       () => runCli(['change', 'prepare', root, '--input', inputPath, '--json']),
-      /Archive or remove.*\.resonant-code\/playbook/i,
+      /Archive or remove.*\.resonant-code/i,
     );
-    assert.equal(readFileSync(join(legacyRoot, 'local-augment.yaml'), 'utf8'), 'legacy\n');
-    assert.equal(existsSync(join(root, '.resonant-code', 'runs')), false);
+    assert.equal(readFileSync(join(legacyRoot, 'run.json'), 'utf8'), 'legacy\n');
+    assert.equal(existsSync(join(root, '.stetra', 'runs')), false);
   } finally {
     rmSync(root, { recursive: true, force: true });
     rmSync(inputRoot, { recursive: true, force: true });

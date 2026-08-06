@@ -46,7 +46,7 @@ export function prepareReleaseVersion({
         readFileSync(corePath, 'utf8'),
         sourceVersion,
         releaseVersion,
-        '@sovea/resonant-code-core',
+        '@sovea/stetra-core',
       ),
     },
     {
@@ -55,7 +55,7 @@ export function prepareReleaseVersion({
         readFileSync(cliPath, 'utf8'),
         sourceVersion,
         releaseVersion,
-        '@sovea/resonant-code',
+        '@sovea/stetra',
       ),
     },
     {

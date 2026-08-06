@@ -1,16 +1,16 @@
 {
-  "name": "@sovea/resonant-code",
+  "name": "@sovea/stetra",
   "version": "0.0.1",
-  "description": "CLI for the resonant-code engineering harness for coding agents.",
+  "description": "CLI for the Stetra engineering harness for coding agents.",
   "type": "module",
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/Sovea/resonant-code.git",
+    "url": "https://github.com/Sovea/stetra.git",
     "directory": "packages/cli"
   },
   "bin": {
-    "resonant-code": "./dist/index.mjs"
+    "stetra": "./dist/index.mjs"
   },
   "files": [
     "dist",
@@ -33,7 +33,7 @@
   },
   "dependencies": {
     "@inquirer/prompts": "^8.0.0",
-    "@sovea/resonant-code-core": "workspace:*",
+    "@sovea/stetra-core": "workspace:*",
     "commander": "^15.0.0",
     "execa": "^9.6.0",
     "picocolors": "^1.1.1",

@@ -7,21 +7,21 @@ import { pathToFileURL } from 'node:url';
 export async function verifyReleaseInstallation(installationRoot, expectedVersion) {
   const coreRoot = resolve(
     installationRoot,
-    'node_modules/@sovea/resonant-code-core',
+    'node_modules/@sovea/stetra-core',
   );
   const cliRoot = resolve(
     installationRoot,
-    'node_modules/@sovea/resonant-code',
+    'node_modules/@sovea/stetra',
   );
   const coreManifest = readJson(resolve(coreRoot, 'package.json'));
   const cliManifest = readJson(resolve(cliRoot, 'package.json'));
 
-  assert.equal(coreManifest.name, '@sovea/resonant-code-core');
-  assert.equal(cliManifest.name, '@sovea/resonant-code');
+  assert.equal(coreManifest.name, '@sovea/stetra-core');
+  assert.equal(cliManifest.name, '@sovea/stetra');
   assert.equal(coreManifest.version, expectedVersion);
   assert.equal(cliManifest.version, expectedVersion);
   assert.equal(
-    cliManifest.dependencies?.['@sovea/resonant-code-core'],
+    cliManifest.dependencies?.['@sovea/stetra-core'],
     expectedVersion,
     'Packed CLI must depend on the exact matching Core version.',
   );
@@ -32,7 +32,7 @@ export async function verifyReleaseInstallation(installationRoot, expectedVersio
     ['compileDelegation', 'evaluateHandoff'],
   );
 
-  const cliEntrypoint = resolve(cliRoot, cliManifest.bin['resonant-code']);
+  const cliEntrypoint = resolve(cliRoot, cliManifest.bin['stetra']);
   const result = spawnSync(process.execPath, [cliEntrypoint, '--version'], {
     encoding: 'utf8',
   });

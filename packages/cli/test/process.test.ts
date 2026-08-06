@@ -13,12 +13,12 @@ import test from 'node:test';
 import { runBufferedCommand } from '../src/infrastructure/process.ts';
 
 test('command resolution respects cwd, PATH, missing executables, and real exits', async () => {
-  const root = mkdtempSync(join(tmpdir(), 'resonant-process-runner-'));
+  const root = mkdtempSync(join(tmpdir(), 'stetra-process-runner-'));
   const originalPath = process.env.PATH;
   try {
     const binDirectory = join(root, 'bin');
     mkdirSync(binDirectory);
-    const commandName = 'resonant-process-fixture';
+    const commandName = 'stetra-process-fixture';
     const commandPath = process.platform === 'win32'
       ? join(binDirectory, `${commandName}.cmd`)
       : join(binDirectory, commandName);
@@ -57,7 +57,7 @@ test('command resolution respects cwd, PATH, missing executables, and real exits
     assert.equal(relativeCommand.exitCode, 7);
 
     const missingCommand = await runBufferedCommand({
-      file: 'resonant-code-definitely-missing-executable',
+      file: 'stetra-definitely-missing-executable',
       args: [],
       cwd: root,
       maxBuffer: 1_024,
