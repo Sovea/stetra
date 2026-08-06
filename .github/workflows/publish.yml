@@ -73,6 +73,33 @@ jobs:
           pnpm verify
           pnpm audit --audit-level high
 
+      - name: Prepare tag-driven prerelease version
+        if: steps.release.outputs.prepare_version == 'true'
+        shell: bash
+        env:
+          RELEASE_VERSION: ${{ steps.release.outputs.version }}
+          SOURCE_VERSION: ${{ steps.release.outputs.source_version }}
+        run: |
+          if ! git diff --quiet \
+            || ! git diff --cached --quiet \
+            || [[ -n "$(git ls-files --others --exclude-standard)" ]]; then
+            echo "Source verification left an unexpected worktree change." >&2
+            git status --short
+            exit 1
+          fi
+          node scripts/prepare-release-version.mjs
+          git diff --check
+
+          expected_files=$'packages/cli/package.json\npackages/cli/src/version.ts\npackages/core/package.json'
+          actual_files="$(git diff --name-only | LC_ALL=C sort)"
+          if [[ "$actual_files" != "$expected_files" ]] \
+            || ! git diff --cached --quiet \
+            || [[ -n "$(git ls-files --others --exclude-standard)" ]]; then
+            echo "Prerelease preparation changed unexpected files:" >&2
+            git status --short >&2
+            exit 1
+          fi
+
       - name: Pack exact release artifacts
         shell: bash
         run: |

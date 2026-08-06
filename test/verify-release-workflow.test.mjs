@@ -18,6 +18,21 @@ assert.match(workflow, /persist-credentials: false/);
 assert.match(workflow, /package-manager-cache: false/);
 assert.match(workflow, /refs\/remotes\/origin\/main/);
 assert.match(workflow, /scripts\/release-contract\.mjs/);
+assert.match(
+  workflow,
+  /if: steps\.release\.outputs\.prepare_version == 'true'/,
+);
+assert.match(workflow, /scripts\/prepare-release-version\.mjs/);
+assert.match(workflow, /steps\.release\.outputs\.source_version/);
+assert.match(workflow, /git diff --cached --quiet/);
+assert.match(workflow, /git ls-files --others --exclude-standard/);
+for (const path of [
+  'packages/core/package.json',
+  'packages/cli/package.json',
+  'packages/cli/src/version.ts',
+]) {
+  assert.match(workflow, new RegExp(path.replaceAll('.', '\\.')));
+}
 assert.match(workflow, /scripts\/publish-release\.mjs/);
 assert.match(workflow, /npm audit signatures/);
 assert.doesNotMatch(workflow, /NODE_AUTH_TOKEN|NPM_TOKEN|secrets\./);
@@ -34,3 +49,11 @@ for (const action of ['actions/checkout', 'actions/setup-node', 'pnpm/action-set
     `${action} must be pinned to a full commit SHA.`,
   );
 }
+
+const verifyIndex = workflow.indexOf('Verify source and dependency audit');
+const prepareIndex = workflow.indexOf('Prepare tag-driven prerelease version');
+const packIndex = workflow.indexOf('Pack exact release artifacts');
+assert.ok(
+  verifyIndex < prepareIndex && prepareIndex < packIndex,
+  'source verification must precede transient version preparation and packing.',
+);

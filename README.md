@@ -167,5 +167,7 @@ corepack pnpm verify
 ```
 
 Read [CONTRIBUTING.md](CONTRIBUTING.md) before changing public behavior. Core
-and CLI versions move together, and generated `dist/` files are not committed.
-Maintainer releases follow the [trusted publishing process](docs/releasing.md).
+and CLI versions move together from a committed stable baseline; prerelease
+suffixes are tag-driven at publish time. Generated `dist/` files are not
+committed. Maintainer releases follow the
+[trusted publishing process](docs/releasing.md).

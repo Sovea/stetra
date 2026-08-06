@@ -3,13 +3,21 @@
 Releases are built from an exact commit on `main` and published by
 `.github/workflows/publish.yml` when a GitHub Release is published. npm
 authentication uses GitHub Actions OIDC. The repository stores no npm publish
-token.
+token. Source commits carry a stable release-line version such as `0.0.1`;
+prerelease versions such as `0.0.1-alpha.1` come from the GitHub Release tag
+and are applied only inside the publishing runner.
 
 ## Release invariants
 
-- Core and CLI use the same version.
-- `packages/cli/src/version.ts` uses that version as `PRODUCT_VERSION`.
-- The release tag is `v<version>` and points to a commit reachable from `main`.
+- Core, CLI, and `PRODUCT_VERSION` use the same committed stable SemVer baseline
+  without a prerelease suffix or build metadata.
+- A stable release tag exactly matches that baseline, for example `v0.0.1`.
+- A prerelease tag adds a suffix to the same baseline, for example
+  `v0.0.1-alpha.1`. The workflow applies that exact version transiently to the
+  two package manifests and `PRODUCT_VERSION`; it does not create a version
+  commit.
+- Release tags do not use SemVer build metadata and point to commits reachable
+  from `main`.
 - GitHub's prerelease flag agrees with the SemVer prerelease suffix.
 - The workflow packs and verifies both archives before publishing either one.
 - Core is published and visible before the matching CLI is published.
@@ -65,26 +73,33 @@ for the external trust model.
 
 ## Prepare a release
 
-Use a release branch for the version and release notes. The first version used
-to exercise this OIDC path must be an unpublished version; the planned first
-candidate is `0.0.1-alpha.1`.
+The first version used to exercise this OIDC path must be unpublished; the
+planned first candidate is `0.0.1-alpha.1`.
 
-1. Update these three source versions together:
+1. Confirm that `main` carries the stable baseline for the intended release
+   line. For `0.0.1-alpha.1`, all three source locations remain `0.0.1`:
 
    - `packages/core/package.json`
    - `packages/cli/package.json`
    - `PRODUCT_VERSION` in `packages/cli/src/version.ts`
 
-2. Update `CHANGELOG.md` for the exact version.
-3. Run the complete local gate:
+   Change these together only when starting a different stable release line,
+   such as moving from `0.0.1` to `0.0.2`.
+2. Ensure `CHANGELOG.md` and the GitHub Release notes describe the code being
+   released. A new prerelease sequence number alone does not require a source
+   version commit.
+3. Run the complete local gate against the stable source baseline:
 
    ```sh
    corepack pnpm verify
    corepack pnpm audit --audit-level high
    ```
 
-4. Merge the release commit into `main`.
-5. Create and push an annotated `v<version>` tag at that exact `main` commit.
+4. Merge any release-content changes into `main`.
+5. Create and push an annotated `v<version>` tag at the intended `main` commit.
+   A prerelease tag must retain the committed baseline as its core version;
+   `v0.0.1-alpha.1` is valid on a `0.0.1` baseline, while
+   `v0.0.2-alpha.1` is not.
 6. Before publishing the GitHub Release, make the repository public and
    confirm the workflow and tag are visible.
 7. Create the GitHub Release from the existing tag. Mark it as a prerelease if
@@ -92,10 +107,18 @@ candidate is `0.0.1-alpha.1`.
 8. Publish the GitHub Release. This is the human action that starts npm
    publication.
 
-The workflow checks repository visibility, release metadata, source versions,
-and `main` ancestry before it installs dependencies. It then runs the complete
-gate, packs the exact Core and CLI archives, installs those archives together,
-and validates the CLI's exact Core dependency.
+The workflow checks repository visibility, release metadata, the stable source
+baseline, and `main` ancestry before it installs dependencies. It runs the
+complete gate against that committed baseline. For a prerelease, it then
+changes exactly the two package manifests and `PRODUCT_VERSION` in the runner
+and rejects any broader tracked diff. Stable releases skip this preparation.
+The workflow packs the resulting Core and CLI archives, installs those exact
+archives together, and validates the CLI's exact Core dependency.
+
+After publishing a stable release, update the three source locations together
+only when development begins on the next release line. This keeps stable
+version changes reviewable while allowing repeated alpha, beta, and rc releases
+without version-only commits.
 
 ## Publication and recovery
 
