@@ -59,9 +59,9 @@ npm install --prefix "$bootstrap_install" \
 node scripts/verify-release-install.mjs \
   --root "$bootstrap_install" --version 0.0.1-alpha.1
 
-npm publish release-artifacts/core.tgz --access public --tag alpha
+npm publish ./release-artifacts/core.tgz --access public --tag alpha
 npm view @sovea/stetra-core@0.0.1-alpha.1 version
-npm publish release-artifacts/cli.tgz --access public --tag alpha
+npm publish ./release-artifacts/cli.tgz --access public --tag alpha
 ```
 
 The bootstrap version has no CI provenance. Do not create a GitHub Release for
