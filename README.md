@@ -112,7 +112,8 @@ numeric complexity score.
 
 ## Architecture
 
-The long-term design is three task cores and one loop:
+The current product kernel is three task cores and one future longitudinal
+loop:
 
 1. **Semantic Contract** — what this change is intended and authorized to mean.
 2. **Fact Spine** — what the workflow observed before and after implementation.
@@ -142,8 +143,10 @@ Neither package calls an LLM. The coding agent keeps responsibility for
 repository investigation and semantic judgment; the runtime owns only facts it
 collects.
 
-See [Architecture](docs/architecture.md) for the product kernel and
-[Change workflow](docs/change-workflow.md) for the executable protocol.
+See [Product direction](docs/product-direction.md) for the long-term product
+positioning, [Architecture](docs/architecture.md) for the current product
+kernel, and [Change workflow](docs/change-workflow.md) for the executable
+protocol.
 
 ## Current state
 
