@@ -31,7 +31,7 @@ test('check facts preserve stdout, stderr, exact exit termination, and an outcom
   }
 });
 
-test('check facts distinguish outputless failure, timeout, signal, and spawn failure', async () => {
+test('check facts distinguish outputless failure, timeout, platform termination, and spawn failure', async () => {
   const root = mkdtempSync(join(tmpdir(), 'stetra-check-termination-'));
   try {
     const failed = await run(root, [process.execPath, '-e', 'process.exit(7)']);
@@ -55,7 +55,12 @@ test('check facts distinguish outputless failure, timeout, signal, and spawn fai
       1_000,
       'signal',
     );
-    assert.deepEqual(signaled.attempts[0].termination, { kind: 'signal', signal: 'SIGTERM' });
+    assert.deepEqual(
+      signaled.attempts[0].termination,
+      process.platform === 'win32'
+        ? { kind: 'exit', exitCode: 1 }
+        : { kind: 'signal', signal: 'SIGTERM' },
+    );
 
     const unavailable = await run(root, ['stetra-command-that-does-not-exist'], 1_000, 'spawn');
     assert.equal(unavailable.attempts[0].termination.kind, 'spawn-error');
