@@ -1,5 +1,26 @@
 # Changelog
 
+## Unreleased
+
+- Introduces the initial `cognitive-adoption` schema with exact Human events,
+  falsifiable Evidence Obligations, immutable verification definitions, and
+  separate semantic, verification, and effective identities.
+- Adds a task-scoped append-only ledger, crash-recoverable publication and fact
+  collection, selective task-start baselines, ordered check attempts, bounded
+  logs, and exact baseline/current relations.
+- Requires fact-bound diagnosis before acting on non-passing evidence and
+  provides executable repair, verification-revision, challenge, Human
+  resolution, handoff, correction, and adoption paths.
+- Constrains Condition conclusions by Obligation results, preserves adverse and
+  unverified evidence, and triggers review when declared verifier surfaces
+  change without inferring meaning from repository heuristics.
+- Projects task-specific Authoring Packets, exact stdin commands, compact
+  decision views, and honest Host capability provenance without persisting a
+  second workflow layer.
+- Defines paired-evaluation preflight, coverage, negative-control, timing, and
+  black-box usability gates. The retained historical pilot remains
+  inconclusive and product effectiveness remains `unverified`.
+
 ## 0.0.1
 
 - Renames the product to Stetra, the CLI package to `@sovea/stetra`, the Core

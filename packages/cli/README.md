@@ -1,7 +1,7 @@
 # @sovea/stetra
 
-CLI for carrying a coding change from developer intent through
-Runtime-collected facts to an inspectable handoff.
+CLI for carrying a coding change from exact developer intent through Agent
+delivery and Runtime-collected facts to an informed Human decision.
 
 ```sh
 npm install --global @sovea/stetra
@@ -10,57 +10,64 @@ stetra init .
 stetra doctor . --strict
 ```
 
-`init` generates a thin Codex and/or Claude Code workflow. The normal agent path
-uses three JSON commands:
+The initial-version task path is:
+
+```text
+prepare -> implement -> collect -> diagnose when needed
+        -> resolve, repair, revision, or challenge -> handoff -> decide
+```
+
+All authoring documents travel on stdin or from outside the worktree:
 
 ```sh
 stetra change prepare . --input - --json
-stetra change collect . --run <run-id> --json
-stetra change finalize . --run <run-id> --json
+stetra change collect . --task <task-id> --json
+stetra change diagnose . --task <task-id> --input - --json
+stetra change revise-verification . --task <task-id> --input - --json
+stetra change challenge . --task <task-id> --input - --json
+stetra change handoff . --task <task-id> --input - --json
+stetra change decide . --task <task-id> --input - --json
+stetra change resolve . --task <task-id> --input - --json
 ```
 
-- `prepare` compiles the task contract and proportional Assurance Plan,
-  captures the dirty/untracked worktree baseline, and freezes explicit checks.
-- `collect` executes those checks without a shell and records the complete
-  actual change, patch, ordered check attempts, output integrity, and
-  verifier-surface mutations. Runtime supplies the normal timeout budget; an
-  actually timed-out check can retry in the same run with
-  `--retry-check <id>=<larger-milliseconds>`.
-- `finalize` rejects stale facts and binds the agent's claims, unknowns,
-  falsification, and Review Map to the current collection.
+- `prepare` compiles a compact authority-separated contract, generates stable
+  identities, runs selected task-start checks, records their side effects, and
+  freezes the post-check Git baseline.
+- `collect` records the actual change, current checks, mechanical baseline
+  relations, check-induced changes, verifier mutations, bounded logs, patch
+  identity, and non-secret environment facts.
+- `diagnose` covers every non-passing check with Agent cause judgment and a
+  falsification attempt. Only explicit implementation cause creates a bounded
+  successor Attempt; other causes route to challenge, handoff, or Human choice.
+- `revise-verification` preserves task meaning while creating immutable exact
+  Definition lineage and an honestly unknown original baseline when necessary.
+- `challenge` records fresh-context falsification when explicitly required or
+  when a fact-triggered Obligation relies on a changed declared acceptance
+  surface.
+- `handoff` produces decision, condition, and fact layers with consolidated
+  Attention. Post-collection edits return `facts-stale` first.
+- `decide` preserves the developer's exact message. Acceptance with Attention
+  requires exact exceptions. It performs no external adoption side effects.
+- `resolve` records exact mid-task Human authority and continues correction or
+  evidence decisions without overwriting prior artifacts.
 
-Finalize returns a structured `handoffPacket` containing the compact Semantic
-Contract, collected Runtime facts, Agent-authored handoff, and Core evaluation.
-The generated Host renders it in the current conversation language while
-keeping paths, IDs, statuses, commands, numeric facts, quoted evidence, and
-logs exact. No locale or rendered prose is persisted by Runtime.
+Task state lives under `.stetra/tasks/<taskId>/`. `events.jsonl` is the
+append-only source; `task.json` is a rebuildable projection. The initial schema
+has no task-state migration path.
 
-The Assurance Plan is explicit and inspectable. Routine work can omit claims
-and Review Map entries when no semantic or factual escalation applies.
-Standard and critical work must cover declared material or adoption-critical
-dimensions, while failed checks, verifier mutations, unrepresentable changes,
-unknowns, and Host-disclosed critical claims can only add obligations.
-
-Exact canonical detail is available on demand:
+Exact detail is available on demand:
 
 ```sh
-stetra change explain . --run <run-id> --section contract --json
-stetra change explain . --run <run-id> --section facts --json
-stetra change explain . --run <run-id> --section handoff --json
-stetra change explain . --run <run-id> --section evaluation --json
-stetra change explain . --run <run-id> --section review --json
+stetra change explain . --task <task-id> --section contract --json
+stetra change explain . --task <task-id> --section baseline --json
+stetra change explain . --task <task-id> --section attempts --json
+stetra change explain . --task <task-id> --section challenge --json
+stetra change explain . --task <task-id> --section revision --json
+stetra change explain . --task <task-id> --section handoff --json
+stetra change explain . --task <task-id> --section decision --json
+stetra change explain . --task <task-id> --section events --json
 ```
 
-The CLI owns project initialization, task-run IO, exact repository-evidence
-windows, Git and check collection, bounded logs with complete-stream digests,
-fact-staleness detection, retention, and deterministic review-packet assembly.
-The host agent cannot submit changed-file or check facts; it owns user-facing
-handoff prose.
-
-`handoff-ready` means ready for developer review, never adopted.
-`needs-attention` and `rejected` results identify exact references and the next
-repair, evidence, validation, recollection, or direct-review action. The Host
-explains their adoption impact to the developer.
-
-The CLI pins the exact matching `@sovea/stetra-core` version. Neither
-package calls an LLM.
+The Host cannot submit changed-file or check facts. Runtime facts cannot decide
+product meaning. Agent recommendation cannot become Human adoption through a
+label. Neither package calls an LLM.

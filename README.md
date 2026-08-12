@@ -1,172 +1,144 @@
 # Stetra
 
-**Let the agent implement. Keep the thread and the final say.**
+**Let the Agent implement. Keep the engineering thread and the final say.**
 
-Stetra is an engineering harness for coding agents, designed to keep
-the engineering thread intact when implementation is delegated.
+Stetra is an engineering harness for coding agents. It preserves the chain from
+an exact developer request, through Agent delivery and Runtime-collected facts,
+to an informed Human adoption decision.
 
-It connects developer intent, Runtime-collected repository and verification
-facts, Agent execution and explanation, and the Human adoption decision in an
-inspectable engineering loop.
+Its objective is to reduce the total cost from request to confident adoption
+without weakening the developer's system understanding or engineering
+judgment.
 
-Its objective is to reduce the total cost from a developer request to a
-confident adoption decision without weakening the developer's system
-understanding or engineering judgment.
-
-## Why it exists
-
-A coding task is not finished when an agent produces a plausible patch. The
-developer still needs to know:
-
-- what behavior or invariant actually changed;
-- whether the implementation fits the repository and the requested tradeoffs;
-- what the checks established and what they did not;
-- which conclusions are observed facts and which are agent judgment;
-- what remains uncertain and where direct review is worth the time.
-
-Ordinary agent transcripts make that reconstruction expensive. Stetra
-wraps a coding task with a small deterministic protocol so the implementation
-and its handoff are tied to the same task meaning and actual change.
-
-## Workflow
+## Current MVP
 
 ```text
-Developer request and material decisions
-                  |
-                  v
-          Semantic Contract
-                  |
-                  v
- agent investigation, implementation, repair
-                  |
-                  v
-              Fact Spine
-                  |
-                  v
-          Cognitive Handoff
-                  |
-                  v
-    Developer review and adoption decision
+exact developer event
+       |
+       v
+Semantic Contract + falsifiable Evidence Obligations
+       |
+       v
+Agent implementation
+       |
+       v
+Runtime baseline/current facts
+       |
+       +--> Agent diagnosis of every non-passing check
+       |       +--> bounded implementation repair
+       |       +--> verification revision / challenge / Human resolution
+       |
+       +--> fact-triggered fresh-context challenge when required
+       |
+       v
+layered Cognitive Handoff
+       |
+       v
+exact Human Decision
 ```
 
-The generated host workflow runs three commands around a normal coding change:
+The executable initial-version lifecycle is:
+
+```text
+prepare -> implement -> collect -> diagnose when needed
+        -> resolve, repair, revision, or challenge -> handoff -> decide
+```
 
 ```sh
 stetra change prepare . --input - --json
-stetra change collect . --run <run-id> --json
-stetra change finalize . --run <run-id> --json
+stetra change collect . --task <task-id> --json
+stetra change diagnose . --task <task-id> --input - --json
+stetra change revise-verification . --task <task-id> --input - --json
+stetra change challenge . --task <task-id> --input - --json
+stetra change handoff . --task <task-id> --input - --json
+stetra change decide . --task <task-id> --input - --json
+stetra change resolve . --task <task-id> --input - --json
 ```
 
-- `prepare` compiles the task's Semantic Contract and proportional Assurance
-  Plan, freezes checks, and captures the pre-change worktree.
-- `collect` runs those checks and records the complete actual change plus every
-  ordered check attempt. Execution timeout is a collect-time budget, not part
-  of task meaning; a timed-out check can retry with a larger budget in the same
-  run without hiding the first attempt.
-- `finalize` binds the agent's explanation, counterevidence search, unknowns,
-  and Review Map to the collected facts.
+`prepare` keeps the quoted developer event physically separate from Host task
+interpretation. It generates canonical identities, compiles explicit
+Conditions, Evidence Obligations, and checks, runs only selected task-start
+baseline checks, records their side effects, and freezes the resulting worktree
+as the implementation baseline. Routine work may have no conditions.
 
-The successful status is `handoff-ready`: ready for developer review, never
-automatically adopted. Failed checks, stale facts, contradictions, and missing
-evidence remain visible and actionable.
+`collect` records the complete baseline-to-current change, check attempts,
+bounded logs with complete-stream digests, check-induced changes, declared
+verifier-surface mutations, non-secret environment identity, and mechanical
+baseline/current check relationships. A larger-budget timeout retry preserves
+every prior attempt in the same Attempt.
 
-Exact contract, fact, handoff, evaluation, and review-packet data is available
-on demand through `stetra change explain`.
+`diagnose` requires the Agent to classify every current non-passing check as an
+implementation, environment, verification, or unknown cause with a
+falsification attempt. Runtime never guesses cause from errors or repository
+shape. Only an explicit implementation cause inside the current meaning and
+repair budget creates a successor Attempt.
 
-Finalize returns a structured `handoffPacket` that keeps the Semantic
-Contract, Runtime facts, Agent-authored handoff, and evaluation separate. The
-Host renders that source data in the current conversation language. Paths,
-IDs, statuses, commands, numeric facts, quoted evidence, and collected output
-remain exact. Runtime therefore does not need a locale field or one hard-coded
-translation table per supported language.
+`revise-verification` preserves the Semantic Contract while creating an
+immutable Verification Plan, exact Definition lineage, honest baseline status,
+and successor Attempt. Mechanical relaxation requires exact Human authority.
 
-## Dynamic Host projection
+`challenge` is requested by an explicit Evidence Obligation or when a
+fact-triggered Obligation depends on a declared Verifier acceptance surface
+changed by the patch. Agent input cannot self-assert Host independence.
 
-Runtime keeps the same deterministic `prepare -> collect -> finalize` kernel,
-but the generated Host workflow no longer loads one fixed instruction bundle.
-Each stage returns a structured `hostAction` with the next argv command and at
-most one reference: routine, assurance, or recovery. The Host progressively
-loads only that page.
+`handoff` rejects stale facts first, then binds one conclusion per Evidence
+Obligation and Condition, important system effects, residual unknowns, review
+questions, and Agent recommendation to current evidence. It returns decision,
+condition, and raw fact layers plus consolidated Attention. `handoff-ready`
+never means adopted.
 
-This removes fixed protocol reading from routine work without delegating path
-selection to the agent. The Assurance Plan and actual facts select the
-projection. Any requirement, failed or unavailable check, retry history,
-verifier change, non-text file, unknown, critical claim, or attention
-condition expands the path again. A clean routine completion may collapse
-empty review sections, while canonical detail remains inspectable in the task
-run.
+`decide` records `accepted`, `correction-requested`, `rejected`, or `deferred`
+with the developer's exact message. Acceptance with Attention requires an
+explicit exception for every item. It does not commit, merge, publish, deploy,
+or activate a rule for later tasks.
 
-## Proportional assurance
+`resolve` records exact mid-task Human authority and closes semantic-impact,
+Host-policy, and correction continuation paths.
 
-The lifecycle stays fixed, but handoff cost follows adoption consequence.
-Low-consequence routine work can finish with a concise system-meaning update
-and Runtime facts. Standard work must cover each declared material dimension.
-Critical work adds adoption-critical claims, applicable falsification, and
-direct-review surfaces. Failed or unavailable checks, verifier changes,
-unrepresentable changes, unknowns, and newly discovered critical claims can
-only raise those requirements.
+## Authority boundary
 
-The plan is compiled from explicit, basis-bearing consequence and dimension
-interpretations. It is not inferred from diff size, file count, keywords, or a
-numeric complexity score.
+- Developers own outcomes, constraints, non-goals, long-lived tradeoffs,
+  exceptions, and adoption.
+- Coding Agents own investigation, interpretation, reversible engineering
+  choices, implementation, evidence diagnosis, repair, challenge conclusions,
+  handoff, and recommendation.
+- Runtime owns only what the workflow observes plus deterministic identity,
+  ordering, references, budgets, routing, and currency validation.
 
-## Architecture
+A Human exception cannot erase a fact. A fact cannot decide product meaning.
+Agent prose cannot become Human authority or Runtime fact through a label.
 
-The current product kernel is three task cores and one future longitudinal
-loop:
+## Persistence and packages
 
-1. **Semantic Contract** — what this change is intended and authorized to mean.
-2. **Fact Spine** — what the workflow observed before and after implementation.
-3. **Cognitive Handoff** — what the actual change means, what remains unknown,
-   and where review has the highest value.
-4. **Decision Continuity** — how adopted decisions and observed outcomes may
-   reduce repeated semantic work in later tasks.
+Task data lives under `.stetra/tasks/<taskId>/`. `events.jsonl` is the
+append-only source and `task.json` is a rebuildable projection. Contracts,
+baseline verification, Attempts, facts, evidence dispositions, Verification
+Revisions, Challenges, handoffs, resolutions, and decisions remain separate
+immutable artifacts. The initial schema has no migration path.
 
-The current implementation closes one task-scoped loop across the first three
-cores and applies Proportional Assurance between them. It does not yet store
-adoption outcomes, cross-task decisions, learned preferences, or a delegation
-frontier.
-
-The workspace contains two lockstep packages:
-
-- `@sovea/stetra-core` — deterministic contract compilation, fact
-  binding, and handoff evaluation;
-- `@sovea/stetra` — CLI lifecycle, Git and check collection, run IO,
-  review-packet assembly, initialization, and generated Codex/Claude
-  workflows.
+- `@sovea/stetra-core` — deterministic compilation and handoff evaluation. Its
+  root exposes exactly `compileDelegation` and `evaluateHandoff`.
+- `@sovea/stetra` — CLI lifecycle, Git/check collection, diagnosis routing,
+  packet assembly, initialization, presentation, and generated Host workflows.
 
 ```text
-Generated host adapter -> CLI -> Core
+Generated Host adapter -> CLI -> Core
 ```
 
-Neither package calls an LLM. The coding agent keeps responsibility for
-repository investigation and semantic judgment; the runtime owns only facts it
-collects.
+Neither package calls an LLM.
 
-See [Product direction](docs/product-direction.md) for the long-term product
-positioning, [Architecture](docs/architecture.md) for the current product
-kernel, and [Change workflow](docs/change-workflow.md) for the executable
-protocol.
+See [Product direction](docs/product-direction.md),
+[Architecture](docs/architecture.md), and
+[Change workflow](docs/change-workflow.md).
 
-## Current state
+## Current evidence
 
-The repository implements the complete technical workflow and verifies it
-through unit, lifecycle, archive, and isolated-installation tests. The protocol
-is still a `0.0.1` prototype: unsupported shapes are rejected, and obsolete
-owner data is never automatically translated or deleted.
-
-Technical verification is not evidence that the product lowers adoption cost.
-That claim remains unverified until committed paired-agent evidence satisfies
-[`evaluation/paired-agent/PROTOCOL.md`](evaluation/paired-agent/PROTOCOL.md)
-and supports a scoped developer decision.
-
-To run the current source checkout:
-
-```sh
-corepack pnpm install --frozen-lockfile
-corepack pnpm build
-node packages/cli/dist/index.mjs --help
-```
+Technical tests establish internal consistency and distributability, not
+product effectiveness. The first three-pair historical replay exposed useful
+design failures but lacks protocol-complete Human blind review and timing data;
+it is recorded as inconclusive. Effectiveness remains `unverified` until
+results satisfy [`evaluation/paired-agent/PROTOCOL.md`](evaluation/paired-agent/PROTOCOL.md)
+and support an explicit scoped product-owner conclusion.
 
 ## Development
 
@@ -177,8 +149,6 @@ corepack pnpm install --frozen-lockfile
 corepack pnpm verify
 ```
 
-Read [CONTRIBUTING.md](CONTRIBUTING.md) before changing public behavior. Core
-and CLI versions move together from a committed stable baseline; prerelease
-suffixes are tag-driven at publish time. Generated `dist/` files are not
-committed. Maintainer releases follow the
-[trusted publishing process](docs/releasing.md).
+Read [CONTRIBUTING.md](CONTRIBUTING.md) before changing public behavior.
+Generated `dist/` files are not committed. Maintainer releases follow
+[the trusted publishing process](docs/releasing.md).

@@ -1,7 +1,7 @@
 {
   "name": "@sovea/stetra-core",
   "version": "0.0.1",
-  "description": "Deterministic Semantic Contract and Cognitive Handoff kernel for Stetra.",
+  "description": "Deterministic Semantic Contract, Fact Spine, and Cognitive Handoff kernel for Stetra.",
   "type": "module",
   "license": "MIT",
   "repository": {
