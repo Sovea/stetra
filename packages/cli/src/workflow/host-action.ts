@@ -25,6 +25,12 @@ export interface HostAction {
     | 'resolve-evidence-decision';
   reference: HostWorkflowReference | null;
   command?: { argv: string[] };
+  inputBinding?: {
+    transport: 'stdin';
+    source: 'authoringPacket.draft';
+    serialization: 'json';
+    execution: 'one-shot';
+  };
   authoringPacket?: AuthoringPacket;
 }
 
@@ -58,9 +64,11 @@ export function collectedHostAction(input: {
   diagnosisPacket: AuthoringPacket;
   challengePacket: AuthoringPacket;
   handoffPacket: AuthoringPacket;
-  requiredChallengeObligationIds: string[];
+  pendingChallengeObligationIds: string[];
+  challengeAttestationAvailable: boolean;
 }): HostAction {
-  const timedOut = input.facts.checks.filter((check) => latestAttempt(check).timedOut);
+  const timedOut = input.facts.checks.filter((check) =>
+    latestAttempt(check).termination.kind === 'timeout');
   if (timedOut.length) {
     const argv = taskCommand('collect', input.taskId).argv;
     for (const check of timedOut) {
@@ -76,8 +84,10 @@ export function collectedHostAction(input: {
   if (input.facts.checks.some((check) => latestAttempt(check).status !== 'passed')) {
     return inputAction('diagnose-collected-evidence', 'recovery', 'diagnose', input.taskId, input.diagnosisPacket);
   }
-  if (input.requiredChallengeObligationIds.length) {
-    return inputAction('perform-independent-challenge', 'challenge', 'challenge', input.taskId, input.challengePacket);
+  if (input.pendingChallengeObligationIds.length) {
+    return input.challengeAttestationAvailable
+      ? inputAction('perform-independent-challenge', 'challenge', 'challenge', input.taskId, input.challengePacket)
+      : inputAction('author-handoff', 'handoff', 'handoff', input.taskId, input.handoffPacket);
   }
   return inputAction('author-handoff', 'handoff', 'handoff', input.taskId, input.handoffPacket);
 }
@@ -91,18 +101,33 @@ export function diagnosisHostAction(
     | 'ask-human',
   taskId: string,
   packet?: AuthoringPacket,
+  challengeAttestationAvailable = true,
 ): HostAction {
   if (route === 'repair-implementation') return preparedHostAction(taskId);
   if (route === 'revise-verification') {
-    return inputAction('revise-verification', 'recovery', 'revise-verification', taskId, packet);
+    return inputAction(
+      'revise-verification', 'recovery', 'revise-verification', taskId,
+      requiredAuthoringPacket(packet, route),
+    );
   }
   if (route === 'challenge') {
-    return inputAction('perform-independent-challenge', 'challenge', 'challenge', taskId, packet);
+    return challengeAttestationAvailable
+      ? inputAction(
+          'perform-independent-challenge', 'challenge', 'challenge', taskId,
+          requiredAuthoringPacket(packet, route),
+        )
+      : inputAction(
+          'author-handoff', 'handoff', 'handoff', taskId,
+          requiredAuthoringPacket(packet, route),
+        );
   }
   if (route === 'handoff') {
-    return inputAction('author-handoff', 'handoff', 'handoff', taskId, packet);
+    return inputAction(
+      'author-handoff', 'handoff', 'handoff', taskId,
+      requiredAuthoringPacket(packet, route),
+    );
   }
-  return resolutionHostAction(taskId, packet!);
+  return resolutionHostAction(taskId, requiredAuthoringPacket(packet, route));
 }
 
 export function challengeHostAction(
@@ -150,7 +175,7 @@ function inputAction(
     | 'decide'
     | 'resolve',
   taskId: string,
-  authoringPacket?: AuthoringPacket,
+  authoringPacket: AuthoringPacket,
 ): HostAction {
   return {
     kind,
@@ -158,8 +183,22 @@ function inputAction(
     command: {
       argv: ['stetra', 'change', stage, '.', '--task', taskId, '--input', '-', '--json'],
     },
-    ...(authoringPacket ? { authoringPacket } : {}),
+    inputBinding: {
+      transport: 'stdin',
+      source: 'authoringPacket.draft',
+      serialization: 'json',
+      execution: 'one-shot',
+    },
+    authoringPacket,
   };
+}
+
+function requiredAuthoringPacket(
+  packet: AuthoringPacket | undefined,
+  route: string,
+): AuthoringPacket {
+  if (!packet) throw new Error(`Route ${route} requires an Authoring Packet.`);
+  return packet;
 }
 
 function latestAttempt(check: FactBundle['checks'][number]) {

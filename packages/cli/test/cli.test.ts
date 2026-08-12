@@ -41,7 +41,9 @@ test('CLI JSON mode executes compact prepare, baseline-aware collect, layered ha
     assert.equal(prepared.taskContract.understanding.desiredOutcome.value, 'Change the CLI fixture.');
     assert.equal(prepared.baselineVerification.checks[0].mode, 'unknown');
     assert.equal(prepareExecution.json, true);
-    assert.doesNotMatch(formatCliOutput(prepareExecution), /\u001b\[/);
+    const preparedJson = formatCliOutput(prepareExecution);
+    assert.doesNotMatch(preparedJson, /\u001b\[/);
+    assert.ok(preparedJson.indexOf('"hostAction"') < preparedJson.indexOf('"status"'));
     assert.match(formatCliOutput({ ...prepareExecution, json: false, color: false }), /Desired outcome/);
 
     writeFileSync(join(root, 'source.txt'), 'after\n', 'utf8');
@@ -69,12 +71,25 @@ test('CLI JSON mode executes compact prepare, baseline-aware collect, layered ha
     )) });
     const handedOff = handoffExecution.output as {
       status: string;
-      adoption: { status: string };
-      decisionPacket: { review: { decision: { desiredOutcome: string } } };
+      decisionPacket: {
+        semanticContract: { desiredOutcome: string };
+        decision: { adoption: { status: string } };
+      };
     };
     assert.equal(handedOff.status, 'handoff-ready');
-    assert.equal(handedOff.adoption.status, 'pending');
-    assert.equal(handedOff.decisionPacket.review.decision.desiredOutcome, 'Change the CLI fixture.');
+    assert.equal(handedOff.decisionPacket.decision.adoption.status, 'pending');
+    assert.equal(handedOff.decisionPacket.semanticContract.desiredOutcome, 'Change the CLI fixture.');
+    assert.deepEqual(Object.keys(handedOff.decisionPacket), [
+      'protocol', 'schemaVersion', 'authority', 'semanticContract', 'decision',
+      'systemMeaning', 'conditions', 'attention', 'reviewQuestions', 'runtimeFacts',
+      'evidenceJudgments', 'detailSections',
+    ]);
+    for (const removedDuplicate of [
+      'contract', 'facts', 'handoff', 'evaluation', 'review', 'challenges', 'evidenceDispositions',
+    ]) {
+      assert.equal(removedDuplicate in handedOff.decisionPacket, false);
+    }
+    assert.equal('attention' in handedOff, false);
     assert.match(formatCliOutput({ ...handoffExecution, json: false, color: false }), /Decision summary/);
 
     const decisionExecution = await runCli([
@@ -131,6 +146,7 @@ function createRepository(): string {
 function prepareDocument() {
   return {
     protocol: 'cognitive-adoption', schemaVersion: '1',
+    prepareRequestId: 'prepare:cli-test',
     developerEvent: { content: 'Change the CLI fixture.' },
     repositoryEvidence: [],
     task: {
@@ -145,7 +161,7 @@ function prepareDocument() {
         statement: 'The fixture behavior is exercised by the frozen check.',
         failureHypothesis: 'The frozen check could miss the changed fixture behavior.',
         strategies: [{
-          kind: 'runtime-check', checkKeys: ['test'], expectedObservation: 'passed',
+          kind: 'runtime-check', checkKeys: ['test'],
         }],
       }],
     }],

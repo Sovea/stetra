@@ -20,7 +20,11 @@ import type {
 import { runBufferedCommand } from '../infrastructure/process.ts';
 import { sha256, stableFingerprint } from '../protocol.ts';
 
-const WORKFLOW_OUTPUT_PREFIX = '.stetra/tasks/';
+const WORKFLOW_OUTPUT_PREFIXES = [
+  '.stetra/tasks/',
+  '.stetra/staging/',
+] as const;
+const WORKFLOW_OUTPUT_FILES = new Set(['.stetra/worktree-operation.lock']);
 const GIT_OUTPUT_LIMIT = 256 * 1024 * 1024;
 const GITLINK_MODE = '160000';
 const GIT_OBJECT_ID_PATTERN = /^[0-9a-f]{40}(?:[0-9a-f]{24})?$/;
@@ -50,6 +54,7 @@ export interface CollectedWorktreeChange {
 
 export interface WorktreeCaptureOptions {
   objectDirectory?: string;
+  alternateObjectDirectories?: string[];
 }
 
 export async function captureGitWorktree(
@@ -64,7 +69,11 @@ export async function captureGitWorktree(
   const objectDirectory = realpathOrResolved(options.objectDirectory ?? ephemeralRoot!);
   mkdirSync(objectDirectory, { recursive: true });
   try {
-    const objectEnv = await gitObjectEnvironment(projectRoot, objectDirectory);
+    const objectEnv = await gitObjectEnvironment(
+      projectRoot,
+      objectDirectory,
+      options.alternateObjectDirectories,
+    );
     const head = await readHead(projectRoot);
     const treeId = await createWorktreeTree(projectRoot, head, objectEnv);
     const [listed, staged] = await Promise.all([
@@ -79,8 +88,7 @@ export async function captureGitWorktree(
     ]);
     const indexEntries = parseIndexEntries(staged);
     const paths = parseNullSeparatedPaths(listed)
-      .filter((path) => path !== WORKFLOW_OUTPUT_PREFIX.slice(0, -1)
-        && !path.startsWith(WORKFLOW_OUTPUT_PREFIX))
+      .filter((path) => !isWorkflowOutput(path))
       .sort((left, right) => left.localeCompare(right));
     const entries: WorktreeEntry[] = [];
     for (const path of paths) {
@@ -139,11 +147,15 @@ export async function captureGitWorktree(
 export async function collectGitWorktreeChange(
   projectRoot: string,
   baseline: WorktreeSnapshot,
-  options: { objectDirectory: string },
+  options: { objectDirectory: string; alternateObjectDirectories?: string[] },
 ): Promise<CollectedWorktreeChange> {
   assertWorktreeSnapshot(baseline, 'prepared baseline');
   const current = await captureGitWorktree(projectRoot, options);
-  const objectEnv = await gitObjectEnvironment(projectRoot, options.objectDirectory);
+  const objectEnv = await gitObjectEnvironment(
+    projectRoot,
+    options.objectDirectory,
+    options.alternateObjectDirectories,
+  );
   const binaryPaths = await collectBinaryPaths(
     projectRoot,
     baseline.treeId,
@@ -283,14 +295,19 @@ async function createWorktreeTree(
   try {
     await runGitBuffer(projectRoot, head ? ['read-tree', head] : ['read-tree', '--empty'], env);
     await runGitBuffer(projectRoot, ['add', '-A', '--', '.'], env);
-    await runGitBuffer(projectRoot, [
-      'rm',
-      '-r',
-      '--cached',
-      '--ignore-unmatch',
-      '--',
-      '.stetra/tasks',
-    ], env);
+    for (const path of [
+      ...WORKFLOW_OUTPUT_PREFIXES.map((prefix) => prefix.slice(0, -1)),
+      ...WORKFLOW_OUTPUT_FILES,
+    ]) {
+      await runGitBuffer(projectRoot, [
+        'rm',
+        '-r',
+        '--cached',
+        '--ignore-unmatch',
+        '--',
+        path,
+      ], env);
+    }
     const treeId = (await runGitBuffer(projectRoot, ['write-tree'], env)).toString('ascii').trim();
     if (!GIT_OBJECT_ID_PATTERN.test(treeId)) {
       throw new Error('Git returned an invalid worktree tree identity.');
@@ -299,6 +316,12 @@ async function createWorktreeTree(
   } finally {
     rmSync(temporaryRoot, { recursive: true, force: true });
   }
+}
+
+function isWorkflowOutput(path: string): boolean {
+  return WORKFLOW_OUTPUT_FILES.has(path)
+    || WORKFLOW_OUTPUT_PREFIXES.some((prefix) =>
+      path === prefix.slice(0, -1) || path.startsWith(prefix));
 }
 
 async function collectPatch(
@@ -351,6 +374,7 @@ async function collectBinaryPaths(
 async function gitObjectEnvironment(
   projectRoot: string,
   objectDirectoryInput: string,
+  additionalAlternates: string[] = [],
 ): Promise<NodeJS.ProcessEnv> {
   const objectDirectory = realpathOrResolved(objectDirectoryInput);
   mkdirSync(objectDirectory, { recursive: true });
@@ -370,7 +394,11 @@ async function gitObjectEnvironment(
   return {
     ...process.env,
     GIT_OBJECT_DIRECTORY: objectDirectory,
-    GIT_ALTERNATE_OBJECT_DIRECTORIES: [repositoryObjects, inheritedAlternates]
+    GIT_ALTERNATE_OBJECT_DIRECTORIES: [
+      repositoryObjects,
+      ...additionalAlternates.map((path) => realpathOrResolved(path)),
+      inheritedAlternates,
+    ]
       .filter((value): value is string => Boolean(value))
       .join(delimiter),
   };

@@ -49,15 +49,20 @@ export interface CheckStreamFact {
   logPath?: string;
 }
 
+export type CheckTermination =
+  | { kind: 'exit'; exitCode: number }
+  | { kind: 'signal'; signal: string }
+  | { kind: 'timeout'; signal?: string }
+  | { kind: 'spawn-error'; code?: string };
+
 export interface CheckAttemptFact {
   attempt: number;
   startedAt: string;
   durationMs: number;
   timeoutMs: number;
   status: CheckStatus;
-  exitCode: number | null;
-  timedOut: boolean;
-  outputDigest: string;
+  termination: CheckTermination;
+  outcomeFingerprint: string;
   stdout: CheckStreamFact;
   stderr: CheckStreamFact;
   reason?: string;
@@ -109,6 +114,13 @@ export interface EvidenceDisposition extends ProtocolEnvelope {
   attemptId: string;
   factCollectionId: string;
   semanticImpact: 'none' | 'material';
+  proposedRoute:
+    | 'repair-implementation'
+    | 'revise-verification'
+    | 'challenge'
+    | 'handoff'
+    | 'ask-human';
+  routeRationale: string;
   entries: EvidenceDispositionEntry[];
   route:
     | 'repair-implementation'

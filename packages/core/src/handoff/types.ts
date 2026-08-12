@@ -154,7 +154,7 @@ export interface EvaluateHandoffInput extends ProtocolEnvelope {
   factBundle: FactBundle;
   currentWorktreeFingerprint: string;
   challenges: IndependentChallenge[];
-  evidenceDispositions: EvidenceDisposition[];
+  currentEvidenceDisposition?: EvidenceDisposition;
   hostPolicyEvaluations: HostPolicyEvaluation[];
   deliveryExhausted: boolean;
   verificationRevised: boolean;
@@ -176,43 +176,66 @@ export interface HandoffEvaluation extends ProtocolEnvelope {
   };
 }
 
-export interface DecisionReviewLayers {
-  decision: {
-    desiredOutcome: string;
-    recommendation: AgentRecommendation;
-    conditionStatuses: Array<{ conditionId: string; status: ConclusionStatus }>;
-    attentionIds: string[];
-  };
-  conditions: Array<{
-    condition: TaskContract['adoptionConditions'][number];
-    conclusion: AdoptionConditionConclusion;
-    obligations: Array<{
-      obligation: TaskContract['adoptionConditions'][number]['evidenceObligations'][number];
-      conclusion: EvidenceObligationConclusion;
-      challenges: IndependentChallenge[];
-    }>;
-    reviewQuestions: ReviewQuestion[];
-  }>;
-  facts: {
-    changedFiles: FactBundle['changedFiles'];
-    checks: FactBundle['checks'];
-    checkComparisons: FactBundle['checkComparisons'];
-    verifierMutations: FactBundle['verifierMutations'];
-    checkInducedChanges: FactBundle['checkInducedChanges'];
-    evidenceDispositions: EvidenceDisposition[];
-  };
-}
-
 export interface DecisionPacket extends ProtocolEnvelope {
   authority: TaskContract['authority'];
-  contract: TaskContract;
-  facts: FactBundle;
-  evidenceDispositions: EvidenceDisposition[];
-  challenges: IndependentChallenge[];
-  handoff: CognitiveHandoff;
-  evaluation: HandoffEvaluation;
-  review: DecisionReviewLayers;
-  decision?: HumanDecision;
+  semanticContract: {
+    semanticContractId: string;
+    effectiveContractId: string;
+    desiredOutcome: string;
+    constraints: string[];
+    nonGoals: string[];
+    focusPaths: string[];
+  };
+  decision: {
+    recommendation: AgentRecommendation;
+    adoption: HandoffEvaluation['adoption'];
+    humanDecision?: HumanDecision;
+  };
+  systemMeaning: {
+    summary: string;
+    importantSystemEffects: string[];
+    residualUnknowns: ResidualUnknown[];
+  };
+  conditions: Array<{
+    id: string;
+    key: string;
+    statement: string;
+    criticality: 'material' | 'adoption-critical';
+    conclusion: AdoptionConditionConclusion;
+    obligations: Array<{
+      id: string;
+      key: string;
+      statement: string;
+      failureHypothesis: string;
+      conclusion: EvidenceObligationConclusion;
+      challengeIds: string[];
+    }>;
+  }>;
+  attention: HandoffAttentionItem[];
+  reviewQuestions: ReviewQuestion[];
+  runtimeFacts: {
+    attemptId: string;
+    factCollectionId: string;
+    changeFingerprint: string;
+    changedFiles: Array<Pick<FactBundle['changedFiles'][number], 'id' | 'path' | 'previousPath' | 'operation' | 'representation'>>;
+    checks: Array<{
+      verifierId: string;
+      definitionId: string;
+      argv: string[];
+      latestAttempt: FactBundle['checks'][number]['attempts'][number];
+      attemptCount: number;
+      baselineRelation: FactBundle['checkComparisons'][number]['relation'];
+    }>;
+    verifierMutations: FactBundle['verifierMutations'];
+    checkInducedChanges: Array<Pick<FactBundle['checkInducedChanges'][number], 'id' | 'path' | 'operation'>>;
+  };
+  evidenceJudgments: {
+    dispositions: Array<Pick<EvidenceDisposition,
+      'dispositionId' | 'attemptId' | 'semanticImpact' | 'proposedRoute' | 'routeRationale' | 'route' | 'entries'>>;
+    challenges: Array<Pick<IndependentChallenge,
+      'id' | 'obligationIds' | 'conditionIds' | 'independence' | 'outcome' | 'conclusion'>>;
+  };
+  detailSections: Array<'contract' | 'attempts' | 'challenge' | 'handoff' | 'events'>;
 }
 
 export class HandoffValidationError extends Error {

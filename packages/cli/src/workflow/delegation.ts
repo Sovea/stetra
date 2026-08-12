@@ -52,6 +52,7 @@ import {
   DELEGATION_SCHEMA_VERSION,
   sha256,
   stableFingerprint,
+  taskIdForPrepareRequest,
 } from '../protocol.ts';
 import { assertNoLegacyArtifacts } from '../project/legacy.ts';
 import {
@@ -93,13 +94,17 @@ import {
 } from './authoring.ts';
 import {
   canonicalProjectRoot,
+  commitStagedTaskTransition,
+  createCollectionStagingDirectory,
   createTaskWorkspace,
+  findTaskByPrepareRequestId,
   initializeTask,
   loadTask,
   projectRelativePath,
   readJsonArtifact,
   taskArtifactPath,
   transitionTask,
+  withWorktreeLease,
   writeImmutableBuffer,
   writeImmutableJson,
   type LoadedTask,
@@ -128,6 +133,21 @@ export async function prepareDelegationTask(options: {
     DelegationPrepareDocumentSchema,
     'Task Contract input',
   );
+  const prepareInputFingerprint = stableFingerprint(source);
+  return withWorktreeLease({ projectRoot, operation: 'prepare' }, async () => {
+  const existingTask = findTaskByPrepareRequestId(projectRoot, source.prepareRequestId);
+  if (existingTask) {
+    if (existingTask.projection.prepareInputFingerprint !== prepareInputFingerprint) {
+      throw inputError(
+        `Prepare request ${source.prepareRequestId} is already bound to task ${existingTask.taskId} with different input. `
+        + 'Reuse the original input for a retry or generate a new prepareRequestId for a distinct request.',
+      );
+    }
+    return prepareReplayResult(
+      existingTask,
+      Boolean(options.hostAttestations?.attestChallenge),
+    );
+  }
   const repositoryEvidence = materializeEvidenceWindows(
     projectRoot,
     source.repositoryEvidence ?? [],
@@ -177,7 +197,7 @@ export async function prepareDelegationTask(options: {
     };
   }
 
-  const taskId = randomUUID();
+  const taskId = taskIdForPrepareRequest(source.prepareRequestId);
   const hostPolicyEvaluations = await materializeHostPolicyEvaluations(
     taskId,
     compiled.contract,
@@ -186,8 +206,9 @@ export async function prepareDelegationTask(options: {
   const unresolvedHostPolicy = compiled.contract.hostPolicyRequirements.find((requirement) =>
     requirement.enforcementRequirement === 'required'
     && hostPolicyEvaluations.find((item) => item.requirementId === requirement.id)?.mode !== 'enforced');
-  const workspace = createTaskWorkspace(projectRoot, taskId);
+  let workspace: ReturnType<typeof createTaskWorkspace> | undefined;
   try {
+    workspace = createTaskWorkspace(projectRoot, taskId);
     const preBaselineCheck = await captureGitWorktree(projectRoot, {
       objectDirectory: workspace.objectDirectory,
     });
@@ -202,6 +223,7 @@ export async function prepareDelegationTask(options: {
         timeoutMs: DEFAULT_CHECK_TIMEOUT_MS,
       })),
       outputDirectory: join(workspace.taskDirectory, 'baseline-checks'),
+      recordedOutputDirectory: join(workspace.finalTaskDirectory, 'baseline-checks'),
     });
     const baseline = await captureGitWorktree(projectRoot, {
       objectDirectory: workspace.objectDirectory,
@@ -236,6 +258,8 @@ export async function prepareDelegationTask(options: {
       protocol: DELEGATION_PROTOCOL,
       schemaVersion: DELEGATION_SCHEMA_VERSION,
       taskId,
+      prepareRequestId: source.prepareRequestId,
+      prepareInputFingerprint,
       workflow: 'cognitive-adoption',
       projectRoot,
       createdAt,
@@ -268,6 +292,7 @@ export async function prepareDelegationTask(options: {
     const loaded = initializeTask({
       projectRoot,
       taskId,
+      stagingDirectory: workspace.taskDirectory,
       projection,
       artifacts: [
         { relativePath: contractPath(1), value: compiled.contract },
@@ -285,7 +310,7 @@ export async function prepareDelegationTask(options: {
       task: compactTask(loaded.projection),
       taskContract: contractWorkPacket(compiled.contract),
       baseline: summarizeWorktree(baseline),
-      baselineVerification,
+      baselineVerification: summarizeBaselineVerification(baselineVerification),
       details: {
         taskPath: loaded.taskPath,
         eventsPath: loaded.eventsPath,
@@ -300,9 +325,25 @@ export async function prepareDelegationTask(options: {
         : preparedHostAction(taskId),
     };
   } catch (error) {
-    rmSync(workspace.taskDirectory, { recursive: true, force: true });
+    if (workspace) rmSync(workspace.taskDirectory, { recursive: true, force: true });
+    const concurrentlyPublished = findTaskByPrepareRequestId(
+      projectRoot,
+      source.prepareRequestId,
+    );
+    if (concurrentlyPublished) {
+      if (concurrentlyPublished.projection.prepareInputFingerprint !== prepareInputFingerprint) {
+        throw inputError(
+          `Prepare request ${source.prepareRequestId} was concurrently bound to task ${concurrentlyPublished.taskId} with different input.`,
+        );
+      }
+      return prepareReplayResult(
+        concurrentlyPublished,
+        Boolean(options.hostAttestations?.attestChallenge),
+      );
+    }
     throw error;
   }
+  });
 }
 
 export async function collectDelegationFacts(options: {
@@ -311,31 +352,33 @@ export async function collectDelegationFacts(options: {
   productVersion: string;
   timeoutMs?: number;
   retryChecks?: CheckTimeoutRetry[];
+  hostAttestations?: HostAttestationProvider;
 }) {
   let collectedFacts: FactBundle | undefined;
   let collectionMode: 'full-collection' | 'timeout-retry' = 'full-collection';
   let repeatedObservation = false;
-  const initial = loadTask(options.projectRoot, options.taskId);
-  const contract = readContract(initial);
-  const definitions = contract.verificationPlan.mode === 'checks'
-    ? contract.verificationPlan.definitions
-    : [];
   const retries = options.retryChecks ?? [];
-  validateCollectionOptions(definitions, retries, options.timeoutMs);
-  const timeoutBudget = retries.length
-    ? retries.reduce((sum, retry) => sum + retry.timeoutMs, 0)
-    : definitions.length * (options.timeoutMs ?? DEFAULT_CHECK_TIMEOUT_MS);
-  const lockTtlMs = Number.isSafeInteger(timeoutBudget + 300_000)
-    ? Math.max(60 * 60 * 1000, timeoutBudget + 300_000)
-    : 24 * 60 * 60 * 1000;
-
-  const transitioned = await transitionTask({
+  const transitioned = await withWorktreeLease({
     projectRoot: options.projectRoot,
+    operation: 'collect',
     taskId: options.taskId,
-    type: retries.length ? 'timeout-retried' : 'facts-collected',
-    actor: 'runtime',
-    lockTtlMs,
-    async mutate(task) {
+  }, async () => {
+    const task = loadTask(options.projectRoot, options.taskId);
+    const expectedRevision = task.projection.revision;
+    const contract = readContract(task);
+    const definitions = contract.verificationPlan.mode === 'checks'
+      ? contract.verificationPlan.definitions
+      : [];
+    validateCollectionOptions(definitions, retries, options.timeoutMs);
+    const stagingDirectory = createCollectionStagingDirectory({
+      projectRoot: task.projectRoot,
+      taskId: task.taskId,
+      revision: expectedRevision,
+    });
+    const stagedArtifactsDirectory = join(stagingDirectory, 'artifacts');
+    const objectDirectory = join(stagingDirectory, 'objects');
+    const durableObjectDirectory = taskArtifactPath(task.taskDirectory, WORKTREE_OBJECTS_DIRECTORY);
+    try {
       assertTaskOpenForCollection(task);
       const currentContract = readContract(task);
       const baseline = readBaseline(task);
@@ -345,11 +388,16 @@ export async function collectDelegationFacts(options: {
       const priorFacts = currentAttempt.factCollectionId
         ? readFacts(task, currentAttempt.attemptId, currentAttempt.factCollectionId)
         : undefined;
+      const checksRelative =
+        `${attemptDirectory(currentAttempt.attemptId)}/checks/collection-${task.projection.revision + 1}`;
       const checksDirectory = taskArtifactPath(
-        task.taskDirectory,
-        `${attemptDirectory(currentAttempt.attemptId)}/checks/collection-${task.projection.revision + 1}`,
+        stagedArtifactsDirectory,
+        checksRelative,
       );
-      const objectDirectory = taskArtifactPath(task.taskDirectory, WORKTREE_OBJECTS_DIRECTORY);
+      const publishedChecksDirectory = taskArtifactPath(
+        task.taskDirectory,
+        checksRelative,
+      );
       let factsBase: Omit<FactBundle, 'factCollectionId' | 'bundleFingerprint'>;
       let newArtifactRefs: string[] = [];
 
@@ -359,7 +407,10 @@ export async function collectDelegationFacts(options: {
           throw usageError('Timeout retry requires facts from the current Attempt.');
         }
         assertFactBundleIdentity(priorFacts, currentContract.effectiveContractId, currentAttempt.attemptId);
-        const beforeRetry = await captureGitWorktree(task.projectRoot, { objectDirectory });
+        const beforeRetry = await captureGitWorktree(task.projectRoot, {
+          objectDirectory,
+          alternateObjectDirectories: [durableObjectDirectory],
+        });
         if (beforeRetry.fingerprint !== priorFacts.current.fingerprint) {
           throw usageError('The worktree changed after collection; run a full collect instead of retrying one check.');
         }
@@ -372,13 +423,17 @@ export async function collectDelegationFacts(options: {
             previousAttempts: previous.attempts,
           })),
           outputDirectory: checksDirectory,
+          recordedOutputDirectory: publishedChecksDirectory,
         });
         const retriedById = new Map(retried.map((check) => [check.definitionId, check]));
         const checks = definitions.map((definition) =>
           retriedById.get(definition.definitionId)
           ?? priorFacts.checks.find((check) =>
             check.definitionId === definition.definitionId)!);
-        const afterRetry = await captureGitWorktree(task.projectRoot, { objectDirectory });
+        const afterRetry = await captureGitWorktree(task.projectRoot, {
+          objectDirectory,
+          alternateObjectDirectories: [durableObjectDirectory],
+        });
         if (afterRetry.fingerprint !== priorFacts.current.fingerprint) {
           throw usageError('A retried check changed the worktree; run a full collect to rebind every fact.');
         }
@@ -393,19 +448,27 @@ export async function collectDelegationFacts(options: {
         delete (factsBase as Partial<FactBundle>).bundleFingerprint;
       } else {
         const timeoutMs = options.timeoutMs ?? DEFAULT_CHECK_TIMEOUT_MS;
-        const preCheck = await captureGitWorktree(task.projectRoot, { objectDirectory });
+        const preCheck = await captureGitWorktree(task.projectRoot, {
+          objectDirectory,
+          alternateObjectDirectories: [durableObjectDirectory],
+        });
         const checks = await runFrozenChecks({
           projectRoot: task.projectRoot,
           executions: definitions.map((definition) => ({ definition, timeoutMs })),
           outputDirectory: checksDirectory,
+          recordedOutputDirectory: publishedChecksDirectory,
         });
-        const worktree = await collectGitWorktreeChange(task.projectRoot, baseline, { objectDirectory });
+        const worktree = await collectGitWorktreeChange(task.projectRoot, baseline, {
+          objectDirectory,
+          alternateObjectDirectories: [durableObjectDirectory],
+        });
         const checkInducedChanges = compareGitWorktrees(preCheck, worktree.current);
         const patchRelative = `${attemptDirectory(currentAttempt.attemptId)}/change-${task.projection.revision + 1}.patch`;
-        const patchPath = taskArtifactPath(task.taskDirectory, patchRelative);
+        const patchPath = taskArtifactPath(stagedArtifactsDirectory, patchRelative);
+        const publishedPatchPath = taskArtifactPath(task.taskDirectory, patchRelative);
         const patch = worktree.patch.length
           ? {
-              path: projectRelativePath(task.projectRoot, patchPath),
+              path: projectRelativePath(task.projectRoot, publishedPatchPath),
               digest: sha256(worktree.patch),
               byteLength: worktree.patch.length,
             }
@@ -447,9 +510,10 @@ export async function collectDelegationFacts(options: {
         bundleFingerprint: stableFingerprint(withCollection),
       };
       const factsRelative = factsPath(currentAttempt.attemptId, collectionId);
-      const factsAbsolute = taskArtifactPath(task.taskDirectory, factsRelative);
+      const factsAbsolute = taskArtifactPath(stagedArtifactsDirectory, factsRelative);
+      const publishedFactsAbsolute = taskArtifactPath(task.taskDirectory, factsRelative);
       writeImmutableJson(factsAbsolute, facts);
-      newArtifactRefs.push(projectRelativePath(task.projectRoot, factsAbsolute));
+      newArtifactRefs.push(projectRelativePath(task.projectRoot, publishedFactsAbsolute));
       newArtifactRefs.push(...factLogPaths(facts));
       collectedFacts = facts;
 
@@ -469,7 +533,12 @@ export async function collectDelegationFacts(options: {
             }
           : attempt);
       const cleared = clearPostCollectionArtifacts(task.projection);
-      return {
+      return commitStagedTaskTransition({
+        projectRoot: task.projectRoot,
+        taskId: task.taskId,
+        expectedRevision,
+        type: retries.length ? 'timeout-retried' : 'facts-collected',
+        actor: 'runtime',
         projection: {
           ...cleared,
           deliveryStatus: 'implementation-complete',
@@ -479,11 +548,18 @@ export async function collectDelegationFacts(options: {
           challengeIds: [],
         },
         artifactRefs: unique(newArtifactRefs),
-      };
-    },
+        stagedArtifactsDirectory,
+      });
+    } finally {
+      rmSync(stagingDirectory, { recursive: true, force: true });
+    }
   });
   if (!collectedFacts) throw new Error('Fact collection completed without a Fact Bundle.');
   const currentContract = readContract(transitioned);
+  const collectedChallenges = readChallenges(transitioned);
+  const requiredChallenges = requiredChallengeObligationIds(currentContract, collectedFacts);
+  const pendingChallenges = pendingChallengeObligationIds(requiredChallenges, collectedChallenges);
+  const challengeAttestationAvailable = Boolean(options.hostAttestations?.attestChallenge);
   return {
     protocol: DELEGATION_PROTOCOL,
     schemaVersion: DELEGATION_SCHEMA_VERSION,
@@ -523,17 +599,19 @@ export async function collectDelegationFacts(options: {
         task: transitioned.projection,
         contract: currentContract,
         facts: collectedFacts,
-        challenges: [],
-        requiredObligationIds: requiredChallengeObligationIds(currentContract, collectedFacts),
+        challenges: collectedChallenges,
+        requiredObligationIds: requiredChallenges,
       }),
       handoffPacket: handoffAuthoringPacket({
         task: transitioned.projection,
         contract: currentContract,
         facts: collectedFacts,
-        challenges: [],
-        requiredObligationIds: requiredChallengeObligationIds(currentContract, collectedFacts),
+        challenges: collectedChallenges,
+        requiredObligationIds: requiredChallenges,
+        challengeAttestationAvailable,
       }),
-      requiredChallengeObligationIds: requiredChallengeObligationIds(currentContract, collectedFacts),
+      pendingChallengeObligationIds: pendingChallenges,
+      challengeAttestationAvailable,
     }),
   };
 }
@@ -543,6 +621,7 @@ export async function diagnoseCollectedEvidence(options: {
   taskId: string;
   inputPath: string;
   input?: Readable;
+  hostAttestations?: HostAttestationProvider;
 }) {
   const projectRoot = canonicalProjectRoot(options.projectRoot);
   const source = await readInputDocument(
@@ -572,7 +651,7 @@ export async function diagnoseCollectedEvidence(options: {
       }
       const facts = readFacts(task, current.attemptId, current.factCollectionId);
       validateEvidenceDispositionInput(source, contract, facts);
-      route = evidenceDispositionRoute(source, contract);
+      route = source.proposedRoute;
       const budgetExhausted = route === 'repair-implementation'
         && task.projection.repairCount >= contract.plan.maxRepairAttempts;
       if (budgetExhausted) route = 'handoff';
@@ -583,6 +662,8 @@ export async function diagnoseCollectedEvidence(options: {
         attemptId: current.attemptId,
         factCollectionId: facts.factCollectionId,
         semanticImpact: source.semanticImpact,
+        proposedRoute: source.proposedRoute,
+        routeRationale: source.routeRationale,
         entries: source.entries,
         route,
       };
@@ -659,6 +740,7 @@ export async function diagnoseCollectedEvidence(options: {
   const challenges = route === 'repair-implementation' ? [] : readChallenges(transitioned);
   const required = currentFacts
     ? requiredChallengeObligationIds(currentContract, currentFacts) : [];
+  const challengeAttestationAvailable = Boolean(options.hostAttestations?.attestChallenge);
   const packet = route === 'ask-human'
     ? resolutionAuthoringPacket({
         task: transitioned.projection,
@@ -672,16 +754,30 @@ export async function diagnoseCollectedEvidence(options: {
           facts: currentFacts,
         })
     : route === 'challenge' && currentFacts
-      ? challengeAuthoringPacket({
-          task: transitioned.projection, contract: currentContract, facts: currentFacts,
-          challenges, requiredObligationIds: required,
-        })
+      ? challengeAttestationAvailable
+        ? challengeAuthoringPacket({
+            task: transitioned.projection, contract: currentContract, facts: currentFacts,
+            challenges, requiredObligationIds: required,
+          })
+        : handoffAuthoringPacket({
+            task: transitioned.projection, contract: currentContract, facts: currentFacts,
+            challenges, requiredObligationIds: required,
+            challengeAttestationAvailable,
+          })
       : route === 'handoff' && currentFacts
         ? handoffAuthoringPacket({
             task: transitioned.projection, contract: currentContract, facts: currentFacts,
             challenges, requiredObligationIds: required,
+            challengeAttestationAvailable,
           })
         : undefined;
+  if (route === 'challenge' && !challengeAttestationAvailable && packet) {
+    packet.outstandingObligations.push(...source.entries.map((entry) => ({
+      code: 'direct-human-review-required',
+      targetId: entry.definitionId,
+      requiredAction: 'The current Host cannot attest a fresh challenger context. Preserve this unresolved diagnosis in the handoff and ask the developer to inspect the stated failure hypothesis directly.',
+    })));
+  }
   return {
     protocol: DELEGATION_PROTOCOL,
     schemaVersion: DELEGATION_SCHEMA_VERSION,
@@ -692,7 +788,9 @@ export async function diagnoseCollectedEvidence(options: {
     disposition: disposition!,
     ...(successorAttemptId ? { successorAttemptId } : {}),
     task: compactTask(transitioned.projection),
-    hostAction: diagnosisHostAction(route!, transitioned.taskId, packet),
+    hostAction: diagnosisHostAction(
+      route!, transitioned.taskId, packet, challengeAttestationAvailable,
+    ),
   };
 }
 
@@ -762,9 +860,10 @@ export async function recordChallenge(options: {
   const transitionedFacts = readCurrentFacts(transitioned);
   const challenges = readChallenges(transitioned);
   const required = requiredChallengeObligationIds(transitionedContract, transitionedFacts);
-  const coveredObligations = new Set(challenges.flatMap((item) => item.obligationIds));
-  const needsAnotherChallenge = required.some((id) => !coveredObligations.has(id));
-  const packet = needsAnotherChallenge
+  const pending = pendingChallengeObligationIds(required, challenges);
+  const challengeAttestationAvailable = Boolean(options.hostAttestations?.attestChallenge);
+  const performAnotherChallenge = pending.length > 0 && challengeAttestationAvailable;
+  const packet = performAnotherChallenge
     ? challengeAuthoringPacket({
         task: transitioned.projection,
         contract: transitionedContract,
@@ -778,6 +877,7 @@ export async function recordChallenge(options: {
         facts: transitionedFacts,
         challenges,
         requiredObligationIds: required,
+        challengeAttestationAvailable,
       });
   return {
     protocol: DELEGATION_PROTOCOL,
@@ -787,7 +887,7 @@ export async function recordChallenge(options: {
     attemptId: challenge!.attemptId,
     factCollectionId: challenge!.factCollectionId,
     challenge: challenge!,
-    hostAction: challengeHostAction(transitioned.taskId, needsAnotherChallenge, packet),
+    hostAction: challengeHostAction(transitioned.taskId, performAnotherChallenge, packet),
   };
 }
 
@@ -837,7 +937,7 @@ export async function evaluateDelegationHandoff(options: {
           factBundle: currentFacts,
           currentWorktreeFingerprint: currentFacts.current.fingerprint,
           challenges,
-          evidenceDispositions: readEvidenceDispositions(task),
+          currentEvidenceDisposition: readCurrentEvidenceDisposition(task),
           hostPolicyEvaluations: task.projection.hostPolicyEvaluations,
           deliveryExhausted: task.projection.deliveryStatus === 'exhausted',
           verificationRevised: task.projection.verificationRevised,
@@ -883,8 +983,6 @@ export async function evaluateDelegationHandoff(options: {
     factCollectionId: evaluation!.factCollectionId,
     handoffId: handoff!.handoffId,
     handoffFingerprint: handoff!.handoffFingerprint,
-    attention: evaluation!.attention,
-    adoption: evaluation!.adoption,
     decisionPacket: packet!,
     hostAction: handoffHostAction(
       evaluation!.status,
@@ -951,7 +1049,7 @@ export async function recordHumanDecision(options: {
           factBundle: currentFacts,
           currentWorktreeFingerprint: currentFacts.current.fingerprint,
           challenges,
-          evidenceDispositions: readEvidenceDispositions(task),
+          currentEvidenceDisposition: readCurrentEvidenceDisposition(task),
           hostPolicyEvaluations: task.projection.hostPolicyEvaluations,
           deliveryExhausted: task.projection.deliveryStatus === 'exhausted',
           verificationRevised: task.projection.verificationRevised,
@@ -1007,7 +1105,6 @@ export async function recordHumanDecision(options: {
     taskId: transitioned.taskId,
     decisionStatus: decision!.action,
     evidenceStatus: evaluation!.status,
-    attention: evaluation!.attention,
     decisionPacket: packet!,
     externalEffects: {
       committed: false,
@@ -1031,6 +1128,7 @@ export async function resolveHumanChoice(options: {
   taskId: string;
   inputPath: string;
   input?: Readable;
+  hostAttestations?: HostAttestationProvider;
 }) {
   const projectRoot = canonicalProjectRoot(options.projectRoot);
   const source = await readInputDocument(
@@ -1153,9 +1251,11 @@ export async function resolveHumanChoice(options: {
       const facts = readCurrentFacts(transitioned);
       const challenges = readChallenges(transitioned);
       const required = requiredChallengeObligationIds(contract, facts);
-      const covered = new Set(challenges.flatMap((item) => item.obligationIds));
-      const needsChallenge = required.some((id) => !covered.has(id));
-      const packet = needsChallenge
+      const pending = pendingChallengeObligationIds(required, challenges);
+      const needsChallenge = pending.length > 0;
+      const challengeAttestationAvailable = Boolean(options.hostAttestations?.attestChallenge);
+      const performChallenge = needsChallenge && challengeAttestationAvailable;
+      const packet = performChallenge
         ? challengeAuthoringPacket({
             task: transitioned.projection, contract, facts, challenges,
             requiredObligationIds: required,
@@ -1163,8 +1263,9 @@ export async function resolveHumanChoice(options: {
         : handoffAuthoringPacket({
             task: transitioned.projection, contract, facts, challenges,
             requiredObligationIds: required,
+            challengeAttestationAvailable,
           });
-      hostAction = challengeHostAction(transitioned.taskId, needsChallenge, packet);
+      hostAction = challengeHostAction(transitioned.taskId, performChallenge, packet);
     }
   }
   return {
@@ -1334,6 +1435,7 @@ export function explainDelegationTask(options: {
   projectRoot: string;
   taskId: string;
   section?: string;
+  hostAttestations?: HostAttestationProvider;
 }) {
   const task = loadTask(options.projectRoot, options.taskId);
   const section = options.section ?? 'all';
@@ -1346,6 +1448,22 @@ export function explainDelegationTask(options: {
   };
   if (section === 'contract') {
     return { ...common, contract: readContract(task), baseline: summarizeWorktree(readBaseline(task)) };
+  }
+  if (section === 'baseline') {
+    return {
+      ...common,
+      baseline: readBaseline(task),
+      baselineVerification: readBaselineVerification(task),
+    };
+  }
+  if (section === 'action') {
+    return {
+      ...common,
+      hostAction: currentTaskHostAction(
+        task,
+        Boolean(options.hostAttestations?.attestChallenge),
+      ),
+    };
   }
   if (section === 'plan') return { ...common, plan: readContract(task).plan };
   if (section === 'attempts') {
@@ -1382,7 +1500,7 @@ export function explainDelegationTask(options: {
   }
   if (section === 'events') return { ...common, events: task.events };
   if (section !== 'all') {
-    throw usageError('Invalid explain section; use contract, plan, attempts, challenge, revision, handoff, decision, events, or all.');
+    throw usageError('Invalid explain section; use action, contract, baseline, plan, attempts, challenge, revision, handoff, decision, events, or all.');
   }
   return {
     ...common,
@@ -1399,8 +1517,130 @@ export function explainDelegationTask(options: {
   };
 }
 
+function currentTaskHostAction(task: LoadedTask, challengeAttestationAvailable = false) {
+  const contract = readContract(task);
+  if (task.projection.pendingResolution) {
+    const currentAttempt = task.projection.attempts.find((attempt) =>
+      attempt.attemptId === task.projection.currentAttemptId)!;
+    const facts = currentAttempt.factCollectionId
+      ? readFacts(task, currentAttempt.attemptId, currentAttempt.factCollectionId)
+      : undefined;
+    return resolutionHostAction(task.taskId, resolutionAuthoringPacket({
+      task: task.projection,
+      contract,
+      ...(facts ? { facts } : {}),
+    }));
+  }
+  if (task.projection.decisionStatus !== 'pending') return null;
+  const currentAttempt = task.projection.attempts.find((attempt) =>
+    attempt.attemptId === task.projection.currentAttemptId)!;
+  if (!currentAttempt.factCollectionId) return preparedHostAction(task.taskId);
+  const facts = readFacts(task, currentAttempt.attemptId, currentAttempt.factCollectionId);
+  const challenges = readChallenges(task);
+  if (task.projection.currentHandoffId) {
+    const handoff = readCurrentHandoff(task);
+    const evaluation = readJsonArtifact<HandoffEvaluation>(
+      taskArtifactPath(task.taskDirectory, handoffEvaluationPath(handoff.handoffId)),
+      'handoff evaluation',
+    );
+    return handoffHostAction(
+      evaluation.status,
+      task.taskId,
+      decisionAuthoringPacket({
+        task: task.projection,
+        contract,
+        facts,
+        challenges,
+        handoff,
+        evaluation,
+      }),
+    );
+  }
+  const disposition = currentAttempt.evidenceDispositionPath
+    ? readJsonArtifact<EvidenceDisposition>(
+        resolve(task.projectRoot, currentAttempt.evidenceDispositionPath),
+        `Evidence disposition for ${currentAttempt.attemptId}`,
+      )
+    : undefined;
+  const required = requiredChallengeObligationIds(contract, facts);
+  const pending = pendingChallengeObligationIds(required, challenges);
+  if (disposition) {
+    const packet = disposition.route === 'revise-verification'
+      ? verificationRevisionAuthoringPacket({ task: task.projection, contract, facts })
+      : disposition.route === 'challenge'
+        ? challengeAttestationAvailable
+          ? challengeAuthoringPacket({
+              task: task.projection, contract, facts, challenges,
+              requiredObligationIds: required,
+            })
+          : handoffAuthoringPacket({
+              task: task.projection, contract, facts, challenges,
+              requiredObligationIds: required,
+              challengeAttestationAvailable,
+            })
+        : disposition.route === 'handoff'
+          ? handoffAuthoringPacket({
+              task: task.projection, contract, facts, challenges,
+              requiredObligationIds: required,
+              challengeAttestationAvailable,
+            })
+          : undefined;
+    if (disposition.route === 'challenge' && !challengeAttestationAvailable && packet) {
+      packet.outstandingObligations.push(...disposition.entries.map((entry) => ({
+        code: 'direct-human-review-required',
+        targetId: entry.definitionId,
+        requiredAction: 'The current Host cannot attest a fresh challenger context. Preserve this unresolved diagnosis in the handoff and ask the developer to inspect the stated failure hypothesis directly.',
+      })));
+    }
+    return diagnosisHostAction(
+      disposition.route,
+      task.taskId,
+      packet,
+      challengeAttestationAvailable,
+    );
+  }
+  return collectedHostAction({
+    facts,
+    taskId: task.taskId,
+    diagnosisPacket: diagnosisAuthoringPacket({ task: task.projection, contract, facts }),
+    challengePacket: challengeAuthoringPacket({
+      task: task.projection, contract, facts, challenges,
+      requiredObligationIds: required,
+    }),
+    handoffPacket: handoffAuthoringPacket({
+      task: task.projection, contract, facts, challenges,
+      requiredObligationIds: required,
+      challengeAttestationAvailable,
+    }),
+    pendingChallengeObligationIds: pending,
+    challengeAttestationAvailable,
+  });
+}
+
 export function readDelegationTask(projectRoot: string, taskId: string): LoadedTask {
   return loadTask(projectRoot, taskId);
+}
+
+function prepareReplayResult(task: LoadedTask, challengeAttestationAvailable: boolean) {
+  const contract = readContract(task);
+  return {
+    protocol: DELEGATION_PROTOCOL,
+    schemaVersion: DELEGATION_SCHEMA_VERSION,
+    status: 'prepare-replayed' as const,
+    taskId: task.taskId,
+    task: compactTask(task.projection),
+    taskContract: contractWorkPacket(contract),
+    baseline: summarizeWorktree(readBaseline(task)),
+    baselineVerification: summarizeBaselineVerification(readBaselineVerification(task)),
+    details: {
+      taskPath: task.taskPath,
+      eventsPath: task.eventsPath,
+      explain: { taskId: task.taskId, section: 'contract' as const },
+    },
+    taskCreated: false,
+    replayed: true,
+    hostAction: currentTaskHostAction(task, challengeAttestationAvailable),
+  };
 }
 
 async function readInputDocument<Schema extends Parameters<typeof parseArtifact>[0]>(
@@ -1530,6 +1770,16 @@ function readEvidenceDispositions(task: LoadedTask): EvidenceDisposition[] {
   });
 }
 
+function readCurrentEvidenceDisposition(task: LoadedTask): EvidenceDisposition | undefined {
+  const current = task.projection.attempts.find((attempt) =>
+    attempt.attemptId === task.projection.currentAttemptId);
+  if (!current?.evidenceDispositionPath) return undefined;
+  return readJsonArtifact<EvidenceDisposition>(
+    resolve(task.projectRoot, current.evidenceDispositionPath),
+    `Evidence disposition for ${current.attemptId}`,
+  );
+}
+
 function readCurrentHandoff(task: LoadedTask): CognitiveHandoff {
   if (!task.projection.currentHandoffId) throw usageError('Task has no evaluated Cognitive Handoff.');
   const handoff = readJsonArtifact<CognitiveHandoff>(
@@ -1598,50 +1848,95 @@ function buildDecisionPacket(
   evaluation: HandoffEvaluation,
   decision?: HumanDecision,
 ): DecisionPacket {
+  const comparisonByDefinition = new Map(facts.checkComparisons.map((item) =>
+    [item.definitionId, item.relation]));
   return {
     protocol: DELEGATION_PROTOCOL,
     schemaVersion: DELEGATION_SCHEMA_VERSION,
     authority: contract.authority,
-    contract,
-    facts,
-    evidenceDispositions,
-    challenges,
-    handoff,
-    evaluation,
-    review: {
-      decision: {
-        desiredOutcome: contract.understanding.desiredOutcome.value,
-        recommendation: handoff.recommendation,
-        conditionStatuses: handoff.conditionConclusions.map((item) => ({
-          conditionId: item.conditionId,
-          status: item.status,
-        })),
-        attentionIds: evaluation.attention.map((item) => item.id),
-      },
-      conditions: contract.adoptionConditions.map((condition) => ({
-        condition,
-        conclusion: handoff.conditionConclusions.find((item) =>
-          item.conditionId === condition.id)!,
-        obligations: condition.evidenceObligations.map((obligation) => ({
-          obligation,
-          conclusion: handoff.obligationConclusions.find((item) =>
-            item.obligationId === obligation.id)!,
-          challenges: challenges.filter((item) =>
-            item.obligationIds.includes(obligation.id)),
-        })),
-        reviewQuestions: handoff.reviewQuestions.filter((item) =>
-          item.conditionIds.includes(condition.id)),
-      })),
-      facts: {
-        changedFiles: facts.changedFiles,
-        checks: facts.checks,
-        checkComparisons: facts.checkComparisons,
-        verifierMutations: facts.verifierMutations,
-        checkInducedChanges: facts.checkInducedChanges,
-        evidenceDispositions,
-      },
+    semanticContract: {
+      semanticContractId: contract.semanticContractId,
+      effectiveContractId: contract.effectiveContractId,
+      desiredOutcome: contract.understanding.desiredOutcome.value,
+      constraints: contract.understanding.constraints.map((item) => item.value),
+      nonGoals: contract.understanding.nonGoals.map((item) => item.value),
+      focusPaths: contract.understanding.focus.map((item) => item.value),
     },
-    ...(decision ? { decision } : {}),
+    decision: {
+      recommendation: handoff.recommendation,
+      adoption: evaluation.adoption,
+      ...(decision ? { humanDecision: decision } : {}),
+    },
+    systemMeaning: {
+      summary: handoff.summary,
+      importantSystemEffects: handoff.importantSystemEffects,
+      residualUnknowns: handoff.residualUnknowns,
+    },
+    conditions: contract.adoptionConditions.map((condition) => ({
+      id: condition.id,
+      key: condition.key,
+      statement: condition.statement,
+      criticality: condition.criticality,
+      conclusion: handoff.conditionConclusions.find((item) =>
+        item.conditionId === condition.id)!,
+      obligations: condition.evidenceObligations.map((obligation) => ({
+        id: obligation.id,
+        key: obligation.key,
+        statement: obligation.statement,
+        failureHypothesis: obligation.failureHypothesis,
+        conclusion: handoff.obligationConclusions.find((item) =>
+          item.obligationId === obligation.id)!,
+        challengeIds: challenges
+          .filter((item) => item.obligationIds.includes(obligation.id))
+          .map((item) => item.id),
+      })),
+    })),
+    attention: evaluation.attention,
+    reviewQuestions: handoff.reviewQuestions,
+    runtimeFacts: {
+      attemptId: facts.attemptId,
+      factCollectionId: facts.factCollectionId,
+      changeFingerprint: facts.changeFingerprint,
+      changedFiles: facts.changedFiles.map((file) => ({
+        id: file.id,
+        path: file.path,
+        ...(file.previousPath ? { previousPath: file.previousPath } : {}),
+        operation: file.operation,
+        representation: file.representation,
+      })),
+      checks: facts.checks.map((check) => ({
+        verifierId: check.verifierId,
+        definitionId: check.definitionId,
+        argv: check.argv,
+        latestAttempt: latestCheckAttempt(check),
+        attemptCount: check.attempts.length,
+        baselineRelation: comparisonByDefinition.get(check.definitionId)!,
+      })),
+      verifierMutations: facts.verifierMutations,
+      checkInducedChanges: facts.checkInducedChanges.map((file) => ({
+        id: file.id, path: file.path, operation: file.operation,
+      })),
+    },
+    evidenceJudgments: {
+      dispositions: evidenceDispositions.map((disposition) => ({
+        dispositionId: disposition.dispositionId,
+        attemptId: disposition.attemptId,
+        semanticImpact: disposition.semanticImpact,
+        proposedRoute: disposition.proposedRoute,
+        routeRationale: disposition.routeRationale,
+        route: disposition.route,
+        entries: disposition.entries,
+      })),
+      challenges: challenges.map((challenge) => ({
+        id: challenge.id,
+        obligationIds: challenge.obligationIds,
+        conditionIds: challenge.conditionIds,
+        independence: challenge.independence,
+        outcome: challenge.outcome,
+        conclusion: challenge.conclusion,
+      })),
+    },
+    detailSections: ['contract', 'attempts', 'challenge', 'handoff', 'events'],
   };
 }
 
@@ -1657,7 +1952,7 @@ async function staleHandoffResult(
     factBundle: facts,
     currentWorktreeFingerprint: currentFingerprint,
     challenges: [],
-    evidenceDispositions: readEvidenceDispositions(task),
+    currentEvidenceDisposition: readCurrentEvidenceDisposition(task),
     hostPolicyEvaluations: task.projection.hostPolicyEvaluations,
     deliveryExhausted: task.projection.deliveryStatus === 'exhausted',
     verificationRevised: task.projection.verificationRevised,
@@ -1741,7 +2036,7 @@ function validateTimeoutRetries(
     if (!definition || !previous) throw usageError(`Unknown frozen check ${retry.checkId}.`);
     assertCheckTimeout(retry.timeoutMs, `Retry timeout for ${retry.checkId}`);
     const latest = latestCheckAttempt(previous);
-    if (!latest.timedOut || latest.status !== 'unavailable') {
+    if (latest.termination.kind !== 'timeout' || latest.status !== 'unavailable') {
       throw usageError(`Check ${retry.checkId} can retry only after its latest attempt timed out.`);
     }
     if (retry.timeoutMs <= latest.timeoutMs) {
@@ -1870,38 +2165,33 @@ function validateEvidenceDispositionInput(
       throw inputError(`Evidence disposition entry ${index} proposes code changes without classifying an implementation cause.`);
     }
   }
-}
-
-function evidenceDispositionRoute(
-  source: EvidenceDispositionDocument,
-  contract: TaskContract,
-): EvidenceDisposition['route'] {
-  if (source.semanticImpact === 'material') return 'ask-human';
-  if (source.entries.some((entry) => entry.cause === 'implementation')) {
-    return 'repair-implementation';
+  if (source.semanticImpact === 'material') {
+    if (source.proposedRoute !== 'ask-human') {
+      throw inputError('Material semantic impact requires the explicit ask-human route.');
+    }
+    return;
   }
-  const criticalVerifierIds = new Set(contract.adoptionConditions
-    .filter((condition) => condition.criticality === 'adoption-critical')
-    .flatMap((condition) => condition.evidenceObligations)
-    .flatMap((obligation) => obligation.strategies)
-    .flatMap((strategy) => strategy.kind === 'runtime-check' ? strategy.verifierIds : []));
-  const verifierByDefinition = new Map(contract.verificationPlan.mode === 'checks'
-    ? contract.verificationPlan.definitions.map((definition) =>
-        [definition.definitionId, definition.verifierId]) : []);
-  if (source.entries.some((entry) =>
-    entry.cause === 'verification'
-    && criticalVerifierIds.has(verifierByDefinition.get(entry.definitionId)!))) {
-    return 'ask-human';
+  const compatibleRoutes = {
+    implementation: new Set(['repair-implementation', 'handoff']),
+    environment: new Set(['revise-verification', 'handoff']),
+    verification: new Set(['revise-verification', 'handoff']),
+    unknown: new Set(['challenge', 'handoff', 'ask-human']),
+  } satisfies Record<EvidenceDispositionDocument['entries'][number]['cause'], Set<string>>;
+  const hasImplementationCause = source.entries.some((entry) => entry.cause === 'implementation');
+  const incompatible = source.entries.filter((entry) => {
+    if (source.proposedRoute === 'repair-implementation'
+      && hasImplementationCause
+      && ['environment', 'verification'].includes(entry.cause)) {
+      return false;
+    }
+    return !compatibleRoutes[entry.cause].has(source.proposedRoute);
+  });
+  if (incompatible.length) {
+    throw inputError(
+      `Proposed route ${source.proposedRoute} is incompatible with declared cause(s): `
+      + unique(incompatible.map((entry) => entry.cause)).join(', ') + '.',
+    );
   }
-  if (source.entries.some((entry) => entry.cause === 'verification')) {
-    return 'revise-verification';
-  }
-  if (source.entries.some((entry) =>
-    entry.cause === 'unknown'
-    && criticalVerifierIds.has(verifierByDefinition.get(entry.definitionId)!))) {
-    return 'challenge';
-  }
-  return 'handoff';
 }
 
 function requiredChallengeObligationIds(contract: TaskContract, facts: FactBundle): string[] {
@@ -1924,6 +2214,14 @@ function requiredChallengeObligationIds(contract: TaskContract, facts: FactBundl
     }))).sort();
 }
 
+function pendingChallengeObligationIds(
+  requiredObligationIds: string[],
+  challenges: IndependentChallenge[],
+): string[] {
+  const covered = new Set(challenges.flatMap((challenge) => challenge.obligationIds));
+  return requiredObligationIds.filter((id) => !covered.has(id));
+}
+
 function attemptOutcomeFingerprint(facts: FactBundle): string {
   return stableFingerprint({
     changeFingerprint: facts.changeFingerprint,
@@ -1932,8 +2230,8 @@ function attemptOutcomeFingerprint(facts: FactBundle): string {
       return {
         definitionId: check.definitionId,
         status: latest.status,
-        timedOut: latest.timedOut,
-        outputDigest: latest.outputDigest,
+        termination: latest.termination,
+        outcomeFingerprint: latest.outcomeFingerprint,
       };
     }),
   });
@@ -1951,13 +2249,28 @@ function compactCheckFact(check: CheckFact) {
     verifierId: check.verifierId,
     definitionId: check.definitionId,
     status: latest.status,
-    exitCode: latest.exitCode,
-    timedOut: latest.timedOut,
+    termination: latest.termination,
     timeoutMs: latest.timeoutMs,
     attemptCount: check.attempts.length,
     ...(latest.reason ? { reason: latest.reason } : {}),
     stdout: { byteLength: latest.stdout.byteLength, truncated: latest.stdout.truncated, ...(latest.stdout.logPath ? { logPath: latest.stdout.logPath } : {}) },
     stderr: { byteLength: latest.stderr.byteLength, truncated: latest.stderr.truncated, ...(latest.stderr.logPath ? { logPath: latest.stderr.logPath } : {}) },
+  };
+}
+
+function summarizeBaselineVerification(fact: BaselineVerificationFact) {
+  return {
+    fingerprint: fact.fingerprint,
+    capturedAt: fact.capturedAt,
+    checkInducedChanges: fact.checkInducedChanges.map((file) => ({
+      path: file.path,
+      operation: file.operation,
+    })),
+    checks: fact.checks.map((check) => ({
+      definitionId: check.definitionId,
+      mode: check.mode,
+      observation: check.observation ? compactCheckFact(check.observation) : null,
+    })),
   };
 }
 

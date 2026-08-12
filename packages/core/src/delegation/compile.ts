@@ -604,7 +604,7 @@ function validateObligationStrategies(
       continue;
     }
     if (candidate.kind === 'runtime-check') {
-      rejectExtraKeys(candidate, ['kind', 'checkKeys', 'expectedObservation'], itemPath, issues);
+      rejectExtraKeys(candidate, ['kind', 'checkKeys'], itemPath, issues);
       const keys = stableIdArray(candidate.checkKeys, `${itemPath}.checkKeys`, issues);
       if (!keys.length) issues.push(issue('runtime-check-strategy-empty', `${itemPath}.checkKeys`, 'Runtime-check strategy must select at least one check.'));
       const verifierIds = keys.flatMap((key) => {
@@ -615,11 +615,8 @@ function validateObligationStrategies(
         }
         return [check.verifierId];
       });
-      if (candidate.expectedObservation !== 'passed') {
-        issues.push(issue('runtime-check-observation-invalid', `${itemPath}.expectedObservation`, 'Runtime-check expected observation must be passed.'));
-      }
       if (issues.length === before) output.push({
-        kind: 'runtime-check', verifierIds: sortedUnique(verifierIds), expectedObservation: 'passed',
+        kind: 'runtime-check', verifierIds: sortedUnique(verifierIds),
       });
       continue;
     }

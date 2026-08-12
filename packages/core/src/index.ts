@@ -95,7 +95,6 @@ export type {
   HumanDecision,
   HumanDecisionAction,
   HumanDecisionException,
-  DecisionReviewLayers,
   RecommendationAction,
   ResidualUnknown,
   ReviewQuestion,

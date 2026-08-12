@@ -22,12 +22,18 @@ test('host actions route the initial lifecycle with executable task argv', () =>
   assert.equal(diagnosisHostAction('repair-implementation', 'task-id').kind, 'implement-and-collect');
   assert.equal(diagnosisHostAction('challenge', 'task-id', packet('challenge')).kind, 'perform-independent-challenge');
   assert.equal(diagnosisHostAction(
+    'challenge', 'task-id', packet('handoff'), false,
+  ).kind, 'author-handoff');
+  assert.equal(diagnosisHostAction(
     'revise-verification', 'task-id', packet('verification-revision'),
   ).kind, 'revise-verification');
   assert.equal(diagnosisHostAction('handoff', 'task-id', packet('handoff')).kind, 'author-handoff');
   const resolution = diagnosisHostAction('ask-human', 'task-id', packet('resolution'));
   assert.equal(resolution.kind, 'resolve-evidence-decision');
   assert.deepEqual(resolution.command?.argv.slice(0, 4), ['stetra', 'change', 'resolve', '.']);
+  assert.deepEqual(resolution.inputBinding, {
+    transport: 'stdin', source: 'authoringPacket.draft', serialization: 'json', execution: 'one-shot',
+  });
   assert.equal(staleFactsHostAction('task-id').kind, 'recollect-stale-facts');
   assert.equal(handoffHostAction('needs-attention', 'task-id', packet('decision')).kind, 'review-and-decide');
   assert.equal(resolutionHostAction('task-id', packet('resolution')).authoringPacket?.inputKind, 'resolution');
@@ -41,23 +47,29 @@ test('collection routes timeout, diagnosis, required challenge, and ordinary han
     diagnosisPacket: packet('diagnosis'),
     challengePacket: packet('challenge'),
     handoffPacket: packet('handoff'),
+    challengeAttestationAvailable: true,
   };
   assert.equal(collectedHostAction({
-    ...common, requiredChallengeObligationIds: [],
+    ...common, pendingChallengeObligationIds: [],
   }).kind, 'author-handoff');
   assert.equal(collectedHostAction({
-    ...common, requiredChallengeObligationIds: ['obligation:test'],
+    ...common, pendingChallengeObligationIds: ['obligation:test'],
   }).kind, 'perform-independent-challenge');
+  assert.equal(collectedHostAction({
+    ...common,
+    pendingChallengeObligationIds: ['obligation:test'],
+    challengeAttestationAvailable: false,
+  }).kind, 'author-handoff');
 
   const failed = factFixture('failed');
   assert.equal(collectedHostAction({
-    ...common, facts: failed, requiredChallengeObligationIds: [],
+    ...common, facts: failed, pendingChallengeObligationIds: [],
   }).kind, 'diagnose-collected-evidence');
 
   const timedOut = factFixture('unavailable');
-  timedOut.checks[0].attempts[0].timedOut = true;
+  timedOut.checks[0].attempts[0].termination = { kind: 'timeout' };
   const retry = collectedHostAction({
-    ...common, facts: timedOut, requiredChallengeObligationIds: [],
+    ...common, facts: timedOut, pendingChallengeObligationIds: [],
   });
   assert.equal(retry.kind, 'retry-timed-out-check');
   assert.match(retry.command!.argv.join(' '), /integer-greater-than-1000/);
@@ -76,8 +88,12 @@ function factFixture(status: 'passed' | 'failed' | 'unavailable'): FactBundle {
     attempts: [{
       attempt: 1, startedAt: '2026-08-10T00:00:00.000Z', durationMs: 3,
       timeoutMs: 1000, status,
-      exitCode: status === 'passed' ? 0 : status === 'failed' ? 1 : null,
-      timedOut: false, outputDigest: digest('o'), stdout: stream('2'), stderr: stream('3'),
+      termination: status === 'passed'
+        ? { kind: 'exit' as const, exitCode: 0 }
+        : status === 'failed'
+          ? { kind: 'exit' as const, exitCode: 1 }
+          : { kind: 'spawn-error' as const, code: 'ENOENT' },
+      outcomeFingerprint: digest('o'), stdout: stream('2'), stderr: stream('3'),
     }],
   };
   return {
@@ -108,7 +124,21 @@ function packet(inputKind: AuthoringPacket['inputKind']): AuthoringPacket {
       taskId: 'task-id', revision: 1, effectiveContractId: digest('e'),
       attemptId: 'attempt:1',
     },
+    semanticContext: {
+      exactDeveloperEvent: {
+        authority: 'human-event',
+        event: {
+          id: 'human:test', kind: 'task', content: 'Exact developer request.',
+          contentFingerprint: digest('h'),
+        },
+      },
+      agentInterpretation: {
+        authority: 'agent-judgment', desiredOutcome: 'Interpreted outcome.',
+        constraints: [], nonGoals: [], focus: [],
+      },
+    },
     draft: {},
+    fieldRequirements: [],
     referenceCatalog: {
       conditions: [], obligations: [], checks: [], changedFiles: [], challenges: [], attention: [],
     },

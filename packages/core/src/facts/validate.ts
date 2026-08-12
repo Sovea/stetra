@@ -271,20 +271,41 @@ function validateCheckAttempts(attempts: CheckAttemptFact[], checkId: string): v
       || !Number.isInteger(attempt.timeoutMs)
       || attempt.timeoutMs <= 0
       || !['passed', 'failed', 'unavailable'].includes(attempt.status)
-      || (attempt.exitCode !== null && !Number.isInteger(attempt.exitCode))
-      || typeof attempt.timedOut !== 'boolean'
-      || !isSha256(attempt.outputDigest)) {
+      || !validTermination(attempt.termination)
+      || !validStatusForTermination(attempt.status, attempt.termination)
+      || !isSha256(attempt.outcomeFingerprint)) {
       throw new Error(`evaluateHandoff check ${checkId} attempt history is invalid.`);
     }
     validateStream(attempt.stdout, checkId);
     validateStream(attempt.stderr, checkId);
     if (index > 0) {
       const previous = attempts[index - 1];
-      if (!previous.timedOut || attempt.timeoutMs <= previous.timeoutMs) {
+      if (previous.termination.kind !== 'timeout' || attempt.timeoutMs <= previous.timeoutMs) {
         throw new Error(`evaluateHandoff check ${checkId} retry is not a monotonic timeout recovery.`);
       }
     }
   }
+}
+
+function validTermination(value: CheckAttemptFact['termination']): boolean {
+  if (!value || typeof value !== 'object') return false;
+  if (value.kind === 'exit') return Number.isInteger(value.exitCode);
+  if (value.kind === 'signal') return isNonEmptyString(value.signal);
+  if (value.kind === 'timeout') {
+    return value.signal === undefined || isNonEmptyString(value.signal);
+  }
+  return value.kind === 'spawn-error'
+    && (value.code === undefined || isNonEmptyString(value.code));
+}
+
+function validStatusForTermination(
+  status: CheckAttemptFact['status'],
+  termination: CheckAttemptFact['termination'],
+): boolean {
+  if (termination.kind === 'exit') {
+    return termination.exitCode === 0 ? status === 'passed' : status === 'failed';
+  }
+  return status === 'unavailable';
 }
 
 function validateStream(stream: CheckAttemptFact['stdout'], checkId: string): void {

@@ -32,6 +32,7 @@ export async function runFrozenChecks(input: {
   projectRoot: string;
   executions: FrozenCheckExecution[];
   outputDirectory: string;
+  recordedOutputDirectory?: string;
 }): Promise<CheckFact[]> {
   const results: CheckFact[] = [];
   for (const execution of input.executions) {
@@ -39,6 +40,7 @@ export async function runFrozenChecks(input: {
       projectRoot: input.projectRoot,
       ...execution,
       outputDirectory: input.outputDirectory,
+      recordedOutputDirectory: input.recordedOutputDirectory ?? input.outputDirectory,
     }));
   }
   return results;
@@ -50,6 +52,7 @@ async function runFrozenCheck(input: {
   timeoutMs: number;
   previousAttempts?: CheckAttemptFact[];
   outputDirectory: string;
+  recordedOutputDirectory: string;
 }): Promise<CheckFact> {
   const { definition } = input;
   if (!Number.isSafeInteger(input.timeoutMs) || input.timeoutMs < 1) {
@@ -57,7 +60,7 @@ async function runFrozenCheck(input: {
   }
   const previousAttempts = input.previousAttempts ?? [];
   const prior = previousAttempts.at(-1);
-  if (prior && (!prior.timedOut || input.timeoutMs <= prior.timeoutMs)) {
+  if (prior && (prior.termination.kind !== 'timeout' || input.timeoutMs <= prior.timeoutMs)) {
     throw new Error(
       `Check ${definition.definitionId} retry requires a timeout greater than the prior timed-out attempt.`,
     );
@@ -66,6 +69,8 @@ async function runFrozenCheck(input: {
   const logStem = `check-${sha256(definition.definitionId).slice(-16)}-attempt-${attemptNumber}`;
   const stdoutPath = resolve(input.outputDirectory, `${logStem}.stdout.log`);
   const stderrPath = resolve(input.outputDirectory, `${logStem}.stderr.log`);
+  const recordedStdoutPath = resolve(input.recordedOutputDirectory, `${logStem}.stdout.log`);
+  const recordedStderrPath = resolve(input.recordedOutputDirectory, `${logStem}.stderr.log`);
   const stdout = new BoundedLogWriter(stdoutPath, MAX_CHECK_LOG_BYTES);
   const stderr = new BoundedLogWriter(stderrPath, MAX_CHECK_LOG_BYTES);
   const stdoutHash = createHash('sha256');
@@ -91,24 +96,34 @@ async function runFrozenCheck(input: {
   const stdoutFact = stdout.fact(
     `sha256:${stdoutHash.digest('hex')}`,
     input.projectRoot,
+    recordedStdoutPath,
   );
   const stderrFact = stderr.fact(
     `sha256:${stderrHash.digest('hex')}`,
     input.projectRoot,
+    recordedStderrPath,
   );
-  const status: CheckAttemptFact['status'] = result.exitCode === null
-    ? 'unavailable'
-    : result.exitCode === 0 && !result.failed
-      ? 'passed'
-      : 'failed';
-  const reason = result.timedOut
-    ? `Check timed out after ${input.timeoutMs} ms.`
+  const termination: CheckAttemptFact['termination'] = result.timedOut
+    ? { kind: 'timeout', ...(result.signal ? { signal: result.signal } : {}) }
     : result.executionError
+      ? { kind: 'spawn-error', ...(result.code ? { code: result.code } : {}) }
+      : result.signal
+        ? { kind: 'signal', signal: result.signal }
+        : result.exitCode !== null
+          ? { kind: 'exit', exitCode: result.exitCode }
+          : noTerminationResult(definition.definitionId);
+  const status: CheckAttemptFact['status'] = termination.kind !== 'exit'
+    ? 'unavailable'
+    : termination.exitCode === 0 && !result.failed
+      ? 'passed' : 'failed';
+  const reason = termination.kind === 'timeout'
+    ? `Check timed out after ${input.timeoutMs} ms.`
+    : termination.kind === 'spawn-error'
       ? `Check could not start: ${result.message ?? result.code ?? 'unknown execution error'}`
-      : status === 'unavailable'
-        ? `Check did not produce an exit code${result.signal ? ` (${result.signal})` : ''}.`
+      : termination.kind === 'signal'
+        ? `Check terminated by signal ${termination.signal}.`
         : status === 'failed'
-          ? `Check exited with ${result.exitCode ?? result.signal ?? 'unknown status'}.`
+          ? `Check exited with ${termination.exitCode}.`
           : undefined;
   const attempt: CheckAttemptFact = {
     attempt: attemptNumber,
@@ -116,15 +131,12 @@ async function runFrozenCheck(input: {
     durationMs,
     timeoutMs: input.timeoutMs,
     status,
-    exitCode: Number.isInteger(result.exitCode) ? result.exitCode : null,
-    timedOut: result.timedOut,
-    outputDigest: stableFingerprint({
+    termination,
+    outcomeFingerprint: stableFingerprint({
       attempt: attemptNumber,
       timeoutMs: input.timeoutMs,
       status,
-      exitCode: Number.isInteger(result.exitCode) ? result.exitCode : null,
-      signal: result.signal,
-      timedOut: result.timedOut,
+      termination,
       stdoutDigest: stdoutFact.digest,
       stderrDigest: stderrFact.digest,
     }),
@@ -146,6 +158,10 @@ async function runFrozenCheck(input: {
       attempt,
     ],
   };
+}
+
+function noTerminationResult(definitionId: string): never {
+  throw new Error(`Check ${definitionId} returned no exit, signal, timeout, or spawn error.`);
 }
 
 class BoundedLogWriter extends Writable {
@@ -191,14 +207,14 @@ class BoundedLogWriter extends Writable {
     }
   }
 
-  fact(digest: string, projectRoot: string): CheckStreamFact {
+  fact(digest: string, projectRoot: string, recordedPath: string): CheckStreamFact {
     return {
       digest,
       byteLength: this.observedBytes,
       persistedBytes: this.writtenBytes,
       truncated: this.writtenBytes < this.observedBytes,
       ...(this.writtenBytes
-        ? { logPath: relative(projectRoot, this.path).replace(/\\/g, '/') }
+        ? { logPath: relative(projectRoot, recordedPath).replace(/\\/g, '/') }
         : {}),
     };
   }

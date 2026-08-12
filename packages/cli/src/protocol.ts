@@ -11,6 +11,12 @@ export function stableFingerprint(value: unknown): string {
   return sha256(JSON.stringify(canonicalize(value)));
 }
 
+export function taskIdForPrepareRequest(prepareRequestId: string): string {
+  const digest = sha256(`prepare-request:${prepareRequestId}`).slice('sha256:'.length);
+  const variant = ((Number.parseInt(digest[16], 16) & 0x3) | 0x8).toString(16);
+  return `${digest.slice(0, 8)}-${digest.slice(8, 12)}-4${digest.slice(13, 16)}-${variant}${digest.slice(17, 20)}-${digest.slice(20, 32)}`;
+}
+
 function canonicalize(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(canonicalize);
   if (!value || typeof value !== 'object') return value;

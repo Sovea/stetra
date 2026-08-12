@@ -82,6 +82,7 @@ export function registerChangeCommands(
         productVersion,
         ...(options.timeoutMs === undefined ? {} : { timeoutMs: options.timeoutMs }),
         retryChecks: options.retryCheck.map(parseRetryCheck),
+        hostAttestations: environment.runtime.hostAttestations,
       }), command);
     });
 
@@ -94,15 +95,16 @@ export function registerChangeCommands(
 
   change
     .command('explain')
-    .description('Inspect contract, plan, Attempts, challenges, handoff, decision, or events')
+    .description('Regenerate the current action or inspect durable workflow artifacts')
     .argument('[project-root]', 'Git worktree root', '.')
     .requiredOption('--task <id>', 'task ID returned by prepare')
-    .option('--section <name>', 'contract, plan, attempts, challenge, revision, handoff, decision, events, or all', 'all')
+    .option('--section <name>', 'action, contract, baseline, plan, attempts, challenge, revision, handoff, decision, events, or all', 'all')
     .action((projectRoot: string, options: ExplainOptions, command: Command) => {
       environment.emit('change explain', explainDelegationTask({
         projectRoot,
         taskId: options.task,
         section: options.section,
+        hostAttestations: environment.runtime.hostAttestations,
       }), command);
     });
 }

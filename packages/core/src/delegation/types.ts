@@ -54,7 +54,6 @@ export type EvidenceObligationStrategyInput =
   | {
       kind: 'runtime-check';
       checkKeys: string[];
-      expectedObservation: 'passed';
     }
   | {
       kind: 'repository-inspection';
@@ -175,7 +174,6 @@ export type EvidenceObligationStrategy =
   | {
       kind: 'runtime-check';
       verifierIds: string[];
-      expectedObservation: 'passed';
     }
   | {
       kind: 'repository-inspection';

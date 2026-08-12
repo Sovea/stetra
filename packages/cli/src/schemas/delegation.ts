@@ -2,6 +2,21 @@ import { z } from 'zod';
 
 import { DELEGATION_PROTOCOL, DELEGATION_SCHEMA_VERSION } from '../protocol.ts';
 
+export const EVIDENCE_SEMANTIC_IMPACTS = ['none', 'material'] as const;
+export const EVIDENCE_CAUSES = ['implementation', 'environment', 'verification', 'unknown'] as const;
+export const EVIDENCE_ROUTES = [
+  'repair-implementation',
+  'revise-verification',
+  'challenge',
+  'handoff',
+  'ask-human',
+] as const;
+export const CONCLUSION_STATUSES = ['supported', 'partial', 'contradicted', 'unknown'] as const;
+export const RECOMMENDATION_ACTIONS = ['accept', 'request-correction', 'reject', 'defer'] as const;
+export const HUMAN_DECISION_ACTIONS = ['accepted', 'correction-requested', 'rejected', 'deferred'] as const;
+export const VERIFICATION_REVISION_KINDS = ['execution-rebinding', 'verification-plan'] as const;
+export const HUMAN_RESOLUTION_ACTIONS = ['continue-current-contract', 'request-correction', 'abort'] as const;
+
 export const StableIdSchema = z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/);
 export const Sha256Schema = z.string().regex(/^sha256:[a-f0-9]{64}$/);
 export const NonEmptyStringSchema = z.string().trim().min(1);
@@ -70,7 +85,6 @@ const EvidenceObligationStrategySchema = z.discriminatedUnion('kind', [
   z.strictObject({
     kind: z.literal('runtime-check'),
     checkKeys: z.array(StableIdSchema).min(1),
-    expectedObservation: z.literal('passed'),
   }),
   z.strictObject({
     kind: z.literal('repository-inspection'),
@@ -109,6 +123,7 @@ const HostPolicyRequirementSchema = z.strictObject({
 export const DelegationPrepareDocumentSchema = z.strictObject({
   protocol: z.literal(DELEGATION_PROTOCOL),
   schemaVersion: z.literal(DELEGATION_SCHEMA_VERSION),
+  prepareRequestId: StableIdSchema,
   developerEvent: HumanEventInputSchema,
   task: z.strictObject({
     desiredOutcome: NonEmptyStringSchema,
@@ -132,10 +147,12 @@ export const DelegationPrepareDocumentSchema = z.strictObject({
 });
 
 export const EvidenceDispositionDocumentSchema = z.strictObject({
-  semanticImpact: z.enum(['none', 'material']),
+  semanticImpact: z.enum(EVIDENCE_SEMANTIC_IMPACTS),
+  proposedRoute: z.enum(EVIDENCE_ROUTES),
+  routeRationale: NonEmptyStringSchema,
   entries: z.array(z.strictObject({
     definitionId: Sha256Schema,
-    cause: z.enum(['implementation', 'environment', 'verification', 'unknown']),
+    cause: z.enum(EVIDENCE_CAUSES),
     diagnosis: NonEmptyStringSchema,
     falsificationAttempt: NonEmptyStringSchema,
     codeChangeCanAlterObservation: z.boolean(),
@@ -172,7 +189,7 @@ export const ChallengeDocumentSchema = z.strictObject({
   falsificationAttempt: NonEmptyStringSchema,
   supportingEvidence: z.array(ChallengeEvidenceItemSchema),
   counterEvidence: z.array(ChallengeEvidenceItemSchema),
-  outcome: z.enum(['supported', 'partial', 'contradicted', 'unknown']),
+  outcome: z.enum(CONCLUSION_STATUSES),
   conclusion: NonEmptyStringSchema,
 });
 
@@ -180,7 +197,7 @@ export const CognitiveHandoffDocumentSchema = z.strictObject({
   summary: NonEmptyStringSchema,
   obligationConclusions: z.array(z.strictObject({
     obligationId: StableIdSchema,
-    status: z.enum(['supported', 'partial', 'contradicted', 'unknown']),
+    status: z.enum(CONCLUSION_STATUSES),
     evidence: z.array(HandoffEvidenceReferenceSchema),
     falsificationAttempt: NonEmptyStringSchema,
     counterEvidence: z.array(HandoffEvidenceReferenceSchema),
@@ -188,7 +205,7 @@ export const CognitiveHandoffDocumentSchema = z.strictObject({
   })),
   conditionConclusions: z.array(z.strictObject({
     conditionId: StableIdSchema,
-    status: z.enum(['supported', 'partial', 'contradicted', 'unknown']),
+    status: z.enum(CONCLUSION_STATUSES),
     summary: NonEmptyStringSchema,
   })),
   importantSystemEffects: z.array(NonEmptyStringSchema),
@@ -208,7 +225,7 @@ export const CognitiveHandoffDocumentSchema = z.strictObject({
     evidence: z.array(HandoffEvidenceReferenceSchema),
   })),
   recommendation: z.strictObject({
-    action: z.enum(['accept', 'request-correction', 'reject', 'defer']),
+    action: z.enum(RECOMMENDATION_ACTIONS),
     rationale: NonEmptyStringSchema,
     caveats: z.array(NonEmptyStringSchema),
   }),
@@ -216,7 +233,7 @@ export const CognitiveHandoffDocumentSchema = z.strictObject({
 
 export const HumanDecisionDocumentSchema = z.strictObject({
   humanEvent: HumanEventInputSchema,
-  action: z.enum(['accepted', 'correction-requested', 'rejected', 'deferred']),
+  action: z.enum(HUMAN_DECISION_ACTIONS),
   reason: NonEmptyStringSchema,
   exceptions: z.array(z.strictObject({
     attentionId: StableIdSchema,
@@ -225,7 +242,7 @@ export const HumanDecisionDocumentSchema = z.strictObject({
 });
 
 export const VerificationRevisionDocumentSchema = z.strictObject({
-  kind: z.enum(['execution-rebinding', 'verification-plan']),
+  kind: z.enum(VERIFICATION_REVISION_KINDS),
   rationale: NonEmptyStringSchema,
   equivalenceClaim: NonEmptyStringSchema,
   checks: z.array(VerificationDefinitionSchema).optional(),
@@ -240,7 +257,7 @@ export const HumanResolutionDocumentSchema = z.strictObject({
     z.strictObject({ kind: z.literal('correction'), decisionId: StableIdSchema }),
     z.strictObject({ kind: z.literal('host-policy'), requirementId: StableIdSchema }),
   ]),
-  action: z.enum(['continue-current-contract', 'request-correction', 'abort']),
+  action: z.enum(HUMAN_RESOLUTION_ACTIONS),
   reason: NonEmptyStringSchema,
 });
 
@@ -281,6 +298,8 @@ export const TaskProjectionSchema = z.strictObject({
   protocol: z.literal(DELEGATION_PROTOCOL),
   schemaVersion: z.literal(DELEGATION_SCHEMA_VERSION),
   taskId: z.uuid(),
+  prepareRequestId: StableIdSchema,
+  prepareInputFingerprint: Sha256Schema,
   workflow: z.literal('cognitive-adoption'),
   projectRoot: NonEmptyStringSchema,
   createdAt: z.iso.datetime(),
