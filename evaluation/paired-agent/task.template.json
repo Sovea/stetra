@@ -1,6 +1,7 @@
 {
-  "protocol": "semantic-handoff-paired-evaluation",
+  "protocol": "cognitive-adoption-paired-evaluation",
   "schemaVersion": "1",
+  "registrationFingerprint": "sha256",
   "taskId": "task-kebab-case",
   "taskType": "bugfix",
   "registeredAt": "2026-08-03T00:00:00.000Z",
@@ -9,6 +10,19 @@
     "url": "repository-reference",
     "commit": "full-commit-sha",
     "submodulesFingerprint": null
+  },
+  "historicalReplay": {
+    "issueUrl": "https://github.com/owner/repository/issues/1",
+    "sealedOracleCommit": "full-commit-sha",
+    "sealedOracleUrl": "https://github.com/owner/repository/commit/full-commit-sha",
+    "oracleAccess": "evaluator-only-after-both-outputs-archived",
+    "publicSolutionMemoryRisk": {
+      "level": "low",
+      "rationale": "Why prior model exposure remains possible or unlikely."
+    },
+    "leakageControls": [
+      "Keep the issue discussion, merged change, and sealed fixture outside both Agent contexts."
+    ]
   },
   "taskPrompt": "Exact prompt shown in both conditions.",
   "interactionPolicy": {
@@ -21,22 +35,77 @@
     "ownership": ["State or architecture owner or not-applicable."],
     "failureRecovery": ["Failure/recovery entry point or not-applicable."]
   },
+  "coverageMatrix": {
+    "requirements": [
+      {
+        "id": "requirement:behavior-boundary",
+        "dimension": "behavior",
+        "importance": "adoption-critical",
+        "statement": "A bounded behavior or invariant the evaluator must establish."
+      }
+    ],
+    "coverage": [
+      {
+        "requirementId": "requirement:behavior-boundary",
+        "sealedAssertionIds": ["sealed-behavior"],
+        "negativeControlIds": ["mutant:plausible-wrong-fix"],
+        "manualReviewRequired": false
+      }
+    ],
+    "negativeControls": [
+      {
+        "id": "mutant:plausible-wrong-fix",
+        "description": "A plausible implementation that appears reasonable but violates the registered requirement.",
+        "expectedRejectedBy": ["sealed-behavior"],
+        "materializationFingerprint": "sha256",
+        "visibility": "evaluator-only-after-both-outputs-archived"
+      }
+    ],
+    "visibility": "evaluator-only-after-both-outputs-archived"
+  },
   "compatibilityOrOwnershipSensitive": true,
   "treatmentRepairRecollectionRequired": false,
   "allowedPaths": ["src/example.ts"],
   "scopeExclusions": ["Do not change public APIs outside the requested module."],
   "acceptanceChecks": [
     {
-      "id": "test",
+      "id": "repository-test",
+      "visibility": "agent",
       "argv": ["pnpm", "test"]
+    },
+    {
+      "id": "sealed-behavior",
+      "visibility": "evaluator-after-archive",
+      "argv": ["node", "test/evaluation-fixture.test.js"],
+      "fixture": {
+        "injectedPath": "test/evaluation-fixture.test.js",
+        "contentFingerprint": "sha256",
+        "baselineExpectedExitCode": 1,
+        "oracleExpectedExitCode": 0
+      }
     }
   ],
+  "environment": {
+    "platform": "linux",
+    "architecture": "x64",
+    "runtimes": [
+      { "name": "node", "version": "24.18.0" }
+    ],
+    "dependencyProvisioning": {
+      "mode": "locked",
+      "setupArgv": [["corepack", "pnpm", "install", "--frozen-lockfile"]],
+      "identityFiles": ["pnpm-lock.yaml"],
+      "identityFingerprint": "sha256",
+      "copyIdenticallyBetweenConditions": true
+    }
+  },
   "agent": {
-    "provider": "provider",
-    "surface": "surface",
-    "model": "exact-model-and-build",
+    "provider": "OpenAI",
+    "surface": "Codex CLI",
+    "surfaceVersion": "0.144.6",
+    "model": "gpt-5",
     "settings": {},
-    "toolPolicy": "same-policy-for-both-conditions",
+    "toolPolicy": "Local repository read/write and command execution; dependency network only during evaluator setup; no web search or upstream mutation during Agent runs.",
     "timeLimitSeconds": 1800,
     "correctionRoundLimit": 3
   },

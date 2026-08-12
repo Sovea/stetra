@@ -1,0 +1,115 @@
+{
+  "protocol": "cognitive-adoption-paired-evaluation",
+  "schemaVersion": "1",
+  "registrationFingerprint": "sha256:7a3e379ac9ad1f9777eb60dde7c3c47e4e8edd137e710b04471a2139dff11443",
+  "taskId": "express-query-array-regression",
+  "taskType": "bugfix",
+  "registeredAt": "2026-08-10T14:36:23.000Z",
+  "registeredBy": "stetra-product-owner",
+  "repository": {
+    "url": "https://github.com/expressjs/express.git",
+    "commit": "d39e8ad1778a0b8a606a5a7b17096d0cc5ec722d",
+    "submodulesFingerprint": null
+  },
+  "historicalReplay": {
+    "issueUrl": "https://github.com/expressjs/express/issues/7147",
+    "sealedOracleCommit": "8d09bfe6d88983da5c3e12cfdd54782c4dc675db",
+    "sealedOracleUrl": "https://github.com/expressjs/express/commit/8d09bfe6d88983da5c3e12cfdd54782c4dc675db",
+    "oracleAccess": "evaluator-only-after-both-outputs-archived",
+    "publicSolutionMemoryRisk": {
+      "level": "medium",
+      "rationale": "The issue and merged solution are public. Their 2026 publication lowers likely pretrained recall, but retrieval or prior exposure remains possible."
+    },
+    "leakageControls": [
+      "Use a fresh Agent context with no conversation history from task selection.",
+      "Disable web search and do not expose the issue, pull request, oracle commit, or fixture content.",
+      "Inject the fingerprinted fixture only after both Agent outputs are archived."
+    ]
+  },
+  "taskPrompt": "Fix the Express 4.x extended-query compatibility regression where repeating one query key more than 20 times silently changes req.query from an array to an object. Preserve the established behavior for smaller inputs and other query forms, while retaining a defensible resource bound against extreme explicit indexes and sparse-array allocation. Add regression tests. Do not change dependencies, consult upstream issue or solution history, or create any external repository state.",
+  "interactionPolicy": {
+    "mode": "initial-prompt-only",
+    "registeredClarifications": []
+  },
+  "expectedUnderstanding": {
+    "behavior": [
+      "A realistic batch of repeated keys must remain an ordered array beyond 20 values.",
+      "The extended parser change must not redefine the simple parser or unrelated query forms."
+    ],
+    "invariants": [
+      "Compatibility restoration must not remove the bound that prevents an extreme explicit index from allocating a large sparse array.",
+      "Existing query parsing behavior below the regression threshold remains stable."
+    ],
+    "ownership": [
+      "Express owns the options passed to its extended qs parser; qs owns the interpretation of those options."
+    ],
+    "failureRecovery": [
+      "A failing repeated-key regression test should lead back to the extended query parser configuration, while a sparse-index failure should block adoption of an unbounded fix."
+    ]
+  },
+  "compatibilityOrOwnershipSensitive": true,
+  "treatmentRepairRecollectionRequired": false,
+  "allowedPaths": [
+    "lib/utils.js",
+    "test/req.query.js"
+  ],
+  "scopeExclusions": [
+    "Do not update dependencies or package metadata.",
+    "Do not change the simple query parser or body parsing behavior.",
+    "Do not create a fork, branch, pull request, issue, comment, or other upstream state."
+  ],
+  "acceptanceChecks": [
+    {
+      "id": "repository-query-suite",
+      "visibility": "agent",
+      "argv": ["npx", "mocha", "--require", "test/support/env", "--reporter", "spec", "--bail", "--check-leaks", "test/req.query.js"]
+    },
+    {
+      "id": "repository-full-suite",
+      "visibility": "agent",
+      "argv": ["npm", "test"]
+    },
+    {
+      "id": "sealed-query-boundary",
+      "visibility": "evaluator-after-archive",
+      "argv": ["npx", "mocha", "--require", "test/support/env", "--reporter", "spec", "--bail", "--check-leaks", "test/stetra-evaluation-7147.test.js"],
+      "fixture": {
+        "injectedPath": "test/stetra-evaluation-7147.test.js",
+        "contentFingerprint": "sha256:492d81387ac83daea00eaf4f9109e31e2b0568aa7b0e2d5d2636d49fb1704a96",
+        "baselineExpectedExitCode": 1,
+        "oracleExpectedExitCode": 0
+      }
+    }
+  ],
+  "environment": {
+    "platform": "linux",
+    "architecture": "x64",
+    "runtimes": [
+      { "name": "node", "version": "24.18.0" },
+      { "name": "npm", "version": "11.16.0" }
+    ],
+    "dependencyProvisioning": {
+      "mode": "single-materialization-copy",
+      "setupArgv": [["npm", "install", "--ignore-scripts", "--no-audit", "--no-fund", "--no-package-lock"]],
+      "identityFiles": ["package.json"],
+      "identityFingerprint": "sha256:7c525b1775bb228b15e6644a05ed4edfe27b65049068c79e77c28fe34b6be0a1",
+      "copyIdenticallyBetweenConditions": true
+    }
+  },
+  "agent": {
+    "provider": "OpenAI",
+    "surface": "Codex CLI",
+    "surfaceVersion": "0.144.6",
+    "model": "gpt-5",
+    "settings": {},
+    "toolPolicy": "Local repository read/write and command execution; dependency network only during evaluator setup; no web search or upstream mutation during Agent runs.",
+    "timeLimitSeconds": 1800,
+    "correctionRoundLimit": 3
+  },
+  "conditionOrder": ["control", "treatment"],
+  "assignmentSeed": "manual-alternation-2026-08-10-a",
+  "review": {
+    "reviewerId": "stetra-product-owner",
+    "rubricVersion": "2"
+  }
+}

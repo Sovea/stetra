@@ -1,12 +1,18 @@
 {
-  "protocol": "semantic-handoff-paired-evaluation",
+  "protocol": "cognitive-adoption-paired-evaluation",
   "schemaVersion": "1",
-  "treatmentProtocol": "semantic-delegation",
-  "status": "not-run",
+  "treatmentProtocol": "cognitive-adoption",
+  "status": "in-progress",
   "effectivenessClaim": "unverified",
   "minimumCompletedPairs": 3,
-  "updatedAt": "2026-08-03T00:00:00.000Z",
+  "updatedAt": "2026-08-10T14:36:23.000Z",
+  "taskFiles": [
+    "tasks/express-query-array-regression.json",
+    "tasks/fastify-shared-router-options.json",
+    "tasks/click-argument-help.json"
+  ],
   "resultFiles": [],
+  "observationFiles": [],
   "productOwnerConclusion": null,
-  "conclusion": "No paired Semantic Handoff trials have been recorded. The technical implementation is not evidence that the harness lowers adoption cost or preserves developer cognition."
+  "conclusion": "Three historical replay tasks are registered, but no protocol-complete paired result has been recorded. Effectiveness remains unverified."
 }

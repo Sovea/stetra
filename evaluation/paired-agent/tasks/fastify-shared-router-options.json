@@ -1,0 +1,115 @@
+{
+  "protocol": "cognitive-adoption-paired-evaluation",
+  "schemaVersion": "1",
+  "registrationFingerprint": "sha256:124e69787e324bf1870c69e9b8583f0d5ccb8f92b32b745bfbd62482cc7c8e3e",
+  "taskId": "fastify-shared-router-options",
+  "taskType": "bugfix",
+  "registeredAt": "2026-08-10T14:36:23.000Z",
+  "registeredBy": "stetra-product-owner",
+  "repository": {
+    "url": "https://github.com/fastify/fastify.git",
+    "commit": "3653e7b92719061c6c2dfb4497d2d5b936509309",
+    "submodulesFingerprint": null
+  },
+  "historicalReplay": {
+    "issueUrl": "https://github.com/fastify/fastify/issues/6512",
+    "sealedOracleCommit": "b4db85b665ac99a809c633b7564d49c8a4c2c5c9",
+    "sealedOracleUrl": "https://github.com/fastify/fastify/commit/b4db85b665ac99a809c633b7564d49c8a4c2c5c9",
+    "oracleAccess": "evaluator-only-after-both-outputs-archived",
+    "publicSolutionMemoryRisk": {
+      "level": "medium",
+      "rationale": "The issue and compact merged fix are public. Their 2026 publication lowers likely pretrained recall, but retrieval or prior exposure remains possible."
+    },
+    "leakageControls": [
+      "Use a fresh Agent context with no conversation history from task selection.",
+      "Disable web search and do not expose the issue, pull request, oracle commit, or fixture content.",
+      "Inject the fingerprinted fixture only after both Agent outputs are archived."
+    ]
+  },
+  "taskPrompt": "Fix Fastify so the same caller-owned routerOptions object can be reused to create multiple instances without errors, hangs, or cross-instance behavior. Creating and readying an instance must not mutate the supplied routerOptions object. Add regression tests for reuse and input immutability. Do not change dependencies, consult upstream issue or solution history, or create any external repository state.",
+  "interactionPolicy": {
+    "mode": "initial-prompt-only",
+    "registeredClarifications": []
+  },
+  "expectedUnderstanding": {
+    "behavior": [
+      "Two Fastify instances created from one options object remain independently usable.",
+      "A missing route on the second instance completes normally instead of using instance state captured from the first."
+    ],
+    "invariants": [
+      "Caller-owned routerOptions retains its original keys and values.",
+      "Default and instance-bound router callbacks are private to each Fastify instance."
+    ],
+    "ownership": [
+      "The caller owns the supplied configuration object; Fastify owns the normalized per-instance router configuration and callbacks."
+    ],
+    "failureRecovery": [
+      "A null-server failure during second-instance routing should lead back to shared normalized router state rather than being masked by forced readiness or cleanup timing."
+    ]
+  },
+  "compatibilityOrOwnershipSensitive": true,
+  "treatmentRepairRecollectionRequired": false,
+  "allowedPaths": [
+    "lib/route.js",
+    "test/router-options.test.js"
+  ],
+  "scopeExclusions": [
+    "Do not require callers to clone configuration or change their initialization order.",
+    "Do not update dependencies or alter unrelated routing behavior.",
+    "Do not create a fork, branch, pull request, issue, comment, or other upstream state."
+  ],
+  "acceptanceChecks": [
+    {
+      "id": "repository-router-options-suite",
+      "visibility": "agent",
+      "argv": ["npm", "run", "unit", "--", "test/router-options.test.js"]
+    },
+    {
+      "id": "repository-ci-suite",
+      "visibility": "agent",
+      "argv": ["npm", "run", "test:ci"]
+    },
+    {
+      "id": "sealed-instance-ownership",
+      "visibility": "evaluator-after-archive",
+      "argv": ["node", "--test", "test/stetra-evaluation-6512.test.js"],
+      "fixture": {
+        "injectedPath": "test/stetra-evaluation-6512.test.js",
+        "contentFingerprint": "sha256:bc59ca763dce483bd0b407a11e6a4d74e8999609f9d5f55df8c072ae7e44ea32",
+        "baselineExpectedExitCode": 1,
+        "oracleExpectedExitCode": 0
+      }
+    }
+  ],
+  "environment": {
+    "platform": "linux",
+    "architecture": "x64",
+    "runtimes": [
+      { "name": "node", "version": "24.18.0" },
+      { "name": "npm", "version": "11.16.0" }
+    ],
+    "dependencyProvisioning": {
+      "mode": "single-materialization-copy",
+      "setupArgv": [["npm", "install", "--ignore-scripts", "--no-audit", "--no-fund", "--no-package-lock"]],
+      "identityFiles": ["package.json"],
+      "identityFingerprint": "sha256:1a586c75ed732e9ed55b553d27b9677df768d5db2c2a2f9198c21bd8639f5f9f",
+      "copyIdenticallyBetweenConditions": true
+    }
+  },
+  "agent": {
+    "provider": "OpenAI",
+    "surface": "Codex CLI",
+    "surfaceVersion": "0.144.6",
+    "model": "gpt-5",
+    "settings": {},
+    "toolPolicy": "Local repository read/write and command execution; dependency network only during evaluator setup; no web search or upstream mutation during Agent runs.",
+    "timeLimitSeconds": 1800,
+    "correctionRoundLimit": 3
+  },
+  "conditionOrder": ["treatment", "control"],
+  "assignmentSeed": "manual-alternation-2026-08-10-b",
+  "review": {
+    "reviewerId": "stetra-product-owner",
+    "rubricVersion": "2"
+  }
+}

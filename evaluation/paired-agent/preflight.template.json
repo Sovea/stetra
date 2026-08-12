@@ -1,0 +1,78 @@
+{
+  "protocol": "cognitive-adoption-paired-evaluation-preflight",
+  "schemaVersion": "1",
+  "taskId": "task-kebab-case",
+  "recordedAt": "2026-08-11T00:00:00.000Z",
+  "repository": {
+    "commit": "full-commit-sha",
+    "submodulesFingerprint": null,
+    "controlWorkspaceFingerprint": "sha256",
+    "treatmentWorkspaceFingerprint": "sha256"
+  },
+  "stetra": {
+    "commit": "full-commit-sha",
+    "coreArchiveDigest": "sha256",
+    "cliArchiveDigest": "sha256",
+    "hostAdapterDigest": "sha256"
+  },
+  "agent": {
+    "model": "gpt-5",
+    "modelAvailable": true,
+    "surface": "Codex CLI",
+    "surfaceVersion": "exact-version"
+  },
+  "configurationEquality": {
+    "toolPolicyEqual": true,
+    "dependencyIdentityEqual": true,
+    "runtimeIdentityEqual": true,
+    "timeLimitEqual": true,
+    "sandboxEqual": true,
+    "cachePolicyEqual": true,
+    "networkStackEqual": true
+  },
+  "executionIsolation": {
+    "controlSandboxArgv": ["sandbox-runner", "--profile", "paired-evaluation"],
+    "treatmentSandboxArgv": ["sandbox-runner", "--profile", "paired-evaluation"],
+    "sandboxPolicyFingerprint": "sha256",
+    "writableCachePaths": ["/exact/evaluator-cache"],
+    "ipv6LoopbackAvailable": true,
+    "concurrentSuites": false
+  },
+  "hostEnforcement": {
+    "control": {
+      "webSearch": "enforced-disabled",
+      "network": "enforced-disabled",
+      "externalMutation": "enforced-disabled"
+    },
+    "treatment": {
+      "webSearch": "enforced-disabled",
+      "network": "enforced-disabled",
+      "externalMutation": "enforced-disabled"
+    },
+    "attestationFingerprint": "sha256"
+  },
+  "executables": [
+    {
+      "argv0": "node",
+      "resolvedPath": "/exact/path",
+      "version": "exact-version",
+      "shebangTarget": null
+    }
+  ],
+  "fixtures": [
+    {
+      "acceptanceCheckId": "sealed-behavior",
+      "contentFingerprint": "sha256",
+      "baselineActualExitCode": 1,
+      "oracleActualExitCode": 0,
+      "negativeControls": [
+        {
+          "id": "mutant:plausible-wrong-fix",
+          "actualExitCode": 1
+        }
+      ]
+    }
+  ],
+  "status": "passed",
+  "deviations": []
+}

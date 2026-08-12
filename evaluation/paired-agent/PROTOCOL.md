@@ -1,8 +1,8 @@
-# Semantic Handoff Paired-Agent Evaluation Protocol
+# Cognitive Adoption Paired-Agent Evaluation Protocol
 
 ## Purpose
 
-This protocol tests whether the Semantic Handoff MVP lowers the total cost from
+This protocol tests whether the Cognitive Adoption MVP lowers the total cost from
 a developer request to a confidently adoptable change without degrading the
 developer's system understanding or decision quality.
 
@@ -21,12 +21,17 @@ One pair runs the same task twice from the same immutable repository state:
 - `control`: a fresh instance of the coding agent receives the task,
   repository instructions, and ordinary repository tools.
 - `treatment`: a fresh instance of the same agent receives the same inputs and
-  uses `change prepare`, `change collect`, and `change finalize` under the
-  `semantic-delegation` protocol.
+  uses the `prepare`, `collect`, optional `repair` and `challenge`, `handoff`,
+  and `decide` lifecycle under the `cognitive-adoption` protocol.
 
 Model/build, Host surface, tool policy, reasoning settings, time limit,
 dependencies, and starting Git state must match. Context, patches, messages,
 and tool output from one condition must not leak into the other.
+
+Tool restrictions are enforced outside both conditions and attested by the
+Evaluator. Treatment-side Stetra instructions cannot be the sole mechanism for
+disabling Web search, network access, or external mutation; otherwise Host
+capability differs between conditions.
 
 If a task has a preregistered clarification, both conditions receive the exact
 same response only after satisfying the same delivery rule. A clarification
@@ -65,6 +70,13 @@ sealed oracles are not part of this protocol. A selected preregistration and a
 compact completed result may be committed when the ledger uses them as
 inspectable claim evidence; raw working data remains outside the source tree.
 
+Committed preregistrations contain the digest and expected baseline/oracle
+exit behavior of each sealed acceptance fixture, but not the fixture content.
+The evaluator materializes source checkouts, dependencies, fixtures, patches,
+logs, and Agent transcripts outside this repository. A fixture is injected
+only into an archived copy after both Agent outputs are frozen. Its path in the
+task record is the injection path inside that copy, not a tracked source path.
+
 ## Third-party source boundary
 
 When a task replays work from an uninvolved third-party project, that repository
@@ -88,14 +100,57 @@ Before either condition, create a task record from `task.template.json` with:
 - any clarification delivery rules and exact registered responses;
 - allowed paths only for measuring unexpected scope, not as Agent permissions;
 - acceptance checks and exact argv;
+- an evaluator-only Coverage Matrix connecting every important requirement to
+  sealed assertions or explicit manual review;
+- at least one preregistered plausible wrong implementation for every
+  adoption-critical semantic dimension, or a concrete reason that no automated
+  negative control can represent it;
 - matched Agent configuration and limits;
 - assigned condition order and seed;
 - reviewer identity/pool and rubric.
 
+The task record has a canonical registration fingerprint. Changing any field
+after registration changes that fingerprint and invalidates the pair. The
+ledger lists every registered task even before a corresponding result exists.
+
 Do not select tasks after seeing either solution. Alternate or randomly assign
 condition order. Never rerun only the weaker condition.
 
+The Coverage Matrix and negative-control materialization remain evaluator-only.
+They may reveal boundary cases, historical solution shape, or sealed fixture
+design, so neither Agent sees them before both outputs are archived. Registration
+must reject a requirement with neither sealed assertion nor manual review, a
+sealed assertion whose fixture does not fail at baseline and pass at the oracle,
+or an adoption-critical requirement whose declared negative control is not
+actually rejected.
+
+## Preflight
+
+Before either Agent starts, freeze a `preflight.template.json` record containing:
+
+- exact repository commit, submodule and workspace identity;
+- exact Stetra commit plus Core, CLI, and generated Host Adapter archive digests;
+- exact requested model availability and exact Host surface/version;
+- symmetric tool-policy enforcement attestation for both conditions;
+- identical sandbox argv/policy, writable-cache policy, network-stack capability,
+  and a record that no other suite runs concurrently;
+- dependency, runtime, executable resolved-path, script/shebang, and worktree identity;
+- sealed fixture fingerprint plus actual baseline, oracle, and negative-control
+  exit behavior;
+- equality checks for all condition-neutral configuration.
+
+Expected exit codes in a task record are declarations. Only the actual preflight
+observations establish that a fixture and negative control are usable. A failed
+preflight blocks both conditions; it never selectively delays or replaces one.
+
 ## Execution
+
+Before effectiveness pairs, the treatment workflow must pass a black-box
+usability gate using only packed `@sovea/stetra-core`, packed `@sovea/stetra`,
+and the generated Host Adapter. The treatment Agent may not inspect the Stetra
+source repository or tests. A routine task should require zero schema
+corrections; a conditioned, challenged, or attention-bearing task may require
+at most one. Failure is a product-usability finding, not Agent noncompliance.
 
 1. Materialize a clean workspace at the registered state for each condition;
    the workspaces may run sequentially when resources are constrained.
@@ -103,9 +158,13 @@ condition order. Never rerun only the weaker condition.
 3. Run each condition in a fresh context in registered order.
 4. Preserve initial/final patches, commands, elapsed time, and Agent messages.
 5. Run registered acceptance checks outside the Agent context.
-6. For treatment, preserve prepare/collect/finalize JSON, patch, checks,
-   handoff, and any stale/recollection transition.
-7. Record harness overhead separately from task and review time.
+6. For treatment, preserve the Task Contract, Attempt lineage, every
+   collection, patch, check attempts, Challenges, handoff evaluation, Human
+   Decision, and any stale/recollection transition.
+7. Record harness overhead separately from task and review time. Attribute time
+   by provenance: Host-observed implementation/authoring/challenge, Runtime-
+   observed check/Git collection, Human-observed active review/clarification,
+   and wall-clock queue or wait time.
 8. For historical replay, reveal the sealed reference only after both
    condition outputs are archived.
 
@@ -158,6 +217,7 @@ pair publish:
 - adoption-decision time;
 - correction rounds and total task time;
 - treatment harness overhead;
+- provenance-separated phase durations rather than one inferred “thinking” time;
 - changed/out-of-scope files and acceptance checks;
 - raw cognition findings for behavior, invariants, ownership, and failure entry;
 - Review Map usefulness finding;
@@ -167,6 +227,13 @@ pair publish:
 A narrative conclusion must cite individual pairs, state its repository/Agent/
 task/reviewer scope, preserve contrary results, and avoid a composite score.
 Inconclusive or adverse results return the MVP to iteration.
+
+An interrupted or protocol-incomplete pilot may retain a compact observation
+record when it exposes reproducible product behavior. Such a record must name
+the missing protocol evidence, remain excluded from completed-pair gates, and
+cannot support an effectiveness claim. It may contain patch fingerprints and
+bounded findings, but never raw workspaces, transcripts, logs, patches, or
+sealed fixture contents.
 
 ## Human acceptance boundary
 

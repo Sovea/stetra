@@ -1,0 +1,120 @@
+{
+  "protocol": "cognitive-adoption-paired-evaluation",
+  "schemaVersion": "1",
+  "registrationFingerprint": "sha256:9861ea0ae8db42bc64ccbd4031ac705e1f4d9bac4c2b285cf74906777a21a981",
+  "taskId": "click-argument-help",
+  "taskType": "feature",
+  "registeredAt": "2026-08-10T14:36:23.000Z",
+  "registeredBy": "stetra-product-owner",
+  "repository": {
+    "url": "https://github.com/pallets/click.git",
+    "commit": "1a994adbb114d402275a614942e2f838a654e648",
+    "submodulesFingerprint": null
+  },
+  "historicalReplay": {
+    "issueUrl": "https://github.com/pallets/click/issues/2983",
+    "sealedOracleCommit": "c48021040a50c659b74e24ac2b11c9c9c6620a21",
+    "sealedOracleUrl": "https://github.com/pallets/click/commit/c48021040a50c659b74e24ac2b11c9c9c6620a21",
+    "oracleAccess": "evaluator-only-after-both-outputs-archived",
+    "publicSolutionMemoryRisk": {
+      "level": "medium",
+      "rationale": "The feature request and merged implementation are public. Their 2026 publication lowers likely pretrained recall, but retrieval or prior exposure remains possible."
+    },
+    "leakageControls": [
+      "Use a fresh Agent context with no conversation history from task selection.",
+      "Disable web search and do not expose the issue, pull request, oracle commit, or fixture content.",
+      "Inject the fingerprinted fixture only after both Agent outputs are archived."
+    ]
+  },
+  "taskPrompt": "Add an optional help parameter to click.argument. When at least one positional argument has help, command help should render a dedicated positional-arguments section without changing the output shape of commands whose arguments have no help. Public parameter metadata and documentation tools must observe the same normalized help value. Preserve deprecated-argument behavior, update user documentation, and add tests. Do not change dependencies, consult upstream issue or solution history, or create any external repository state.",
+  "interactionPolicy": {
+    "mode": "initial-prompt-only",
+    "registeredClarifications": []
+  },
+  "expectedUnderstanding": {
+    "behavior": [
+      "Arguments with help appear in a dedicated section before options, using the argument metavar.",
+      "Commands without argument help retain their previous help layout."
+    ],
+    "invariants": [
+      "Argument help is normalized consistently with existing Click help text.",
+      "Deprecation remains visible with or without explicit argument help.",
+      "Parameter and command metadata expose the same help value rendered to users."
+    ],
+    "ownership": [
+      "Argument owns its help metadata; Command owns section ordering and formatting; documentation consumers read parameter info dictionaries."
+    ],
+    "failureRecovery": [
+      "A help-output failure should be separated from metadata or deprecation failures so repair targets the owning layer instead of special-casing a rendered string."
+    ]
+  },
+  "compatibilityOrOwnershipSensitive": true,
+  "treatmentRepairRecollectionRequired": false,
+  "allowedPaths": [
+    "src/click/core.py",
+    "tests/test_arguments.py",
+    "tests/test_info_dict.py",
+    "docs/arguments.md",
+    "docs/documentation.md",
+    "CHANGES.rst"
+  ],
+  "scopeExclusions": [
+    "Do not change option help behavior or reorder existing sections for commands without argument help.",
+    "Do not add dependencies or redesign Click's formatter.",
+    "Do not create a fork, branch, pull request, issue, comment, or other upstream state."
+  ],
+  "acceptanceChecks": [
+    {
+      "id": "repository-argument-and-metadata-suite",
+      "visibility": "agent",
+      "argv": [".venv/bin/pytest", "-q", "tests/test_arguments.py", "tests/test_info_dict.py"]
+    },
+    {
+      "id": "repository-full-suite",
+      "visibility": "agent",
+      "argv": [".venv/bin/pytest", "-q"]
+    },
+    {
+      "id": "sealed-help-contract",
+      "visibility": "evaluator-after-archive",
+      "argv": [".venv/bin/pytest", "-q", "tests/test_stetra_evaluation_2983.py"],
+      "fixture": {
+        "injectedPath": "tests/test_stetra_evaluation_2983.py",
+        "contentFingerprint": "sha256:8bd23a63c1b732fb876ed2c1e13e91d40947906297f56cd0067006e6809e9930",
+        "baselineExpectedExitCode": 1,
+        "oracleExpectedExitCode": 0
+      }
+    }
+  ],
+  "environment": {
+    "platform": "linux",
+    "architecture": "x86_64",
+    "runtimes": [
+      { "name": "python", "version": "3.13.14" },
+      { "name": "uv", "version": "0.11.32" }
+    ],
+    "dependencyProvisioning": {
+      "mode": "locked",
+      "setupArgv": [["uv", "sync", "--frozen", "--no-default-groups", "--group", "tests"]],
+      "identityFiles": ["uv.lock"],
+      "identityFingerprint": "sha256:14c74547b7e155a6aca455130da3e6bf08f593fcb29d1d9d9ece49bc4dcf3a87",
+      "copyIdenticallyBetweenConditions": true
+    }
+  },
+  "agent": {
+    "provider": "OpenAI",
+    "surface": "Codex CLI",
+    "surfaceVersion": "0.144.6",
+    "model": "gpt-5",
+    "settings": {},
+    "toolPolicy": "Local repository read/write and command execution; dependency network only during evaluator setup; no web search or upstream mutation during Agent runs.",
+    "timeLimitSeconds": 1800,
+    "correctionRoundLimit": 3
+  },
+  "conditionOrder": ["control", "treatment"],
+  "assignmentSeed": "manual-alternation-2026-08-10-c",
+  "review": {
+    "reviewerId": "stetra-product-owner",
+    "rubricVersion": "2"
+  }
+}

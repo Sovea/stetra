@@ -1,10 +1,11 @@
 {
-  "protocol": "semantic-handoff-paired-evaluation",
+  "protocol": "cognitive-adoption-paired-evaluation",
   "schemaVersion": "1",
-  "treatmentProtocol": "semantic-delegation",
+  "treatmentProtocol": "cognitive-adoption",
   "pairId": "pair-kebab-case",
   "taskId": "task-kebab-case",
   "taskRecord": "tasks/task-kebab-case.json",
+  "preflightRecord": "preflights/task-kebab-case.json",
   "status": "completed",
   "conditions": {
     "control": {
@@ -18,6 +19,19 @@
       "initialOutputDurationMs": 0,
       "totalDurationMs": 0,
       "harnessOverheadMs": 0,
+      "phaseDurations": {
+        "investigationAndImplementationMs": 0,
+        "protocolAuthoringMs": 0,
+        "schemaCorrectionMs": 0,
+        "challengeMs": 0,
+        "baselineCheckExecutionMs": 0,
+        "collectionCheckExecutionMs": 0,
+        "gitFactCollectionMs": 0,
+        "activeReviewMs": 0,
+        "clarificationMs": 0,
+        "correctionDecisionMs": 0,
+        "queueOrWaitMs": 0
+      },
       "correctionRounds": [],
       "infrastructureRetries": 0,
       "lifecycle": null
@@ -33,12 +47,26 @@
       "initialOutputDurationMs": 0,
       "totalDurationMs": 0,
       "harnessOverheadMs": 0,
+      "phaseDurations": {
+        "investigationAndImplementationMs": 0,
+        "protocolAuthoringMs": 0,
+        "schemaCorrectionMs": 0,
+        "challengeMs": 0,
+        "baselineCheckExecutionMs": 0,
+        "collectionCheckExecutionMs": 0,
+        "gitFactCollectionMs": 0,
+        "activeReviewMs": 0,
+        "clarificationMs": 0,
+        "correctionDecisionMs": 0,
+        "queueOrWaitMs": 0
+      },
       "correctionRounds": [],
       "infrastructureRetries": 0,
       "lifecycle": {
         "prepareStatus": "prepared",
         "collectionIds": ["sha256"],
-        "finalizeStatus": "handoff-ready",
+        "handoffStatus": "handoff-ready",
+        "decisionStatus": "accepted",
         "repairRecollectionOccurred": false
       }
     }
