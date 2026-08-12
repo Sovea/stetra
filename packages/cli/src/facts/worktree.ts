@@ -1,4 +1,4 @@
-/** Git-backed baseline and actual-change collection for the Semantic Handoff protocol. */
+/** Git-backed baseline and actual-change collection for the Cognitive Adoption protocol. */
 import {
   lstatSync,
   mkdtempSync,
@@ -20,7 +20,7 @@ import type {
 import { runBufferedCommand } from '../infrastructure/process.ts';
 import { sha256, stableFingerprint } from '../protocol.ts';
 
-const WORKFLOW_OUTPUT_PREFIX = '.stetra/runs/';
+const WORKFLOW_OUTPUT_PREFIX = '.stetra/tasks/';
 const GIT_OUTPUT_LIMIT = 256 * 1024 * 1024;
 const GITLINK_MODE = '160000';
 const GIT_OBJECT_ID_PATTERN = /^[0-9a-f]{40}(?:[0-9a-f]{24})?$/;
@@ -289,7 +289,7 @@ async function createWorktreeTree(
       '--cached',
       '--ignore-unmatch',
       '--',
-      '.stetra/runs',
+      '.stetra/tasks',
     ], env);
     const treeId = (await runGitBuffer(projectRoot, ['write-tree'], env)).toString('ascii').trim();
     if (!GIT_OBJECT_ID_PATTERN.test(treeId)) {

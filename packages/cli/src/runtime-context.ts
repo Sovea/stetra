@@ -1,4 +1,8 @@
 import type { Readable, Writable } from 'node:stream';
+import type {
+  HostPolicyEvaluation,
+  HostPolicyRequirement,
+} from '@sovea/stetra-core';
 
 import type { HostAdapter } from './project/init.ts';
 
@@ -21,6 +25,25 @@ export interface RunCliOptions {
   interactive?: boolean;
   color?: boolean;
   prompts?: PromptProvider;
+  hostAttestations?: HostAttestationProvider;
+}
+
+export interface HostAttestationProvider {
+  provenance: 'native-adapter' | 'evaluation-runner';
+  evaluatePolicies(input: {
+    taskId: string;
+    requirements: HostPolicyRequirement[];
+  }): Promise<HostPolicyEvaluation[]>;
+  attestChallenge?(input: {
+    taskId: string;
+    effectiveContractId: string;
+    attemptId: string;
+    factCollectionId: string;
+  }): Promise<{
+    attestationId: string;
+    implementerContextId: string;
+    challengerContextId: string;
+  }>;
 }
 
 export interface CliRuntimeContext {
@@ -29,6 +52,7 @@ export interface CliRuntimeContext {
   interactive: boolean;
   color: boolean;
   prompts: PromptProvider;
+  hostAttestations?: HostAttestationProvider;
 }
 
 export async function resolveRuntimeContext(
@@ -51,6 +75,7 @@ export async function resolveRuntimeContext(
       && process.env.NO_COLOR === undefined
     ),
     prompts: options.prompts ?? defaultPromptProvider,
+    ...(options.hostAttestations ? { hostAttestations: options.hostAttestations } : {}),
   };
 }
 

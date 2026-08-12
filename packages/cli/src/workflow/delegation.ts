@@ -1,30 +1,31 @@
-/** CLI-owned prepare/collect orchestration for the Semantic Handoff protocol. */
+/** CLI-owned orchestration for the task-scoped Cognitive Adoption protocol. */
 import { randomUUID } from 'node:crypto';
 import {
   existsSync,
-  lstatSync,
-  mkdirSync,
-  readdirSync,
   readFileSync,
   realpathSync,
-  renameSync,
   rmSync,
-  statSync,
-  writeFileSync,
 } from 'node:fs';
-import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
+import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 import type { Readable } from 'node:stream';
 
 import {
   compileDelegation,
   evaluateHandoff,
   type CheckFact,
+  type CheckBaselineRelation,
   type CognitiveHandoff,
   type CompileDelegationInput,
+  type DecisionPacket,
   type FactBundle,
+  type BaselineVerificationFact,
+  type EvidenceDisposition,
   type HandoffEvaluation,
   type HandoffValidationIssue,
-  type SemanticContract,
+  type HostPolicyEvaluation,
+  type HumanDecision,
+  type IndependentChallenge,
+  type TaskContract,
   type VerificationDefinition,
   type VerifierMutation,
 } from '@sovea/stetra-core';
@@ -34,11 +35,13 @@ import {
   DEFAULT_CHECK_TIMEOUT_MS,
   runFrozenChecks,
 } from '../facts/checks.ts';
+import { collectExecutionEnvironment } from '../facts/environment.ts';
 import { materializeEvidenceWindows } from '../facts/evidence.ts';
 import {
   assertWorktreeSnapshot,
   captureGitWorktree,
   collectGitWorktreeChange,
+  compareGitWorktrees,
   summarizeWorktree,
   type WorktreeSnapshot,
 } from '../facts/worktree.ts';
@@ -52,77 +55,61 @@ import {
 } from '../protocol.ts';
 import { assertNoLegacyArtifacts } from '../project/legacy.ts';
 import {
+  ChallengeDocumentSchema,
   CognitiveHandoffDocumentSchema,
   DelegationPrepareDocumentSchema,
-  DelegationRunSchema,
-  type DelegationPrepareDocument,
+  HumanDecisionDocumentSchema,
+  HumanResolutionDocumentSchema,
+  HostPolicyEvaluationSchema,
+  VerificationRevisionDocumentSchema,
+  EvidenceDispositionDocumentSchema,
+  type CognitiveHandoffDocument,
+  type EvidenceDispositionDocument,
+  type HumanDecisionDocument,
+  type HumanResolutionDocument,
+  type VerificationRevisionDocument,
+  type TaskProjection,
 } from '../schemas/delegation.ts';
+import type { HostAttestationProvider } from '../runtime-context.ts';
 import { parseArtifact } from '../validation.ts';
 import {
+  challengeHostAction,
   collectedHostAction,
   compileProblemHostAction,
-  finalizedHostAction,
+  handoffHostAction,
   preparedHostAction,
+  diagnosisHostAction,
+  resolutionHostAction,
   staleFactsHostAction,
   unavailableVerificationHostAction,
 } from './host-action.ts';
+import {
+  challengeAuthoringPacket,
+  decisionAuthoringPacket,
+  diagnosisAuthoringPacket,
+  handoffAuthoringPacket,
+  resolutionAuthoringPacket,
+  verificationRevisionAuthoringPacket,
+} from './authoring.ts';
+import {
+  canonicalProjectRoot,
+  createTaskWorkspace,
+  initializeTask,
+  loadTask,
+  projectRelativePath,
+  readJsonArtifact,
+  taskArtifactPath,
+  transitionTask,
+  writeImmutableBuffer,
+  writeImmutableJson,
+  type LoadedTask,
+} from './task-store.ts';
 
-const RUN_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
-const MAX_COMPLETED_RUNS = 50;
 const WORKTREE_OBJECTS_DIRECTORY = 'worktree-objects';
-
-export interface DelegationRun {
-  protocol: typeof DELEGATION_PROTOCOL;
-  schemaVersion: typeof DELEGATION_SCHEMA_VERSION;
-  runId: string;
-  workflow: 'semantic-handoff';
-  state: 'prepared' | 'facts-collected' | 'completed';
-  projectRoot: string;
-  createdAt: string;
-  packageIdentity: {
-    cli: { name: '@sovea/stetra'; version: string };
-    core: { name: '@sovea/stetra-core'; version: string };
-  };
-  contract: SemanticContract;
-  worktreeBaseline: WorktreeSnapshot;
-  factBundle?: FactBundle;
-  handoffFile?: 'handoff.json';
-  completion?: {
-    completedAt: string;
-    handoffFingerprint: string;
-    evaluation: unknown;
-  };
-}
 
 export interface CheckTimeoutRetry {
   checkId: string;
   timeoutMs: number;
-}
-
-export interface HandoffPacket {
-  semanticContract: ReturnType<typeof contractWorkPacket>;
-  runtimeFacts: {
-    factCollectionId: string;
-    collectedAt: string;
-    changeFingerprint: string;
-    changedFiles: FactBundle['changedFiles'];
-    checks: FactBundle['checks'];
-    verifierSurfaces: ReturnType<typeof summarizeVerifierSurfaces>;
-    patch: NonNullable<FactBundle['patch']> | null;
-  };
-  hostHandoff: CognitiveHandoff;
-  evaluation: Pick<
-    HandoffEvaluation,
-    | 'protocol'
-    | 'schemaVersion'
-    | 'status'
-    | 'contractId'
-    | 'factCollectionId'
-    | 'handoffFingerprint'
-    | 'claimConclusions'
-    | 'attention'
-    | 'adoption'
-  >;
 }
 
 export async function prepareDelegationTask(options: {
@@ -130,10 +117,17 @@ export async function prepareDelegationTask(options: {
   inputPath: string;
   input?: Readable;
   productVersion: string;
+  hostAttestations?: HostAttestationProvider;
 }) {
   const projectRoot = canonicalProjectRoot(options.projectRoot);
   assertNoLegacyArtifacts(projectRoot);
-  const source = await readPrepareDocument(projectRoot, options.inputPath, options.input);
+  const source = await readInputDocument(
+    projectRoot,
+    options.inputPath,
+    options.input,
+    DelegationPrepareDocumentSchema,
+    'Task Contract input',
+  );
   const repositoryEvidence = materializeEvidenceWindows(
     projectRoot,
     source.repositoryEvidence ?? [],
@@ -141,24 +135,25 @@ export async function prepareDelegationTask(options: {
   const compileInput: CompileDelegationInput = {
     protocol: DELEGATION_PROTOCOL,
     schemaVersion: DELEGATION_SCHEMA_VERSION,
-    humanEvents: source.humanEvents.map((event) => ({
-      ...event,
-      contentFingerprint: event.contentFingerprint ?? sha256(event.content),
-    })),
+    developerEvent: source.developerEvent,
+    task: source.task,
     ...(repositoryEvidence.length ? { repositoryEvidence } : {}),
-    semantic: source.semantic,
-    verification: source.verification,
+    conditions: source.conditions,
+    hostPolicyRequirements: source.hostPolicyRequirements,
+    delivery: source.delivery,
+    ...(source.checks ? { checks: source.checks } : {}),
+    ...(source.noCommandRationale ? { noCommandRationale: source.noCommandRationale } : {}),
   };
   const compiled = compileDelegation(compileInput);
   if (compiled.status !== 'delegation-compiled') {
     return {
       ...compiled,
-      runCreated: false,
+      taskCreated: false,
       hostAction: compileProblemHostAction(compiled.status),
     };
   }
-  const unavailableExecutables = compiled.contract.verification.mode === 'checks'
-    ? compiled.contract.verification.checks.flatMap((check, index) => {
+  const unavailableExecutables = compiled.contract.verificationPlan.mode === 'checks'
+    ? compiled.contract.verificationPlan.definitions.flatMap((check, index) => {
         const resolution = resolveExecutable(check.argv[0], projectRoot);
         return resolution.status === 'unavailable'
           ? [{ check, index, reason: resolution.error.message }]
@@ -170,1003 +165,2053 @@ export async function prepareDelegationTask(options: {
       protocol: DELEGATION_PROTOCOL,
       schemaVersion: DELEGATION_SCHEMA_VERSION,
       status: 'verification-required' as const,
-      message: 'One or more configured top-level check executables are unavailable; no run may be created.',
+      message: 'One or more frozen top-level check executables are unavailable; no task was created.',
       issues: unavailableExecutables.map(({ check, index, reason }) => ({
         code: 'verification-executable-unavailable',
-        path: `verification.checks[${index}].argv[0]`,
-        message: `Check ${check.id} cannot resolve executable ${JSON.stringify(check.argv[0])}: ${reason}`,
-        remediation: 'Restore the executable in the configured command environment or select a different explicit verification command.',
+        path: `checks[${index}].argv[0]`,
+        message: `Check ${check.definitionId} cannot resolve ${JSON.stringify(check.argv[0])}: ${reason}`,
+        remediation: 'Restore the executable or choose another explicit verification command.',
       })),
-      runCreated: false,
+      taskCreated: false,
       hostAction: unavailableVerificationHostAction(),
     };
   }
 
-  const runId = randomUUID();
-  const runDirectory = resolveRunDirectory(projectRoot, runId);
+  const taskId = randomUUID();
+  const hostPolicyEvaluations = await materializeHostPolicyEvaluations(
+    taskId,
+    compiled.contract,
+    options.hostAttestations,
+  );
+  const unresolvedHostPolicy = compiled.contract.hostPolicyRequirements.find((requirement) =>
+    requirement.enforcementRequirement === 'required'
+    && hostPolicyEvaluations.find((item) => item.requirementId === requirement.id)?.mode !== 'enforced');
+  const workspace = createTaskWorkspace(projectRoot, taskId);
   try {
-    mkdirSync(dirname(runDirectory), { recursive: true });
-    mkdirSync(runDirectory, { recursive: false });
-    const worktreeBaseline = await captureGitWorktree(projectRoot, {
-      objectDirectory: worktreeObjectDirectory(runDirectory),
+    const preBaselineCheck = await captureGitWorktree(projectRoot, {
+      objectDirectory: workspace.objectDirectory,
     });
-    const run: DelegationRun = {
+    const definitions = compiled.contract.verificationPlan.mode === 'checks'
+      ? compiled.contract.verificationPlan.definitions : [];
+    const taskStartDefinitions = definitions.filter((definition) =>
+      definition.baseline.mode === 'task-start');
+    const baselineObservations = await runFrozenChecks({
+      projectRoot,
+      executions: taskStartDefinitions.map((definition) => ({
+        definition,
+        timeoutMs: DEFAULT_CHECK_TIMEOUT_MS,
+      })),
+      outputDirectory: join(workspace.taskDirectory, 'baseline-checks'),
+    });
+    const baseline = await captureGitWorktree(projectRoot, {
+      objectDirectory: workspace.objectDirectory,
+    });
+    const baselineProjection = {
+      capturedAt: new Date().toISOString(),
+      preCheck: summarizeWorktree(preBaselineCheck),
+      postCheck: summarizeWorktree(baseline),
+      checkInducedChanges: compareGitWorktrees(preBaselineCheck, baseline),
+      checks: definitions.map((definition) => ({
+        definitionId: definition.definitionId,
+        mode: definition.baseline.mode,
+        observation: baselineObservations.find((item) =>
+          item.definitionId === definition.definitionId) ?? null,
+      })),
+    };
+    const baselineVerification: BaselineVerificationFact = {
+      fingerprint: stableFingerprint(baselineProjection),
+      ...baselineProjection,
+    };
+    const createdAt = new Date().toISOString();
+    const attempt = {
+      attemptId: 'attempt:1',
+      ordinal: 1,
+      parentAttemptId: null,
+      effectiveContractId: compiled.contract.effectiveContractId,
+      trigger: 'initial' as const,
+      deliveryStatus: 'waiting-for-implementation' as const,
+      createdAt,
+    };
+    const projection: TaskProjection = {
       protocol: DELEGATION_PROTOCOL,
       schemaVersion: DELEGATION_SCHEMA_VERSION,
-      runId,
-      workflow: 'semantic-handoff',
-      state: 'prepared',
+      taskId,
+      workflow: 'cognitive-adoption',
       projectRoot,
-      createdAt: new Date().toISOString(),
+      createdAt,
+      updatedAt: createdAt,
+      revision: 1,
+      contractRevision: 1,
       packageIdentity: {
         cli: { name: '@sovea/stetra', version: options.productVersion },
         core: { name: '@sovea/stetra-core', version: options.productVersion },
       },
-      contract: compiled.contract,
-      worktreeBaseline,
+      semanticContractId: compiled.contract.semanticContractId,
+      verificationPlanId: compiled.contract.verificationPlanId,
+      effectiveContractId: compiled.contract.effectiveContractId,
+      planId: compiled.contract.plan.planId,
+      currentAttemptId: attempt.attemptId,
+      deliveryStatus: 'waiting-for-implementation',
+      evidenceStatus: 'not-collected',
+      decisionStatus: 'pending',
+      repairCount: 0,
+      attempts: [attempt],
+      challengeIds: [],
+      hostPolicyEvaluations,
+      resolvedHostPolicyIds: [],
+      verificationRevised: false,
+      verificationRevisionIds: [],
+      ...(unresolvedHostPolicy ? {
+        pendingResolution: { kind: 'host-policy' as const, targetId: unresolvedHostPolicy.id },
+      } : {}),
     };
-    writeJsonAtomic(join(runDirectory, 'run.json'), run);
+    const loaded = initializeTask({
+      projectRoot,
+      taskId,
+      projection,
+      artifacts: [
+        { relativePath: contractPath(1), value: compiled.contract },
+        { relativePath: planPath(1), value: compiled.contract.plan },
+        { relativePath: baselinePath(1), value: baseline },
+        { relativePath: baselineVerificationPath(1), value: baselineVerification },
+        { relativePath: `${attemptDirectory(attempt.attemptId)}/attempt.json`, value: attempt },
+      ],
+    });
     return {
       protocol: DELEGATION_PROTOCOL,
       schemaVersion: DELEGATION_SCHEMA_VERSION,
-      status: 'prepared',
-      runId,
-      semanticContract: contractWorkPacket(compiled.contract),
-      baseline: summarizeWorktree(worktreeBaseline),
+      status: 'prepared' as const,
+      taskId,
+      task: compactTask(loaded.projection),
+      taskContract: contractWorkPacket(compiled.contract),
+      baseline: summarizeWorktree(baseline),
+      baselineVerification,
       details: {
-        runPath: join(runDirectory, 'run.json'),
-        explain: { runId, section: 'contract' as const },
+        taskPath: loaded.taskPath,
+        eventsPath: loaded.eventsPath,
+        explain: { taskId, section: 'contract' as const },
       },
-      runCreated: true,
-      hostAction: preparedHostAction(compiled.contract.assurancePlan, runId),
+      taskCreated: true,
+      hostAction: unresolvedHostPolicy
+        ? resolutionHostAction(taskId, resolutionAuthoringPacket({
+            task: loaded.projection,
+            contract: compiled.contract,
+          }))
+        : preparedHostAction(taskId),
     };
   } catch (error) {
-    rmSync(runDirectory, { recursive: true, force: true });
+    rmSync(workspace.taskDirectory, { recursive: true, force: true });
     throw error;
   }
 }
 
 export async function collectDelegationFacts(options: {
   projectRoot: string;
-  runId: string;
+  taskId: string;
   productVersion: string;
   timeoutMs?: number;
   retryChecks?: CheckTimeoutRetry[];
 }) {
-  const projectRoot = canonicalProjectRoot(options.projectRoot);
-  const runId = requiredRunId(options.runId);
-  const runDirectory = resolveRunDirectory(projectRoot, runId);
-  const runPath = join(runDirectory, 'run.json');
-  const run = readRun(runPath);
-  assertRunProject(run, projectRoot, runId);
-  if (run.state === 'completed') {
-    throw usageError(`Run ${runId} is already completed and cannot collect new facts.`);
-  }
-  validateFrozenContract(run.contract);
-  assertWorktreeSnapshot(run.worktreeBaseline, 'run baseline');
-  assertWorktreeObjectStore(runDirectory, runId);
-
-  const checksDirectory = join(runDirectory, 'checks');
-  const definitions = run.contract.verification.mode === 'checks'
-    ? run.contract.verification.checks
+  let collectedFacts: FactBundle | undefined;
+  let collectionMode: 'full-collection' | 'timeout-retry' = 'full-collection';
+  let repeatedObservation = false;
+  const initial = loadTask(options.projectRoot, options.taskId);
+  const contract = readContract(initial);
+  const definitions = contract.verificationPlan.mode === 'checks'
+    ? contract.verificationPlan.definitions
     : [];
-  const retryChecks = options.retryChecks ?? [];
-  if (retryChecks.length && options.timeoutMs !== undefined) {
-    throw usageError('Use --timeout-ms for a full collection or --retry-check for timeout recovery, not both.');
-  }
-  if (options.timeoutMs !== undefined && !definitions.length) {
-    throw usageError('--timeout-ms applies only when the frozen contract contains checks.');
-  }
+  const retries = options.retryChecks ?? [];
+  validateCollectionOptions(definitions, retries, options.timeoutMs);
+  const timeoutBudget = retries.length
+    ? retries.reduce((sum, retry) => sum + retry.timeoutMs, 0)
+    : definitions.length * (options.timeoutMs ?? DEFAULT_CHECK_TIMEOUT_MS);
+  const lockTtlMs = Number.isSafeInteger(timeoutBudget + 300_000)
+    ? Math.max(60 * 60 * 1000, timeoutBudget + 300_000)
+    : 24 * 60 * 60 * 1000;
 
-  let collectionMode: 'full-collection' | 'timeout-retry';
-  let checks: CheckFact[];
-  if (retryChecks.length) {
-    if (run.state !== 'facts-collected' || !run.factBundle) {
-      throw usageError('Timeout retry requires an existing facts-collected run. Run change collect normally first.');
-    }
-    assertFactBundleIdentity(run.factBundle, run.contract.contractId);
-    const currentBeforeRetry = await captureGitWorktree(projectRoot, {
-      objectDirectory: worktreeObjectDirectory(runDirectory),
-    });
-    if (currentBeforeRetry.fingerprint !== run.factBundle.current.fingerprint) {
-      throw usageError(
-        `Run ${runId} changed after collection; run change collect without --retry-check to collect the new implementation and rerun all checks.`,
+  const transitioned = await transitionTask({
+    projectRoot: options.projectRoot,
+    taskId: options.taskId,
+    type: retries.length ? 'timeout-retried' : 'facts-collected',
+    actor: 'runtime',
+    lockTtlMs,
+    async mutate(task) {
+      assertTaskOpenForCollection(task);
+      const currentContract = readContract(task);
+      const baseline = readBaseline(task);
+      const baselineVerification = readBaselineVerification(task);
+      const currentAttempt = task.projection.attempts.find((attempt) =>
+        attempt.attemptId === task.projection.currentAttemptId)!;
+      const priorFacts = currentAttempt.factCollectionId
+        ? readFacts(task, currentAttempt.attemptId, currentAttempt.factCollectionId)
+        : undefined;
+      const checksDirectory = taskArtifactPath(
+        task.taskDirectory,
+        `${attemptDirectory(currentAttempt.attemptId)}/checks/collection-${task.projection.revision + 1}`,
       );
-    }
-    const retryPlan = validateTimeoutRetries(
-      retryChecks,
-      definitions,
-      run.factBundle.checks,
-    );
-    const retriedChecks = await runFrozenChecks({
-      projectRoot,
-      executions: retryPlan.map(({ definition, timeoutMs, previous }) => ({
-        definition,
-        timeoutMs,
-        previousAttempts: previous.attempts,
-      })),
-      outputDirectory: checksDirectory,
-    });
-    const retriedById = new Map(retriedChecks.map((check) => [check.id, check]));
-    const previousById = new Map(run.factBundle.checks.map((check) => [check.id, check]));
-    checks = definitions.map((definition) => {
-      const check = retriedById.get(definition.id) ?? previousById.get(definition.id);
-      if (!check) throw new Error(`Run ${runId} is missing check facts for ${definition.id}.`);
-      return check;
-    });
-    collectionMode = 'timeout-retry';
-  } else {
-    const timeoutMs = options.timeoutMs ?? DEFAULT_CHECK_TIMEOUT_MS;
-    assertCheckTimeout(timeoutMs, 'Collection timeout');
-    rmSync(checksDirectory, { recursive: true, force: true });
-    checks = await runFrozenChecks({
-      projectRoot,
-      executions: definitions.map((definition) => ({ definition, timeoutMs })),
-      outputDirectory: checksDirectory,
-    });
-    collectionMode = 'full-collection';
-  }
-  const worktree = await collectGitWorktreeChange(projectRoot, run.worktreeBaseline, {
-    objectDirectory: worktreeObjectDirectory(runDirectory),
-  });
-  if (collectionMode === 'timeout-retry'
-    && run.factBundle
-    && worktree.current.fingerprint !== run.factBundle.current.fingerprint) {
-    throw usageError(
-      `A retried check changed the worktree for run ${runId}; run change collect without --retry-check so every check is rebound to the new facts.`,
-    );
-  }
-  const verifierMutations = collectVerifierMutations(
-    run.contract,
-    worktree.changedFiles,
-  );
-  const patchPath = join(runDirectory, 'change.patch');
-  const patchFact = worktree.patch.length
-    ? {
-        path: projectRelativePath(projectRoot, patchPath),
-        digest: sha256(worktree.patch),
-        byteLength: worktree.patch.length,
+      const objectDirectory = taskArtifactPath(task.taskDirectory, WORKTREE_OBJECTS_DIRECTORY);
+      let factsBase: Omit<FactBundle, 'factCollectionId' | 'bundleFingerprint'>;
+      let newArtifactRefs: string[] = [];
+
+      if (retries.length) {
+        collectionMode = 'timeout-retry';
+        if (!priorFacts) {
+          throw usageError('Timeout retry requires facts from the current Attempt.');
+        }
+        assertFactBundleIdentity(priorFacts, currentContract.effectiveContractId, currentAttempt.attemptId);
+        const beforeRetry = await captureGitWorktree(task.projectRoot, { objectDirectory });
+        if (beforeRetry.fingerprint !== priorFacts.current.fingerprint) {
+          throw usageError('The worktree changed after collection; run a full collect instead of retrying one check.');
+        }
+        const retryPlan = validateTimeoutRetries(retries, definitions, priorFacts.checks);
+        const retried = await runFrozenChecks({
+          projectRoot: task.projectRoot,
+          executions: retryPlan.map(({ definition, timeoutMs, previous }) => ({
+            definition,
+            timeoutMs,
+            previousAttempts: previous.attempts,
+          })),
+          outputDirectory: checksDirectory,
+        });
+        const retriedById = new Map(retried.map((check) => [check.definitionId, check]));
+        const checks = definitions.map((definition) =>
+          retriedById.get(definition.definitionId)
+          ?? priorFacts.checks.find((check) =>
+            check.definitionId === definition.definitionId)!);
+        const afterRetry = await captureGitWorktree(task.projectRoot, { objectDirectory });
+        if (afterRetry.fingerprint !== priorFacts.current.fingerprint) {
+          throw usageError('A retried check changed the worktree; run a full collect to rebind every fact.');
+        }
+        factsBase = {
+          ...priorFacts,
+          collectedAt: new Date().toISOString(),
+          checks,
+          checkComparisons: compareChecksToBaseline(priorFacts.baselineVerification, checks),
+          environment: collectExecutionEnvironment(task.projectRoot, definitions),
+        };
+        delete (factsBase as Partial<FactBundle>).factCollectionId;
+        delete (factsBase as Partial<FactBundle>).bundleFingerprint;
+      } else {
+        const timeoutMs = options.timeoutMs ?? DEFAULT_CHECK_TIMEOUT_MS;
+        const preCheck = await captureGitWorktree(task.projectRoot, { objectDirectory });
+        const checks = await runFrozenChecks({
+          projectRoot: task.projectRoot,
+          executions: definitions.map((definition) => ({ definition, timeoutMs })),
+          outputDirectory: checksDirectory,
+        });
+        const worktree = await collectGitWorktreeChange(task.projectRoot, baseline, { objectDirectory });
+        const checkInducedChanges = compareGitWorktrees(preCheck, worktree.current);
+        const patchRelative = `${attemptDirectory(currentAttempt.attemptId)}/change-${task.projection.revision + 1}.patch`;
+        const patchPath = taskArtifactPath(task.taskDirectory, patchRelative);
+        const patch = worktree.patch.length
+          ? {
+              path: projectRelativePath(task.projectRoot, patchPath),
+              digest: sha256(worktree.patch),
+              byteLength: worktree.patch.length,
+            }
+          : undefined;
+        if (patch) {
+          writeImmutableBuffer(patchPath, worktree.patch);
+          newArtifactRefs.push(patch.path);
+        }
+        factsBase = {
+          protocol: DELEGATION_PROTOCOL,
+          schemaVersion: DELEGATION_SCHEMA_VERSION,
+          effectiveContractId: currentContract.effectiveContractId,
+          attemptId: currentAttempt.attemptId,
+          collectedAt: new Date().toISOString(),
+          baseline: summarizeWorktree(baseline),
+          preCheck: summarizeWorktree(preCheck),
+          current: summarizeWorktree(worktree.current),
+          baselineVerification,
+          changeFingerprint: worktree.changeFingerprint,
+          changedFiles: worktree.changedFiles,
+          checkInducedChanges,
+          checks,
+          checkComparisons: compareChecksToBaseline(baselineVerification, checks),
+          verifierMutations: collectVerifierMutations(currentContract, worktree.changedFiles),
+          environment: collectExecutionEnvironment(task.projectRoot, definitions),
+          ...(patch ? { patch } : {}),
+          provenance: {
+            collector: 'stetra-cli',
+            cliVersion: options.productVersion,
+            coreVersion: options.productVersion,
+          },
+        };
       }
-    : undefined;
-  if (patchFact) {
-    writeBufferAtomic(patchPath, worktree.patch);
-  } else {
-    rmSync(patchPath, { force: true });
-  }
-  const collectedAt = new Date().toISOString();
-  const bundleBase = {
-    protocol: DELEGATION_PROTOCOL,
-    schemaVersion: DELEGATION_SCHEMA_VERSION,
-    contractId: run.contract.contractId,
-    collectedAt,
-    baseline: summarizeWorktree(run.worktreeBaseline),
-    current: summarizeWorktree(worktree.current),
-    changeFingerprint: worktree.changeFingerprint,
-    changedFiles: worktree.changedFiles,
-    checks,
-    verifierMutations,
-    ...(patchFact ? { patch: patchFact } : {}),
-    provenance: {
-      collector: 'stetra-cli' as const,
-      cliVersion: options.productVersion,
-      coreVersion: options.productVersion,
+
+      const collectionId = factCollectionId(factsBase);
+      const withCollection = { ...factsBase, factCollectionId: collectionId };
+      const facts: FactBundle = {
+        ...withCollection,
+        bundleFingerprint: stableFingerprint(withCollection),
+      };
+      const factsRelative = factsPath(currentAttempt.attemptId, collectionId);
+      const factsAbsolute = taskArtifactPath(task.taskDirectory, factsRelative);
+      writeImmutableJson(factsAbsolute, facts);
+      newArtifactRefs.push(projectRelativePath(task.projectRoot, factsAbsolute));
+      newArtifactRefs.push(...factLogPaths(facts));
+      collectedFacts = facts;
+
+      const parentFacts = currentAttempt.parentAttemptId
+        ? readAttemptFactsIfPresent(task, currentAttempt.parentAttemptId)
+        : undefined;
+      repeatedObservation = ['repair', 'correction'].includes(currentAttempt.trigger)
+        && Boolean(parentFacts)
+        && attemptOutcomeFingerprint(parentFacts!) === attemptOutcomeFingerprint(facts);
+      const checksNeedJudgment = facts.checks.some((check) => latestCheckAttempt(check).status !== 'passed');
+      const attempts = task.projection.attempts.map((attempt) =>
+        attempt.attemptId === currentAttempt.attemptId
+          ? {
+              ...attempt,
+              deliveryStatus: 'implementation-complete' as const,
+              factCollectionId: facts.factCollectionId,
+            }
+          : attempt);
+      const cleared = clearPostCollectionArtifacts(task.projection);
+      return {
+        projection: {
+          ...cleared,
+          deliveryStatus: 'implementation-complete',
+          evidenceStatus: checksNeedJudgment ? 'awaiting-evidence-judgment' : 'incomplete',
+          decisionStatus: 'pending',
+          attempts,
+          challengeIds: [],
+        },
+        artifactRefs: unique(newArtifactRefs),
+      };
     },
-  };
-  const factCollectionId = stableFingerprint({
-    contractId: bundleBase.contractId,
-    baselineFingerprint: bundleBase.baseline.fingerprint,
-    currentFingerprint: bundleBase.current.fingerprint,
-    changeFingerprint: bundleBase.changeFingerprint,
-    changedFiles: bundleBase.changedFiles,
-    checks: bundleBase.checks,
-    verifierMutations: bundleBase.verifierMutations,
-    patch: bundleBase.patch ?? null,
   });
-  const bundleWithCollection = { ...bundleBase, factCollectionId };
-  const factBundle: FactBundle = {
-    ...bundleWithCollection,
-    bundleFingerprint: stableFingerprint(bundleWithCollection),
-  };
-  const handoffPath = join(runDirectory, 'handoff.json');
-  writeJsonAtomic(handoffPath, emptyHandoff());
-  const collectedRun: DelegationRun = {
-    ...run,
-    state: 'facts-collected',
-    factBundle,
-    handoffFile: 'handoff.json',
-  };
-  delete collectedRun.completion;
-  writeJsonAtomic(runPath, collectedRun);
+  if (!collectedFacts) throw new Error('Fact collection completed without a Fact Bundle.');
+  const currentContract = readContract(transitioned);
   return {
     protocol: DELEGATION_PROTOCOL,
     schemaVersion: DELEGATION_SCHEMA_VERSION,
-    status: 'facts-collected',
+    status: 'facts-collected' as const,
     collectionMode,
-    runId,
-    factCollectionId,
-    changedFiles: factBundle.changedFiles.map((file) => ({
+    taskId: transitioned.taskId,
+    attemptId: collectedFacts.attemptId,
+    factCollectionId: collectedFacts.factCollectionId,
+    repeatedObservation,
+    task: compactTask(transitioned.projection),
+    changedFiles: collectedFacts.changedFiles.map((file) => ({
       path: file.path,
       ...(file.previousPath ? { previousPath: file.previousPath } : {}),
       operation: file.operation,
       representation: file.representation,
     })),
-    checks: factBundle.checks.map(compactCheckFact),
-    verifierSurfaces: summarizeVerifierSurfaces(verifierMutations),
-    assurancePlan: run.contract.assurancePlan,
-    patch: factBundle.patch
-      ? {
-          ...factBundle.patch,
-        }
-      : null,
-    handoffPath,
+    checkInducedChanges: collectedFacts.checkInducedChanges.map((file) => ({
+      path: file.path,
+      operation: file.operation,
+    })),
+    checks: collectedFacts.checks.map(compactCheckFact),
+    checkComparisons: collectedFacts.checkComparisons,
+    verifierSurfaces: summarizeVerifierSurfaces(collectedFacts.verifierMutations),
+    patch: collectedFacts.patch ?? null,
+    environment: collectedFacts.environment,
     details: {
-      runPath,
-      explain: { runId, section: 'facts' as const },
+      taskPath: transitioned.taskPath,
+      explain: { taskId: transitioned.taskId, section: 'attempts' as const },
     },
-    hostAction: collectedHostAction(factBundle, run.contract.assurancePlan, runId),
+    hostAction: collectedHostAction({
+      facts: collectedFacts,
+      taskId: transitioned.taskId,
+      diagnosisPacket: diagnosisAuthoringPacket({
+        task: transitioned.projection, contract: currentContract, facts: collectedFacts,
+      }),
+      challengePacket: challengeAuthoringPacket({
+        task: transitioned.projection,
+        contract: currentContract,
+        facts: collectedFacts,
+        challenges: [],
+        requiredObligationIds: requiredChallengeObligationIds(currentContract, collectedFacts),
+      }),
+      handoffPacket: handoffAuthoringPacket({
+        task: transitioned.projection,
+        contract: currentContract,
+        facts: collectedFacts,
+        challenges: [],
+        requiredObligationIds: requiredChallengeObligationIds(currentContract, collectedFacts),
+      }),
+      requiredChallengeObligationIds: requiredChallengeObligationIds(currentContract, collectedFacts),
+    }),
   };
 }
 
-export function readDelegationRun(projectRootInput: string, runIdInput: string): {
-  run: DelegationRun;
-  runDirectory: string;
-  runPath: string;
-} {
-  const projectRoot = canonicalProjectRoot(projectRootInput);
-  const runId = requiredRunId(runIdInput);
-  const runDirectory = resolveRunDirectory(projectRoot, runId);
-  const runPath = join(runDirectory, 'run.json');
-  const run = readRun(runPath);
-  assertRunProject(run, projectRoot, runId);
-  return { run, runDirectory, runPath };
-}
-
-export async function finalizeDelegationHandoff(options: {
+export async function diagnoseCollectedEvidence(options: {
   projectRoot: string;
-  runId: string;
+  taskId: string;
+  inputPath: string;
+  input?: Readable;
 }) {
-  const loaded = readDelegationRun(options.projectRoot, options.runId);
-  const { run, runDirectory, runPath } = loaded;
-  if (run.state === 'prepared') {
-    throw usageError(`Run ${run.runId} has no Fact Bundle; run change collect first.`);
-  }
-  if (run.state === 'completed') {
-    throw usageError(`Run ${run.runId} is already completed.`);
-  }
-  if (!run.factBundle || run.handoffFile !== 'handoff.json') {
-    throw new Error(`Run ${run.runId} has an invalid facts-collected state.`);
-  }
-  validateFrozenContract(run.contract);
-  assertWorktreeObjectStore(runDirectory, run.runId);
-  const current = await captureGitWorktree(run.projectRoot, {
-    objectDirectory: worktreeObjectDirectory(runDirectory),
-  });
-  if (current.fingerprint !== run.factBundle.current.fingerprint) {
-    const stale = evaluateHandoff({
-      protocol: DELEGATION_PROTOCOL,
-      schemaVersion: DELEGATION_SCHEMA_VERSION,
-      contract: run.contract,
-      factBundle: run.factBundle,
-      currentWorktreeFingerprint: current.fingerprint,
-      handoff: emptyHandoff() as CognitiveHandoff,
-    });
-    return {
-      ...stale,
-      runId: run.runId,
-      state: run.state,
-      hostAction: staleFactsHostAction(run.runId),
-    };
-  }
-
-  const handoffPath = join(runDirectory, run.handoffFile);
-  const source = readHandoffDocument(handoffPath);
-  const repositoryEvidence = materializeEvidenceWindows(
-    run.projectRoot,
-    source.repositoryEvidence ?? [],
+  const projectRoot = canonicalProjectRoot(options.projectRoot);
+  const source = await readInputDocument(
+    projectRoot,
+    options.inputPath,
+    options.input,
+    EvidenceDispositionDocumentSchema,
+    'Evidence disposition input',
   );
-  const handoff: CognitiveHandoff = {
-    protocol: DELEGATION_PROTOCOL,
-    schemaVersion: DELEGATION_SCHEMA_VERSION,
-    systemMeaningUpdate: source.systemMeaningUpdate,
-    materialClaims: source.materialClaims,
-    residualUnknowns: source.residualUnknowns,
-    reviewMap: source.reviewMap,
-    ...(source.materialAlternatives
-      ? { materialAlternatives: source.materialAlternatives }
-      : {}),
-    ...(repositoryEvidence.length ? { repositoryEvidence } : {}),
-  };
-  let evaluation;
-  try {
-    evaluation = evaluateHandoff({
-      protocol: DELEGATION_PROTOCOL,
-      schemaVersion: DELEGATION_SCHEMA_VERSION,
-      contract: run.contract,
-      factBundle: run.factBundle,
-      currentWorktreeFingerprint: current.fingerprint,
-      handoff,
-    });
-  } catch (error) {
-    if (isHandoffValidationError(error)) {
-      throw inputError(
-        'Cognitive Handoff cannot be evaluated; correct all reported issues and finalize again.',
-        error,
-        error.issues,
-      );
-    }
-    throw inputError(
-      `Cognitive Handoff cannot be evaluated: ${error instanceof Error ? error.message : String(error)}`,
-      error,
-    );
-  }
-  if (evaluation.status === 'facts-stale' || !evaluation.handoffFingerprint) {
-    throw new Error('Fresh fact validation unexpectedly returned a stale or unbound evaluation.');
-  }
-  const handoffPacket = buildHandoffPacket(
-    run.contract,
-    run.factBundle,
-    handoff,
-    evaluation,
-  );
-  const completedRun: DelegationRun = {
-    ...run,
-    state: 'completed',
-    completion: {
-      completedAt: new Date().toISOString(),
-      handoffFingerprint: evaluation.handoffFingerprint,
-      evaluation,
+  let route: EvidenceDisposition['route'] | undefined;
+  let disposition: EvidenceDisposition | undefined;
+  let successorAttemptId: string | undefined;
+  const transitioned = await transitionTask({
+    projectRoot,
+    taskId: options.taskId,
+    type: 'evidence-diagnosed',
+    actor: 'agent',
+    mutate(task) {
+      const contract = readContract(task);
+      const current = task.projection.attempts.find((attempt) =>
+        attempt.attemptId === task.projection.currentAttemptId)!;
+      if (!current.factCollectionId) {
+        throw usageError('Evidence diagnosis requires collected facts for the current Attempt.');
+      }
+      if (task.projection.decisionStatus !== 'pending') {
+        throw usageError('A decided task cannot record evidence diagnosis.');
+      }
+      const facts = readFacts(task, current.attemptId, current.factCollectionId);
+      validateEvidenceDispositionInput(source, contract, facts);
+      route = evidenceDispositionRoute(source, contract);
+      const budgetExhausted = route === 'repair-implementation'
+        && task.projection.repairCount >= contract.plan.maxRepairAttempts;
+      if (budgetExhausted) route = 'handoff';
+      const dispositionProjection = {
+        protocol: DELEGATION_PROTOCOL,
+        schemaVersion: DELEGATION_SCHEMA_VERSION,
+        effectiveContractId: contract.effectiveContractId,
+        attemptId: current.attemptId,
+        factCollectionId: facts.factCollectionId,
+        semanticImpact: source.semanticImpact,
+        entries: source.entries,
+        route,
+      };
+      disposition = {
+        dispositionId: stableFingerprint(dispositionProjection),
+        ...dispositionProjection,
+      };
+      const dispositionRelative = `${attemptDirectory(current.attemptId)}/evidence-disposition.json`;
+      const dispositionPath = taskArtifactPath(task.taskDirectory, dispositionRelative);
+      writeImmutableJson(dispositionPath, disposition);
+      const currentWithDisposition = {
+        ...current,
+        evidenceDispositionPath: projectRelativePath(task.projectRoot, dispositionPath),
+        ...(budgetExhausted ? { deliveryStatus: 'exhausted' as const } : {}),
+      };
+      const cleared = clearPostCollectionArtifacts(task.projection);
+      if (route !== 'repair-implementation') {
+        return {
+          projection: {
+            ...cleared,
+            deliveryStatus: budgetExhausted ? 'exhausted' : 'implementation-complete',
+            evidenceStatus: route === 'ask-human' || budgetExhausted
+              ? 'needs-attention' : 'incomplete',
+            attempts: task.projection.attempts.map((attempt) =>
+              attempt.attemptId === current.attemptId ? currentWithDisposition : attempt),
+            ...(route === 'ask-human' ? {
+              pendingResolution: {
+                kind: 'semantic-impact' as const,
+                targetId: disposition.dispositionId,
+              },
+            } : {}),
+          },
+          artifactRefs: [projectRelativePath(task.projectRoot, dispositionPath)],
+        };
+      }
+      successorAttemptId = `attempt:${current.ordinal + 1}`;
+      const attemptRelative = `${attemptDirectory(successorAttemptId)}/attempt.json`;
+      const attemptPath = taskArtifactPath(task.taskDirectory, attemptRelative);
+      const createdAt = new Date().toISOString();
+      const successor = {
+        attemptId: successorAttemptId,
+        ordinal: current.ordinal + 1,
+        parentAttemptId: current.attemptId,
+        effectiveContractId: contract.effectiveContractId,
+        trigger: 'repair' as const,
+        deliveryStatus: 'repairing' as const,
+        createdAt,
+      };
+      writeImmutableJson(attemptPath, successor);
+      return {
+        projection: {
+          ...cleared,
+          currentAttemptId: successorAttemptId,
+          deliveryStatus: 'repairing',
+          evidenceStatus: 'not-collected',
+          decisionStatus: 'pending',
+          repairCount: task.projection.repairCount + 1,
+          attempts: [
+            ...task.projection.attempts.map((attempt) =>
+              attempt.attemptId === current.attemptId ? currentWithDisposition : attempt),
+            successor,
+          ],
+          challengeIds: [],
+        },
+        artifactRefs: [
+          projectRelativePath(task.projectRoot, dispositionPath),
+          projectRelativePath(task.projectRoot, attemptPath),
+        ],
+      };
     },
-  };
-  writeJsonAtomic(handoffPath, handoff);
-  writeJsonAtomic(runPath, completedRun);
-  rmSync(worktreeObjectDirectory(runDirectory), { recursive: true, force: true });
-  const removedCompletedRunIds = cleanupCompletedRuns(run.projectRoot, run.runId);
+  });
+  const currentContract = readContract(transitioned);
+  const currentFacts = route === 'repair-implementation' ? undefined : readCurrentFacts(transitioned);
+  const challenges = route === 'repair-implementation' ? [] : readChallenges(transitioned);
+  const required = currentFacts
+    ? requiredChallengeObligationIds(currentContract, currentFacts) : [];
+  const packet = route === 'ask-human'
+    ? resolutionAuthoringPacket({
+        task: transitioned.projection,
+        contract: currentContract,
+        ...(currentFacts ? { facts: currentFacts } : {}),
+      })
+    : route === 'revise-verification' && currentFacts
+      ? verificationRevisionAuthoringPacket({
+          task: transitioned.projection,
+          contract: currentContract,
+          facts: currentFacts,
+        })
+    : route === 'challenge' && currentFacts
+      ? challengeAuthoringPacket({
+          task: transitioned.projection, contract: currentContract, facts: currentFacts,
+          challenges, requiredObligationIds: required,
+        })
+      : route === 'handoff' && currentFacts
+        ? handoffAuthoringPacket({
+            task: transitioned.projection, contract: currentContract, facts: currentFacts,
+            challenges, requiredObligationIds: required,
+          })
+        : undefined;
   return {
     protocol: DELEGATION_PROTOCOL,
     schemaVersion: DELEGATION_SCHEMA_VERSION,
-    status: evaluation.status,
-    runId: run.runId,
-    state: 'completed',
-    factCollectionId: run.factBundle.factCollectionId,
-    handoffFingerprint: evaluation.handoffFingerprint,
-    attention: evaluation.attention,
-    adoption: evaluation.adoption,
-    handoffPacket,
-    details: {
-      runPath,
-      handoffPath,
-      patchPath: run.factBundle.patch?.path ?? null,
-      checkLogs: run.factBundle.checks.flatMap((check) =>
-        check.attempts.flatMap((attempt) => {
-          const logs = {
-            ...(attempt.stdout.logPath ? { stdout: attempt.stdout.logPath } : {}),
-            ...(attempt.stderr.logPath ? { stderr: attempt.stderr.logPath } : {}),
-          };
-          return Object.keys(logs).length
-            ? [{
-                checkId: check.id,
-                attempt: attempt.attempt,
-                timeoutMs: attempt.timeoutMs,
-                status: attempt.status,
-                ...logs,
-              }]
-            : [];
-        })),
-      explain: {
-        runId: run.runId,
-        sections: ['contract', 'facts', 'handoff', 'evaluation', 'review'] as const,
-      },
-    },
-    retention: { removedCompletedRunIds },
-    hostAction: finalizedHostAction(evaluation.status, run.runId),
+    status: route === 'repair-implementation'
+      ? 'repair-prepared' as const
+      : 'evidence-diagnosed' as const,
+    taskId: transitioned.taskId,
+    disposition: disposition!,
+    ...(successorAttemptId ? { successorAttemptId } : {}),
+    task: compactTask(transitioned.projection),
+    hostAction: diagnosisHostAction(route!, transitioned.taskId, packet),
   };
 }
 
-function isHandoffValidationError(
-  value: unknown,
-): value is Error & { issues: HandoffValidationIssue[] } {
-  const candidate = value as { name?: unknown; issues?: unknown };
-  return value instanceof Error
-    && candidate.name === 'HandoffValidationError'
-    && Array.isArray(candidate.issues)
-    && candidate.issues.every((issue) =>
-      Boolean(issue)
-      && typeof issue === 'object'
-      && typeof (issue as { code?: unknown }).code === 'string'
-      && typeof (issue as { path?: unknown }).path === 'string'
-      && typeof (issue as { message?: unknown }).message === 'string'
-      && typeof (issue as { remediation?: unknown }).remediation === 'string');
-}
-
-function worktreeObjectDirectory(runDirectory: string): string {
-  return join(runDirectory, WORKTREE_OBJECTS_DIRECTORY);
-}
-
-function assertWorktreeObjectStore(runDirectory: string, runId: string): void {
-  if (!existsSync(worktreeObjectDirectory(runDirectory))) {
-    throw usageError(
-      `Run ${runId} is missing its task-owned worktree object store; prepare a new run.`,
-    );
-  }
-}
-
-export function explainDelegationRun(options: {
+export async function recordChallenge(options: {
   projectRoot: string;
-  runId: string;
-  section?: string;
-}): {
-  protocol: typeof DELEGATION_PROTOCOL;
-  schemaVersion: typeof DELEGATION_SCHEMA_VERSION;
-  runId: string;
-  state: DelegationRun['state'];
-  packageIdentity: DelegationRun['packageIdentity'];
-  section: string;
-  contract?: SemanticContract;
-  baseline?: ReturnType<typeof summarizeWorktree>;
-  factBundle?: FactBundle | null;
-  handoff?: unknown;
-  evaluation?: unknown;
-  handoffPacket?: HandoffPacket | null;
-  issue?: string;
-} {
-  const { run, runDirectory } = readDelegationRun(options.projectRoot, options.runId);
-  const handoffPath = join(runDirectory, 'handoff.json');
-  const handoff = existsSync(handoffPath)
-    ? readJsonValue(handoffPath, 'Cognitive Handoff')
-    : null;
-  const common = {
-    protocol: run.protocol,
-    schemaVersion: run.schemaVersion,
-    runId: run.runId,
-    state: run.state,
-    packageIdentity: run.packageIdentity,
+  taskId: string;
+  inputPath: string;
+  input?: Readable;
+  hostAttestations?: HostAttestationProvider;
+}) {
+  const projectRoot = canonicalProjectRoot(options.projectRoot);
+  const source = await readInputDocument(
+    projectRoot,
+    options.inputPath,
+    options.input,
+    ChallengeDocumentSchema,
+    'Independent Challenge input',
+  );
+  let challenge: IndependentChallenge | undefined;
+  const transitioned = await transitionTask({
+    projectRoot,
+    taskId: options.taskId,
+    type: 'challenge-recorded',
+    actor: 'agent',
+    async mutate(task) {
+      const contract = readContract(task);
+      const facts = readCurrentFacts(task);
+      const stale = await currentFactsAreStale(task, facts);
+      if (stale) throw usageError('Facts changed before challenge; collect the current worktree first.');
+      validateChallengeReferences(source, contract, facts);
+      const attest = options.hostAttestations?.attestChallenge
+        ? await options.hostAttestations.attestChallenge({
+            taskId: task.taskId,
+            effectiveContractId: contract.effectiveContractId,
+            attemptId: facts.attemptId,
+            factCollectionId: facts.factCollectionId,
+          })
+        : undefined;
+      const obligationById = new Map(contract.adoptionConditions.flatMap((condition) =>
+        condition.evidenceObligations.map((obligation) => [obligation.id, obligation] as const)));
+      const challengeId = `challenge:${randomUUID()}`;
+      challenge = {
+        protocol: DELEGATION_PROTOCOL,
+        schemaVersion: DELEGATION_SCHEMA_VERSION,
+        ...source,
+        id: challengeId,
+        effectiveContractId: contract.effectiveContractId,
+        attemptId: facts.attemptId,
+        factCollectionId: facts.factCollectionId,
+        conditionIds: unique(source.obligationIds.map((id) => obligationById.get(id)!.conditionId)),
+        independence: attest ? 'host-attested' : 'unverified',
+        ...(attest ? attest : {}),
+      };
+      const relativePath = challengePath(challengeId);
+      const path = taskArtifactPath(task.taskDirectory, relativePath);
+      writeImmutableJson(path, challenge);
+      return {
+        projection: {
+          ...task.projection,
+          challengeIds: [...task.projection.challengeIds, challengeId],
+        },
+        artifactRefs: [projectRelativePath(task.projectRoot, path)],
+      };
+    },
+  });
+  const transitionedContract = readContract(transitioned);
+  const transitionedFacts = readCurrentFacts(transitioned);
+  const challenges = readChallenges(transitioned);
+  const required = requiredChallengeObligationIds(transitionedContract, transitionedFacts);
+  const coveredObligations = new Set(challenges.flatMap((item) => item.obligationIds));
+  const needsAnotherChallenge = required.some((id) => !coveredObligations.has(id));
+  const packet = needsAnotherChallenge
+    ? challengeAuthoringPacket({
+        task: transitioned.projection,
+        contract: transitionedContract,
+        facts: transitionedFacts,
+        challenges,
+        requiredObligationIds: required,
+      })
+    : handoffAuthoringPacket({
+        task: transitioned.projection,
+        contract: transitionedContract,
+        facts: transitionedFacts,
+        challenges,
+        requiredObligationIds: required,
+      });
+  return {
+    protocol: DELEGATION_PROTOCOL,
+    schemaVersion: DELEGATION_SCHEMA_VERSION,
+    status: 'challenge-recorded' as const,
+    taskId: transitioned.taskId,
+    attemptId: challenge!.attemptId,
+    factCollectionId: challenge!.factCollectionId,
+    challenge: challenge!,
+    hostAction: challengeHostAction(transitioned.taskId, needsAnotherChallenge, packet),
   };
+}
+
+export async function evaluateDelegationHandoff(options: {
+  projectRoot: string;
+  taskId: string;
+  inputPath: string;
+  input?: Readable;
+}) {
+  const projectRoot = canonicalProjectRoot(options.projectRoot);
+  const loaded = loadTask(projectRoot, options.taskId);
+  const facts = readCurrentFacts(loaded);
+  const current = await captureGitWorktree(projectRoot, {
+    objectDirectory: taskArtifactPath(loaded.taskDirectory, WORKTREE_OBJECTS_DIRECTORY),
+  });
+  if (current.fingerprint !== facts.current.fingerprint) {
+    return staleHandoffResult(loaded, facts, current.fingerprint);
+  }
+  const source = await readInputDocument(
+    projectRoot,
+    options.inputPath,
+    options.input,
+    CognitiveHandoffDocumentSchema,
+    'Cognitive Handoff input',
+  );
+  let handoff: CognitiveHandoff | undefined;
+  let evaluation: HandoffEvaluation | undefined;
+  let packet: DecisionPacket | undefined;
+  const transitioned = await transitionTask({
+    projectRoot,
+    taskId: options.taskId,
+    type: 'handoff-evaluated',
+    actor: 'agent',
+    async mutate(task) {
+      const contract = readContract(task);
+      const currentFacts = readCurrentFacts(task);
+      if (await currentFactsAreStale(task, currentFacts)) {
+        throw usageError('Facts changed while handoff was being authored; collect again.');
+      }
+      const challenges = readChallenges(task);
+      handoff = materializeHandoff(source, contract, currentFacts);
+      try {
+        evaluation = evaluateHandoff({
+          protocol: DELEGATION_PROTOCOL,
+          schemaVersion: DELEGATION_SCHEMA_VERSION,
+          contract,
+          factBundle: currentFacts,
+          currentWorktreeFingerprint: currentFacts.current.fingerprint,
+          challenges,
+          evidenceDispositions: readEvidenceDispositions(task),
+          hostPolicyEvaluations: task.projection.hostPolicyEvaluations,
+          deliveryExhausted: task.projection.deliveryStatus === 'exhausted',
+          verificationRevised: task.projection.verificationRevised,
+          handoff,
+        });
+      } catch (error) {
+        throw handoffInputError(error);
+      }
+      packet = buildDecisionPacket(
+        contract,
+        currentFacts,
+        readEvidenceDispositions(task),
+        challenges,
+        handoff,
+        evaluation,
+      );
+      const handoffRelative = handoffPath(handoff.handoffId);
+      const evaluationRelative = handoffEvaluationPath(handoff.handoffId);
+      const handoffAbsolute = taskArtifactPath(task.taskDirectory, handoffRelative);
+      const evaluationAbsolute = taskArtifactPath(task.taskDirectory, evaluationRelative);
+      writeImmutableJson(handoffAbsolute, handoff);
+      writeImmutableJson(evaluationAbsolute, evaluation);
+      return {
+        projection: {
+          ...task.projection,
+          evidenceStatus: evaluation.status,
+          currentHandoffId: handoff.handoffId,
+          currentHandoffFingerprint: handoff.handoffFingerprint,
+        },
+        artifactRefs: [
+          projectRelativePath(task.projectRoot, handoffAbsolute),
+          projectRelativePath(task.projectRoot, evaluationAbsolute),
+        ],
+      };
+    },
+  });
+  return {
+    protocol: DELEGATION_PROTOCOL,
+    schemaVersion: DELEGATION_SCHEMA_VERSION,
+    status: evaluation!.status,
+    taskId: transitioned.taskId,
+    attemptId: evaluation!.attemptId,
+    factCollectionId: evaluation!.factCollectionId,
+    handoffId: handoff!.handoffId,
+    handoffFingerprint: handoff!.handoffFingerprint,
+    attention: evaluation!.attention,
+    adoption: evaluation!.adoption,
+    decisionPacket: packet!,
+    hostAction: handoffHostAction(
+      evaluation!.status,
+      transitioned.taskId,
+      decisionAuthoringPacket({
+        task: transitioned.projection,
+        contract: readContract(transitioned),
+        facts: readCurrentFacts(transitioned),
+        challenges: readChallenges(transitioned),
+        handoff: handoff!,
+        evaluation: evaluation!,
+      }),
+    ),
+  };
+}
+
+export async function recordHumanDecision(options: {
+  projectRoot: string;
+  taskId: string;
+  inputPath: string;
+  input?: Readable;
+}) {
+  const projectRoot = canonicalProjectRoot(options.projectRoot);
+  const loaded = loadTask(projectRoot, options.taskId);
+  const facts = readCurrentFacts(loaded);
+  const current = await captureGitWorktree(projectRoot, {
+    objectDirectory: taskArtifactPath(loaded.taskDirectory, WORKTREE_OBJECTS_DIRECTORY),
+  });
+  if (current.fingerprint !== facts.current.fingerprint) {
+    return staleHandoffResult(loaded, facts, current.fingerprint);
+  }
+  const source = await readInputDocument(
+    projectRoot,
+    options.inputPath,
+    options.input,
+    HumanDecisionDocumentSchema,
+    'Human Decision input',
+  );
+  let decision: HumanDecision | undefined;
+  let evaluation: HandoffEvaluation | undefined;
+  let packet: DecisionPacket | undefined;
+  const transitioned = await transitionTask({
+    projectRoot,
+    taskId: options.taskId,
+    type: 'decision-recorded',
+    actor: 'human',
+    async mutate(task) {
+      if (task.projection.decisionStatus !== 'pending') {
+        throw usageError(`Task already has decision ${task.projection.decisionStatus}.`);
+      }
+      const contract = readContract(task);
+      const currentFacts = readCurrentFacts(task);
+      if (await currentFactsAreStale(task, currentFacts)) {
+        throw usageError('Facts changed while the decision was being recorded; collect and review again.');
+      }
+      const handoff = readCurrentHandoff(task);
+      const challenges = readChallenges(task);
+      decision = materializeDecision(source, contract, currentFacts, handoff);
+      try {
+        evaluation = evaluateHandoff({
+          protocol: DELEGATION_PROTOCOL,
+          schemaVersion: DELEGATION_SCHEMA_VERSION,
+          contract,
+          factBundle: currentFacts,
+          currentWorktreeFingerprint: currentFacts.current.fingerprint,
+          challenges,
+          evidenceDispositions: readEvidenceDispositions(task),
+          hostPolicyEvaluations: task.projection.hostPolicyEvaluations,
+          deliveryExhausted: task.projection.deliveryStatus === 'exhausted',
+          verificationRevised: task.projection.verificationRevised,
+          handoff,
+          decision,
+        });
+      } catch (error) {
+        throw handoffInputError(error);
+      }
+      packet = buildDecisionPacket(
+        contract,
+        currentFacts,
+        readEvidenceDispositions(task),
+        challenges,
+        handoff,
+        evaluation,
+        decision,
+      );
+      const decisionRelative = decisionPath(decision.decisionId);
+      const evaluationRelative = decisionEvaluationPath(decision.decisionId);
+      const decisionAbsolute = taskArtifactPath(task.taskDirectory, decisionRelative);
+      const evaluationAbsolute = taskArtifactPath(task.taskDirectory, evaluationRelative);
+      writeImmutableJson(decisionAbsolute, decision);
+      writeImmutableJson(evaluationAbsolute, evaluation);
+      const terminal = decision.action === 'accepted'
+        || decision.action === 'rejected'
+        || decision.action === 'deferred';
+      return {
+        projection: {
+          ...task.projection,
+          evidenceStatus: evaluation.status,
+          decisionStatus: decision.action,
+          decisionId: decision.decisionId,
+          ...(decision.action === 'correction-requested' ? {
+            pendingResolution: {
+              kind: 'correction' as const,
+              targetId: decision.decisionId,
+            },
+          } : {}),
+          ...(terminal ? { terminalAt: new Date().toISOString() } : {}),
+        },
+        artifactRefs: [
+          projectRelativePath(task.projectRoot, decisionAbsolute),
+          projectRelativePath(task.projectRoot, evaluationAbsolute),
+        ],
+      };
+    },
+  });
+  return {
+    protocol: DELEGATION_PROTOCOL,
+    schemaVersion: DELEGATION_SCHEMA_VERSION,
+    status: 'decision-recorded' as const,
+    taskId: transitioned.taskId,
+    decisionStatus: decision!.action,
+    evidenceStatus: evaluation!.status,
+    attention: evaluation!.attention,
+    decisionPacket: packet!,
+    externalEffects: {
+      committed: false,
+      merged: false,
+      published: false,
+      deployed: false,
+      activatedForFutureTasks: false,
+    },
+    hostAction: decision!.action === 'correction-requested'
+      ? resolutionHostAction(transitioned.taskId, resolutionAuthoringPacket({
+          task: transitioned.projection,
+          contract: readContract(transitioned),
+          facts: readCurrentFacts(transitioned),
+        }))
+      : null,
+  };
+}
+
+export async function resolveHumanChoice(options: {
+  projectRoot: string;
+  taskId: string;
+  inputPath: string;
+  input?: Readable;
+}) {
+  const projectRoot = canonicalProjectRoot(options.projectRoot);
+  const source = await readInputDocument(
+    projectRoot,
+    options.inputPath,
+    options.input,
+    HumanResolutionDocumentSchema,
+    'Human Resolution input',
+  );
+  let resolution: ReturnType<typeof materializeResolution> | undefined;
+  let successorAttemptId: string | undefined;
+  const transitioned = await transitionTask({
+    projectRoot,
+    taskId: options.taskId,
+    type: 'human-resolution-recorded',
+    actor: 'human',
+    mutate(task) {
+      const pending = task.projection.pendingResolution;
+      if (!pending || !resolutionTargetMatches(source, pending)) {
+        throw usageError('Human Resolution must target the exact currently pending decision.');
+      }
+      const contract = readContract(task);
+      resolution = materializeResolution(source, contract);
+      const resolutionRelative = resolutionPath(resolution.resolutionId);
+      const resolutionAbsolute = taskArtifactPath(task.taskDirectory, resolutionRelative);
+      writeImmutableJson(resolutionAbsolute, resolution);
+      const artifactRefs = [projectRelativePath(task.projectRoot, resolutionAbsolute)];
+      if (source.action === 'abort') {
+        return {
+          projection: {
+            ...withoutPendingResolution(task.projection),
+            decisionStatus: 'aborted' as const,
+            terminalAt: new Date().toISOString(),
+          },
+          artifactRefs,
+        };
+      }
+
+      const requestsSuccessor = pending.kind === 'correction'
+        || source.action === 'request-correction';
+      if (requestsSuccessor) {
+        const current = task.projection.attempts.find((attempt) =>
+          attempt.attemptId === task.projection.currentAttemptId)!;
+        successorAttemptId = `attempt:${current.ordinal + 1}`;
+        const successor = {
+          attemptId: successorAttemptId,
+          ordinal: current.ordinal + 1,
+          parentAttemptId: current.attemptId,
+          effectiveContractId: contract.effectiveContractId,
+          trigger: 'correction' as const,
+          deliveryStatus: 'repairing' as const,
+          createdAt: new Date().toISOString(),
+        };
+        const attemptRelative = `${attemptDirectory(successorAttemptId)}/attempt.json`;
+        const attemptAbsolute = taskArtifactPath(task.taskDirectory, attemptRelative);
+        writeImmutableJson(attemptAbsolute, successor);
+        artifactRefs.push(projectRelativePath(task.projectRoot, attemptAbsolute));
+        const cleared = clearPostCollectionArtifacts(withoutPendingResolution(task.projection));
+        return {
+          projection: {
+            ...cleared,
+            currentAttemptId: successorAttemptId,
+            deliveryStatus: 'repairing' as const,
+            evidenceStatus: 'not-collected' as const,
+            decisionStatus: 'pending' as const,
+            attempts: [...task.projection.attempts, successor],
+            challengeIds: [],
+          },
+          artifactRefs,
+        };
+      }
+
+      if (pending.kind === 'host-policy') {
+        const resolvedHostPolicyIds = unique([
+          ...task.projection.resolvedHostPolicyIds,
+          pending.targetId,
+        ]);
+        const nextUnresolvedHostPolicy = contract.hostPolicyRequirements.find((requirement) =>
+          requirement.enforcementRequirement === 'required'
+          && task.projection.hostPolicyEvaluations.find((item) =>
+            item.requirementId === requirement.id)?.mode !== 'enforced'
+          && !resolvedHostPolicyIds.includes(requirement.id));
+        return {
+          projection: {
+            ...withoutPendingResolution(task.projection),
+            resolvedHostPolicyIds,
+            ...(nextUnresolvedHostPolicy ? {
+              pendingResolution: {
+                kind: 'host-policy' as const,
+                targetId: nextUnresolvedHostPolicy.id,
+              },
+            } : {}),
+          },
+          artifactRefs,
+        };
+      }
+
+      return {
+        projection: withoutPendingResolution(task.projection),
+        artifactRefs,
+      };
+    },
+  });
+
+  let hostAction = null;
+  if (transitioned.projection.decisionStatus !== 'aborted') {
+    if (transitioned.projection.pendingResolution) {
+      hostAction = resolutionHostAction(transitioned.taskId, resolutionAuthoringPacket({
+        task: transitioned.projection,
+        contract: readContract(transitioned),
+        facts: readAttemptFactsIfPresent(
+          transitioned,
+          transitioned.projection.currentAttemptId,
+        ),
+      }));
+    } else if (successorAttemptId || transitioned.projection.deliveryStatus === 'waiting-for-implementation') {
+      hostAction = preparedHostAction(transitioned.taskId);
+    } else {
+      const contract = readContract(transitioned);
+      const facts = readCurrentFacts(transitioned);
+      const challenges = readChallenges(transitioned);
+      const required = requiredChallengeObligationIds(contract, facts);
+      const covered = new Set(challenges.flatMap((item) => item.obligationIds));
+      const needsChallenge = required.some((id) => !covered.has(id));
+      const packet = needsChallenge
+        ? challengeAuthoringPacket({
+            task: transitioned.projection, contract, facts, challenges,
+            requiredObligationIds: required,
+          })
+        : handoffAuthoringPacket({
+            task: transitioned.projection, contract, facts, challenges,
+            requiredObligationIds: required,
+          });
+      hostAction = challengeHostAction(transitioned.taskId, needsChallenge, packet);
+    }
+  }
+  return {
+    protocol: DELEGATION_PROTOCOL,
+    schemaVersion: DELEGATION_SCHEMA_VERSION,
+    status: 'human-resolution-recorded' as const,
+    taskId: transitioned.taskId,
+    resolution: resolution!,
+    ...(successorAttemptId ? { successorAttemptId } : {}),
+    task: compactTask(transitioned.projection),
+    hostAction,
+  };
+}
+
+export async function reviseVerificationPlan(options: {
+  projectRoot: string;
+  taskId: string;
+  inputPath: string;
+  input?: Readable;
+}) {
+  const projectRoot = canonicalProjectRoot(options.projectRoot);
+  const source = await readInputDocument(
+    projectRoot,
+    options.inputPath,
+    options.input,
+    VerificationRevisionDocumentSchema,
+    'Verification Revision input',
+  );
+  let revisionRecord: ReturnType<typeof materializeVerificationRevision> | undefined;
+  let successorAttemptId: string | undefined;
+  let revisedContract: TaskContract | undefined;
+  const transitioned = await transitionTask({
+    projectRoot,
+    taskId: options.taskId,
+    type: 'verification-revised',
+    actor: 'agent',
+    mutate(task) {
+      if (task.projection.pendingResolution) {
+        throw usageError('Resolve the pending Human decision before revising verification.');
+      }
+      if (task.projection.decisionStatus !== 'pending') {
+        throw usageError(`Task ${task.taskId} is already ${task.projection.decisionStatus}.`);
+      }
+      const priorContract = readContract(task);
+      const compiled = compileDelegation({
+        protocol: DELEGATION_PROTOCOL,
+        schemaVersion: DELEGATION_SCHEMA_VERSION,
+        operation: 'revise-verification',
+        priorContract,
+        revision: source,
+      });
+      if (compiled.status !== 'delegation-compiled') {
+        const issues = compiled.status === 'authority-invalid' ? compiled.issues : [];
+        throw inputError(
+          compiled.status === 'authority-invalid'
+            ? 'Verification Revision is invalid.' : compiled.message,
+          undefined,
+          issues.map((item) => ({
+            ...item,
+            remediation: 'Correct the exact revision input; no existing artifact was changed.',
+          })),
+        );
+      }
+      revisedContract = compiled.contract;
+      const definitions = revisedContract.verificationPlan.mode === 'checks'
+        ? revisedContract.verificationPlan.definitions : [];
+      const unavailable = definitions.flatMap((definition) => {
+        const resolution = resolveExecutable(definition.argv[0], task.projectRoot);
+        return resolution.status === 'unavailable'
+          ? [`${definition.definitionId}: ${resolution.error.message}`] : [];
+      });
+      if (unavailable.length) {
+        throw inputError(`Revised top-level check executables are unavailable: ${unavailable.join('; ')}`);
+      }
+      const priorBaseline = readBaseline(task);
+      const baselineSummary = summarizeWorktree(priorBaseline);
+      const baselineProjection = {
+        capturedAt: new Date().toISOString(),
+        preCheck: baselineSummary,
+        postCheck: baselineSummary,
+        checkInducedChanges: [],
+        checks: definitions.map((definition) => ({
+          definitionId: definition.definitionId,
+          mode: definition.baseline.mode === 'task-start'
+            ? 'unknown-after-revision' as const : 'unknown' as const,
+          observation: null,
+        })),
+      };
+      const baselineVerification: BaselineVerificationFact = {
+        fingerprint: stableFingerprint(baselineProjection),
+        ...baselineProjection,
+      };
+      const current = task.projection.attempts.find((attempt) =>
+        attempt.attemptId === task.projection.currentAttemptId)!;
+      successorAttemptId = `attempt:${current.ordinal + 1}`;
+      const successor = {
+        attemptId: successorAttemptId,
+        ordinal: current.ordinal + 1,
+        parentAttemptId: current.attemptId,
+        effectiveContractId: revisedContract.effectiveContractId,
+        trigger: 'verification-revision' as const,
+        deliveryStatus: 'waiting-for-implementation' as const,
+        createdAt: new Date().toISOString(),
+      };
+      const contractRevision = task.projection.contractRevision + 1;
+      revisionRecord = materializeVerificationRevision(
+        source,
+        priorContract,
+        revisedContract,
+      );
+      const artifacts = [
+        { relativePath: contractPath(contractRevision), value: revisedContract },
+        { relativePath: planPath(contractRevision), value: revisedContract.plan },
+        { relativePath: baselinePath(contractRevision), value: priorBaseline },
+        { relativePath: baselineVerificationPath(contractRevision), value: baselineVerification },
+        { relativePath: verificationRevisionPath(revisionRecord.revisionId), value: revisionRecord },
+        { relativePath: `${attemptDirectory(successorAttemptId)}/attempt.json`, value: successor },
+      ];
+      for (const artifact of artifacts) {
+        writeImmutableJson(taskArtifactPath(task.taskDirectory, artifact.relativePath), artifact.value);
+      }
+      const cleared = clearPostCollectionArtifacts(task.projection);
+      return {
+        projection: {
+          ...cleared,
+          contractRevision,
+          semanticContractId: revisedContract.semanticContractId,
+          verificationPlanId: revisedContract.verificationPlanId,
+          effectiveContractId: revisedContract.effectiveContractId,
+          currentAttemptId: successorAttemptId,
+          deliveryStatus: 'waiting-for-implementation',
+          evidenceStatus: 'not-collected',
+          decisionStatus: 'pending',
+          attempts: [...task.projection.attempts, successor],
+          challengeIds: [],
+          verificationRevised: true,
+          verificationRevisionIds: [
+            ...task.projection.verificationRevisionIds,
+            revisionRecord.revisionId,
+          ],
+        },
+        artifactRefs: artifacts.map((artifact) => projectRelativePath(
+          task.projectRoot,
+          taskArtifactPath(task.taskDirectory, artifact.relativePath),
+        )),
+      };
+    },
+  });
+  return {
+    protocol: DELEGATION_PROTOCOL,
+    schemaVersion: DELEGATION_SCHEMA_VERSION,
+    status: 'verification-revised' as const,
+    taskId: transitioned.taskId,
+    revision: revisionRecord!,
+    contractRevision: transitioned.projection.contractRevision,
+    semanticContractId: revisedContract!.semanticContractId,
+    verificationPlanId: revisedContract!.verificationPlanId,
+    effectiveContractId: revisedContract!.effectiveContractId,
+    successorAttemptId: successorAttemptId!,
+    baseline: 'baseline-unknown-after-revision' as const,
+    task: compactTask(transitioned.projection),
+    hostAction: preparedHostAction(transitioned.taskId),
+  };
+}
+
+export function explainDelegationTask(options: {
+  projectRoot: string;
+  taskId: string;
+  section?: string;
+}) {
+  const task = loadTask(options.projectRoot, options.taskId);
   const section = options.section ?? 'all';
+  const common = {
+    protocol: task.projection.protocol,
+    schemaVersion: task.projection.schemaVersion,
+    taskId: task.taskId,
+    task: compactTask(task.projection),
+    section,
+  };
   if (section === 'contract') {
+    return { ...common, contract: readContract(task), baseline: summarizeWorktree(readBaseline(task)) };
+  }
+  if (section === 'plan') return { ...common, plan: readContract(task).plan };
+  if (section === 'attempts') {
     return {
       ...common,
-      section,
-      contract: run.contract,
-      baseline: summarizeWorktree(run.worktreeBaseline),
+      attempts: task.projection.attempts.map((attempt) => ({
+        ...attempt,
+        facts: attempt.factCollectionId
+          ? readFacts(task, attempt.attemptId, attempt.factCollectionId)
+          : null,
+      })),
     };
   }
-  if (section === 'facts') {
-    return { ...common, section, factBundle: run.factBundle ?? null };
+  if (section === 'challenge') return { ...common, challenges: readChallenges(task) };
+  if (section === 'revision') {
+    return { ...common, verificationRevisions: readVerificationRevisions(task) };
   }
   if (section === 'handoff') {
-    return { ...common, section, handoff };
-  }
-  if (section === 'evaluation') {
-    return { ...common, section, evaluation: run.completion?.evaluation ?? null };
-  }
-  if (section === 'review') {
-    if (!run.factBundle || !handoff || !run.completion) {
-      return {
-        ...common,
-        section,
-        handoffPacket: null,
-        issue: 'The run has no completed Cognitive Handoff review packet.',
-      };
-    }
-    const currentHandoffFingerprint = stableFingerprint({
-      factCollectionId: run.factBundle.factCollectionId,
-      handoff,
-    });
-    if (currentHandoffFingerprint !== run.completion.handoffFingerprint) {
-      return {
-        ...common,
-        section,
-        handoffPacket: null,
-        issue: 'The persisted handoff changed after completion; a bound review packet is unavailable.',
-      };
-    }
     return {
       ...common,
-      section,
-      handoffPacket: buildHandoffPacket(
-        run.contract,
-        run.factBundle,
-        handoff as CognitiveHandoff,
-        run.completion.evaluation as HandoffEvaluation,
-      ),
+      handoff: task.projection.currentHandoffId ? readCurrentHandoff(task) : null,
+      evaluation: task.projection.currentHandoffId
+        ? readJsonArtifact(taskArtifactPath(task.taskDirectory, handoffEvaluationPath(task.projection.currentHandoffId)), 'handoff evaluation')
+        : null,
     };
   }
+  if (section === 'decision') {
+    return {
+      ...common,
+      decision: task.projection.decisionId
+        ? readJsonArtifact(taskArtifactPath(task.taskDirectory, decisionPath(task.projection.decisionId)), 'Human Decision')
+        : null,
+    };
+  }
+  if (section === 'events') return { ...common, events: task.events };
   if (section !== 'all') {
-    throw usageError(
-      `Invalid explain section ${JSON.stringify(section)}; use contract, facts, handoff, evaluation, review, or all.`,
-    );
+    throw usageError('Invalid explain section; use contract, plan, attempts, challenge, revision, handoff, decision, events, or all.');
   }
   return {
     ...common,
-    section,
-    contract: run.contract,
-    baseline: summarizeWorktree(run.worktreeBaseline),
-    factBundle: run.factBundle ?? null,
-    handoff,
-    evaluation: run.completion?.evaluation ?? null,
+    contract: readContract(task),
+    plan: readContract(task).plan,
+    attempts: task.projection.attempts,
+    challenges: readChallenges(task),
+    verificationRevisions: readVerificationRevisions(task),
+    handoff: task.projection.currentHandoffId ? readCurrentHandoff(task) : null,
+    decision: task.projection.decisionId
+      ? readJsonArtifact(taskArtifactPath(task.taskDirectory, decisionPath(task.projection.decisionId)), 'Human Decision')
+      : null,
+    events: task.events,
   };
 }
 
-export function writeDelegationRun(path: string, run: DelegationRun): void {
-  writeJsonAtomic(path, run);
+export function readDelegationTask(projectRoot: string, taskId: string): LoadedTask {
+  return loadTask(projectRoot, taskId);
 }
 
-async function readPrepareDocument(
+async function readInputDocument<Schema extends Parameters<typeof parseArtifact>[0]>(
   projectRoot: string,
   pathInput: string,
-  input: Readable = process.stdin,
-): Promise<DelegationPrepareDocument> {
-  const sourceLabel = pathInput === '-' ? 'stdin' : safePrepareInputPath(projectRoot, pathInput);
-  let textValue: string;
+  input: Readable | undefined,
+  schema: Schema,
+  label: string,
+): Promise<ReturnType<typeof parseArtifact<Schema>>> {
+  const sourceLabel = pathInput === '-' ? 'stdin' : safeInputPath(projectRoot, pathInput, label);
+  let text: string;
   try {
-    textValue = pathInput === '-'
-      ? await readUtf8Stream(input)
+    text = pathInput === '-'
+      ? await readUtf8Stream(input ?? process.stdin)
       : readFileSync(sourceLabel, 'utf8');
   } catch (error) {
-    throw inputError(
-      `Failed to read Semantic Contract input from ${sourceLabel}: ${error instanceof Error ? error.message : String(error)}`,
-      error,
-    );
+    throw inputError(`Failed to read ${label} from ${sourceLabel}.`, error);
   }
   let value: unknown;
   try {
-    value = JSON.parse(textValue);
+    value = JSON.parse(text);
   } catch (error) {
-    throw inputError(
-      `Semantic Contract input from ${sourceLabel} is not valid JSON: ${error instanceof Error ? error.message : String(error)}`,
-      error,
-    );
+    throw inputError(`${label} from ${sourceLabel} is not valid JSON.`, error);
   }
-  return parseArtifact(
-    DelegationPrepareDocumentSchema,
-    value,
-    'Semantic Contract input',
-  );
+  return parseArtifact(schema, value, label) as ReturnType<typeof parseArtifact<Schema>>;
 }
 
-function safePrepareInputPath(projectRoot: string, pathInput: string): string {
-  const path = resolve(pathInput);
+function safeInputPath(projectRoot: string, input: string, label: string): string {
+  const path = resolve(input);
   const canonical = existsSync(path) ? realpathSync(path) : path;
   const rel = relative(projectRoot, canonical);
   if (!isAbsolute(rel) && rel !== '..' && !rel.startsWith(`..${sep}`)) {
-    throw inputError(
-      `Semantic Contract input must not be stored inside the project worktree: ${canonical}`,
-      undefined,
-      [{
-        code: 'prepare-input-inside-project',
-        path: 'input',
-        message: 'A task input inside the worktree can pollute the collected change.',
-        remediation: 'Pass the JSON on stdin with --input -, or use a file outside the project root.',
-      }],
-    );
+    throw inputError(`${label} must not be stored inside the project worktree; use stdin or a file outside it.`);
   }
   return canonical;
 }
 
 async function readUtf8Stream(input: Readable): Promise<string> {
   const chunks: Buffer[] = [];
-  for await (const chunk of input) {
-    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk), 'utf8'));
-  }
+  for await (const chunk of input) chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk)));
   return Buffer.concat(chunks).toString('utf8');
 }
 
-function readHandoffDocument(path: string) {
-  return parseArtifact(
-    CognitiveHandoffDocumentSchema,
-    readJsonValue(path, 'Cognitive Handoff'),
-    'Cognitive Handoff',
+function readContract(task: LoadedTask): TaskContract {
+  const contract = readJsonArtifact<TaskContract>(
+    taskArtifactPath(task.taskDirectory, contractPath(task.projection.contractRevision)),
+    'Task Contract',
+  );
+  if (contract.protocol !== DELEGATION_PROTOCOL
+    || contract.schemaVersion !== DELEGATION_SCHEMA_VERSION
+    || contract.semanticContractId !== task.projection.semanticContractId
+    || contract.verificationPlanId !== task.projection.verificationPlanId
+    || contract.effectiveContractId !== task.projection.effectiveContractId) {
+    throw new Error('Stored Task Contract identity is invalid.');
+  }
+  assertStoredContractFingerprints(contract);
+  return contract;
+}
+
+function readBaseline(task: LoadedTask): WorktreeSnapshot {
+  const baseline = readJsonArtifact<WorktreeSnapshot>(
+    taskArtifactPath(task.taskDirectory, baselinePath(task.projection.contractRevision)),
+    'task baseline',
+  );
+  assertWorktreeSnapshot(baseline, 'task baseline');
+  return baseline;
+}
+
+function readBaselineVerification(task: LoadedTask): BaselineVerificationFact {
+  const baseline = readJsonArtifact<BaselineVerificationFact>(
+    taskArtifactPath(task.taskDirectory, baselineVerificationPath(task.projection.contractRevision)),
+    'baseline verification',
+  );
+  const { fingerprint: _ignored, ...projection } = baseline;
+  if (baseline.fingerprint !== stableFingerprint(projection)) {
+    throw new Error('Stored baseline verification changed after preparation.');
+  }
+  return baseline;
+}
+
+function readCurrentFacts(task: LoadedTask): FactBundle {
+  const attempt = task.projection.attempts.find((candidate) =>
+    candidate.attemptId === task.projection.currentAttemptId);
+  if (!attempt?.factCollectionId) {
+    throw usageError(`Task ${task.taskId} has no facts for its current Attempt.`);
+  }
+  const facts = readFacts(task, attempt.attemptId, attempt.factCollectionId);
+  assertFactBundleIdentity(facts, attempt.effectiveContractId, attempt.attemptId);
+  return facts;
+}
+
+function readFacts(task: LoadedTask, attemptId: string, collectionId: string): FactBundle {
+  return readJsonArtifact<FactBundle>(
+    taskArtifactPath(task.taskDirectory, factsPath(attemptId, collectionId)),
+    `Fact Bundle ${collectionId}`,
   );
 }
 
-function readJsonValue(path: string, label: string): unknown {
-  if (!existsSync(path)) throw usageError(`${label} does not exist at ${path}.`);
-  try {
-    return JSON.parse(readFileSync(path, 'utf8'));
-  } catch (error) {
-    throw inputError(`Failed to read ${label} at ${path}.`, error);
-  }
+function readAttemptFactsIfPresent(task: LoadedTask, attemptId: string): FactBundle | undefined {
+  const attempt = task.projection.attempts.find((candidate) => candidate.attemptId === attemptId);
+  return attempt?.factCollectionId ? readFacts(task, attemptId, attempt.factCollectionId) : undefined;
 }
 
-function readRun(path: string): DelegationRun {
-  if (!existsSync(path)) throw usageError(`Run does not exist at ${path}.`);
-  let value: unknown;
-  try {
-    value = JSON.parse(readFileSync(path, 'utf8'));
-  } catch (error) {
-    throw inputError(`Failed to read run at ${path}.`, error);
-  }
-  const parsed = parseArtifact(DelegationRunSchema, value, 'Semantic Handoff run');
-  return parsed as DelegationRun;
+function readChallenges(task: LoadedTask): IndependentChallenge[] {
+  return task.projection.challengeIds.map((id) =>
+    readJsonArtifact<IndependentChallenge>(
+      taskArtifactPath(task.taskDirectory, challengePath(id)),
+      `Challenge ${id}`,
+    ));
 }
 
-function validateFrozenContract(contract: SemanticContract): void {
-  if (contract.protocol !== DELEGATION_PROTOCOL
-    || contract.schemaVersion !== DELEGATION_SCHEMA_VERSION
-    || !/^sha256:[a-f0-9]{64}$/.test(contract.contractId)) {
-    throw new Error('Prepared Semantic Contract has an unsupported protocol or invalid identity.');
-  }
-  const { contractId: _ignored, ...projection } = contract;
-  if (contract.contractId !== stableFingerprint(projection)) {
-    throw new Error('Prepared Semantic Contract was modified after compilation; prepare a new run.');
-  }
-  if (contract.verification.mode === 'checks') {
-    for (const definition of contract.verification.checks) {
-      if (!definition.argv.length
-        || definition.argv.some((item) => typeof item !== 'string' || !item)
-        || !Array.isArray(definition.verifierRefs)
-        || definition.verifierRefs.some((item) =>
-          !item
-          || !projectRelativePathIsSafe(item.path)
-          || (item.role !== 'command-definition' && item.role !== 'acceptance-surface'))) {
-        throw new Error(`Prepared check ${definition.id} is invalid; prepare a new run.`);
-      }
-    }
-  }
+function readVerificationRevisions(task: LoadedTask): unknown[] {
+  return task.projection.verificationRevisionIds.map((id) =>
+    readJsonArtifact(
+      taskArtifactPath(task.taskDirectory, verificationRevisionPath(id)),
+      `Verification Revision ${id}`,
+    ));
 }
 
-function projectRelativePathIsSafe(value: unknown): value is string {
-  return typeof value === 'string'
-    && Boolean(value)
-    && !value.startsWith('/')
-    && !/^[A-Za-z]:[\\/]/.test(value)
-    && !value.includes('\\')
-    && value.split('/').every((segment) => Boolean(segment) && segment !== '.' && segment !== '..');
-}
-
-function assertFactBundleIdentity(bundle: FactBundle, contractId: string): void {
-  if (bundle.contractId !== contractId) {
-    throw new Error('Collected facts are bound to another Semantic Contract.');
-  }
-  const expectedCollectionId = stableFingerprint({
-    contractId: bundle.contractId,
-    baselineFingerprint: bundle.baseline.fingerprint,
-    currentFingerprint: bundle.current.fingerprint,
-    changeFingerprint: bundle.changeFingerprint,
-    changedFiles: bundle.changedFiles,
-    checks: bundle.checks,
-    verifierMutations: bundle.verifierMutations,
-    patch: bundle.patch ?? null,
+function readEvidenceDispositions(task: LoadedTask): EvidenceDisposition[] {
+  return task.projection.attempts.flatMap((attempt) => {
+    if (!attempt.evidenceDispositionPath) return [];
+    return [readJsonArtifact<EvidenceDisposition>(
+      resolve(task.projectRoot, attempt.evidenceDispositionPath),
+      `Evidence disposition for ${attempt.attemptId}`,
+    )];
   });
-  if (bundle.factCollectionId !== expectedCollectionId) {
-    throw new Error('Collected machine facts were modified after collection.');
+}
+
+function readCurrentHandoff(task: LoadedTask): CognitiveHandoff {
+  if (!task.projection.currentHandoffId) throw usageError('Task has no evaluated Cognitive Handoff.');
+  const handoff = readJsonArtifact<CognitiveHandoff>(
+    taskArtifactPath(task.taskDirectory, handoffPath(task.projection.currentHandoffId)),
+    'Cognitive Handoff',
+  );
+  if (handoff.handoffFingerprint !== task.projection.currentHandoffFingerprint) {
+    throw new Error('Stored Cognitive Handoff fingerprint differs from the task projection.');
   }
-  const { bundleFingerprint: _ignored, ...projection } = bundle;
-  if (bundle.bundleFingerprint !== stableFingerprint(projection)) {
-    throw new Error('Collected Fact Bundle fingerprint does not match its content.');
+  return handoff;
+}
+
+function materializeHandoff(
+  source: CognitiveHandoffDocument,
+  contract: TaskContract,
+  facts: FactBundle,
+): CognitiveHandoff {
+  const projection = {
+    protocol: DELEGATION_PROTOCOL,
+    schemaVersion: DELEGATION_SCHEMA_VERSION,
+    handoffId: `handoff:${randomUUID()}`,
+    ...source,
+    reviewQuestions: source.reviewQuestions.map((question) => ({
+      id: `review:${randomUUID()}`,
+      ...question,
+    })),
+    effectiveContractId: contract.effectiveContractId,
+    attemptId: facts.attemptId,
+    factCollectionId: facts.factCollectionId,
+  };
+  return { ...projection, handoffFingerprint: stableFingerprint(projection) };
+}
+
+function materializeDecision(
+  source: HumanDecisionDocument,
+  contract: TaskContract,
+  facts: FactBundle,
+  handoff: CognitiveHandoff,
+): HumanDecision {
+  return {
+    protocol: DELEGATION_PROTOCOL,
+    schemaVersion: DELEGATION_SCHEMA_VERSION,
+    decisionId: `decision:${randomUUID()}`,
+    ...source,
+    humanEvent: {
+      id: generatedHumanEventId(source.humanEvent, source.action === 'correction-requested'
+        ? 'correction' : 'decision'),
+      kind: source.action === 'correction-requested' ? 'correction' as const : 'decision' as const,
+      ...source.humanEvent,
+      contentFingerprint: sha256(source.humanEvent.content),
+    },
+    effectiveContractId: contract.effectiveContractId,
+    attemptId: facts.attemptId,
+    factCollectionId: facts.factCollectionId,
+    handoffId: handoff.handoffId,
+    handoffFingerprint: handoff.handoffFingerprint,
+  };
+}
+
+function buildDecisionPacket(
+  contract: TaskContract,
+  facts: FactBundle,
+  evidenceDispositions: EvidenceDisposition[],
+  challenges: IndependentChallenge[],
+  handoff: CognitiveHandoff,
+  evaluation: HandoffEvaluation,
+  decision?: HumanDecision,
+): DecisionPacket {
+  return {
+    protocol: DELEGATION_PROTOCOL,
+    schemaVersion: DELEGATION_SCHEMA_VERSION,
+    authority: contract.authority,
+    contract,
+    facts,
+    evidenceDispositions,
+    challenges,
+    handoff,
+    evaluation,
+    review: {
+      decision: {
+        desiredOutcome: contract.understanding.desiredOutcome.value,
+        recommendation: handoff.recommendation,
+        conditionStatuses: handoff.conditionConclusions.map((item) => ({
+          conditionId: item.conditionId,
+          status: item.status,
+        })),
+        attentionIds: evaluation.attention.map((item) => item.id),
+      },
+      conditions: contract.adoptionConditions.map((condition) => ({
+        condition,
+        conclusion: handoff.conditionConclusions.find((item) =>
+          item.conditionId === condition.id)!,
+        obligations: condition.evidenceObligations.map((obligation) => ({
+          obligation,
+          conclusion: handoff.obligationConclusions.find((item) =>
+            item.obligationId === obligation.id)!,
+          challenges: challenges.filter((item) =>
+            item.obligationIds.includes(obligation.id)),
+        })),
+        reviewQuestions: handoff.reviewQuestions.filter((item) =>
+          item.conditionIds.includes(condition.id)),
+      })),
+      facts: {
+        changedFiles: facts.changedFiles,
+        checks: facts.checks,
+        checkComparisons: facts.checkComparisons,
+        verifierMutations: facts.verifierMutations,
+        checkInducedChanges: facts.checkInducedChanges,
+        evidenceDispositions,
+      },
+    },
+    ...(decision ? { decision } : {}),
+  };
+}
+
+async function staleHandoffResult(
+  task: LoadedTask,
+  facts: FactBundle,
+  currentFingerprint: string,
+) {
+  const evaluation = evaluateHandoff({
+    protocol: DELEGATION_PROTOCOL,
+    schemaVersion: DELEGATION_SCHEMA_VERSION,
+    contract: readContract(task),
+    factBundle: facts,
+    currentWorktreeFingerprint: currentFingerprint,
+    challenges: [],
+    evidenceDispositions: readEvidenceDispositions(task),
+    hostPolicyEvaluations: task.projection.hostPolicyEvaluations,
+    deliveryExhausted: task.projection.deliveryStatus === 'exhausted',
+    verificationRevised: task.projection.verificationRevised,
+    handoff: {} as CognitiveHandoff,
+  });
+  return {
+    ...evaluation,
+    taskId: task.taskId,
+    stateWritten: false,
+    hostAction: staleFactsHostAction(task.taskId),
+  };
+}
+
+async function currentFactsAreStale(task: LoadedTask, facts: FactBundle): Promise<boolean> {
+  const current = await captureGitWorktree(task.projectRoot, {
+    objectDirectory: taskArtifactPath(task.taskDirectory, WORKTREE_OBJECTS_DIRECTORY),
+  });
+  return current.fingerprint !== facts.current.fingerprint;
+}
+
+function validateChallengeReferences(
+  source: ReturnType<typeof ChallengeDocumentSchema.parse>,
+  contract: TaskContract,
+  facts: FactBundle,
+): void {
+  assertReferences(source.obligationIds, contract.adoptionConditions.flatMap((condition) =>
+    condition.evidenceObligations.map((obligation) => obligation.id)), 'evidence obligation');
+  assertReferences(source.evidence.changedFiles, facts.changedFiles.map((file) => file.id), 'changed file');
+  assertReferences(source.evidence.checks, facts.checks.map((check) => check.definitionId), 'check');
+  assertReferences(source.evidence.repositoryEvidence, contract.repositoryEvidence.map((item) => item.id), 'repository evidence');
+  assertReferences(source.evidence.humanEvents, [contract.authority.developerEvent.id], 'Human Event');
+  if (source.evidence.patch && !facts.patch) throw inputError('Challenge selected a patch that does not exist.');
+}
+
+function assertReferences(selected: string[], available: string[], label: string): void {
+  const set = new Set(available);
+  for (const value of selected) if (!set.has(value)) throw inputError(`Unknown ${label} reference ${JSON.stringify(value)}.`);
+}
+
+function assertTaskOpenForCollection(task: LoadedTask): void {
+  if (task.projection.pendingResolution) {
+    throw usageError(`Task ${task.taskId} requires an exact Human resolution before collection.`);
+  }
+  if (task.projection.decisionStatus !== 'pending') {
+    throw usageError(`Task ${task.taskId} is already ${task.projection.decisionStatus}.`);
+  }
+  if (task.projection.deliveryStatus === 'exhausted') {
+    throw usageError(`Task ${task.taskId} exhausted its repair route.`);
+  }
+}
+
+function validateCollectionOptions(
+  definitions: VerificationDefinition[],
+  retries: CheckTimeoutRetry[],
+  timeoutMs: number | undefined,
+): void {
+  if (retries.length && timeoutMs !== undefined) {
+    throw usageError('Use --timeout-ms for full collection or --retry-check for timeout recovery, not both.');
+  }
+  if (timeoutMs !== undefined) assertCheckTimeout(timeoutMs, 'Collection timeout');
+  if (timeoutMs !== undefined && !definitions.length) {
+    throw usageError('--timeout-ms applies only when frozen checks exist.');
   }
 }
 
 function validateTimeoutRetries(
   retries: CheckTimeoutRetry[],
-  definitions: VerificationDefinition[],
+  definitions: Extract<TaskContract['verificationPlan'], { mode: 'checks' }>['definitions'],
   previousChecks: CheckFact[],
-): Array<{
-  definition: VerificationDefinition;
-  timeoutMs: number;
-  previous: CheckFact;
-}> {
-  if (previousChecks.length !== definitions.length) {
-    throw new Error('Collected checks do not match the frozen verification definitions.');
-  }
-  const definitionsById = new Map(definitions.map((definition) => [definition.id, definition]));
-  const previousById = new Map(previousChecks.map((check) => [check.id, check]));
-  if (previousById.size !== previousChecks.length) {
-    throw new Error('Collected checks contain duplicate IDs.');
-  }
-  for (const definition of definitions) {
-    const previous = previousById.get(definition.id);
-    if (!previous
-      || JSON.stringify(previous.argv) !== JSON.stringify(definition.argv)
-      || previous.definitionFingerprint !== stableFingerprint(definition)
-      || !Array.isArray(previous.attempts)
-      || !previous.attempts.length) {
-      throw new Error(`Collected check ${definition.id} is not bound to its frozen definition.`);
-    }
-  }
-
-  const requested = new Map<string, number>();
-  for (const retry of retries) {
-    if (requested.has(retry.checkId)) {
-      throw usageError(`Duplicate --retry-check entry for ${retry.checkId}.`);
-    }
+) {
+  const definitionsById = new Map(definitions.map((definition) =>
+    [definition.definitionId, definition]));
+  const previousById = new Map(previousChecks.map((check) =>
+    [check.definitionId, check]));
+  const requested = new Set<string>();
+  return retries.map((retry) => {
+    if (requested.has(retry.checkId)) throw usageError(`Duplicate retry for ${retry.checkId}.`);
+    requested.add(retry.checkId);
     const definition = definitionsById.get(retry.checkId);
     const previous = previousById.get(retry.checkId);
-    if (!definition || !previous) {
-      throw usageError(`Cannot retry unknown frozen check ${JSON.stringify(retry.checkId)}.`);
-    }
-    assertCheckTimeout(retry.timeoutMs, `Retry timeout for check ${retry.checkId}`);
+    if (!definition || !previous) throw usageError(`Unknown frozen check ${retry.checkId}.`);
+    assertCheckTimeout(retry.timeoutMs, `Retry timeout for ${retry.checkId}`);
     const latest = latestCheckAttempt(previous);
     if (!latest.timedOut || latest.status !== 'unavailable') {
-      throw usageError(
-        `Check ${retry.checkId} may use --retry-check only after its latest attempt timed out.`,
-      );
+      throw usageError(`Check ${retry.checkId} can retry only after its latest attempt timed out.`);
     }
     if (retry.timeoutMs <= latest.timeoutMs) {
-      throw usageError(
-        `Check ${retry.checkId} retry timeout must be greater than ${latest.timeoutMs} ms.`,
-      );
+      throw usageError(`Retry timeout for ${retry.checkId} must exceed ${latest.timeoutMs} ms.`);
     }
-    requested.set(retry.checkId, retry.timeoutMs);
-  }
-
-  return definitions.flatMap((definition) => {
-    const timeoutMs = requested.get(definition.id);
-    const previous = previousById.get(definition.id);
-    return timeoutMs !== undefined && previous
-      ? [{ definition, timeoutMs, previous }]
-      : [];
+    return { definition, previous, timeoutMs: retry.timeoutMs };
   });
 }
 
 function assertCheckTimeout(value: number, label: string): void {
-  if (!Number.isSafeInteger(value) || value < 1) {
-    throw usageError(`${label} must be a positive safe integer in milliseconds.`);
+  if (!Number.isSafeInteger(value) || value < 1) throw usageError(`${label} must be a positive safe integer.`);
+}
+
+function assertFactBundleIdentity(bundle: FactBundle, effectiveContractId: string, attemptId: string): void {
+  if (bundle.effectiveContractId !== effectiveContractId || bundle.attemptId !== attemptId) {
+    throw new Error('Fact Bundle is bound to another contract or Attempt.');
+  }
+  const { factCollectionId: _collection, bundleFingerprint: _bundle, ...base } = bundle;
+  if (bundle.factCollectionId !== factCollectionId(base)) {
+    throw new Error('Collected machine facts changed after collection.');
+  }
+  const { bundleFingerprint: _ignored, ...projection } = bundle;
+  if (bundle.bundleFingerprint !== stableFingerprint(projection)) {
+    throw new Error('Fact Bundle fingerprint does not match its content.');
   }
 }
 
+function factCollectionId(bundle: Omit<FactBundle, 'factCollectionId' | 'bundleFingerprint'>): string {
+  return stableFingerprint({
+    protocol: bundle.protocol,
+    schemaVersion: bundle.schemaVersion,
+    effectiveContractId: bundle.effectiveContractId,
+    attemptId: bundle.attemptId,
+    baseline: bundle.baseline,
+    preCheck: bundle.preCheck,
+    current: bundle.current,
+    baselineVerification: bundle.baselineVerification,
+    changeFingerprint: bundle.changeFingerprint,
+    changedFiles: bundle.changedFiles,
+    checkInducedChanges: bundle.checkInducedChanges,
+    checks: bundle.checks,
+    checkComparisons: bundle.checkComparisons,
+    verifierMutations: bundle.verifierMutations,
+    environment: bundle.environment,
+    patch: bundle.patch ?? null,
+    provenance: bundle.provenance,
+  });
+}
+
 function collectVerifierMutations(
-  contract: SemanticContract,
+  contract: TaskContract,
   files: FactBundle['changedFiles'],
 ): VerifierMutation[] {
-  if (contract.verification.mode !== 'checks') return [];
+  if (contract.verificationPlan.mode !== 'checks') return [];
   const changedByPath = new Map<string, FactBundle['changedFiles'][number]>();
   for (const file of files) {
     changedByPath.set(file.path, file);
     if (file.previousPath) changedByPath.set(file.previousPath, file);
   }
-  return contract.verification.checks.flatMap((check) =>
-    check.verifierRefs.flatMap((verifierRef) => {
-      const changed = changedByPath.get(verifierRef.path);
-      return changed
-        ? [{
-            checkId: check.id,
-            path: verifierRef.path,
-            role: verifierRef.role,
-            changedFileId: changed.id,
-          }]
-        : [];
+  return contract.verificationPlan.definitions.flatMap((check) =>
+    check.verifierRefs.flatMap((reference) => {
+      const changed = changedByPath.get(reference.path);
+      return changed ? [{
+        verifierId: check.verifierId,
+        definitionId: check.definitionId,
+        path: reference.path,
+        role: reference.role,
+        changedFileId: changed.id,
+      }] : [];
     }));
 }
 
-function buildHandoffPacket(
-  contract: SemanticContract,
+function compareChecksToBaseline(
+  baseline: BaselineVerificationFact,
+  checks: CheckFact[],
+): FactBundle['checkComparisons'] {
+  return checks.map((check) => {
+    const baselineCheck = baseline.checks.find((item) =>
+      item.definitionId === check.definitionId);
+    if (baselineCheck?.mode === 'unknown-after-revision') {
+      return {
+        definitionId: check.definitionId,
+        relation: 'baseline-unknown-after-revision' as const,
+      };
+    }
+    if (!baselineCheck || baselineCheck.mode === 'unknown' || !baselineCheck.observation) {
+      return { definitionId: check.definitionId, relation: 'baseline-unknown' as const };
+    }
+    const before = latestCheckAttempt(baselineCheck.observation).status;
+    const current = latestCheckAttempt(check).status;
+    return {
+      definitionId: check.definitionId,
+      relation: `${before}-before-${current}-now` as CheckBaselineRelation,
+    };
+  });
+}
+
+function validateEvidenceDispositionInput(
+  source: EvidenceDispositionDocument,
+  contract: TaskContract,
   facts: FactBundle,
-  handoff: CognitiveHandoff,
-  evaluation: HandoffEvaluation,
-): HandoffPacket {
-  return {
-    semanticContract: contractWorkPacket(contract),
-    runtimeFacts: {
-      factCollectionId: facts.factCollectionId,
-      collectedAt: facts.collectedAt,
-      changeFingerprint: facts.changeFingerprint,
-      changedFiles: facts.changedFiles,
-      checks: facts.checks,
-      verifierSurfaces: summarizeVerifierSurfaces(facts.verifierMutations),
-      patch: facts.patch ?? null,
-    },
-    hostHandoff: handoff,
-    evaluation: {
-      protocol: evaluation.protocol,
-      schemaVersion: evaluation.schemaVersion,
-      status: evaluation.status,
-      contractId: evaluation.contractId,
-      factCollectionId: evaluation.factCollectionId,
-      handoffFingerprint: evaluation.handoffFingerprint,
-      claimConclusions: evaluation.claimConclusions,
-      attention: evaluation.attention,
-      adoption: evaluation.adoption,
-    },
-  };
+): void {
+  const nonpassing = facts.checks
+    .filter((check) => latestCheckAttempt(check).status !== 'passed')
+    .map((check) => check.definitionId)
+    .sort();
+  const selected = source.entries.map((entry) => entry.definitionId).sort();
+  if (new Set(selected).size !== selected.length
+    || selected.length !== nonpassing.length
+    || selected.some((id, index) => id !== nonpassing[index])) {
+    throw inputError('Evidence disposition must diagnose every current non-passing check exactly once.');
+  }
+  const available = new Set(
+    contract.verificationPlan.mode === 'checks'
+      ? contract.verificationPlan.definitions.map((check) => check.definitionId) : [],
+  );
+  for (const [index, entry] of source.entries.entries()) {
+    if (!available.has(entry.definitionId)) {
+      throw inputError(`Unknown frozen check ${JSON.stringify(entry.definitionId)} in evidence disposition.`);
+    }
+    if (entry.cause === 'implementation'
+      && (!entry.codeChangeCanAlterObservation || !entry.intendedChanges.length)) {
+      throw inputError(`Evidence disposition entry ${index} classifies implementation cause but supplies no code-change path.`);
+    }
+    if (entry.cause !== 'implementation' && entry.intendedChanges.length) {
+      throw inputError(`Evidence disposition entry ${index} proposes code changes without classifying an implementation cause.`);
+    }
+  }
 }
 
-function contractWorkPacket(contract: SemanticContract) {
-  return {
-    contractId: contract.contractId,
-    authority: {
-      humanEventIds: contract.authority.humanEvents.map((event) => event.id),
-      repositoryEvidenceIds: contract.repositoryEvidence.map((evidence) => evidence.id),
-    },
-    assurancePlan: contract.assurancePlan,
-    semantic: {
-      desiredOutcome: compactSemanticValue(contract.semantic.desiredOutcome),
-      constraints: contract.semantic.constraints.map(compactSemanticValue),
-      nonGoals: contract.semantic.nonGoals.map(compactSemanticValue),
-      focus: contract.semantic.focus.map(compactSemanticValue),
-      consequence: {
-        value: contract.semantic.consequence,
-        basis: contract.semantic.consequenceInterpretation.basis,
-      },
-    },
-    repositoryEvidence: contract.repositoryEvidence.map((evidence) => ({
-      id: evidence.id,
-      path: evidence.path,
-      startLine: evidence.startLine,
-      endLine: evidence.endLine,
-    })),
-    verification: contract.verification.mode === 'no-command'
-      ? contract.verification
-      : {
-          mode: 'checks' as const,
-          checks: contract.verification.checks.map((check) => ({
-            id: check.id,
-            rationale: check.rationale,
-            argv: check.argv,
-            source: check.source,
-            commandDefinitionPaths: check.verifierRefs
-              .filter((reference) => reference.role === 'command-definition')
-              .map((reference) => reference.path),
-            acceptanceSurfacePaths: check.verifierRefs
-              .filter((reference) => reference.role === 'acceptance-surface')
-              .map((reference) => reference.path),
-          })),
-        },
-  };
+function evidenceDispositionRoute(
+  source: EvidenceDispositionDocument,
+  contract: TaskContract,
+): EvidenceDisposition['route'] {
+  if (source.semanticImpact === 'material') return 'ask-human';
+  if (source.entries.some((entry) => entry.cause === 'implementation')) {
+    return 'repair-implementation';
+  }
+  const criticalVerifierIds = new Set(contract.adoptionConditions
+    .filter((condition) => condition.criticality === 'adoption-critical')
+    .flatMap((condition) => condition.evidenceObligations)
+    .flatMap((obligation) => obligation.strategies)
+    .flatMap((strategy) => strategy.kind === 'runtime-check' ? strategy.verifierIds : []));
+  const verifierByDefinition = new Map(contract.verificationPlan.mode === 'checks'
+    ? contract.verificationPlan.definitions.map((definition) =>
+        [definition.definitionId, definition.verifierId]) : []);
+  if (source.entries.some((entry) =>
+    entry.cause === 'verification'
+    && criticalVerifierIds.has(verifierByDefinition.get(entry.definitionId)!))) {
+    return 'ask-human';
+  }
+  if (source.entries.some((entry) => entry.cause === 'verification')) {
+    return 'revise-verification';
+  }
+  if (source.entries.some((entry) =>
+    entry.cause === 'unknown'
+    && criticalVerifierIds.has(verifierByDefinition.get(entry.definitionId)!))) {
+    return 'challenge';
+  }
+  return 'handoff';
 }
 
-function compactSemanticValue(
-  value: SemanticContract['semantic']['desiredOutcome'],
-) {
-  return {
-    value: value.value,
-    basis: value.basis,
-  };
+function requiredChallengeObligationIds(contract: TaskContract, facts: FactBundle): string[] {
+  const changedAcceptanceVerifiers = new Set(facts.verifierMutations
+    .filter((item) => item.role === 'acceptance-surface')
+    .map((item) => item.verifierId));
+  return unique(contract.adoptionConditions.flatMap((condition) =>
+    condition.evidenceObligations.flatMap((obligation) => {
+      const challengePolicies = obligation.strategies.filter((strategy) =>
+        strategy.kind === 'independent-challenge');
+      if (challengePolicies.some((strategy) => strategy.policy === 'required')) {
+        return [obligation.id];
+      }
+      const factTriggered = challengePolicies.some((strategy) =>
+        strategy.policy === 'fact-triggered');
+      const ownVerifierChanged = obligation.strategies.some((strategy) =>
+        strategy.kind === 'runtime-check'
+        && strategy.verifierIds.some((id) => changedAcceptanceVerifiers.has(id)));
+      return factTriggered && ownVerifierChanged ? [obligation.id] : [];
+    }))).sort();
+}
+
+function attemptOutcomeFingerprint(facts: FactBundle): string {
+  return stableFingerprint({
+    changeFingerprint: facts.changeFingerprint,
+    checks: facts.checks.map((check) => {
+      const latest = latestCheckAttempt(check);
+      return {
+        definitionId: check.definitionId,
+        status: latest.status,
+        timedOut: latest.timedOut,
+        outputDigest: latest.outputDigest,
+      };
+    }),
+  });
 }
 
 function latestCheckAttempt(check: CheckFact): CheckFact['attempts'][number] {
   const latest = check.attempts.at(-1);
-  if (!latest) throw new Error(`Check ${check.id} has no execution attempt.`);
+  if (!latest) throw new Error(`Check ${check.definitionId} has no execution attempt.`);
   return latest;
 }
 
 function compactCheckFact(check: CheckFact) {
   const latest = latestCheckAttempt(check);
-  const includeLogPaths = latest.status !== 'passed' || check.attempts.length > 1;
   return {
-    id: check.id,
+    verifierId: check.verifierId,
+    definitionId: check.definitionId,
     status: latest.status,
     exitCode: latest.exitCode,
     timedOut: latest.timedOut,
     timeoutMs: latest.timeoutMs,
     attemptCount: check.attempts.length,
     ...(latest.reason ? { reason: latest.reason } : {}),
-    stdout: compactCheckStream(latest.stdout, includeLogPaths),
-    stderr: compactCheckStream(latest.stderr, includeLogPaths),
+    stdout: { byteLength: latest.stdout.byteLength, truncated: latest.stdout.truncated, ...(latest.stdout.logPath ? { logPath: latest.stdout.logPath } : {}) },
+    stderr: { byteLength: latest.stderr.byteLength, truncated: latest.stderr.truncated, ...(latest.stderr.logPath ? { logPath: latest.stderr.logPath } : {}) },
   };
 }
 
-function compactCheckStream(
-  stream: CheckFact['attempts'][number]['stdout'],
-  includeLogPath: boolean,
-) {
+function contractWorkPacket(contract: TaskContract) {
   return {
-    byteLength: stream.byteLength,
-    truncated: stream.truncated,
-    ...(includeLogPath && stream.logPath ? { logPath: stream.logPath } : {}),
+    semanticContractId: contract.semanticContractId,
+    verificationPlanId: contract.verificationPlanId,
+    effectiveContractId: contract.effectiveContractId,
+    authority: {
+      developerEventId: contract.authority.developerEvent.id,
+      repositoryEvidenceIds: contract.repositoryEvidence.map((evidence) => evidence.id),
+    },
+    understanding: {
+      desiredOutcome: compactMeaning(contract.understanding.desiredOutcome),
+      constraints: contract.understanding.constraints.map(compactMeaning),
+      nonGoals: contract.understanding.nonGoals.map(compactMeaning),
+      focus: contract.understanding.focus.map(compactMeaning),
+    },
+    adoptionConditions: contract.adoptionConditions,
+    hostPolicyRequirements: contract.hostPolicyRequirements,
+    plan: contract.plan,
+    verificationPlan: contract.verificationPlan,
   };
 }
 
-function cleanupCompletedRuns(projectRoot: string, currentRunId: string): string[] {
-  const runsRoot = join(projectRoot, '.stetra', 'runs');
-  if (!existsSync(runsRoot)) return [];
-  const completed = readdirSync(runsRoot, { withFileTypes: true })
-    .filter((entry) => entry.isDirectory() && RUN_ID_PATTERN.test(entry.name))
-    .flatMap((entry) => {
-      const runPath = join(runsRoot, entry.name, 'run.json');
-      if (!existsSync(runPath)) return [];
-      try {
-        const parsed = DelegationRunSchema.safeParse(
-          JSON.parse(readFileSync(runPath, 'utf8')),
-        );
-        if (!parsed.success
-          || parsed.data.projectRoot !== projectRoot
-          || parsed.data.runId !== entry.name
-          || parsed.data.state !== 'completed'
-          || !parsed.data.completion
-          || parsed.data.handoffFile !== 'handoff.json'
-          || !existsSync(join(runsRoot, entry.name, parsed.data.handoffFile))) {
-          return [];
-        }
-        return [{ runId: entry.name, completedAt: parsed.data.completion.completedAt }];
-      } catch {
-        return [];
-      }
-    })
-    .sort((left, right) => right.completedAt.localeCompare(left.completedAt)
-      || left.runId.localeCompare(right.runId));
-  if (completed.length <= MAX_COMPLETED_RUNS) return [];
-  const retained = new Set<string>([currentRunId]);
-  for (const candidate of completed) {
-    if (retained.size >= MAX_COMPLETED_RUNS) break;
-    retained.add(candidate.runId);
-  }
-  const removed = completed
-    .filter((candidate) => !retained.has(candidate.runId))
-    .map((candidate) => candidate.runId)
-    .sort((left, right) => left.localeCompare(right));
-  for (const runId of removed) {
-    rmSync(join(runsRoot, runId), { recursive: true, force: true });
-  }
-  return removed;
+function compactMeaning(value: TaskContract['understanding']['desiredOutcome']) {
+  return { value: value.value, basis: value.basis };
 }
 
-function emptyHandoff() {
+function compactTask(task: TaskProjection) {
+  return {
+    revision: task.revision,
+    deliveryStatus: task.deliveryStatus,
+    evidenceStatus: task.evidenceStatus,
+    decisionStatus: task.decisionStatus,
+    currentAttemptId: task.currentAttemptId,
+    repairCount: task.repairCount,
+  };
+}
+
+function clearPostCollectionArtifacts(projection: TaskProjection): TaskProjection {
+  const {
+    currentHandoffId: _handoff,
+    currentHandoffFingerprint: _fingerprint,
+    decisionId: _decision,
+    terminalAt: _terminal,
+    ...remaining
+  } = projection;
+  return remaining;
+}
+
+function factLogPaths(facts: FactBundle): string[] {
+  return unique(facts.checks.flatMap((check) => check.attempts.flatMap((attempt) => [
+    attempt.stdout.logPath,
+    attempt.stderr.logPath,
+  ].filter((path): path is string => Boolean(path)))));
+}
+
+function unique(values: string[]): string[] {
+  return [...new Set(values)].sort((left, right) => left.localeCompare(right));
+}
+
+async function materializeHostPolicyEvaluations(
+  taskId: string,
+  contract: TaskContract,
+  provider: HostAttestationProvider | undefined,
+): Promise<HostPolicyEvaluation[]> {
+  if (!provider) {
+    return contract.hostPolicyRequirements.map((requirement) => ({
+      requirementId: requirement.id,
+      mode: 'instruction-only',
+      provenance: 'thin-skill',
+    }));
+  }
+  const evaluations = await provider.evaluatePolicies({
+    taskId,
+    requirements: contract.hostPolicyRequirements,
+  });
+  const parsed = evaluations.map((evaluation) => parseArtifact(
+    HostPolicyEvaluationSchema,
+    evaluation,
+    'Host policy enforcement attestation',
+  ));
+  const expected = contract.hostPolicyRequirements.map((item) => item.id).sort();
+  const actual = parsed.map((item) => item.requirementId).sort();
+  if (new Set(actual).size !== actual.length
+    || stableFingerprint(actual) !== stableFingerprint(expected)
+    || parsed.some((item) => item.provenance !== provider.provenance)) {
+    throw inputError('Trusted Host policy attestations must cover every requirement exactly once with the provider provenance.');
+  }
+  return parsed;
+}
+
+function materializeResolution(source: HumanResolutionDocument, contract: TaskContract) {
+  const kind = source.target.kind === 'correction' || source.action === 'request-correction'
+    ? 'correction' as const : 'exception' as const;
   return {
     protocol: DELEGATION_PROTOCOL,
     schemaVersion: DELEGATION_SCHEMA_VERSION,
-    systemMeaningUpdate: '',
-    materialClaims: [],
-    residualUnknowns: [],
-    reviewMap: [],
+    resolutionId: `resolution:${randomUUID()}`,
+    effectiveContractId: contract.effectiveContractId,
+    humanEvent: {
+      id: generatedHumanEventId(source.humanEvent, kind),
+      kind,
+      ...source.humanEvent,
+      contentFingerprint: sha256(source.humanEvent.content),
+    },
+    target: source.target,
+    action: source.action,
+    reason: source.reason,
   };
 }
 
-function canonicalProjectRoot(input: string): string {
-  const root = resolve(input);
-  if (!existsSync(root) || !statSync(root).isDirectory()) {
-    throw usageError(`Project root is not a directory: ${root}`);
-  }
-  return realpathSync(root);
+function materializeVerificationRevision(
+  source: VerificationRevisionDocument,
+  priorContract: TaskContract,
+  revisedContract: TaskContract,
+) {
+  return {
+    protocol: DELEGATION_PROTOCOL,
+    schemaVersion: DELEGATION_SCHEMA_VERSION,
+    revisionId: `verification-revision:${randomUUID()}`,
+    kind: source.kind,
+    rationale: source.rationale,
+    equivalenceClaim: source.equivalenceClaim,
+    prior: {
+      verificationPlanId: priorContract.verificationPlanId,
+      effectiveContractId: priorContract.effectiveContractId,
+    },
+    current: {
+      verificationPlanId: revisedContract.verificationPlanId,
+      effectiveContractId: revisedContract.effectiveContractId,
+    },
+    ...(source.humanAuthorization ? {
+      humanAuthorization: {
+        id: generatedHumanEventId(source.humanAuthorization, 'exception'),
+        kind: 'exception' as const,
+        ...source.humanAuthorization,
+        contentFingerprint: sha256(source.humanAuthorization.content),
+      },
+    } : {}),
+  };
 }
 
-function resolveRunDirectory(projectRoot: string, runId: string): string {
-  const relativePath = `.stetra/runs/${runId}`;
-  assertNoSymlinkTraversal(projectRoot, relativePath);
-  const path = resolve(projectRoot, relativePath);
-  const rel = relative(projectRoot, path);
-  if (isAbsolute(rel) || rel === '..' || rel.startsWith(`..${sep}`)) {
-    throw new Error(`Unsafe run path for ${runId}.`);
-  }
-  return path;
+function generatedHumanEventId(
+  event: { content: string; provider?: string; nativeId?: string },
+  kind: 'correction' | 'exception' | 'decision',
+): string {
+  return `event:${stableFingerprint({ kind, ...event }).slice('sha256:'.length, 'sha256:'.length + 24)}`;
 }
 
-function requiredRunId(value: string): string {
-  if (!RUN_ID_PATTERN.test(value)) {
-    throw usageError('Invalid run ID: expected the UUID returned by change prepare.');
-  }
-  return value;
+function resolutionTargetMatches(
+  source: HumanResolutionDocument,
+  pending: NonNullable<TaskProjection['pendingResolution']>,
+): boolean {
+  if (source.target.kind !== pending.kind) return false;
+  const targetId = source.target.kind === 'semantic-impact'
+    ? source.target.dispositionId
+    : source.target.kind === 'correction'
+      ? source.target.decisionId
+      : source.target.requirementId;
+  return targetId === pending.targetId;
 }
 
-function assertRunProject(run: DelegationRun, projectRoot: string, runId: string): void {
-  if (run.projectRoot !== projectRoot || run.runId !== runId) {
-    throw new Error('Run identity or project root does not match its storage location.');
+function withoutPendingResolution(projection: TaskProjection): TaskProjection {
+  const { pendingResolution: _pending, ...remaining } = projection;
+  return remaining;
+}
+
+function assertStoredContractFingerprints(contract: TaskContract): void {
+  const semanticProjection = {
+    protocol: contract.protocol,
+    schemaVersion: contract.schemaVersion,
+    authority: contract.authority,
+    understanding: contract.understanding,
+    repositoryEvidence: contract.repositoryEvidence,
+    adoptionConditions: contract.adoptionConditions,
+    hostPolicyRequirements: contract.hostPolicyRequirements,
+    authorization: contract.authorization,
+  };
+  const { verificationPlanId: _verificationPlanId, ...verificationProjection } = contract.verificationPlan;
+  if (contract.semanticContractId !== stableFingerprint(semanticProjection)
+    || contract.verificationPlanId !== stableFingerprint(verificationProjection)
+    || contract.verificationPlanId !== contract.verificationPlan.verificationPlanId
+    || contract.effectiveContractId !== stableFingerprint({
+      semanticContractId: contract.semanticContractId,
+      verificationPlanId: contract.verificationPlanId,
+    })) {
+    throw new Error('Stored Task Contract changed after compilation.');
   }
 }
 
-function projectRelativePath(projectRoot: string, path: string): string {
-  const output = relative(projectRoot, path).replace(/\\/g, '/');
-  if (!output || output.startsWith('../') || isAbsolute(output)) {
-    throw new Error(`Path is outside the project: ${path}`);
-  }
-  return output;
+function contractPath(revision: number): string {
+  return `contracts/${revision}.json`;
 }
 
-function assertNoSymlinkTraversal(projectRoot: string, relativePath: string): void {
-  let current = projectRoot;
-  for (const [index, segment] of relativePath.split('/').entries()) {
-    current = join(current, segment);
-    if (!existsSync(current)) return;
-    const stat = lstatSync(current);
-    if (stat.isSymbolicLink()) throw new Error(`Refusing to use run storage through a symlink: ${relativePath}`);
-    if (index < relativePath.split('/').length - 1 && !stat.isDirectory()) {
-      throw new Error(`Invalid run storage path: ${relativePath}`);
-    }
-  }
+function planPath(revision: number): string {
+  return `contracts/${revision}.plan.json`;
 }
 
-function writeJsonAtomic(path: string, value: unknown): void {
-  writeBufferAtomic(path, Buffer.from(`${JSON.stringify(value, null, 2)}\n`, 'utf8'));
+function baselinePath(revision: number): string {
+  return `contracts/${revision}.baseline.json`;
 }
 
-function writeBufferAtomic(path: string, value: Buffer): void {
-  mkdirSync(dirname(path), { recursive: true });
-  const temporary = `${path}.tmp-${process.pid}`;
-  writeFileSync(temporary, value);
-  try {
-    renameSync(temporary, path);
-  } catch (error) {
-    rmSync(temporary, { force: true });
-    throw error;
+function baselineVerificationPath(revision: number): string {
+  return `contracts/${revision}.baseline-verification.json`;
+}
+
+function attemptDirectory(attemptId: string): string {
+  return `attempts/${sha256(attemptId).slice(-24)}`;
+}
+
+function factsPath(attemptId: string, collectionId: string): string {
+  return `${attemptDirectory(attemptId)}/facts/${collectionId.slice('sha256:'.length)}.json`;
+}
+
+function challengePath(id: string): string {
+  return `challenges/${sha256(id).slice(-32)}.json`;
+}
+
+function handoffPath(id: string): string {
+  return `handoffs/${sha256(id).slice(-32)}.json`;
+}
+
+function handoffEvaluationPath(id: string): string {
+  return `handoffs/${sha256(id).slice(-32)}.evaluation.json`;
+}
+
+function decisionPath(id: string): string {
+  return `decisions/${sha256(id).slice(-32)}.json`;
+}
+
+function decisionEvaluationPath(id: string): string {
+  return `decisions/${sha256(id).slice(-32)}.evaluation.json`;
+}
+
+function resolutionPath(id: string): string {
+  return `resolutions/${sha256(id).slice(-32)}.json`;
+}
+
+function verificationRevisionPath(id: string): string {
+  return `verification-revisions/${sha256(id).slice(-32)}.json`;
+}
+
+function handoffInputError(error: unknown) {
+  if (isHandoffValidationError(error)) {
+    return inputError('Cognitive Adoption input cannot be evaluated; correct every reported issue.', error, error.issues);
   }
+  return inputError(`Cognitive Adoption input cannot be evaluated: ${error instanceof Error ? error.message : String(error)}`, error);
+}
+
+function isHandoffValidationError(value: unknown): value is Error & { issues: HandoffValidationIssue[] } {
+  const candidate = value as { name?: unknown; issues?: unknown };
+  return value instanceof Error
+    && candidate.name === 'HandoffValidationError'
+    && Array.isArray(candidate.issues);
 }

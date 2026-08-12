@@ -1,4 +1,4 @@
-export type HumanEventKind = 'task' | 'decision';
+export type HumanEventKind = 'task' | 'correction' | 'exception' | 'decision';
 
 export interface HumanEvent {
   id: string;
@@ -13,9 +13,7 @@ export type InterpretationField =
   | 'desired-outcome'
   | 'constraint'
   | 'non-goal'
-  | 'focus-path'
-  | 'consequence'
-  | 'assurance-dimension';
+  | 'focus-path';
 
 export interface InterpretationBasis {
   humanEventIds: string[];

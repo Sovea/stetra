@@ -30,7 +30,7 @@ export function formatHumanResult(
   }
   if (command === 'change prepare') return formatChangePrepare(output, colors);
   if (command === 'change collect') return formatChangeCollect(output, colors);
-  if (command === 'change finalize') return formatChangeFinalize(output, colors);
+  if (command === 'change handoff') return formatChangeFinalize(output, colors);
   if (command === 'change explain') return formatChangeExplain(output, colors);
   return formatStructured(output, colors);
 }
@@ -38,10 +38,9 @@ export function formatHumanResult(
 function formatStructured(output: JsonObject, colors: Colors): string {
   const lines = [statusLine(String(output.status ?? 'ok'), colors)];
   for (const [label, field] of [
+    ['Task', 'taskId'],
+    ['Attempt', 'attemptId'],
     ['Decision', 'decisionId'],
-    ['Evaluation', 'evaluationId'],
-    ['Run', 'runId'],
-    ['Run file', 'runPath'],
   ] as const) {
     if (typeof output[field] === 'string') {
       lines.push(`${colors.bold(`${label}:`)} ${output[field]}`);

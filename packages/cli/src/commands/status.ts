@@ -34,8 +34,8 @@ function registerStatusCommand(
   const command = program
     .command(name)
     .description(name === 'doctor'
-      ? 'Validate the local Semantic Handoff control plane'
-      : 'Inspect Semantic Handoff installation state')
+      ? 'Validate the local Cognitive Adoption control plane'
+      : 'Inspect Cognitive Adoption installation state')
     .argument('[project-root]', 'project root', '.');
   if (name === 'doctor') command.option('--strict', 'return blocked for unresolved required conditions');
   command.action(async (
@@ -99,7 +99,7 @@ function registerStatusCommand(
       },
       paths: {
         manifest: join(projectRoot, '.stetra', 'manifest.json'),
-        runs: join(projectRoot, '.stetra', 'runs'),
+        tasks: join(projectRoot, '.stetra', 'tasks'),
       },
     }, source);
   });

@@ -3,7 +3,7 @@ import type { VerifierMutation } from '@sovea/stetra-core';
 export interface VerifierSurfaceSummary {
   path: string;
   role: VerifierMutation['role'];
-  checkIds: string[];
+  definitionIds: string[];
 }
 
 export function summarizeVerifierSurfaces(
@@ -12,23 +12,23 @@ export function summarizeVerifierSurfaces(
   const groups = new Map<string, {
     path: string;
     role: VerifierMutation['role'];
-    checkIds: Set<string>;
+    definitionIds: Set<string>;
   }>();
   for (const mutation of mutations) {
     const key = `${mutation.path}\0${mutation.role}`;
     const group = groups.get(key) ?? {
       path: mutation.path,
       role: mutation.role,
-      checkIds: new Set<string>(),
+      definitionIds: new Set<string>(),
     };
-    group.checkIds.add(mutation.checkId);
+    group.definitionIds.add(mutation.definitionId);
     groups.set(key, group);
   }
   return [...groups.values()]
     .map((group) => ({
       path: group.path,
       role: group.role,
-      checkIds: [...group.checkIds].sort((left, right) => left.localeCompare(right)),
+      definitionIds: [...group.definitionIds].sort((left, right) => left.localeCompare(right)),
     }))
     .sort((left, right) => left.path.localeCompare(right.path)
       || left.role.localeCompare(right.role));

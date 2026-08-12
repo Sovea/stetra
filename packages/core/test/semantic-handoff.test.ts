@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import test from 'node:test';
 
 import {
@@ -6,761 +7,643 @@ import {
   evaluateHandoff,
   type CognitiveHandoff,
   type CompileDelegationInput,
+  type ConclusionStatus,
   type FactBundle,
-  type SemanticContract,
+  type HostPolicyEvaluation,
+  type HumanDecision,
+  type IndependentChallenge,
+  type TaskContract,
+  type VerificationRevisionInput,
 } from '../src/index.ts';
-import { HandoffValidationError } from '../src/handoff/types.ts';
 import {
   checkDefinitionFingerprint,
   factBundleFingerprint,
-  factCollectionId,
+  factCollectionId as collectionFingerprint,
 } from '../src/facts/validate.ts';
-import { sha256, stableFingerprint } from '../src/shared/protocol.ts';
 
-const PROTOCOL = 'semantic-delegation' as const;
-const SCHEMA_VERSION = '1' as const;
-const TIMESTAMP = '2026-08-03T12:00:00.000Z';
+const envelope = { protocol: 'cognitive-adoption' as const, schemaVersion: '1' as const };
 
-test('compileDelegation separates exact Human Events from Agent interpretations', () => {
-  const input = compileInput();
+test('prepare separates semantic, verification, and effective identities', () => {
+  const first = compileDelegation(criticalInput());
+  const second = compileDelegation(criticalInput());
+  assert.equal(first.status, 'delegation-compiled');
+  assert.equal(second.status, 'delegation-compiled');
+  if (first.status !== 'delegation-compiled' || second.status !== 'delegation-compiled') return;
+
+  assert.equal(first.contract.semanticContractId, second.contract.semanticContractId);
+  assert.equal(first.contract.verificationPlanId, second.contract.verificationPlanId);
+  assert.equal(first.contract.effectiveContractId, second.contract.effectiveContractId);
+  assert.match(first.contract.authority.developerEvent.id, /^event:/);
+  assert.deepEqual(first.contract.plan.lifecycle, [
+    'implement', 'collect', 'judge-evidence', 'resolve', 'handoff', 'decide',
+  ]);
+  assert.match(first.contract.adoptionConditions[0].id, /^condition:/);
+  assert.match(first.contract.adoptionConditions[0].evidenceObligations[0].id, /^obligation:/);
+  if (first.contract.verificationPlan.mode !== 'checks') return;
+  assert.match(first.contract.verificationPlan.verifiers[0].verifierId, /^verifier:/);
+  assert.match(first.contract.verificationPlan.definitions[0].definitionId, /^sha256:/);
+});
+
+test('routine work may omit conditions but still requires an explicit verification rationale', () => {
+  const input = criticalInput();
+  input.conditions = [];
+  input.checks = undefined;
+  input.noCommandRationale = 'Documentation wording has no executable behavior.';
   const result = compileDelegation(input);
-
   assert.equal(result.status, 'delegation-compiled');
   if (result.status !== 'delegation-compiled') return;
-  assert.equal(result.contract.authority.humanEvents[0].content, input.humanEvents[0].content);
-  assert.equal(result.contract.semantic.desiredOutcome.value, 'Replace the legacy workflow with an inspectable handoff.');
-  assert.deepEqual(result.contract.semantic.desiredOutcome.basis.humanEventIds, ['event:task']);
-  assert.equal(result.contract.semantic.consequence, 'high');
-  assert.equal(result.contract.assurancePlan.profile, 'critical');
-  assert.deepEqual(
-    result.contract.assurancePlan.requirements.map((item) => ({
-      dimension: item.value,
-      criticality: item.criticality,
-    })),
-    [{ dimension: 'behavior', criticality: 'adoption-critical' }],
-  );
-  assert.ok(result.contract.interpretationTrace.some((item) =>
-    item.field === 'assurance-dimension'));
-  assert.equal(result.contract.authorization.focusPathsArePermissions, false);
-  assert.equal(result.contract.verification.mode, 'checks');
-  assert.match(result.contract.contractId, /^sha256:[a-f0-9]{64}$/);
-  assert.deepEqual(compileDelegation(input), result);
+  assert.deepEqual(result.contract.adoptionConditions, []);
+  assert.equal(result.contract.verificationPlan.mode, 'no-command');
+
+  const missing = compileDelegation({ ...input, noCommandRationale: undefined });
+  assert.equal(missing.status, 'verification-required');
 });
 
-test('compileDelegation derives inspectable routine, standard, and critical assurance plans', () => {
-  const routine = compileInput();
-  routine.semantic.consequence.value = 'low';
-  routine.semantic.assuranceDimensions = [];
-  const compiledRoutine = compileDelegation(routine);
-  assert.equal(compiledRoutine.status, 'delegation-compiled');
-  if (compiledRoutine.status !== 'delegation-compiled') return;
-  assert.deepEqual(compiledRoutine.contract.assurancePlan, {
-    profile: 'routine',
-    requirements: [],
-  });
-
-  const standard = compileInput();
-  standard.semantic.consequence.value = 'medium';
-  standard.semantic.assuranceDimensions = [{
-    dimension: 'maintenance',
-    criticality: 'material',
-    rationale: 'The ownership boundary should remain understandable after adoption.',
-    basis: { humanEventIds: ['event:task'], repositoryEvidenceIds: [] },
-  }];
-  const compiledStandard = compileDelegation(standard);
-  assert.equal(compiledStandard.status, 'delegation-compiled');
-  if (compiledStandard.status !== 'delegation-compiled') return;
-  assert.equal(compiledStandard.contract.assurancePlan.profile, 'standard');
-  assert.equal(compiledStandard.contract.assurancePlan.requirements[0].value, 'maintenance');
-
-  const escalated = compileInput();
-  escalated.semantic.consequence.value = 'medium';
-  const compiledEscalated = compileDelegation(escalated);
-  assert.equal(compiledEscalated.status, 'delegation-compiled');
-  if (compiledEscalated.status !== 'delegation-compiled') return;
-  assert.equal(compiledEscalated.contract.assurancePlan.profile, 'critical');
-});
-
-test('compileDelegation rejects consequence labels without actionable assurance dimensions', () => {
-  const medium = compileInput();
-  medium.semantic.consequence.value = 'medium';
-  medium.semantic.assuranceDimensions = [];
-  const invalidMedium = compileDelegation(medium);
-  assert.equal(invalidMedium.status, 'authority-invalid');
-  if (invalidMedium.status === 'authority-invalid') {
-    assert.ok(invalidMedium.issues.some((item) => item.code === 'assurance-dimension-required'));
-  }
-
-  const high = compileInput();
-  high.semantic.assuranceDimensions[0].criticality = 'material';
-  const invalidHigh = compileDelegation(high);
-  assert.equal(invalidHigh.status, 'authority-invalid');
-  if (invalidHigh.status === 'authority-invalid') {
-    assert.ok(invalidHigh.issues.some((item) =>
-      item.code === 'critical-assurance-dimension-required'));
-  }
-
-  const duplicate = compileInput();
-  duplicate.semantic.assuranceDimensions.push(structuredClone(
-    duplicate.semantic.assuranceDimensions[0],
-  ));
-  const invalidDuplicate = compileDelegation(duplicate);
-  assert.equal(invalidDuplicate.status, 'authority-invalid');
-  if (invalidDuplicate.status === 'authority-invalid') {
-    assert.ok(invalidDuplicate.issues.some((item) => item.code === 'assurance-dimension-duplicate'));
-  }
-});
-
-test('compileDelegation rejects unknown protocols and schema versions without compatibility', () => {
-  assert.throws(
-    () => compileDelegation({ ...compileInput(), protocol: 'legacy' as never }),
-    /UNSUPPORTED_PROTOCOL/,
-  );
-  assert.throws(
-    () => compileDelegation({ ...compileInput(), schemaVersion: '1.0' as never }),
-    /UNSUPPORTED_SCHEMA_VERSION/,
-  );
-
-  const legacy = structuredClone(compileInput()) as unknown as {
-    verification: { checks: Array<Record<string, unknown>> };
-  };
-  const check = legacy.verification.checks[0];
-  delete check.commandDefinitionPaths;
-  check.verifierRefs = [{ path: 'package.json', role: 'command-definition' }];
-  const result = compileDelegation(legacy as unknown as CompileDelegationInput);
+test('every condition requires a falsifiable evidence obligation', () => {
+  const input = criticalInput();
+  input.conditions[0].evidenceObligations = [];
+  const result = compileDelegation(input);
   assert.equal(result.status, 'authority-invalid');
   if (result.status === 'authority-invalid') {
-    assert.ok(result.issues.some((item) => item.path.endsWith('.verifierRefs')));
-    assert.ok(result.issues.some((item) => item.path.endsWith('.commandDefinitionPaths')));
+    assert.ok(result.issues.some((item) => item.code === 'evidence-obligations-required'));
   }
+});
 
-  const timeoutInContract = structuredClone(compileInput()) as unknown as {
-    verification: { checks: Array<Record<string, unknown>> };
-  };
-  timeoutInContract.verification.checks[0].timeoutMs = 120_000;
-  const invalidTimeout = compileDelegation(
-    timeoutInContract as unknown as CompileDelegationInput,
-  );
-  assert.equal(invalidTimeout.status, 'authority-invalid');
-  if (invalidTimeout.status === 'authority-invalid') {
-    assert.ok(invalidTimeout.issues.some((item) =>
-      item.path === 'verification.checks[0].timeoutMs'
-      && item.code === 'unsupported-field'));
-  }
-
-  const oldAuthoring = structuredClone(compileInput()) as unknown as Record<string, unknown>;
-  oldAuthoring.interpretations = [{
-    id: 'meaning:outcome',
-    field: 'desired-outcome',
-    value: 'Legacy relational input.',
-    basis: { humanEventIds: ['event:task'], repositoryEvidenceIds: [] },
+test('adoption-critical semantics require challenge or direct Human review', () => {
+  const input = criticalInput();
+  input.conditions[0].evidenceObligations[0].strategies = [{
+    kind: 'runtime-check', checkKeys: ['suite'], expectedObservation: 'passed',
   }];
-  oldAuthoring.semantic = {
-    desiredOutcomeId: 'meaning:outcome',
-    constraintIds: [],
-    nonGoalIds: [],
-    focusIds: [],
-    consequenceId: 'meaning:consequence',
-  };
-  const obsolete = compileDelegation(oldAuthoring as unknown as CompileDelegationInput);
-  assert.equal(obsolete.status, 'authority-invalid');
-  if (obsolete.status === 'authority-invalid') {
-    assert.ok(obsolete.issues.some((item) => item.path === 'interpretations'));
-    assert.ok(obsolete.issues.some((item) => item.path === 'semantic.desiredOutcomeId'));
+  const result = compileDelegation(input);
+  assert.equal(result.status, 'authority-invalid');
+  if (result.status === 'authority-invalid') {
+    assert.ok(result.issues.some((item) => item.code === 'critical-condition-review-required'));
   }
 });
 
-test('compileDelegation returns authority-invalid for fabricated fingerprints and references', () => {
-  const fingerprint = compileInput();
-  fingerprint.humanEvents[0].contentFingerprint = sha256('different content');
-  const invalidFingerprint = compileDelegation(fingerprint);
-  assert.equal(invalidFingerprint.status, 'authority-invalid');
-  if (invalidFingerprint.status === 'authority-invalid') {
-    assert.ok(invalidFingerprint.issues.some((issue) => issue.code === 'human-event-fingerprint-mismatch'));
-  }
-
-  const reference = compileInput();
-  reference.semantic.desiredOutcome.basis.humanEventIds = ['event:missing'];
-  const invalidReference = compileDelegation(reference);
-  assert.equal(invalidReference.status, 'authority-invalid');
-  if (invalidReference.status === 'authority-invalid') {
-    assert.ok(invalidReference.issues.some((issue) => issue.code === 'human-event-reference-missing'));
-  }
+test('unsupported schema versions are rejected without a migration path', () => {
+  assert.throws(() => compileDelegation({
+    ...criticalInput(),
+    schemaVersion: 'unsupported',
+  } as unknown as CompileDelegationInput), /UNSUPPORTED_SCHEMA_VERSION/);
 });
 
-test('compileDelegation prevents runs for material forks and absent verification', () => {
-  const forked = compileInput();
-  forked.semantic.unresolvedMaterialFork = {
-    question: 'Which public compatibility boundary should remain?',
-    alternatives: ['Break it now', 'Retain it for one release'],
-    decisionImpact: 'The public API and migration cost differ.',
-  };
-  assert.equal(compileDelegation(forked).status, 'semantic-decision-required');
-
-  const missing = compileInput();
-  missing.verification = {};
-  assert.equal(compileDelegation(missing).status, 'verification-required');
-
-  const noCommand = compileInput();
-  noCommand.verification = {
-    noCommandRationale: 'The task changes prose only and has no executable acceptance command.',
-  };
-  const result = compileDelegation(noCommand);
+test('verification rebinding preserves semantic identity and supersedes exact definitions', () => {
+  const prior = compiledContract();
+  const source = criticalInput().checks![0];
+  const result = compileDelegation({
+    ...envelope,
+    operation: 'revise-verification',
+    priorContract: prior,
+    revision: {
+      kind: 'execution-rebinding',
+      rationale: 'The original executable entry is unavailable in this workspace.',
+      equivalenceClaim: 'The new argv invokes the same test runner and target.',
+      checks: [{ ...source, argv: ['node', '--test', 'test/feature.test.ts'] }],
+    },
+  } satisfies VerificationRevisionInput);
   assert.equal(result.status, 'delegation-compiled');
-  if (result.status === 'delegation-compiled') {
-    assert.deepEqual(result.contract.verification, {
-      mode: 'no-command',
-      rationale: 'The task changes prose only and has no executable acceptance command.',
-    });
-  }
+  if (result.status !== 'delegation-compiled') return;
+  assert.equal(result.contract.semanticContractId, prior.semanticContractId);
+  assert.notEqual(result.contract.verificationPlanId, prior.verificationPlanId);
+  assert.notEqual(result.contract.effectiveContractId, prior.effectiveContractId);
+  if (prior.verificationPlan.mode !== 'checks'
+    || result.contract.verificationPlan.mode !== 'checks') return;
+  const before = prior.verificationPlan.definitions[0];
+  const after = result.contract.verificationPlan.definitions[0];
+  assert.equal(after.verifierId, before.verifierId);
+  assert.equal(after.revision, before.revision + 1);
+  assert.equal(after.supersedesDefinitionId, before.definitionId);
 });
 
-test('evaluateHandoff accepts a fact-bound, falsified handoff for human review', () => {
+test('verification revision preserves the identity of unchanged definitions', () => {
+  const input = criticalInput();
+  input.checks!.push({
+    ...input.checks![0],
+    key: 'unchanged-suite',
+    baseline: { mode: 'unknown' },
+  });
+  const compiled = compileDelegation(input);
+  assert.equal(compiled.status, 'delegation-compiled');
+  if (compiled.status !== 'delegation-compiled'
+    || compiled.contract.verificationPlan.mode !== 'checks') return;
+
+  const result = compileDelegation({
+    ...envelope,
+    operation: 'revise-verification',
+    priorContract: compiled.contract,
+    revision: {
+      kind: 'execution-rebinding',
+      rationale: 'Only one executable binding has changed.',
+      equivalenceClaim: 'The changed argv invokes the same bounded verifier.',
+      checks: input.checks!.map((check) => check.key === 'suite'
+        ? { ...check, argv: ['node', '--test', 'test/feature.test.ts'] }
+        : check),
+    },
+  } satisfies VerificationRevisionInput);
+  assert.equal(result.status, 'delegation-compiled');
+  if (result.status !== 'delegation-compiled'
+    || result.contract.verificationPlan.mode !== 'checks') return;
+
+  const before = compiled.contract.verificationPlan.definitions.find((definition) =>
+    definition.key === 'unchanged-suite')!;
+  const after = result.contract.verificationPlan.definitions.find((definition) =>
+    definition.key === 'unchanged-suite')!;
+  assert.deepEqual(after, before);
+});
+
+test('verification relaxation requires exact Human authority', () => {
+  const prior = compiledContract();
+  const source = criticalInput().checks![0];
+  const revision = {
+    ...envelope,
+    operation: 'revise-verification' as const,
+    priorContract: prior,
+    revision: {
+      kind: 'verification-plan' as const,
+      rationale: 'The original baseline cannot be recreated.',
+      equivalenceClaim: 'Current execution still observes the intended public behavior.',
+      checks: [{ ...source, baseline: { mode: 'unknown' as const } }],
+    },
+  };
+  const rejected = compileDelegation(revision);
+  assert.equal(rejected.status, 'authority-invalid');
+  if (rejected.status === 'authority-invalid') {
+    assert.ok(rejected.issues.some((item) =>
+      item.code === 'verification-relaxation-human-authorization-required'));
+  }
+  const authorized = compileDelegation({
+    ...revision,
+    revision: {
+      ...revision.revision,
+      humanAuthorization: { content: 'Proceed without reconstructing the original baseline.' },
+    },
+  });
+  assert.equal(authorized.status, 'delegation-compiled');
+});
+
+test('clean handoff keeps Runtime facts, Agent recommendation, and Human adoption separate', () => {
   const contract = compiledContract();
-  const facts = factBundle(contract, 'passed');
-  const handoff = validHandoff(facts);
+  const facts = factBundle(contract);
+  const challenges = supportedChallenges(contract, facts);
+  const handoff = handoffFor(contract, facts, challenges);
   const evaluation = evaluateHandoff({
-    protocol: PROTOCOL,
-    schemaVersion: SCHEMA_VERSION,
+    ...envelope,
     contract,
     factBundle: facts,
     currentWorktreeFingerprint: facts.current.fingerprint,
+    challenges,
+    evidenceDispositions: [],
+    hostPolicyEvaluations: [],
+    deliveryExhausted: false,
+    verificationRevised: false,
     handoff,
   });
-
   assert.equal(evaluation.status, 'handoff-ready');
-  assert.equal(evaluation.factCollectionId, facts.factCollectionId);
-  assert.equal(evaluation.claimConclusions?.[0].basis, 'agent-judgment');
-  assert.equal(evaluation.claimConclusions?.[0].falsification, 'supported');
-  assert.deepEqual(evaluation.adoption, {
-    authority: 'human',
-    decisionRecorded: false,
-  });
+  assert.equal(evaluation.adoption.status, 'pending');
+  assert.equal(handoff.recommendation.action, 'accept');
 });
 
-test('evaluateHandoff allows a clean routine handoff without claims or review boilerplate', () => {
-  const input = compileInput();
-  input.semantic.consequence.value = 'low';
-  input.semantic.assuranceDimensions = [];
-  const compiled = compileDelegation(input);
-  assert.equal(compiled.status, 'delegation-compiled');
-  if (compiled.status !== 'delegation-compiled') return;
-  const facts = factBundle(compiled.contract, 'passed');
-  const handoff = validHandoff(facts);
-  handoff.materialClaims = [];
-  handoff.reviewMap = [];
-
-  const evaluation = evaluateHandoff(evaluationInput(compiled.contract, facts, handoff));
-  assert.equal(evaluation.status, 'handoff-ready');
-  assert.deepEqual(evaluation.claimConclusions, []);
-  assert.deepEqual(evaluation.reviewMap, []);
-});
-
-test('evaluateHandoff lets collected fact failures escalate a routine plan', () => {
-  const input = compileInput();
-  input.semantic.consequence.value = 'low';
-  input.semantic.assuranceDimensions = [];
-  const compiled = compileDelegation(input);
-  assert.equal(compiled.status, 'delegation-compiled');
-  if (compiled.status !== 'delegation-compiled') return;
-  const facts = factBundle(compiled.contract, 'unavailable');
-  const handoff = validHandoff(facts);
-  handoff.materialClaims = [];
-  handoff.reviewMap = [];
-  assert.throws(
-    () => evaluateHandoff(evaluationInput(compiled.contract, facts, handoff)),
-    /requires must-read or unresolved Review Map coverage/,
-  );
-
-  handoff.reviewMap = [{
-    id: 'review:unavailable-check',
-    priority: 'unresolved',
-    changedFiles: [],
-    checkIds: ['test'],
-    claimIds: [],
-    unknownIds: [],
-    rationale: 'The frozen verification boundary produced no result.',
-    prevents: 'Adopting without inspecting the missing verification evidence.',
-  }];
-  const evaluation = evaluateHandoff(evaluationInput(compiled.contract, facts, handoff));
-  assert.equal(evaluation.status, 'needs-attention');
-  assert.ok(evaluation.attention.some((item) => item.code === 'check-unavailable'));
-});
-
-test('evaluateHandoff enforces compiled assurance dimensions and critical review escalation', () => {
+test('facts-stale takes priority over malformed Agent handoff', () => {
   const contract = compiledContract();
-  const facts = factBundle(contract, 'passed');
-
-  const missing = validHandoff(facts);
-  missing.materialClaims[0].dimension = 'compatibility';
-  assert.throws(
-    () => evaluateHandoff(evaluationInput(contract, facts, missing)),
-    /requires a behavior claim/,
-  );
-
-  const downgraded = validHandoff(facts);
-  downgraded.materialClaims[0].adoptionCritical = false;
-  delete downgraded.materialClaims[0].falsification;
-  assert.throws(
-    () => evaluateHandoff(evaluationInput(contract, facts, downgraded)),
-    /requires an adoption-critical behavior claim/,
-  );
-
-  const unreviewed = validHandoff(facts);
-  unreviewed.reviewMap[0].priority = 'useful-to-sample';
-  assert.throws(
-    () => evaluateHandoff(evaluationInput(contract, facts, unreviewed)),
-    /requires must-read or unresolved review coverage/,
-  );
-});
-
-test('evaluateHandoff detects stale facts before accepting Host conclusions', () => {
-  const contract = compiledContract();
-  const facts = factBundle(contract, 'passed');
-  const result = evaluateHandoff({
-    protocol: PROTOCOL,
-    schemaVersion: SCHEMA_VERSION,
+  const facts = factBundle(contract);
+  const evaluation = evaluateHandoff({
+    ...envelope,
     contract,
     factBundle: facts,
-    currentWorktreeFingerprint: sha256('later worktree'),
-    handoff: validHandoff(facts),
+    currentWorktreeFingerprint: digest('different'),
+    challenges: [],
+    evidenceDispositions: [],
+    hostPolicyEvaluations: [],
+    deliveryExhausted: false,
+    verificationRevised: false,
+    handoff: {} as CognitiveHandoff,
   });
-  assert.equal(result.status, 'facts-stale');
-  assert.equal(result.handoffFingerprint, undefined);
+  assert.equal(evaluation.status, 'facts-stale');
 });
 
-test('evaluateHandoff rejects failed checks and surfaces unavailable checks', () => {
-  const contract = compiledContract();
-  const failed = factBundle(contract, 'failed');
-  const failedHandoff = validHandoff(failed);
-  failedHandoff.reviewMap[0].priority = 'must-read';
-  const failedResult = evaluateHandoff({
-    protocol: PROTOCOL,
-    schemaVersion: SCHEMA_VERSION,
-    contract,
-    factBundle: failed,
-    currentWorktreeFingerprint: failed.current.fingerprint,
-    handoff: failedHandoff,
-  });
-  assert.equal(failedResult.status, 'rejected');
-  const failedAttention = failedResult.attention.find((item) => item.code === 'check-failed');
-  assert.ok(failedAttention);
-  assert.ok('checkId' in failedAttention);
-  assert.equal(failedAttention.checkId, 'test');
-  assert.deepEqual(failedAttention.references, { checks: ['test'] });
-  assert.equal(failedAttention.resolution.kind, 'repair-or-revise');
-
-  const unavailable = factBundle(contract, 'unavailable');
-  const unavailableHandoff = validHandoff(unavailable);
-  unavailableHandoff.reviewMap[0].priority = 'must-read';
-  const unavailableResult = evaluateHandoff({
-    protocol: PROTOCOL,
-    schemaVersion: SCHEMA_VERSION,
-    contract,
-    factBundle: unavailable,
-    currentWorktreeFingerprint: unavailable.current.fingerprint,
-    handoff: unavailableHandoff,
-  });
-  assert.equal(unavailableResult.status, 'needs-attention');
-  const unavailableAttention = unavailableResult.attention.find((item) => item.code === 'check-unavailable');
-  assert.ok(unavailableAttention);
-  assert.ok('checkId' in unavailableAttention);
-  assert.equal(unavailableAttention.checkId, 'test');
-  assert.deepEqual(unavailableAttention.references, { checks: ['test'] });
-  assert.equal(unavailableAttention.resolution.kind, 'supply-evidence');
-  assert.equal(unavailableAttention.reason, 'Executable was not available.');
-});
-
-test('evaluateHandoff uses the latest monotonic timeout attempt without hiding history', () => {
-  const contract = compiledContract();
-  const firstFacts = factBundle(contract, 'passed');
-  const passed = firstFacts.checks[0].attempts[0];
-  firstFacts.checks[0].attempts = [
-    {
-      ...structuredClone(passed),
-      attempt: 1,
-      timeoutMs: 100,
-      status: 'unavailable',
-      exitCode: null,
-      timedOut: true,
-      outputDigest: sha256('timed-out-attempt'),
-      reason: 'Check timed out after 100 ms.',
-    },
-    {
-      ...structuredClone(passed),
-      attempt: 2,
-      timeoutMs: 1_000,
-      outputDigest: sha256('passing-retry'),
-    },
-  ];
-  const retried = rebindFactBundle(firstFacts);
-  const result = evaluateHandoff(evaluationInput(
-    contract,
-    retried,
-    validHandoff(retried),
-  ));
-  assert.equal(result.status, 'handoff-ready');
-  assert.equal(result.attention.some((item) => item.code === 'check-unavailable'), false);
-
-  const invalid = structuredClone(retried);
-  invalid.checks[0].attempts[1].timeoutMs = 100;
-  assert.throws(
-    () => evaluateHandoff(evaluationInput(
-      contract,
-      rebindFactBundle(invalid),
-      validHandoff(invalid),
-    )),
-    /retry timeouts must increase monotonically/,
-  );
-});
-
-test('evaluateHandoff requires falsification and urgent Review Map coverage', () => {
-  const contract = compiledContract();
-  const facts = factBundle(contract, 'passed');
-  const missing = validHandoff(facts);
-  delete missing.materialClaims[0].falsification;
-  assert.throws(
-    () => evaluateHandoff(evaluationInput(contract, facts, missing)),
-    /requires falsification/,
-  );
-
-  const uncovered = validHandoff(facts);
-  uncovered.materialClaims[0].falsification!.status = 'partial';
-  uncovered.materialClaims[0].falsification!.counterEvidence = {
-    changedFiles: [facts.changedFiles[0].path],
-  };
-  uncovered.reviewMap[0].priority = 'useful-to-sample';
-  assert.throws(
-    () => evaluateHandoff(evaluationInput(contract, facts, uncovered)),
-    /requires must-read or unresolved review coverage/,
-  );
-
-  uncovered.reviewMap[0].priority = 'must-read';
-  const partial = evaluateHandoff(evaluationInput(contract, facts, uncovered));
-  assert.equal(partial.status, 'needs-attention');
-});
-
-test('evaluateHandoff rejects contradicted critical claims and preserves counterevidence', () => {
-  const contract = compiledContract();
-  const facts = factBundle(contract, 'passed');
-  const handoff = validHandoff(facts);
-  handoff.materialClaims[0].falsification!.status = 'contradicted';
-  handoff.materialClaims[0].falsification!.supportingEvidence = {};
-  handoff.materialClaims[0].falsification!.counterEvidence = {
-    changedFiles: [facts.changedFiles[0].path],
-  };
-  handoff.reviewMap[0].priority = 'must-read';
-  const result = evaluateHandoff(evaluationInput(contract, facts, handoff));
-  assert.equal(result.status, 'rejected');
-  assert.ok(result.attention.some((item) => item.code === 'critical-claim-contradicted'));
-});
-
-test('evaluateHandoff rejects obsolete Host machine facts and aggregates independent issues', () => {
-  const contract = compiledContract();
-  const facts = factBundle(contract, 'passed');
-  const obsolete = structuredClone(validHandoff(facts)) as unknown as Record<string, unknown>;
-  obsolete.factCollectionId = sha256('another collection');
-  const claims = obsolete.materialClaims as Array<Record<string, unknown>>;
-  claims[0].basis = 'runtime-fact';
-  claims[0].runtimeStatement = 'Check test was passed.';
-  assert.throws(
-    () => evaluateHandoff(evaluationInput(
-      contract,
-      facts,
-      obsolete as unknown as CognitiveHandoff,
-    )),
-    (error: unknown) => {
-      assert.ok(error instanceof HandoffValidationError);
-      assert.ok(error.issues.some((issue) => issue.path === 'factCollectionId'));
-      assert.ok(error.issues.some((issue) => issue.path === 'materialClaims[0].basis'));
-      assert.ok(error.issues.some((issue) => issue.path === 'materialClaims[0].runtimeStatement'));
-      return true;
-    },
-  );
-});
-
-test('evaluateHandoff makes residual unknowns first-class attention', () => {
-  const contract = compiledContract();
-  const facts = factBundle(contract, 'passed');
-  const handoff = validHandoff(facts);
-  handoff.residualUnknowns = [{
-    id: 'unknown:operation',
-    statement: 'Production latency was not measured.',
-    adoptionImpact: 'The rollout could regress response time.',
-    validationPath: 'Run the production-shaped benchmark before rollout.',
-    references: {
-      claims: ['claim:critical'],
-      changedFiles: [facts.changedFiles[0].path],
-    },
-  }];
-  handoff.reviewMap.push({
-    id: 'review:unknown',
-    priority: 'unresolved',
-    changedFiles: [facts.changedFiles[0].path],
-    checkIds: [],
-    claimIds: ['claim:critical'],
-    unknownIds: ['unknown:operation'],
-    rationale: 'Operational behavior lacks production evidence.',
-    prevents: 'Adopting a latency regression without a known validation path.',
-  });
-  const result = evaluateHandoff(evaluationInput(contract, facts, handoff));
-  assert.equal(result.status, 'needs-attention');
-  const attention = result.attention.find((item) => item.code === 'residual-unknown');
-  assert.ok(attention);
-  assert.ok('unknownId' in attention);
-  assert.equal(attention.unknownId, 'unknown:operation');
-  assert.deepEqual(attention.references.unknowns, ['unknown:operation']);
-  assert.equal(attention.resolution.kind, 'execute-validation');
-});
-
-test('evaluateHandoff groups one changed verifier surface across checks', () => {
-  const input = compileInput();
-  const first = input.verification.checks![0];
-  first.commandDefinitionPaths = [];
-  first.acceptanceSurfacePaths = ['src/index.ts'];
-  input.verification.checks!.push({
-    ...structuredClone(first),
-    id: 'test:secondary',
-    rationale: 'Exercise a second boundary using the same acceptance surface.',
-  });
-  const compiled = compileDelegation(input);
-  assert.equal(compiled.status, 'delegation-compiled');
-  if (compiled.status !== 'delegation-compiled') return;
-  const facts = factBundle(compiled.contract, 'passed');
-  const handoff = validHandoff(facts);
-  handoff.reviewMap[0].priority = 'must-read';
-  handoff.reviewMap[0].checkIds = ['test', 'test:secondary'];
-  const result = evaluateHandoff(evaluationInput(compiled.contract, facts, handoff));
-
-  assert.equal(result.status, 'needs-attention');
-  const verifierAttention = result.attention.filter((item) =>
-    item.code === 'verifier-surface-changed');
-  assert.equal(verifierAttention.length, 1);
-  assert.deepEqual(verifierAttention[0].references, {
-    changedFiles: ['src/index.ts'],
-    checks: ['test', 'test:secondary'],
-  });
-  assert.ok('path' in verifierAttention[0]);
-  assert.equal(verifierAttention[0].path, 'src/index.ts');
-  assert.deepEqual(verifierAttention[0].checkIds, ['test', 'test:secondary']);
-});
-
-function compileInput(): CompileDelegationInput {
-  const eventContent = 'Replace the current implementation with the approved Semantic Handoff MVP.';
-  return {
-    protocol: PROTOCOL,
-    schemaVersion: SCHEMA_VERSION,
-    humanEvents: [{
-      id: 'event:task',
-      kind: 'task',
-      content: eventContent,
-      contentFingerprint: sha256(eventContent),
-      provider: 'test-host',
-      nativeId: 'message-1',
+test('changed acceptance surface triggers every related fact-triggered obligation', () => {
+  const input = criticalInput('fact-triggered');
+  input.conditions.push({
+    key: 'shared-material',
+    statement: 'The shared behavior remains understandable.',
+    rationale: 'A second adoption decision consumes the same verifier.',
+    criticality: 'material',
+    evidenceObligations: [{
+      key: 'shared-boundary',
+      statement: 'The shared boundary remains stable.',
+      failureHypothesis: 'The changed verifier could accept an incompatible boundary.',
+      strategies: [
+        { kind: 'runtime-check', checkKeys: ['suite'], expectedObservation: 'passed' },
+        { kind: 'independent-challenge', policy: 'fact-triggered' },
+      ],
     }],
-    semantic: {
-      desiredOutcome: {
-        value: 'Replace the legacy workflow with an inspectable handoff.',
-        basis: { humanEventIds: ['event:task'], repositoryEvidenceIds: [] },
-      },
-      constraints: [{
-        value: 'Do not add a compatibility layer.',
-        basis: { humanEventIds: ['event:task'], repositoryEvidenceIds: [] },
-      }],
-      nonGoals: [{
-        value: 'Do not implement cross-task Decision Continuity.',
-        basis: { humanEventIds: ['event:task'], repositoryEvidenceIds: [] },
-      }],
-      focus: [{
-        value: 'packages/core',
-        basis: { humanEventIds: ['event:task'], repositoryEvidenceIds: [] },
-      }],
-      consequence: {
-        value: 'high',
-        basis: { humanEventIds: ['event:task'], repositoryEvidenceIds: [] },
-      },
-      assuranceDimensions: [{
-        dimension: 'behavior',
-        criticality: 'adoption-critical',
-        rationale: 'The public workflow behavior determines whether the new handoff can be adopted.',
-        basis: { humanEventIds: ['event:task'], repositoryEvidenceIds: [] },
-      }],
+  });
+  const result = compileDelegation(input);
+  assert.equal(result.status, 'delegation-compiled');
+  if (result.status !== 'delegation-compiled') return;
+  const contract = result.contract;
+  const facts = factBundle(contract, { changedAcceptanceSurface: true });
+  const handoff = handoffFor(contract, facts, []);
+  const evaluation = evaluateHandoff({
+    ...envelope, contract, factBundle: facts,
+    currentWorktreeFingerprint: facts.current.fingerprint,
+    challenges: [], evidenceDispositions: [], hostPolicyEvaluations: [],
+    deliveryExhausted: false, verificationRevised: false, handoff,
+  });
+  const obligationIds = contract.adoptionConditions
+    .flatMap((condition) => condition.evidenceObligations.map((item) => item.id)).sort();
+  assert.deepEqual(evaluation.requiredChallengeObligationIds, obligationIds);
+  assert.equal(evaluation.attention.filter((item) => item.codes.includes('challenge-missing')).length, 2);
+});
+
+test('a condition cannot claim support beyond its obligation conclusions', () => {
+  const contract = compiledContract();
+  const facts = factBundle(contract);
+  const challenges = supportedChallenges(contract, facts);
+  const handoff = handoffFor(contract, facts, challenges, 'partial');
+  handoff.conditionConclusions[0].status = 'supported';
+  handoff.handoffFingerprint = fingerprint(withoutFingerprint(handoff));
+  assert.throws(() => evaluateHandoff({
+    ...envelope, contract, factBundle: facts,
+    currentWorktreeFingerprint: facts.current.fingerprint,
+    challenges, evidenceDispositions: [], hostPolicyEvaluations: [],
+    deliveryExhausted: false, verificationRevised: false, handoff,
+  }), /cannot be supported while any evidence obligation/);
+});
+
+test('thin Host policy claims remain visible and cannot impersonate enforcement', () => {
+  const input = criticalInput();
+  input.hostPolicyRequirements = [{
+    key: 'no-web', capability: 'web-search', requiredState: 'disabled',
+    enforcementRequirement: 'required', rationale: 'The paired task forbids Web access.',
+  }];
+  const result = compileDelegation(input);
+  assert.equal(result.status, 'delegation-compiled');
+  if (result.status !== 'delegation-compiled') return;
+  const contract = result.contract;
+  const facts = factBundle(contract);
+  const challenges = supportedChallenges(contract, facts);
+  const handoff = handoffFor(contract, facts, challenges);
+  const hostPolicyEvaluations: HostPolicyEvaluation[] = [{
+    requirementId: contract.hostPolicyRequirements[0].id,
+    mode: 'instruction-only', provenance: 'thin-skill',
+  }];
+  const evaluation = evaluateHandoff({
+    ...envelope, contract, factBundle: facts,
+    currentWorktreeFingerprint: facts.current.fingerprint,
+    challenges, evidenceDispositions: [], hostPolicyEvaluations,
+    deliveryExhausted: false, verificationRevised: false, handoff,
+  });
+  assert.ok(evaluation.attention.some((item) => item.codes.includes('host-policy-unverified')));
+
+  assert.throws(() => evaluateHandoff({
+    ...envelope, contract, factBundle: facts,
+    currentWorktreeFingerprint: facts.current.fingerprint,
+    challenges, evidenceDispositions: [],
+    hostPolicyEvaluations: [{
+      requirementId: contract.hostPolicyRequirements[0].id,
+      mode: 'enforced', provenance: 'thin-skill', attestationId: 'attestation:fake',
+    }],
+    deliveryExhausted: false, verificationRevised: false, handoff,
+  }), /host policy evaluation is invalid/);
+});
+
+test('non-passing facts remain inspectable and explicit Human exceptions preserve authority', () => {
+  const contract = compiledContract('fact-triggered');
+  const facts = factBundle(contract, { currentStatus: 'failed', baselineStatus: 'passed' });
+  const handoff = handoffFor(contract, facts, [], 'unknown');
+  const dispositionProjection = {
+    ...envelope,
+    effectiveContractId: contract.effectiveContractId,
+    attemptId: facts.attemptId,
+    factCollectionId: facts.factCollectionId,
+    semanticImpact: 'none' as const,
+    entries: [{
+      definitionId: facts.checks[0].definitionId,
+      cause: 'environment' as const,
+      diagnosis: 'The runner dependency was unavailable.',
+      falsificationAttempt: 'Checked whether implementation edits can restore the runner.',
+      codeChangeCanAlterObservation: false,
+      expectedDifferentObservation: 'The frozen command starts when the runner is available.',
+      intendedChanges: [],
+    }],
+    route: 'handoff' as const,
+  };
+  const evidenceDispositions = [{
+    dispositionId: fingerprint(dispositionProjection), ...dispositionProjection,
+  }];
+  const evaluation = evaluateHandoff({
+    ...envelope, contract, factBundle: facts,
+    currentWorktreeFingerprint: facts.current.fingerprint,
+    challenges: [], evidenceDispositions, hostPolicyEvaluations: [],
+    deliveryExhausted: true, verificationRevised: false, handoff,
+  });
+  assert.equal(evaluation.status, 'needs-attention');
+  assert.ok(evaluation.attention.some((item) => item.codes.includes('verification-nonpassing')));
+  assert.ok(evaluation.attention.some((item) => item.codes.includes('repair-route-exhausted')));
+
+  const decision = decisionFor(contract, facts, handoff, evaluation.attention.map((item) => item.id));
+  const accepted = evaluateHandoff({
+    ...envelope, contract, factBundle: facts,
+    currentWorktreeFingerprint: facts.current.fingerprint,
+    challenges: [], evidenceDispositions, hostPolicyEvaluations: [],
+    deliveryExhausted: true, verificationRevised: false, handoff, decision,
+  });
+  assert.equal(accepted.adoption.status, 'accepted');
+});
+
+function criticalInput(policy: 'required' | 'fact-triggered' = 'required'): CompileDelegationInput {
+  return {
+    ...envelope,
+    developerEvent: { content: 'Keep compatibility intact.', provider: 'test' },
+    task: {
+      desiredOutcome: 'Change the behavior without losing the old path.',
+      constraints: ['Preserve the public contract.'],
+      nonGoals: [],
+      focus: ['src/feature.ts'],
     },
-    verification: {
-      checks: [{
-        id: 'test',
-        rationale: 'Exercise the public contract and handoff behavior.',
-        argv: ['corepack', 'pnpm', 'test'],
-        source: 'host-task',
-        commandDefinitionPaths: ['package.json'],
-        acceptanceSurfacePaths: [],
+    conditions: [{
+      key: 'compatibility',
+      statement: 'Existing callers retain their behavior.',
+      rationale: 'A wrong change breaks adoption.',
+      criticality: 'adoption-critical',
+      evidenceObligations: [{
+        key: 'legacy-path',
+        statement: 'The legacy call path retains its behavior.',
+        failureHypothesis: 'The new branch may bypass the legacy call path.',
+        strategies: [
+          { kind: 'runtime-check', checkKeys: ['suite'], expectedObservation: 'passed' },
+          { kind: 'independent-challenge', policy },
+        ],
       }],
-    },
+    }],
+    hostPolicyRequirements: [],
+    delivery: { maxRepairAttempts: 2 },
+    checks: [{
+      key: 'suite',
+      rationale: 'Exercises the public behavior.',
+      argv: ['node', '--test'],
+      baseline: {
+        mode: 'task-start',
+        rationale: 'The before/after result distinguishes a regression from a pre-existing failure.',
+        obligationKeys: [{ conditionKey: 'compatibility', obligationKey: 'legacy-path' }],
+      },
+      commandDefinitionPaths: ['package.json'],
+      acceptanceSurfacePaths: ['test/feature.test.ts'],
+    }],
   };
 }
 
-function compiledContract(): SemanticContract {
-  const result = compileDelegation(compileInput());
+function compiledContract(policy: 'required' | 'fact-triggered' = 'required'): TaskContract {
+  const result = compileDelegation(criticalInput(policy));
   assert.equal(result.status, 'delegation-compiled');
   if (result.status !== 'delegation-compiled') throw new Error('fixture did not compile');
   return result.contract;
 }
 
 function factBundle(
-  contract: SemanticContract,
-  status: 'passed' | 'failed' | 'unavailable',
+  contract: TaskContract,
+  options: {
+    currentStatus?: 'passed' | 'failed' | 'unavailable';
+    baselineStatus?: 'passed' | 'failed' | 'unavailable';
+    changedAcceptanceSurface?: boolean;
+  } = {},
 ): FactBundle {
-  assert.equal(contract.verification.mode, 'checks');
-  if (contract.verification.mode !== 'checks') throw new Error('fixture requires checks');
-  const changedFile = {
-    id: 'file:source',
-    path: 'src/index.ts',
-    operation: 'modified' as const,
-    before: { kind: 'file' as const, contentDigest: sha256('before'), mode: '100644' },
-    after: { kind: 'file' as const, contentDigest: sha256('after'), mode: '100644' },
-    representation: 'text' as const,
-    patchDigest: sha256('patch section'),
-  };
-  const base = {
-    protocol: PROTOCOL,
-    schemaVersion: SCHEMA_VERSION,
-    contractId: contract.contractId,
-    collectedAt: TIMESTAMP,
-    baseline: {
-      head: 'abc123',
-      fingerprint: sha256('baseline'),
-      entryCount: 2,
-      capturedAt: TIMESTAMP,
-    },
-    current: {
-      head: 'abc123',
-      fingerprint: sha256('current'),
-      entryCount: 2,
-      capturedAt: TIMESTAMP,
-    },
-    changeFingerprint: stableFingerprint([changedFile]),
-    changedFiles: [changedFile],
-    checks: contract.verification.checks.map((checkDefinition) => ({
-      id: checkDefinition.id,
-      argv: checkDefinition.argv,
-      definitionFingerprint: checkDefinitionFingerprint(checkDefinition),
-      attempts: [{
-        attempt: 1,
-        timeoutMs: 300_000,
-        status,
-        exitCode: status === 'passed' ? 0 : status === 'failed' ? 1 : null,
-        timedOut: false,
-        outputDigest: sha256(`output:${checkDefinition.id}:${status}`),
-        stdout: {
-          digest: sha256(''),
-          byteLength: 0,
-          persistedBytes: 0,
-          truncated: false,
-        },
-        stderr: {
-          digest: sha256(''),
-          byteLength: 0,
-          persistedBytes: 0,
-          truncated: false,
-        },
-        ...(status === 'unavailable' ? { reason: 'Executable was not available.' } : {}),
-      }],
+  if (contract.verificationPlan.mode !== 'checks') throw new Error('fixture requires checks');
+  const currentStatus = options.currentStatus ?? 'passed';
+  const baselineStatus = options.baselineStatus ?? 'passed';
+  const implementationBaseline = worktree('baseline-post');
+  const baselineWithoutFingerprint = {
+    capturedAt: '2026-08-11T00:00:00.000Z',
+    preCheck: worktree('baseline-pre'),
+    postCheck: implementationBaseline,
+    checkInducedChanges: [],
+    checks: contract.verificationPlan.definitions.map((definition) => ({
+      definitionId: definition.definitionId,
+      mode: definition.baseline.mode,
+      observation: definition.baseline.mode === 'task-start'
+        ? checkFact(definition, baselineStatus) : null,
     })),
-    verifierMutations: contract.verification.checks.flatMap((checkDefinition) =>
-      checkDefinition.verifierRefs.flatMap((reference) => reference.path === changedFile.path
-        ? [{
-            checkId: checkDefinition.id,
-            path: reference.path,
-            role: reference.role,
-            changedFileId: changedFile.id,
-          }]
-        : [])),
-    patch: {
-      path: 'change.patch',
-      digest: sha256('complete patch'),
-      byteLength: Buffer.byteLength('complete patch'),
-    },
-    provenance: {
-      collector: 'stetra-cli' as const,
-      cliVersion: '0.0.1',
-      coreVersion: '0.0.1',
-    },
   };
-  const factCollection = factCollectionId(base);
-  const withCollection = { ...base, factCollectionId: factCollection };
-  return {
-    ...withCollection,
-    bundleFingerprint: factBundleFingerprint(withCollection),
+  const changedFile = {
+    id: 'file:verifier', path: 'test/feature.test.ts', operation: 'modified' as const,
+    representation: 'metadata-only' as const,
   };
+  const checks = contract.verificationPlan.definitions.map((definition) =>
+    checkFact(definition, currentStatus));
+  const base = {
+    ...envelope,
+    effectiveContractId: contract.effectiveContractId,
+    attemptId: 'attempt:1',
+    collectedAt: '2026-08-11T00:01:00.000Z',
+    baseline: implementationBaseline,
+    preCheck: worktree('current-pre'),
+    current: worktree('current-post'),
+    baselineVerification: {
+      fingerprint: fingerprint(baselineWithoutFingerprint), ...baselineWithoutFingerprint,
+    },
+    changeFingerprint: digest('change'),
+    changedFiles: options.changedAcceptanceSurface ? [changedFile] : [],
+    checkInducedChanges: [],
+    checks,
+    checkComparisons: checks.map((check) => ({
+      definitionId: check.definitionId,
+      relation: `${baselineStatus}-before-${currentStatus}-now` as FactBundle['checkComparisons'][number]['relation'],
+    })),
+    verifierMutations: options.changedAcceptanceSurface
+      ? contract.verificationPlan.definitions.map((definition) => ({
+          verifierId: definition.verifierId,
+          definitionId: definition.definitionId,
+          path: 'test/feature.test.ts',
+          role: 'acceptance-surface' as const,
+          changedFileId: changedFile.id,
+        })) : [],
+    environment: {
+      platform: 'linux', architecture: 'x64', cwdFingerprint: digest('cwd'),
+      executables: [], toolchains: [], lockfiles: [], environmentVariableNames: [],
+    },
+    provenance: { collector: 'stetra-cli' as const, cliVersion: '0.0.1', coreVersion: '0.0.1' },
+  };
+  const factCollectionId = collectionFingerprint(base);
+  const withCollection = { ...base, factCollectionId };
+  return { ...withCollection, bundleFingerprint: factBundleFingerprint(withCollection) };
 }
 
-function rebindFactBundle(bundle: FactBundle): FactBundle {
-  const {
-    factCollectionId: _factCollectionId,
-    bundleFingerprint: _bundleFingerprint,
-    ...base
-  } = bundle;
-  const nextCollectionId = factCollectionId(base);
-  const withCollection = { ...base, factCollectionId: nextCollectionId };
+function checkFact(
+  definition: Extract<TaskContract['verificationPlan'], { mode: 'checks' }>['definitions'][number],
+  status: 'passed' | 'failed' | 'unavailable',
+) {
+  const stream = { digest: digest(''), byteLength: 0, persistedBytes: 0, truncated: false };
   return {
-    ...withCollection,
-    bundleFingerprint: factBundleFingerprint(withCollection),
-  };
-}
-
-function validHandoff(facts: FactBundle): CognitiveHandoff {
-  return {
-    protocol: PROTOCOL,
-    schemaVersion: SCHEMA_VERSION,
-    systemMeaningUpdate: 'The public workflow now binds implementation claims to collected repository facts.',
-    materialClaims: [{
-      id: 'claim:critical',
-      dimension: 'behavior',
-      statement: 'The implementation exposes the new semantic handoff behavior.',
-      adoptionConsequence: 'Reviewers can use the new workflow for production changes.',
-      adoptionCritical: true,
-      basis: 'agent-judgment',
-      evidence: {
-        changedFiles: [facts.changedFiles[0].path],
-        checks: ['test'],
-      },
-      falsification: {
-        failureHypothesis: 'The public behavior could diverge from the requested semantic handoff.',
-        attempt: 'Inspected the complete change and ran the frozen public-contract test.',
-        status: 'supported',
-        supportingEvidence: {
-          changedFiles: [facts.changedFiles[0].path],
-          checks: ['test'],
-        },
-        counterEvidence: {},
-        conclusion: 'No conflicting behavior was found within the collected diff and check boundary.',
-      },
-    }],
-    residualUnknowns: [],
-    reviewMap: [{
-      id: 'review:core',
-      priority: 'must-read',
-      changedFiles: [facts.changedFiles[0].path],
-      checkIds: ['test'],
-      claimIds: ['claim:critical'],
-      unknownIds: [],
-      rationale: 'This file owns the public behavior change.',
-      prevents: 'Missing an unintended change to the public contract.',
+    verifierId: definition.verifierId,
+    definitionId: definition.definitionId,
+    argv: [...definition.argv],
+    definitionFingerprint: checkDefinitionFingerprint(definition),
+    attempts: [{
+      attempt: 1,
+      startedAt: '2026-08-11T00:00:30.000Z',
+      durationMs: 12,
+      timeoutMs: 1000,
+      status,
+      exitCode: status === 'passed' ? 0 : status === 'failed' ? 1 : null,
+      timedOut: false,
+      outputDigest: digest(`output:${status}`),
+      stdout: stream,
+      stderr: stream,
     }],
   };
 }
 
-function evaluationInput(
-  contract: SemanticContract,
+function handoffFor(
+  contract: TaskContract,
+  facts: FactBundle,
+  challenges: IndependentChallenge[],
+  status: ConclusionStatus = 'supported',
+): CognitiveHandoff {
+  const challengeByObligation = new Map(challenges.flatMap((challenge) =>
+    challenge.obligationIds.map((id) => [id, challenge] as const)));
+  const obligations = contract.adoptionConditions.flatMap((condition) => condition.evidenceObligations);
+  const projection = {
+    ...envelope,
+    handoffId: 'handoff:1',
+    effectiveContractId: contract.effectiveContractId,
+    attemptId: facts.attemptId,
+    factCollectionId: facts.factCollectionId,
+    summary: 'The implementation updates the requested behavior.',
+    obligationConclusions: obligations.map((obligation) => {
+      const challenge = challengeByObligation.get(obligation.id);
+      return {
+        obligationId: obligation.id,
+        status,
+        evidence: [
+          ...facts.checks.map((check) => ({ kind: 'check' as const, id: check.definitionId })),
+          ...(challenge ? [{ kind: 'challenge' as const, id: challenge.id }] : []),
+        ],
+        falsificationAttempt: 'Exercised the legacy path and inspected the most plausible bypass.',
+        counterEvidence: [],
+        conclusion: status === 'supported'
+          ? 'The bounded obligation is supported.' : 'The bounded obligation remains unresolved.',
+      };
+    }),
+    conditionConclusions: contract.adoptionConditions.map((condition) => ({
+      conditionId: condition.id,
+      status,
+      summary: status === 'supported'
+        ? 'All declared evidence obligations are supported.' : 'Evidence remains unresolved.',
+    })),
+    importantSystemEffects: ['Public behavior changes only at the requested boundary.'],
+    residualUnknowns: status === 'supported' ? [] : [{
+      conditionIds: contract.adoptionConditions.map((item) => item.id),
+      obligationIds: obligations.map((item) => item.id),
+      statement: 'The environment prevented a conclusive observation.',
+      adoptionImpact: 'Compatibility is not established.',
+      nextAction: 'Review the failure and rerun in a working environment.',
+      evidence: facts.checks.map((check) => ({ kind: 'check' as const, id: check.definitionId })),
+    }],
+    reviewQuestions: contract.adoptionConditions.map((condition) => ({
+      id: `review:${condition.key}`,
+      conditionIds: [condition.id],
+      obligationIds: condition.evidenceObligations.map((item) => item.id),
+      question: 'Does the changed path preserve the required behavior?',
+      adoptionImpact: 'A mismatch breaks compatibility.',
+      evidence: facts.checks.map((check) => ({ kind: 'check' as const, id: check.definitionId })),
+    })),
+    recommendation: {
+      action: status === 'supported' ? 'accept' as const : 'defer' as const,
+      rationale: status === 'supported' ? 'The bounded claims are supported.' : 'Evidence is incomplete.',
+      caveats: [],
+    },
+  };
+  return { ...projection, handoffFingerprint: fingerprint(projection) };
+}
+
+function supportedChallenges(contract: TaskContract, facts: FactBundle): IndependentChallenge[] {
+  const obligations = contract.adoptionConditions.flatMap((condition) =>
+    condition.evidenceObligations.filter((obligation) => obligation.strategies.some((strategy) =>
+      strategy.kind === 'independent-challenge' && strategy.policy === 'required')));
+  return obligations.map((obligation, index) => ({
+    ...envelope,
+    id: `challenge:${index + 1}`,
+    effectiveContractId: contract.effectiveContractId,
+    attemptId: facts.attemptId,
+    factCollectionId: facts.factCollectionId,
+    obligationIds: [obligation.id],
+    conditionIds: [obligation.conditionId],
+    independence: 'host-attested',
+    implementerContextId: 'context:implementer',
+    challengerContextId: `context:challenger-${index + 1}`,
+    attestationId: `attestation:${index + 1}`,
+    failureHypothesis: obligation.failureHypothesis,
+    evidence: {
+      changedFiles: [],
+      checks: facts.checks.map((item) => item.definitionId),
+      repositoryEvidence: [],
+      humanEvents: [],
+      patch: false,
+    },
+    falsificationAttempt: 'Inspected and exercised the compatibility path independently.',
+    supportingEvidence: [{
+      statement: 'The frozen check exercises the compatibility path.',
+      references: facts.checks.map((item) => ({ kind: 'check' as const, id: item.definitionId })),
+    }],
+    counterEvidence: [],
+    outcome: 'supported',
+    conclusion: 'The failure hypothesis was not observed.',
+  }));
+}
+
+function decisionFor(
+  contract: TaskContract,
   facts: FactBundle,
   handoff: CognitiveHandoff,
-) {
+  attentionIds: string[],
+): HumanDecision {
+  const content = 'Accept with the recorded evidence exceptions.';
   return {
-    protocol: PROTOCOL,
-    schemaVersion: SCHEMA_VERSION,
-    contract,
-    factBundle: facts,
-    currentWorktreeFingerprint: facts.current.fingerprint,
-    handoff,
+    ...envelope,
+    decisionId: 'decision:1',
+    humanEvent: {
+      id: 'event:decision', kind: 'decision', content, contentFingerprint: digest(content),
+    },
+    action: 'accepted',
+    effectiveContractId: contract.effectiveContractId,
+    attemptId: facts.attemptId,
+    factCollectionId: facts.factCollectionId,
+    handoffId: handoff.handoffId,
+    handoffFingerprint: handoff.handoffFingerprint,
+    reason: content,
+    exceptions: attentionIds.map((attentionId) => ({
+      attentionId, rationale: 'Accepted knowingly.',
+    })),
   };
+}
+
+function withoutFingerprint(handoff: CognitiveHandoff) {
+  const { handoffFingerprint: _ignored, ...projection } = handoff;
+  return projection;
+}
+
+function worktree(seed: string) {
+  return {
+    head: null,
+    fingerprint: digest(seed),
+    entryCount: 0,
+    capturedAt: '2026-08-11T00:00:00.000Z',
+  };
+}
+
+function digest(value: string): string {
+  return `sha256:${createHash('sha256').update(value).digest('hex')}`;
+}
+
+function fingerprint(value: unknown): string {
+  return digest(JSON.stringify(canonicalize(value)));
+}
+
+function canonicalize(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(canonicalize);
+  if (!value || typeof value !== 'object') return value;
+  return Object.fromEntries(Object.keys(value as Record<string, unknown>).sort()
+    .map((key) => [key, canonicalize((value as Record<string, unknown>)[key])]));
 }

@@ -53,17 +53,17 @@ async function runFrozenCheck(input: {
 }): Promise<CheckFact> {
   const { definition } = input;
   if (!Number.isSafeInteger(input.timeoutMs) || input.timeoutMs < 1) {
-    throw new Error(`Check ${definition.id} timeout must be a positive safe integer.`);
+    throw new Error(`Check ${definition.definitionId} timeout must be a positive safe integer.`);
   }
   const previousAttempts = input.previousAttempts ?? [];
   const prior = previousAttempts.at(-1);
   if (prior && (!prior.timedOut || input.timeoutMs <= prior.timeoutMs)) {
     throw new Error(
-      `Check ${definition.id} retry requires a timeout greater than the prior timed-out attempt.`,
+      `Check ${definition.definitionId} retry requires a timeout greater than the prior timed-out attempt.`,
     );
   }
   const attemptNumber = previousAttempts.length + 1;
-  const logStem = `check-${sha256(definition.id).slice(-16)}-attempt-${attemptNumber}`;
+  const logStem = `check-${sha256(definition.definitionId).slice(-16)}-attempt-${attemptNumber}`;
   const stdoutPath = resolve(input.outputDirectory, `${logStem}.stdout.log`);
   const stderrPath = resolve(input.outputDirectory, `${logStem}.stderr.log`);
   const stdout = new BoundedLogWriter(stdoutPath, MAX_CHECK_LOG_BYTES);
@@ -71,6 +71,8 @@ async function runFrozenCheck(input: {
   const stdoutHash = createHash('sha256');
   const stderrHash = createHash('sha256');
   const [file, ...args] = definition.argv;
+  const startedAt = new Date().toISOString();
+  const startedMs = performance.now();
   const result = await runStreamingCommand({
     file,
     args,
@@ -85,6 +87,7 @@ async function runFrozenCheck(input: {
       stderrHash.update(chunk);
     },
   });
+  const durationMs = Math.max(0, Math.round(performance.now() - startedMs));
   const stdoutFact = stdout.fact(
     `sha256:${stdoutHash.digest('hex')}`,
     input.projectRoot,
@@ -109,6 +112,8 @@ async function runFrozenCheck(input: {
           : undefined;
   const attempt: CheckAttemptFact = {
     attempt: attemptNumber,
+    startedAt,
+    durationMs,
     timeoutMs: input.timeoutMs,
     status,
     exitCode: Number.isInteger(result.exitCode) ? result.exitCode : null,
@@ -128,7 +133,8 @@ async function runFrozenCheck(input: {
     ...(reason ? { reason } : {}),
   };
   return {
-    id: definition.id,
+    verifierId: definition.verifierId,
+    definitionId: definition.definitionId,
     argv: [...definition.argv],
     definitionFingerprint: stableFingerprint(definition),
     attempts: [

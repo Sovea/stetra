@@ -1,4 +1,4 @@
-import type { SemanticContract, VerificationDefinition } from '../delegation/types.ts';
+import type { TaskContract, VerificationDefinition } from '../delegation/types.ts';
 import {
   isNonEmptyString,
   isSafeRepositoryPath,
@@ -8,21 +8,28 @@ import {
 } from '../shared/protocol.ts';
 import type {
   ChangedFileFact,
+  BaselineVerificationFact,
   CheckAttemptFact,
   CheckFact,
+  ExecutionEnvironment,
   FactBundle,
   FileContentFact,
   VerifierMutation,
   WorktreeSummary,
 } from './types.ts';
 
-export function validateFactBundle(bundle: FactBundle, contract: SemanticContract): void {
-  if (!bundle || typeof bundle !== 'object') throw new Error('evaluateHandoff factBundle must be an object.');
-  if (bundle.protocol !== contract.protocol || bundle.schemaVersion !== contract.schemaVersion) {
-    throw new Error('evaluateHandoff Fact Bundle protocol does not match the Semantic Contract.');
+export function validateFactBundle(bundle: FactBundle, contract: TaskContract): void {
+  if (!bundle || typeof bundle !== 'object') {
+    throw new Error('evaluateHandoff factBundle must be an object.');
   }
-  if (bundle.contractId !== contract.contractId) {
-    throw new Error('evaluateHandoff Fact Bundle is bound to another Semantic Contract.');
+  if (bundle.protocol !== contract.protocol || bundle.schemaVersion !== contract.schemaVersion) {
+    throw new Error('evaluateHandoff Fact Bundle protocol does not match the Task Contract.');
+  }
+  if (bundle.effectiveContractId !== contract.effectiveContractId) {
+    throw new Error('evaluateHandoff Fact Bundle is bound to another Task Contract.');
+  }
+  if (!isStableId(bundle.attemptId)) {
+    throw new Error('evaluateHandoff Fact Bundle attempt id is invalid.');
   }
   if (!isSha256(bundle.factCollectionId)
     || !isSha256(bundle.bundleFingerprint)
@@ -33,10 +40,18 @@ export function validateFactBundle(bundle: FactBundle, contract: SemanticContrac
     throw new Error('evaluateHandoff Fact Bundle collectedAt is invalid.');
   }
   validateWorktreeSummary(bundle.baseline, 'baseline');
+  validateWorktreeSummary(bundle.preCheck, 'preCheck');
   validateWorktreeSummary(bundle.current, 'current');
-  validateChangedFiles(bundle.changedFiles);
+  validateBaselineVerification(bundle.baselineVerification, contract);
+  if (stableFingerprint(bundle.baseline) !== stableFingerprint(bundle.baselineVerification.postCheck)) {
+    throw new Error('evaluateHandoff implementation baseline is not the post-baseline-check worktree.');
+  }
+  validateChangedFiles(bundle.changedFiles, 'changedFiles');
+  validateChangedFiles(bundle.checkInducedChanges, 'checkInducedChanges');
   validateChecks(bundle.checks, contract);
+  validateCheckComparisons(bundle, contract);
   validateVerifierMutations(bundle.verifierMutations, bundle.changedFiles, contract);
+  validateEnvironment(bundle.environment);
   if (bundle.patch !== undefined) {
     if (!isSafeRepositoryPath(bundle.patch.path)
       || !isSha256(bundle.patch.digest)
@@ -54,30 +69,122 @@ export function validateFactBundle(bundle: FactBundle, contract: SemanticContrac
     throw new Error('evaluateHandoff Fact Bundle provenance is invalid.');
   }
 
-  const expectedCollectionId = factCollectionId(bundle);
-  if (bundle.factCollectionId !== expectedCollectionId) {
+  if (bundle.factCollectionId !== factCollectionId(bundle)) {
     throw new Error('evaluateHandoff Fact Bundle collection identity does not match its machine facts.');
   }
-  const expectedBundleFingerprint = factBundleFingerprint(bundle);
-  if (bundle.bundleFingerprint !== expectedBundleFingerprint) {
+  if (bundle.bundleFingerprint !== factBundleFingerprint(bundle)) {
     throw new Error('evaluateHandoff Fact Bundle fingerprint does not match its content.');
   }
 }
 
-export function factCollectionId(bundle: Omit<FactBundle, 'factCollectionId' | 'bundleFingerprint'>): string {
+export function factCollectionId(
+  bundle: Omit<FactBundle, 'factCollectionId' | 'bundleFingerprint'>,
+): string {
   return stableFingerprint({
-    contractId: bundle.contractId,
-    baselineFingerprint: bundle.baseline.fingerprint,
-    currentFingerprint: bundle.current.fingerprint,
+    protocol: bundle.protocol,
+    schemaVersion: bundle.schemaVersion,
+    effectiveContractId: bundle.effectiveContractId,
+    attemptId: bundle.attemptId,
+    baseline: bundle.baseline,
+    preCheck: bundle.preCheck,
+    current: bundle.current,
+    baselineVerification: bundle.baselineVerification,
     changeFingerprint: bundle.changeFingerprint,
     changedFiles: bundle.changedFiles,
+    checkInducedChanges: bundle.checkInducedChanges,
     checks: bundle.checks,
+    checkComparisons: bundle.checkComparisons,
     verifierMutations: bundle.verifierMutations,
+    environment: bundle.environment,
     patch: bundle.patch ?? null,
+    provenance: bundle.provenance,
   });
 }
 
-export function factBundleFingerprint(bundle: Omit<FactBundle, 'bundleFingerprint'>): string {
+function validateBaselineVerification(
+  baseline: BaselineVerificationFact,
+  contract: TaskContract,
+): void {
+  if (!baseline || !isSha256(baseline.fingerprint) || !isIsoTimestamp(baseline.capturedAt)) {
+    throw new Error('evaluateHandoff baseline verification identity is invalid.');
+  }
+  validateWorktreeSummary(baseline.preCheck, 'baselineVerification.preCheck');
+  validateWorktreeSummary(baseline.postCheck, 'baselineVerification.postCheck');
+  validateChangedFiles(baseline.checkInducedChanges, 'baselineVerification.checkInducedChanges');
+  const definitions = contract.verificationPlan.mode === 'checks'
+    ? contract.verificationPlan.definitions : [];
+  if (!Array.isArray(baseline.checks) || baseline.checks.length !== definitions.length) {
+    throw new Error('evaluateHandoff baseline verification must cover every frozen check.');
+  }
+  for (const definition of definitions) {
+    const fact = baseline.checks.find((item) => item.definitionId === definition.definitionId);
+    if (!fact || (fact.mode !== definition.baseline.mode
+      && !(definition.baseline.mode === 'task-start'
+        && fact.mode === 'unknown-after-revision'))) {
+      throw new Error(`evaluateHandoff baseline mode for ${definition.definitionId} is invalid.`);
+    }
+    if (definition.baseline.mode === 'unknown' || fact.mode === 'unknown-after-revision') {
+      if (fact.observation !== null) {
+        throw new Error(`evaluateHandoff unknown baseline ${definition.definitionId} cannot contain an observation.`);
+      }
+    } else {
+      if (!fact.observation) {
+        throw new Error(`evaluateHandoff observed baseline ${definition.definitionId} requires an observation.`);
+      }
+      validateCheckFact(fact.observation, definition);
+    }
+  }
+  const { fingerprint: _ignored, ...projection } = baseline;
+  if (baseline.fingerprint !== stableFingerprint(projection)) {
+    throw new Error('evaluateHandoff baseline verification fingerprint is invalid.');
+  }
+}
+
+function validateCheckComparisons(bundle: FactBundle, contract: TaskContract): void {
+  const definitions = contract.verificationPlan.mode === 'checks'
+    ? contract.verificationPlan.definitions : [];
+  if (!Array.isArray(bundle.checkComparisons)
+    || bundle.checkComparisons.length !== definitions.length) {
+    throw new Error('evaluateHandoff check comparisons must cover every frozen check.');
+  }
+  const allowed = new Set([
+    'baseline-unknown',
+    'baseline-unknown-after-revision',
+    'passed-before-passed-now', 'passed-before-failed-now', 'passed-before-unavailable-now',
+    'failed-before-passed-now', 'failed-before-failed-now', 'failed-before-unavailable-now',
+    'unavailable-before-passed-now', 'unavailable-before-failed-now',
+    'unavailable-before-unavailable-now',
+  ]);
+  for (const definition of definitions) {
+    const comparison = bundle.checkComparisons.find((item) =>
+      item.definitionId === definition.definitionId);
+    if (!comparison || !allowed.has(comparison.relation)) {
+      throw new Error(`evaluateHandoff check comparison ${definition.definitionId} is invalid.`);
+    }
+    const baseline = bundle.baselineVerification.checks.find((item) =>
+      item.definitionId === definition.definitionId)!;
+    const current = bundle.checks.find((item) =>
+      item.definitionId === definition.definitionId)!;
+    const expected = baseline.mode === 'unknown-after-revision'
+      ? 'baseline-unknown-after-revision'
+      : baseline.mode === 'unknown' || !baseline.observation
+        ? 'baseline-unknown'
+      : `${latestStatus(baseline.observation)}-before-${latestStatus(current)}-now`;
+    if (comparison.relation !== expected) {
+      throw new Error(`evaluateHandoff check comparison ${definition.definitionId} does not match its observations.`);
+    }
+  }
+}
+
+function latestStatus(check: CheckFact): CheckAttemptFact['status'] {
+  const latest = check.attempts.at(-1);
+  if (!latest) throw new Error(`evaluateHandoff check ${check.definitionId} has no attempt.`);
+  return latest.status;
+}
+
+export function factBundleFingerprint(
+  bundle: Omit<FactBundle, 'bundleFingerprint'> | FactBundle,
+): string {
   const { bundleFingerprint: _ignored, ...projection } = bundle as FactBundle;
   return stableFingerprint(projection);
 }
@@ -86,203 +193,200 @@ export function checkDefinitionFingerprint(definition: VerificationDefinition): 
   return stableFingerprint(definition);
 }
 
-export function changedFileMechanicalStatement(file: ChangedFileFact): string {
-  if (file.operation === 'renamed') {
-    return `File ${file.previousPath} was renamed to ${file.path}.`;
-  }
-  return `File ${file.path} was ${file.operation}.`;
-}
-
-export function checkMechanicalStatement(check: CheckFact): string {
-  const latest = check.attempts.at(-1);
-  return `Check ${check.id} was ${latest?.status ?? 'unavailable'} after ${check.attempts.length} attempt${check.attempts.length === 1 ? '' : 's'}.`;
-}
-
-function validateWorktreeSummary(value: WorktreeSummary, label: string): void {
-  if (!value
-    || (value.head !== null && !isNonEmptyString(value.head))
-    || !isSha256(value.fingerprint)
-    || !Number.isInteger(value.entryCount)
-    || value.entryCount < 0
-    || !isIsoTimestamp(value.capturedAt)) {
-    throw new Error(`evaluateHandoff ${label} worktree summary is invalid.`);
+function validateWorktreeSummary(summary: WorktreeSummary, name: string): void {
+  if (!summary || (summary.head !== null && !isNonEmptyString(summary.head))
+    || !isSha256(summary.fingerprint)
+    || !Number.isInteger(summary.entryCount)
+    || summary.entryCount < 0
+    || !isIsoTimestamp(summary.capturedAt)) {
+    throw new Error(`evaluateHandoff Fact Bundle ${name} worktree summary is invalid.`);
   }
 }
 
-function validateChangedFiles(files: ChangedFileFact[]): void {
-  if (!Array.isArray(files)) throw new Error('evaluateHandoff changedFiles must be an array.');
+function validateChangedFiles(files: ChangedFileFact[], name: string): void {
+  if (!Array.isArray(files)) {
+    throw new Error(`evaluateHandoff ${name} must be an array.`);
+  }
   const ids = new Set<string>();
-  const paths = new Set<string>();
   for (const file of files) {
-    if (!isStableId(file?.id) || ids.has(file.id)) {
-      throw new Error('evaluateHandoff changed-file ids must be unique and stable.');
+    if (!isStableId(file.id) || ids.has(file.id) || !isSafeRepositoryPath(file.path)
+      || !['added', 'modified', 'deleted', 'renamed'].includes(file.operation)
+      || !['text', 'binary', 'metadata-only', 'unrepresentable'].includes(file.representation)) {
+      throw new Error(`evaluateHandoff ${name} contains an invalid changed-file fact.`);
     }
     ids.add(file.id);
-    if (!isSafeRepositoryPath(file.path) || paths.has(file.path)) {
-      throw new Error('evaluateHandoff changed-file paths must be unique and repository-relative.');
+    if ((file.operation === 'renamed') !== Boolean(file.previousPath)
+      || (file.previousPath !== undefined && !isSafeRepositoryPath(file.previousPath))) {
+      throw new Error(`evaluateHandoff ${name} rename fact is invalid.`);
     }
-    paths.add(file.path);
-    if (!['added', 'modified', 'deleted', 'renamed'].includes(file.operation)
-      || !['text', 'binary', 'metadata-only', 'unrepresentable'].includes(file.representation)) {
-      throw new Error(`evaluateHandoff changed-file ${file.id} has an invalid operation or representation.`);
-    }
+    if (file.before) validateFileContent(file.before, `${name} before`);
+    if (file.after) validateFileContent(file.after, `${name} after`);
     if (file.patchDigest !== undefined && !isSha256(file.patchDigest)) {
-      throw new Error(`evaluateHandoff changed-file ${file.id} patch digest is invalid.`);
+      throw new Error(`evaluateHandoff ${name} patch digest is invalid.`);
     }
-    if (file.operation === 'renamed') {
-      if (!isSafeRepositoryPath(file.previousPath)) {
-        throw new Error(`evaluateHandoff renamed file ${file.id} requires previousPath.`);
-      }
-    } else if (file.previousPath !== undefined) {
-      throw new Error(`evaluateHandoff previousPath is valid only for renamed files.`);
-    }
-    if (file.operation === 'added') {
-      if (file.before !== undefined || !file.after) throw new Error(`evaluateHandoff added file ${file.id} facts are invalid.`);
-    } else if (file.operation === 'deleted') {
-      if (!file.before || file.after !== undefined) throw new Error(`evaluateHandoff deleted file ${file.id} facts are invalid.`);
-    } else if (!file.before || !file.after) {
-      throw new Error(`evaluateHandoff ${file.operation} file ${file.id} requires before and after facts.`);
-    }
-    if (file.before) validateFileContent(file.before, `${file.id}.before`);
-    if (file.after) validateFileContent(file.after, `${file.id}.after`);
-  }
-  const ordered = [...files].sort((left, right) => left.path.localeCompare(right.path));
-  if (JSON.stringify(ordered) !== JSON.stringify(files)) {
-    throw new Error('evaluateHandoff changed files must use canonical path ordering.');
   }
 }
 
-function validateFileContent(value: FileContentFact, label: string): void {
-  if (!['file', 'symlink', 'gitlink'].includes(value.kind)
-    || !isSha256(value.contentDigest)
-    || !/^[0-7]{6}$/.test(value.mode)) {
-    throw new Error(`evaluateHandoff file fact ${label} is invalid.`);
-  }
-  if ((value.kind === 'gitlink') !== (value.mode === '160000')) {
-    throw new Error(`evaluateHandoff Git link fact ${label} has an invalid mode.`);
+function validateFileContent(content: FileContentFact, name: string): void {
+  if (!['file', 'symlink', 'gitlink'].includes(content.kind)
+    || !isSha256(content.contentDigest)
+    || !/^[0-7]{6}$/.test(content.mode)) {
+    throw new Error(`evaluateHandoff ${name} content fact is invalid.`);
   }
 }
 
-function validateChecks(checks: CheckFact[], contract: SemanticContract): void {
+function validateChecks(checks: CheckFact[], contract: TaskContract): void {
   if (!Array.isArray(checks)) throw new Error('evaluateHandoff checks must be an array.');
-  const expected = contract.verification.mode === 'checks'
-    ? contract.verification.checks
+  const definitions = contract.verificationPlan.mode === 'checks'
+    ? contract.verificationPlan.definitions
     : [];
-  if (checks.length !== expected.length) {
-    throw new Error('evaluateHandoff checks do not match the frozen verification definitions.');
+  if (checks.length !== definitions.length) {
+    throw new Error('evaluateHandoff Fact Bundle must contain every frozen check exactly once.');
   }
-  const expectedById = new Map(expected.map((definition) => [definition.id, definition]));
-  const seen = new Set<string>();
-  for (const check of checks) {
-    const definition = expectedById.get(check?.id);
-    if (!definition || seen.has(check.id)) {
-      throw new Error(`evaluateHandoff received an unknown or duplicate check ${JSON.stringify(check?.id)}.`);
+  for (const definition of definitions) {
+    const fact = checks.find((item) => item.definitionId === definition.definitionId);
+    if (!fact) throw new Error(`evaluateHandoff check ${definition.definitionId} is missing.`);
+    validateCheckFact(fact, definition);
+  }
+}
+
+function validateCheckFact(fact: CheckFact, definition: VerificationDefinition): void {
+  if (fact.verifierId !== definition.verifierId
+    || fact.definitionId !== definition.definitionId
+    || fact.argv.length !== definition.argv.length
+    || fact.argv.some((arg, index) => arg !== definition.argv[index])
+    || fact.definitionFingerprint !== checkDefinitionFingerprint(definition)
+    || !fact.attempts.length) {
+    throw new Error(`evaluateHandoff check ${definition.definitionId} does not match its frozen definition.`);
+  }
+  validateCheckAttempts(fact.attempts, definition.definitionId);
+}
+
+function validateCheckAttempts(attempts: CheckAttemptFact[], checkId: string): void {
+  for (const [index, attempt] of attempts.entries()) {
+    if (attempt.attempt !== index + 1
+      || !isIsoTimestamp(attempt.startedAt)
+      || !Number.isInteger(attempt.durationMs)
+      || attempt.durationMs < 0
+      || !Number.isInteger(attempt.timeoutMs)
+      || attempt.timeoutMs <= 0
+      || !['passed', 'failed', 'unavailable'].includes(attempt.status)
+      || (attempt.exitCode !== null && !Number.isInteger(attempt.exitCode))
+      || typeof attempt.timedOut !== 'boolean'
+      || !isSha256(attempt.outputDigest)) {
+      throw new Error(`evaluateHandoff check ${checkId} attempt history is invalid.`);
     }
-    seen.add(check.id);
-    if (JSON.stringify(check.argv) !== JSON.stringify(definition.argv)
-      || check.definitionFingerprint !== checkDefinitionFingerprint(definition)
-      || !Array.isArray(check.attempts)
-      || !check.attempts.length) {
-      throw new Error(`evaluateHandoff check ${check.id} is not bound to its frozen definition.`);
-    }
-    for (const [index, attempt] of check.attempts.entries()) {
-      validateCheckAttempt(attempt, check.id, index);
-      if (index > 0 && attempt.timeoutMs <= check.attempts[index - 1].timeoutMs) {
-        throw new Error(`evaluateHandoff check ${check.id} retry timeouts must increase monotonically.`);
-      }
-      if (index < check.attempts.length - 1
-        && (!attempt.timedOut || attempt.status !== 'unavailable')) {
-        throw new Error(`evaluateHandoff check ${check.id} may retry only a timed-out attempt.`);
+    validateStream(attempt.stdout, checkId);
+    validateStream(attempt.stderr, checkId);
+    if (index > 0) {
+      const previous = attempts[index - 1];
+      if (!previous.timedOut || attempt.timeoutMs <= previous.timeoutMs) {
+        throw new Error(`evaluateHandoff check ${checkId} retry is not a monotonic timeout recovery.`);
       }
     }
   }
 }
 
-function validateCheckAttempt(
-  attempt: CheckAttemptFact,
-  checkId: string,
-  index: number,
-): void {
-  if (!attempt
-    || attempt.attempt !== index + 1
-    || !Number.isSafeInteger(attempt.timeoutMs)
-    || attempt.timeoutMs < 1
-    || !['passed', 'failed', 'unavailable'].includes(attempt.status)
-    || typeof attempt.timedOut !== 'boolean'
-    || !isSha256(attempt.outputDigest)) {
-    throw new Error(`evaluateHandoff check ${checkId} attempt ${index + 1} is invalid.`);
-  }
-  if (attempt.status === 'passed' && (attempt.exitCode !== 0 || attempt.timedOut)) {
-    throw new Error(`evaluateHandoff passing check ${checkId} attempt requires exit code 0.`);
-  }
-  if (attempt.status === 'failed'
-    && (!Number.isInteger(attempt.exitCode) || attempt.exitCode === 0 || attempt.timedOut)) {
-    throw new Error(`evaluateHandoff failed check ${checkId} attempt requires a non-zero exit code.`);
-  }
-  if (attempt.status === 'unavailable'
-    && (attempt.exitCode !== null || !isNonEmptyString(attempt.reason))) {
-    throw new Error(`evaluateHandoff unavailable check ${checkId} attempt requires a reason and no exit code.`);
-  }
-  if (attempt.timedOut && attempt.status !== 'unavailable') {
-    throw new Error(`evaluateHandoff timed-out check ${checkId} attempt must be unavailable.`);
-  }
-  validateStream(attempt.stdout, `${checkId}.attempts[${index}].stdout`);
-  validateStream(attempt.stderr, `${checkId}.attempts[${index}].stderr`);
-}
-
-function validateStream(stream: CheckAttemptFact['stdout'], label: string): void {
-  if (!stream
-    || !isSha256(stream.digest)
+function validateStream(stream: CheckAttemptFact['stdout'], checkId: string): void {
+  if (!isSha256(stream.digest)
     || !Number.isInteger(stream.byteLength)
     || stream.byteLength < 0
     || !Number.isInteger(stream.persistedBytes)
     || stream.persistedBytes < 0
     || stream.persistedBytes > stream.byteLength
     || typeof stream.truncated !== 'boolean'
-    || (stream.truncated !== (stream.persistedBytes < stream.byteLength))
-    || (stream.byteLength === 0 && stream.logPath !== undefined)
     || (stream.logPath !== undefined && !isSafeRepositoryPath(stream.logPath))) {
-    throw new Error(`evaluateHandoff check stream ${label} is invalid.`);
+    throw new Error(`evaluateHandoff check ${checkId} stream fact is invalid.`);
   }
 }
 
 function validateVerifierMutations(
   mutations: VerifierMutation[],
-  files: ChangedFileFact[],
-  contract: SemanticContract,
+  changedFiles: ChangedFileFact[],
+  contract: TaskContract,
 ): void {
-  if (!Array.isArray(mutations)) throw new Error('evaluateHandoff verifierMutations must be an array.');
+  if (!Array.isArray(mutations)) {
+    throw new Error('evaluateHandoff verifier mutations must be an array.');
+  }
+  const filesById = new Map(changedFiles.map((file) => [file.id, file]));
+  const checksById = new Map(
+    contract.verificationPlan.mode === 'checks'
+      ? contract.verificationPlan.definitions.map((check) => [check.definitionId, check])
+      : [],
+  );
+  for (const mutation of mutations) {
+    const check = checksById.get(mutation.definitionId);
+    const file = filesById.get(mutation.changedFileId);
+    if (!check || mutation.verifierId !== check.verifierId || !file || file.path !== mutation.path
+      || !check.verifierRefs.some((ref) => ref.path === mutation.path && ref.role === mutation.role)) {
+      throw new Error('evaluateHandoff verifier mutation is not bound to a changed verifier surface.');
+    }
+  }
   const changedByPath = new Map<string, ChangedFileFact>();
-  for (const file of files) {
+  for (const file of changedFiles) {
     changedByPath.set(file.path, file);
     if (file.previousPath) changedByPath.set(file.previousPath, file);
   }
-  const expected: VerifierMutation[] = contract.verification.mode === 'checks'
-    ? contract.verification.checks.flatMap((check) =>
-        check.verifierRefs.flatMap((verifierRef) => {
-          const file = changedByPath.get(verifierRef.path);
-          return file
-            ? [{
-                checkId: check.id,
-                path: verifierRef.path,
-                role: verifierRef.role,
-                changedFileId: file.id,
-              }]
-            : [];
-        }))
-    : [];
-  const sort = (items: VerifierMutation[]) => [...items].sort((left, right) =>
-    left.checkId.localeCompare(right.checkId)
-      || left.path.localeCompare(right.path)
-      || left.role.localeCompare(right.role)
-      || left.changedFileId.localeCompare(right.changedFileId));
-  if (JSON.stringify(sort(mutations)) !== JSON.stringify(sort(expected))) {
-    throw new Error('evaluateHandoff verifier mutations do not match changed verifier refs.');
+  const expected = [...checksById.values()].flatMap((check) =>
+    check.verifierRefs.flatMap((reference) => {
+      const file = changedByPath.get(reference.path);
+      return file ? [{
+        verifierId: check.verifierId,
+        definitionId: check.definitionId,
+        path: reference.path,
+        role: reference.role,
+        changedFileId: file.id,
+      }] : [];
+    })).sort(mutationOrder);
+  const actual = [...mutations].sort(mutationOrder);
+  if (stableFingerprint(actual) !== stableFingerprint(expected)) {
+    throw new Error('evaluateHandoff verifier mutations do not completely match declared changed surfaces.');
+  }
+}
+
+function mutationOrder(left: VerifierMutation, right: VerifierMutation): number {
+  return left.definitionId.localeCompare(right.definitionId)
+    || left.path.localeCompare(right.path)
+    || left.role.localeCompare(right.role)
+    || left.changedFileId.localeCompare(right.changedFileId);
+}
+
+function validateEnvironment(environment: ExecutionEnvironment): void {
+  if (!environment
+    || !isNonEmptyString(environment.platform)
+    || !isNonEmptyString(environment.architecture)
+    || !isSha256(environment.cwdFingerprint)
+    || !Array.isArray(environment.executables)
+    || !Array.isArray(environment.toolchains)
+    || !Array.isArray(environment.lockfiles)
+    || !Array.isArray(environment.environmentVariableNames)) {
+    throw new Error('evaluateHandoff execution environment is invalid.');
+  }
+  for (const executable of environment.executables) {
+    if (!isNonEmptyString(executable.command)
+      || (executable.resolvedPath !== null && !isNonEmptyString(executable.resolvedPath))
+      || (executable.version !== null && !isNonEmptyString(executable.version))) {
+      throw new Error('evaluateHandoff executable environment fact is invalid.');
+    }
+  }
+  for (const toolchain of environment.toolchains) {
+    if (!isNonEmptyString(toolchain.name) || !isNonEmptyString(toolchain.version)) {
+      throw new Error('evaluateHandoff toolchain environment fact is invalid.');
+    }
+  }
+  for (const lockfile of environment.lockfiles) {
+    if (!isSafeRepositoryPath(lockfile.path) || !isSha256(lockfile.digest)) {
+      throw new Error('evaluateHandoff lockfile environment fact is invalid.');
+    }
+  }
+  if (environment.environmentVariableNames.some((name) =>
+    !/^[A-Za-z_][A-Za-z0-9_]*$/.test(name))) {
+    throw new Error('evaluateHandoff environment variable names are invalid.');
   }
 }
 
 function isIsoTimestamp(value: unknown): value is string {
   return typeof value === 'string'
-    && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(value)
-    && !Number.isNaN(Date.parse(value));
+    && Number.isFinite(Date.parse(value))
+    && new Date(value).toISOString() === value;
 }

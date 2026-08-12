@@ -42,70 +42,72 @@ test('generator versions follow semantic prerelease precedence', () => {
   assert.throws(() => compareSemanticVersions('0.0.1-alpha.01', '0.0.1'));
 });
 
-test('project init generates only the Semantic Handoff adapter and manifest', () => {
+test('project init generates the Cognitive Adoption host projection and manifest', () => {
   const root = mkdtempSync(join(tmpdir(), 'stetra-init-'));
   try {
     const initialized = initializeProject({ projectRoot: root, adapters: ['codex'] });
     assert.equal(initialized.status, 'initialized');
-    assert.equal(initialized.protocol, 'semantic-delegation');
+    assert.equal(initialized.protocol, 'cognitive-adoption');
     assert.equal(initialized.schemaVersion, '1');
-    assert.equal(initialized.adapterProtocolVersion, '1');
+    assert.equal(initialized.adapterProtocolVersion, '4');
     assert.deepEqual(initialized.readiness, { required: [], recommended: [], optional: [] });
 
     const skillPath = join(root, '.agents', 'skills', 'stetra', 'SKILL.md');
     const referencesPath = join(root, '.agents', 'skills', 'stetra', 'references');
     const changePath = join(referencesPath, 'change.md');
-    const routinePath = join(referencesPath, 'routine.md');
-    const assurancePath = join(referencesPath, 'assurance.md');
+    const deliveryPath = join(referencesPath, 'delivery.md');
+    const challengePath = join(referencesPath, 'challenge.md');
+    const handoffPath = join(referencesPath, 'handoff.md');
     const recoveryPath = join(referencesPath, 'recovery.md');
     assert.equal(existsSync(skillPath), true);
     assert.equal(existsSync(changePath), true);
-    assert.equal(existsSync(routinePath), true);
-    assert.equal(existsSync(assurancePath), true);
+    assert.equal(existsSync(deliveryPath), true);
+    assert.equal(existsSync(challengePath), true);
+    assert.equal(existsSync(handoffPath), true);
     assert.equal(existsSync(recoveryPath), true);
     assert.equal(existsSync(join(root, '.agents', 'skills', 'stetra', 'references', 'bootstrap.md')), false);
     assert.equal(existsSync(join(root, '.agents', 'skills', 'stetra', 'references', 'context.md')), false);
     const skill = readFileSync(skillPath, 'utf8');
     const change = readFileSync(changePath, 'utf8');
-    const routine = readFileSync(routinePath, 'utf8');
-    const assurance = readFileSync(assurancePath, 'utf8');
+    const delivery = readFileSync(deliveryPath, 'utf8');
+    const challenge = readFileSync(challengePath, 'utf8');
+    const handoff = readFileSync(handoffPath, 'utf8');
     const recovery = readFileSync(recoveryPath, 'utf8');
-    assert.match(skill, /Humans own goals, long-lived tradeoffs, exceptions/);
-    assert.match(skill, /read\s+it only when absent or after context resumed/);
-    assert.match(skill, /do not reread an unchanged\s+reference/);
+    assert.match(skill, /developer owns goals, long-lived tradeoffs, exceptions/);
+    assert.match(skill, /do not reread an\s+unchanged page/);
     assert.match(change, /change prepare/);
-    assert.match(change, /current user's language/);
-    assert.match(change, /natural-language Semantic Contract and Cognitive Handoff fields/);
+    assert.match(change, /developerEvent/);
+    assert.match(change, /conditions/);
     assert.match(change, /commandDefinitionPaths.*acceptanceSurfacePaths/s);
-    assert.match(change, /assuranceDimensions.*adoption-critical dimension/s);
-    assert.match(routine, /"materialClaims": \[\]/);
-    assert.match(routine, /Render its \*\*handoffPacket\*\*/);
-    assert.match(skill, /semanticContract.*runtimeFacts.*hostHandoff.*evaluation/s);
-    assert.match(skill, /Preserve paths, IDs, enums, commands, numeric facts/);
-    assert.match(assurance, /Review Map.*never substitutes/s);
-    assert.match(assurance, /current user's language/);
-    assert.match(assurance, /trace ownership and every writer/);
-    assert.match(assurance, /failure\/retry\/rollback\/idempotency/);
-    assert.match(recovery, /retry-timeout/);
-    assert.match(recovery, /inspect-attention/);
+    assert.match(delivery, /baseline-to-current change/);
+    assert.match(delivery, /evidence\s+disposition/);
+    assert.match(challenge, /fresh Host context/);
+    assert.match(challenge, /Challenge output remains Agent judgment/);
+    assert.match(handoff, /decisionPacket/);
+    assert.match(handoff, /accepted\/correction-requested\/rejected\/deferred/);
+    assert.match(skill, /Preserve paths, IDs, enum\s+values, commands, numeric facts/);
+    assert.match(recovery, /retry-timed-out-check/);
+    assert.match(recovery, /resolve-evidence-decision/);
+    assert.match(recovery, /revise-verification/);
     assert.ok(
-      Buffer.byteLength(skill) + Buffer.byteLength(change) + Buffer.byteLength(routine) <= 6_000,
-      'the complete routine instruction projection must stay within 6 KB',
+      Buffer.byteLength(skill) + Buffer.byteLength(change) + Buffer.byteLength(delivery) <= 10_000,
+      'the normal delivery instruction projection must stay within 10 KB',
     );
-    assert.doesNotMatch(`${change}${routine}${assurance}${recovery}`, /Playbook|RCCL|ready-for-adoption/);
-    assert.doesNotMatch(`${skill}${change}${routine}${assurance}${recovery}`, /presentationLocale|presentationMarkdown/);
+    assert.doesNotMatch(`${change}${delivery}${challenge}${handoff}${recovery}`, /Playbook|RCCL|ready-for-adoption/);
+    assert.doesNotMatch(`${skill}${change}${delivery}${challenge}${handoff}${recovery}`, /presentationLocale|presentationMarkdown/);
     const manifest = JSON.parse(readFileSync(join(root, '.stetra', 'manifest.json'), 'utf8'));
-    assert.equal(manifest.protocol, 'semantic-delegation');
+    assert.equal(manifest.protocol, 'cognitive-adoption');
     assert.equal(manifest.schemaVersion, '1');
     assert.equal(manifest.generatorVersion, PRODUCT_VERSION);
-    assert.equal(manifest.adapterProtocolVersion, '1');
+    assert.equal(manifest.adapterProtocolVersion, '4');
     assert.deepEqual(
       manifest.artifacts.map((artifact: { path: string }) => artifact.path),
       [
-        '.agents/skills/stetra/references/assurance.md',
+        '.agents/skills/stetra/references/challenge.md',
         '.agents/skills/stetra/references/change.md',
+        '.agents/skills/stetra/references/delivery.md',
+        '.agents/skills/stetra/references/handoff.md',
         '.agents/skills/stetra/references/recovery.md',
-        '.agents/skills/stetra/references/routine.md',
         '.agents/skills/stetra/SKILL.md',
         '.gitignore',
         'AGENTS.md',
@@ -115,7 +117,7 @@ test('project init generates only the Semantic Handoff adapter and manifest', ()
 
     const unchanged = initializeProject({ projectRoot: root, adapters: ['codex'] });
     assert.equal(unchanged.status, 'initialized');
-    assert.equal(unchanged.counts.unchanged, 7);
+    assert.equal(unchanged.counts.unchanged, 8);
 
     writeFileSync(skillPath, `${skill}\nowner note\n`, 'utf8');
     const blocked = initializeProject({ projectRoot: root, adapters: ['codex'] });

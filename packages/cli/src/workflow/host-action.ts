@@ -1,139 +1,169 @@
-import type {
-  AssurancePlan,
-  FactBundle,
-  HandoffStatus,
-} from '@sovea/stetra-core';
+import type { FactBundle, HandoffStatus } from '@sovea/stetra-core';
 
-export type HostWorkflowReference = 'routine' | 'assurance' | 'recovery';
+import type { AuthoringPacket } from './authoring.ts';
 
-export type HostAction =
-  | {
-      kind:
-        | 'implement-and-collect'
-        | 'author-handoff'
-        | 'retry-timeout'
-        | 'restore-and-recollect'
-        | 'repair-and-recollect'
-        | 'recollect-stale'
-        | 'restart-rejected';
-      reference: HostWorkflowReference;
-      command: { argv: string[] };
-    }
-  | {
-      kind:
-        | 'resolve-semantic-decision'
-        | 'configure-verification'
-        | 'correct-authority'
-        | 'review-for-adoption'
-        | 'inspect-attention';
-      reference: HostWorkflowReference | null;
-    };
+export type HostWorkflowReference =
+  | 'change'
+  | 'delivery'
+  | 'challenge'
+  | 'handoff'
+  | 'recovery';
+
+export interface HostAction {
+  kind:
+    | 'implement-and-collect'
+    | 'diagnose-collected-evidence'
+    | 'revise-verification'
+    | 'retry-timed-out-check'
+    | 'recollect-stale-facts'
+    | 'perform-independent-challenge'
+    | 'author-handoff'
+    | 'review-and-decide'
+    | 'resolve-human-choice'
+    | 'configure-verification'
+    | 'correct-protocol-input'
+    | 'resolve-evidence-decision';
+  reference: HostWorkflowReference | null;
+  command?: { argv: string[] };
+  authoringPacket?: AuthoringPacket;
+}
 
 export function compileProblemHostAction(
   status: 'semantic-decision-required' | 'verification-required' | 'authority-invalid',
 ): HostAction {
   if (status === 'semantic-decision-required') {
-    return { kind: 'resolve-semantic-decision', reference: null };
+    return { kind: 'resolve-human-choice', reference: 'change' };
   }
   if (status === 'verification-required') {
-    return { kind: 'configure-verification', reference: null };
+    return { kind: 'configure-verification', reference: 'change' };
   }
-  return { kind: 'correct-authority', reference: null };
+  return { kind: 'correct-protocol-input', reference: 'change' };
 }
 
 export function unavailableVerificationHostAction(): HostAction {
   return { kind: 'configure-verification', reference: 'recovery' };
 }
 
-export function preparedHostAction(plan: AssurancePlan, runId: string): HostAction {
+export function preparedHostAction(taskId: string): HostAction {
   return {
     kind: 'implement-and-collect',
-    reference: plan.profile === 'routine' ? 'routine' : 'assurance',
-    command: command('collect', runId),
+    reference: 'delivery',
+    command: taskCommand('collect', taskId),
   };
 }
 
-export function collectedHostAction(
-  facts: FactBundle,
-  plan: AssurancePlan,
-  runId: string,
-): HostAction {
-  const timedOut = facts.checks.filter((check) => latestAttempt(check).timedOut);
+export function collectedHostAction(input: {
+  facts: FactBundle;
+  taskId: string;
+  diagnosisPacket: AuthoringPacket;
+  challengePacket: AuthoringPacket;
+  handoffPacket: AuthoringPacket;
+  requiredChallengeObligationIds: string[];
+}): HostAction {
+  const timedOut = input.facts.checks.filter((check) => latestAttempt(check).timedOut);
   if (timedOut.length) {
-    const argv = command('collect', runId).argv;
+    const argv = taskCommand('collect', input.taskId).argv;
     for (const check of timedOut) {
       const latest = latestAttempt(check);
-      argv.splice(-1, 0, '--retry-check', `${check.id}=<integer-greater-than-${latest.timeoutMs}>`);
+      argv.splice(-1, 0, '--retry-check', `${check.definitionId}=<integer-greater-than-${latest.timeoutMs}>`);
     }
     return {
-      kind: 'retry-timeout',
+      kind: 'retry-timed-out-check',
       reference: 'recovery',
       command: { argv },
     };
   }
-
-  if (facts.checks.some((check) => latestAttempt(check).status === 'unavailable')) {
-    return {
-      kind: 'restore-and-recollect',
-      reference: 'recovery',
-      command: command('collect', runId),
-    };
+  if (input.facts.checks.some((check) => latestAttempt(check).status !== 'passed')) {
+    return inputAction('diagnose-collected-evidence', 'recovery', 'diagnose', input.taskId, input.diagnosisPacket);
   }
-
-  if (facts.checks.some((check) => latestAttempt(check).status === 'failed')) {
-    return {
-      kind: 'repair-and-recollect',
-      reference: 'recovery',
-      command: command('collect', runId),
-    };
+  if (input.requiredChallengeObligationIds.length) {
+    return inputAction('perform-independent-challenge', 'challenge', 'challenge', input.taskId, input.challengePacket);
   }
-
-  return {
-    kind: 'author-handoff',
-    reference: plan.profile === 'routine' ? 'routine' : 'assurance',
-    command: command('finalize', runId),
-  };
+  return inputAction('author-handoff', 'handoff', 'handoff', input.taskId, input.handoffPacket);
 }
 
-export function staleFactsHostAction(runId: string): HostAction {
+export function diagnosisHostAction(
+  route:
+    | 'repair-implementation'
+    | 'revise-verification'
+    | 'challenge'
+    | 'handoff'
+    | 'ask-human',
+  taskId: string,
+  packet?: AuthoringPacket,
+): HostAction {
+  if (route === 'repair-implementation') return preparedHostAction(taskId);
+  if (route === 'revise-verification') {
+    return inputAction('revise-verification', 'recovery', 'revise-verification', taskId, packet);
+  }
+  if (route === 'challenge') {
+    return inputAction('perform-independent-challenge', 'challenge', 'challenge', taskId, packet);
+  }
+  if (route === 'handoff') {
+    return inputAction('author-handoff', 'handoff', 'handoff', taskId, packet);
+  }
+  return resolutionHostAction(taskId, packet!);
+}
+
+export function challengeHostAction(
+  taskId: string,
+  needsAnotherChallenge: boolean,
+  packet: AuthoringPacket,
+): HostAction {
+  return needsAnotherChallenge
+    ? inputAction('perform-independent-challenge', 'challenge', 'challenge', taskId, packet)
+    : inputAction('author-handoff', 'handoff', 'handoff', taskId, packet);
+}
+
+export function resolutionHostAction(taskId: string, packet: AuthoringPacket): HostAction {
+  return inputAction('resolve-evidence-decision', 'recovery', 'resolve', taskId, packet);
+}
+
+export function staleFactsHostAction(taskId: string): HostAction {
   return {
-    kind: 'recollect-stale',
+    kind: 'recollect-stale-facts',
     reference: 'recovery',
-    command: command('collect', runId),
+    command: taskCommand('collect', taskId),
   };
 }
 
-export function finalizedHostAction(status: HandoffStatus, runId: string): HostAction {
-  if (status === 'handoff-ready') {
-    return { kind: 'review-for-adoption', reference: null };
-  }
-  if (status === 'needs-attention') {
-    return { kind: 'inspect-attention', reference: 'recovery' };
-  }
-  if (status === 'rejected') {
-    return {
-      kind: 'restart-rejected',
-      reference: 'recovery',
-      command: prepareCommand(),
-    };
-  }
-  return staleFactsHostAction(runId);
+export function handoffHostAction(
+  _status: HandoffStatus,
+  taskId: string,
+  packet: AuthoringPacket,
+): HostAction {
+  return inputAction('review-and-decide', 'handoff', 'decide', taskId, packet);
 }
 
-function command(stage: 'collect' | 'finalize', runId: string): { argv: string[] } {
-  return {
-    argv: ['stetra', 'change', stage, '.', '--run', runId, '--json'],
-  };
+function taskCommand(stage: 'collect', taskId: string): { argv: string[] } {
+  return { argv: ['stetra', 'change', stage, '.', '--task', taskId, '--json'] };
 }
 
-function prepareCommand(): { argv: string[] } {
+function inputAction(
+  kind: HostAction['kind'],
+  reference: HostWorkflowReference,
+  stage:
+    | 'diagnose'
+    | 'revise-verification'
+    | 'challenge'
+    | 'handoff'
+    | 'decide'
+    | 'resolve',
+  taskId: string,
+  authoringPacket?: AuthoringPacket,
+): HostAction {
   return {
-    argv: ['stetra', 'change', 'prepare', '.', '--input', '-', '--json'],
+    kind,
+    reference,
+    command: {
+      argv: ['stetra', 'change', stage, '.', '--task', taskId, '--input', '-', '--json'],
+    },
+    ...(authoringPacket ? { authoringPacket } : {}),
   };
 }
 
 function latestAttempt(check: FactBundle['checks'][number]) {
   const latest = check.attempts.at(-1);
-  if (!latest) throw new Error(`Check ${check.id} has no execution attempt.`);
+  if (!latest) throw new Error(`Check ${check.definitionId} has no execution attempt.`);
   return latest;
 }

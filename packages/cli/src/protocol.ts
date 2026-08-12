@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 
-export const DELEGATION_PROTOCOL = 'semantic-delegation' as const;
+export const DELEGATION_PROTOCOL = 'cognitive-adoption' as const;
 export const DELEGATION_SCHEMA_VERSION = '1' as const;
 
 export function sha256(value: string | Buffer): string {

@@ -4,6 +4,18 @@ export type FileKind = 'file' | 'symlink' | 'gitlink';
 export type FileOperation = 'added' | 'modified' | 'deleted' | 'renamed';
 export type ChangeRepresentation = 'text' | 'binary' | 'metadata-only' | 'unrepresentable';
 export type CheckStatus = 'passed' | 'failed' | 'unavailable';
+export type CheckBaselineRelation =
+  | 'baseline-unknown'
+  | 'baseline-unknown-after-revision'
+  | 'passed-before-passed-now'
+  | 'passed-before-failed-now'
+  | 'passed-before-unavailable-now'
+  | 'failed-before-passed-now'
+  | 'failed-before-failed-now'
+  | 'failed-before-unavailable-now'
+  | 'unavailable-before-passed-now'
+  | 'unavailable-before-failed-now'
+  | 'unavailable-before-unavailable-now';
 
 export interface WorktreeSummary {
   head: string | null;
@@ -39,6 +51,8 @@ export interface CheckStreamFact {
 
 export interface CheckAttemptFact {
   attempt: number;
+  startedAt: string;
+  durationMs: number;
   timeoutMs: number;
   status: CheckStatus;
   exitCode: number | null;
@@ -50,14 +64,63 @@ export interface CheckAttemptFact {
 }
 
 export interface CheckFact {
-  id: string;
+  verifierId: string;
+  definitionId: string;
   argv: string[];
   definitionFingerprint: string;
   attempts: CheckAttemptFact[];
 }
 
+export interface BaselineCheckFact {
+  definitionId: string;
+  mode: 'task-start' | 'unknown' | 'unknown-after-revision' | 'isolated-original';
+  observation: CheckFact | null;
+}
+
+export interface BaselineVerificationFact {
+  fingerprint: string;
+  capturedAt: string;
+  preCheck: WorktreeSummary;
+  postCheck: WorktreeSummary;
+  checkInducedChanges: ChangedFileFact[];
+  checks: BaselineCheckFact[];
+}
+
+export interface CheckComparisonFact {
+  definitionId: string;
+  relation: CheckBaselineRelation;
+}
+
+export type EvidenceCause = 'implementation' | 'environment' | 'verification' | 'unknown';
+
+export interface EvidenceDispositionEntry {
+  definitionId: string;
+  cause: EvidenceCause;
+  diagnosis: string;
+  falsificationAttempt: string;
+  codeChangeCanAlterObservation: boolean;
+  expectedDifferentObservation: string;
+  intendedChanges: string[];
+}
+
+export interface EvidenceDisposition extends ProtocolEnvelope {
+  dispositionId: string;
+  effectiveContractId: string;
+  attemptId: string;
+  factCollectionId: string;
+  semanticImpact: 'none' | 'material';
+  entries: EvidenceDispositionEntry[];
+  route:
+    | 'repair-implementation'
+    | 'revise-verification'
+    | 'challenge'
+    | 'handoff'
+    | 'ask-human';
+}
+
 export interface VerifierMutation {
-  checkId: string;
+  verifierId: string;
+  definitionId: string;
   path: string;
   role: 'command-definition' | 'acceptance-surface';
   changedFileId: string;
@@ -69,17 +132,49 @@ export interface PatchFact {
   byteLength: number;
 }
 
+export interface ExecutableEnvironmentFact {
+  command: string;
+  resolvedPath: string | null;
+  version: string | null;
+}
+
+export interface ToolchainEnvironmentFact {
+  name: string;
+  version: string;
+}
+
+export interface LockfileEnvironmentFact {
+  path: string;
+  digest: string;
+}
+
+export interface ExecutionEnvironment {
+  platform: string;
+  architecture: string;
+  cwdFingerprint: string;
+  executables: ExecutableEnvironmentFact[];
+  toolchains: ToolchainEnvironmentFact[];
+  lockfiles: LockfileEnvironmentFact[];
+  environmentVariableNames: string[];
+}
+
 export interface FactBundle extends ProtocolEnvelope {
   factCollectionId: string;
   bundleFingerprint: string;
-  contractId: string;
+  effectiveContractId: string;
+  attemptId: string;
   collectedAt: string;
   baseline: WorktreeSummary;
+  preCheck: WorktreeSummary;
   current: WorktreeSummary;
+  baselineVerification: BaselineVerificationFact;
   changeFingerprint: string;
   changedFiles: ChangedFileFact[];
+  checkInducedChanges: ChangedFileFact[];
   checks: CheckFact[];
+  checkComparisons: CheckComparisonFact[];
   verifierMutations: VerifierMutation[];
+  environment: ExecutionEnvironment;
   patch?: PatchFact;
   provenance: {
     collector: 'stetra-cli';

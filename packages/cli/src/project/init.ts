@@ -69,7 +69,7 @@ export interface InitializeProjectOptions {
 }
 
 const MANIFEST_PATH = '.stetra/manifest.json';
-const TEMPLATE_REVISION = 1;
+const TEMPLATE_REVISION = 3;
 const DOC_MARKERS = {
   start: '<!-- stetra:begin -->',
   end: '<!-- stetra:end -->',
@@ -284,7 +284,7 @@ function buildDesiredArtifacts(adapters: HostAdapter[]): DesiredArtifact[] {
     markers: GITIGNORE_MARKERS,
     content: [
       GITIGNORE_MARKERS.start,
-      '.stetra/runs/',
+      '.stetra/tasks/',
       GITIGNORE_MARKERS.end,
     ].join('\n'),
   }];
