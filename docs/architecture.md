@@ -1,371 +1,400 @@
 # Architecture
 
-Stetra is an engineering harness for coding agents, designed to keep
-the engineering thread intact when implementation is delegated.
+This document describes the architecture implemented by the initial version of
+protocol `cognitive-adoption`, schema `1`. Future product hypotheses remain in
+[Product direction](product-direction.md); they are not current Runtime facts,
+authority, or effectiveness evidence.
 
-It connects developer intent, Runtime-collected repository and verification
-facts, Agent execution and explanation, and the Human adoption decision in an
-inspectable engineering loop.
+## Product boundary
 
-The product is successful when it lowers the total cost from a developer
-request to a confident adoption decision without weakening the developer's
-understanding of the system or their engineering judgment. Generation speed
-and passing checks matter only as parts of that outcome.
+Stetra is the cognition and adoption control layer for delegated production
+coding. It keeps one inspectable engineering thread from an exact developer
+event, through Agent interpretation and implementation, to Runtime observations,
+a decision-oriented handoff, and an exact Human adoption decision.
 
-It is not a coding agent, repository wiki, planning framework, prompt library,
-or automated code approver.
+It is not a coding agent, automated approver, project manager, general workflow
+engine, repository wiki, transcript store, or cross-task memory system. Core and
+CLI never call an LLM; the Host Agent owns semantic reasoning and repository work.
 
-## Three cores and one loop
+The task-scoped kernel remains three cores:
 
-The architecture has three task-scoped cores and one longitudinal loop:
+1. **Semantic Contract** — what the change is intended and authorized to mean.
+2. **Fact Spine** — what the workflow actually observed.
+3. **Cognitive Handoff** — what the change means, what remains unknown, and where
+   direct review has adoption value.
 
-1. **Semantic Contract** records what one change is intended and authorized to
-   mean.
-2. **Fact Spine** records what the workflow observed before and after the
-   implementation.
-3. **Cognitive Handoff** explains what the actual change means, what remains
-   uncertain, and where review has the highest value.
-4. **Decision Continuity** may reuse adopted decisions and observed outcomes in
-   later tasks without transferring decision authority to the agent.
+An exact Human Decision closes the task. Decision Continuity across tasks is not
+implemented.
+
+## Fixed lifecycle and closed recovery paths
 
 ```text
-Developer request and long-lived decisions
-                  |
-                  v
-          Semantic Contract
-                  |
-       compiled Assurance Plan
-                  |
-                  v
-   agent investigation, implementation, repair
-                  |
-                  v
-              Fact Spine
-                  |
-                  v
-          Cognitive Handoff
-                  |
-                  v
-    Developer review and adoption decision
-                  |
-                  `------> Decision Continuity (future)
+prepare
+  -> Agent implementation
+  -> collect
+  -> diagnose every non-passing Definition
+       -> implementation repair -> successor Attempt -> recollect
+       -> verification revision -> successor Attempt -> recollect
+       -> independent challenge
+       -> exact Human resolution
+       -> handoff with unresolved evidence
+  -> independent challenge required by contract or collected mutation
+  -> Cognitive Handoff
+  -> Human Decision
+       -> accepted / rejected / deferred
+       -> correction-requested -> exact Human resolution
+                               -> successor correction Attempt
 ```
 
-The current implementation closes one task-scoped loop across the first three
-cores. Decision Continuity is a design boundary, not an implemented store.
+`change explain` is on-demand inspection. A timeout retry is same-Attempt
+operational recovery. The macro lifecycle is fixed; the initial protocol does not add a
+general workflow graph or Runtime-selected mode.
 
-## Responsibility and authority
+Every state-changing Host route now has an executable successor. In particular,
+`resolve-evidence-decision` returns an exact `change resolve` command, and a
+correction decision no longer strands the task.
 
-The workflow keeps three kinds of authority distinct:
+## Authority partitions
 
-| Participant | Owns | Does not own |
+| Actor | Owns | Does not own |
 |---|---|---|
-| Developer | Desired outcome, constraints, non-goals, long-lived tradeoffs, exceptions, and adoption decisions | Repository or check facts contradicted by observation |
-| Coding agent | Investigation, interpretation, local engineering judgment, implementation, diagnosis, repair, and handoff claims | The developer's decisions or machine-observed facts |
-| Runtime process | Baselines, frozen check definitions, actual changes, ordered check attempts and execution budgets, output integrity, and other collected facts | Product intent, semantic tradeoffs, or adoption decisions |
+| Developer | Exact requests, corrections, long-lived tradeoffs, exceptions, and adoption | Runtime observations or Agent investigation |
+| Agent | Interpretation, repository investigation, reversible engineering judgment, implementation, diagnosis, falsification, challenge conclusions, handoff, and recommendation | Developer authority or machine facts |
+| Runtime | Identity, exact references, baselines, immutable verification definitions, actual changes, ordered attempts, bounded logs, timing, currency, and deterministic structural policy | Product meaning, semantic truth, engineering cause, or adoption |
+| Trusted Host integration | Actual tool configuration and fresh-context attestation that it controls | Semantic truth or Human authority |
 
-The harness is not another authority. It binds provenance, controls lifecycle
-ordering, collects or validates facts, preserves contradictions, and presents
-review surfaces.
+Storage and labels cannot move information across partitions. Runtime validates
+that conclusions do not exceed declared evidence results; it does not determine
+whether a test really proves a natural-language statement.
 
-A recorded developer message or decision is represented by an exact
-`HumanEvent`. A structured reading of that event remains an agent
-interpretation. A source label cannot turn a paraphrase into a developer
-decision, and supporting facts cannot turn an agent conclusion into a machine
-fact.
+## Semantic Contract and falsifiable evidence
 
-A concrete task authorizes the agent to perform necessary local, reversible
-inspection, edits, verification, and safe repair within the task meaning. The
-agent asks for input only when a material long-lived choice remains unresolved,
-the work drifts outside that meaning, an exact exception or verification
-relaxation is needed, or an external or irreversible effect is proposed.
+Prepare accepts:
 
-## Semantic Contract
+- one Host-generated `prepareRequestId` that identifies an exact submission
+  across transport retries;
+- one exact `developerEvent`, separate from Agent interpretation;
+- desired outcome, constraints, non-goals, and focus paths;
+- optional exact repository-evidence windows;
+- zero or more material or adoption-critical Conditions;
+- explicit Host policy requirements;
+- bounded repair count;
+- argv checks or a concrete no-command rationale.
 
-The Semantic Contract is the smallest pre-change envelope that can affect
-solution selection, execution authority, verification, or review. It contains:
+Routine work may have no Condition. Once a Condition exists, it must contain at
+least one **Falsifiable Evidence Obligation**. Each Obligation states:
 
-- exact developer messages or decisions relevant to the task;
-- basis-bearing agent interpretations for the desired outcome, constraints,
-  non-goals, focus, and consequence;
-- an explicit assurance-dimension list; each declared material or
-  adoption-critical dimension has an adoption rationale and the same basis
-  discipline;
-- optional exact repository evidence used by a material interpretation;
-- explicit verification commands, or a concrete reason no command applies;
-- no unresolved material semantic fork.
+- the bounded sub-conclusion it is intended to support;
+- the plausible failure hypothesis that must be actively considered;
+- one or more exact evidence strategies:
+  - Runtime Check through logical Verifier identity;
+  - repository inspection through exact Repository Evidence;
+  - independent Challenge with `required` or `fact-triggered` policy;
+  - direct Human review.
 
-It is not a generated design document, predicted implementation plan, or file
-permission list. Focus paths direct investigation and review; necessary
-adjacent implementation, test, type, and documentation work remains allowed
-while the contract meaning is unchanged.
+Every Obligation conclusion includes a falsification attempt, exact supporting
+evidence, exact counter-evidence, and `supported`, `partial`, `contradicted`, or
+`unknown` status. A Condition cannot be `supported` unless all its Obligations
+are `supported`. This is a structural evidence ceiling, not semantic proof.
 
-The runtime validates structure, event and evidence references, deterministic
-identity, and verification readiness. It does not judge whether the agent's
-interpretation is semantically wise or complete.
+Adoption-critical Conditions must declare independent Challenge or direct Human
+review, and they always receive consequence-directed Review Map coverage.
 
-## Proportional Assurance
+No Condition, policy, route, or assurance requirement is inferred from keywords,
+filenames, path count, diff size, dependency count, error text, or a scalar
+complexity, confidence, trust, risk, or readiness score.
 
-The lifecycle topology is fixed, but its semantic handoff obligations are
-proportional to the adoption decision. This is a policy joining the Semantic
-Contract, Fact Spine, and Cognitive Handoff, not a fourth core or an
-implementation workflow engine.
+Prepare request identity is also never inferred from Contract equality. Under
+the worktree lease, the first successful submission binds its request ID to the
+exact input fingerprint and published task. Replaying that ID with identical
+input returns the current projection of the same task without running baseline
+checks or writing an event. Reusing it with different input is rejected; an
+explicitly different request ID always creates a distinct task.
 
-The host uses repository judgment to propose a consequence and exact assurance
-dimensions. Consequence describes the impact of accepting a wrong change or
-explanation; it does not describe coding effort. A one-line authorization
-change can be high consequence, while a broad mechanical rename can be low
-consequence. Runtime does not infer either value from keywords, file counts,
-diff size, dependencies, or a numeric score.
+The task storage ID is deterministically derived from the explicit
+`prepareRequestId`. The lease remains the normal serialization boundary, while
+the deterministic destination is a second uniqueness invariant: even if two
+transport attempts overlap, they cannot publish two task directories for one
+request. A concurrent loser replays the exact published task after verifying
+the input fingerprint.
 
-Core compiles an inspectable Assurance Plan:
+## Identity model
 
-| Profile | Contract condition | Minimum semantic handoff |
-|---|---|---|
-| `routine` | Low consequence and no declared dimension | System-meaning update; claims and Review Map may be empty |
-| `standard` | Medium consequence or a material dimension | One matching claim for every declared dimension |
-| `critical` | High consequence or an adoption-critical dimension | Matching adoption-critical claims, applicable falsification, and must-read or unresolved review coverage |
-
-Medium-consequence work declares at least one assurance dimension.
-High-consequence work declares at least one adoption-critical dimension. A
-critical dimension raises the profile even when the task-level consequence is
-lower. The profile is a derived presentation label; the exact requirements and
-their bases remain the executable policy.
-
-Effective handoff obligations are the union of:
-
-- requirements compiled before implementation;
-- failed or unavailable checks, changed verifier surfaces, unrepresentable
-  changes, and other collected fact conditions;
-- adoption-critical claims and residual unknowns disclosed by the host after
-  inspecting the actual change.
-
-These sources may add obligations but cannot remove the baseline, frozen
-verification, complete change facts, fact currency, authority separation, or
-human adoption boundary. A newly discovered adoption-critical claim therefore
-escalates review even on a routine task. No second plan or effective-profile
-artifact is persisted; Core evaluates the union directly from the contract,
-facts, and handoff.
-
-## Fixed kernel, dynamic Host projection
-
-The Runtime state machine remains deliberately fixed:
+The initial protocol separates three identities:
 
 ```text
-prepare -> implement -> collect -> author handoff -> finalize
+semanticContractId
+verificationPlanId
+effectiveContractId = fingerprint(semanticContractId, verificationPlanId)
 ```
 
-What varies is the Host's cognitive surface. Each CLI stage derives a transient
-`hostAction` from the already-decided Assurance Plan, collected facts, or
-evaluation status:
+A logical Verifier has a stable `verifierId` derived from its explicit key. Each
+immutable executable definition has a content-bound `definitionId`, revision
+number, and optional `supersedesDefinitionId`. Check Attempts and Fact Bundles
+bind the exact Definition, never merely the logical key.
 
-```text
-                         +-> routine.md ----+
-prepare -> hostAction ---+                  +-> collect
-                         +-> assurance.md --+
-                                                |
-collect -> facts -> hostAction -----------------+
-                  |          |
-                  |          +-> routine/assurance -> author handoff
-                  `------------> recovery.md -> retry, repair, or recollect
-
-finalize -> ready for Human review
-         `-> recovery.md for stale, rejected, or attention outcomes
-```
-
-`hostAction` contains a machine-readable action kind, an exact argv command
-when one is runnable, and the one generated reference page needed for that
-action. It replaces prose next-step instructions without asking Runtime to
-author explanatory copy. A reference is an idempotent ensure-loaded handle: a
-continuous Host context does not reread an unchanged page it already has,
-while a fresh or resumed context can load the same page safely. The generated
-Host skill initially loads only the prepare reference and follows the returned
-reference thereafter; standard and critical guidance does not occupy a clean
-routine task's context, and recovery guidance is loaded only after an actual
-recovery condition.
-
-This is dynamic projection, not a general dynamic workflow engine. Runtime
-does not let the Host choose stages, invent a cheaper route, or branch on a
-heuristic score. The projector has no semantic authority and uses no new
-persistent mode: it renders decisions already present in the contract, facts,
-and evaluation. Canonical detail remains in the task run and is available with
-`change explain`; compact stage packets omit duplicate authority content and
-successful one-attempt log paths.
-
-A current-fact finalization returns one structured `handoffPacket` with four
-authority partitions: the compact Semantic Contract, collected Runtime facts,
-the Agent-authored Cognitive Handoff, and Core evaluation. It includes the
-facts that materially affect review, including changed files, ordered check
-attempts, verifier-surface changes, patch identity, Attention, and the Human
-adoption boundary. It is deterministic source data for a handoff, not a
-prewritten handoff.
-
-The generated Host renders that packet for the developer in the current
-conversation language. It may collapse empty routine sections, but it must
-preserve every adoption-changing fact and Attention item and keep Runtime
-facts, Agent judgment, and Human authority visibly distinct. Paths, IDs,
-enums, commands, numeric facts, quoted evidence, and raw tool output remain
-exact. No presentation locale or rendered Markdown is persisted: replay
-reconstructs the same packet, while wording remains Host-owned. Determinism
-therefore protects facts, status, provenance, and authority rather than one
-language's copy.
+This separation permits verification correction without pretending task meaning
+changed, while retaining every fact under the identity that produced it.
 
 ## Fact Spine
 
-The CLI owns fact collection. It captures a complete worktree baseline before
-implementation, including existing tracked changes and non-ignored untracked
-files, and freezes the selected check definitions. A wall-clock timeout is an
-execution-attempt budget rather than part of check identity or task meaning.
+### Baseline and collection
 
-After implementation it records:
+Prepare executes only Definitions whose baseline object explicitly selects
+`task-start`, explains why before/after comparison changes an Obligation, and
+names those Obligation keys. The post-check worktree becomes the implementation
+baseline; baseline-check side effects remain visible.
 
-- added, modified, deleted, and renamed paths;
-- file kinds, modes, content digests, and a complete representable patch;
-- binary or otherwise unrepresentable changes explicitly;
-- every frozen check's argv and ordered attempts, including each attempt's
-  timeout budget, status, exit code, timeout marker, output digests, bounded
-  logs, and availability;
-- changes to declared command-definition and acceptance-surface files;
-- one collection identity binding the change and check facts.
+Collect executes every current immutable argv Definition without a shell and
+records:
 
-The coding agent cannot submit changed-file facts, check outcomes, attempt
-history, or the collection identity. A normal recollection replaces attempts
-after implementation repair. A same-run retry can append only to an actually
-timed-out latest attempt with a larger budget while the worktree is unchanged.
-Passing latest attempts establish only that those commands passed. They do not
-prove the semantic correctness or adoptability of the change.
+- complete baseline-to-current change and representable patch;
+- pre-check and post-check worktrees;
+- check-induced changes;
+- ordered Attempts with `startedAt`, `durationMs`, timeout budget, structured
+  termination (`exit`, `signal`, `timeout`, or `spawn-error`), an outcome
+  fingerprint, full-stream digests, and bounded logs;
+- command-definition and acceptance-surface mutations;
+- non-secret execution-environment observations;
+- mechanical baseline/current relations.
 
-Every handoff is bound to one exact collection. If the worktree changes after
-collection, finalization returns `facts-stale`; the agent must collect again
-before its conclusions can be evaluated.
+`passed` is a fact about one command, not a semantic conclusion. `failed`,
+non-timeout `unavailable`, and timeout remain distinct.
 
-## Cognitive Handoff
+### Evidence disposition
 
-The handoff is written only after the agent has inspected the complete
-collected change. It contains:
+Every current non-passing Definition is diagnosed exactly once. Agent input
+binds the exact `definitionId`, cause, diagnosis, falsification attempt, expected
+different observation, any bounded implementation edits, a proposed next route,
+and the rationale for that route.
 
-- a compact update to the system's behavior or structure;
-- claims required by the Assurance Plan plus only newly discovered material
-  conclusions about applicable behavior, invariants, ownership, data and
-  control flow, compatibility, migration, recovery, security, operations, or
-  maintenance consequences;
-- an explicit basis for each claim;
-- residual unknowns and concrete validation or takeover paths;
-- attempts to disprove adoption-critical claims;
-- a consequence-directed Review Map rather than one item per changed file.
+Runtime validates route compatibility against only those explicit values:
 
-Claim bases remain explicit: repository evidence, agent judgment, a recorded
-developer decision, or unverified. Runtime-collected facts are presented separately from
-these semantic conclusions.
+| Explicit input | Route |
+|---|---|
+| material semantic impact | exact Human resolution |
+| implementation cause | repair successor or handoff |
+| implementation cause with exhausted budget | handoff with Attention |
+| environment or verification cause | immutable Verification Revision or handoff |
+| unknown cause | independent Challenge, handoff, or exact Human resolution |
 
-An adoption-critical claim based on agent judgment, repository evidence, or an
-unverified premise includes a concrete failure hypothesis and falsification
-attempt and a must-read or unresolved review surface. Contradicted, partial,
-and unverified results remain visible. The runtime checks their references and
-mechanical consistency; it does not reproduce the semantic investigation.
+A repair route may include additional environment or verification entries when
+at least one entry explicitly identifies a bounded implementation cause. Only
+the implementation entries authorize edits; every check is recollected and the
+other failures remain visible. This closes the common mixed-result path without
+guessing cause from output.
 
-Attention and review order are different outputs. Core emits a structural
-attention code, exact identifiers and references, and a resolution kind. The
-Host combines that structure with the fact-bound handoff to explain why the
-evidence is insufficient, what adoption risk it creates, what exact facts to
-inspect, and the next action in the current conversation language. The Review
-Map explains where direct code review is most valuable and what failure that
-review can prevent.
+Runtime never reads error prose to guess a cause.
 
-`handoff-ready` means that the handoff is structurally and factually ready for
-developer review. It never means that the change has been adopted.
+Only the current Attempt's Evidence Disposition participates in current
+handoff validation and Attention derivation. Earlier dispositions remain
+immutable lineage in the Decision Packet, but cannot be revalidated against a
+later Verification Plan or reopen a resolved current route.
 
-## Decision Continuity
+## Immutable Verification Revision
 
-The future loop may reduce repeated semantic work using recorded developer
-decisions and observed outcomes such as adoption, correction, rejection,
-reversion, or an incident. Activation must be scoped and inspectable.
+`change revise-verification` compiles a new Verification Plan while preserving
+the Semantic Contract. Two explicit kinds exist:
 
-Repeated agent choices, generated summaries, consensus, or passing checks are
-not developer decisions. They may form hypotheses, but they cannot silently
-expand future autonomy.
+- `execution-rebinding`: only argv may change; logical Verifier set, rationale,
+  baseline semantics, and declared verifier surfaces must be identical;
+- `verification-plan`: a broader evidence-plan change.
 
-No cross-task decision store, preference learner, delegation frontier, or
-adoption history exists in the current MVP. Such state belongs in the product
-only when it has a concrete compile or review consumer and measurable
-value over recovering context from the current task and repository.
+Both record an Agent equivalence claim and produce `verification-revised`
+Attention. Core mechanically requires exact Human authorization when a revision
+removes a Verifier, changes task-start baseline to unknown, or removes a declared
+command/acceptance surface. Obligations cannot lose a Verifier they still consume.
 
-## Package boundary
+Old Contracts, Definitions, Attempts, facts, and decisions are never overwritten.
+A revision creates a successor Attempt under a new `effectiveContractId`. When
+the original baseline cannot honestly execute the new Definition, the new
+Baseline Fact is `unknown-after-revision`; Runtime never runs the revised check
+in the modified worktree and calls that the original baseline.
 
-The dependency direction is intentionally narrow:
+## Independent Challenge and Host provenance
+
+Challenge is required when an Obligation declares `required`, or when a
+`fact-triggered` Obligation consumes a logical Verifier whose declared
+acceptance surface changed. Criticality does not suppress this self-verification
+risk.
+
+Challenge input names Obligation IDs and uses structured supporting and counter
+evidence with exact references. CLI derives Condition IDs and generates the
+Challenge ID. Agent JSON cannot supply independence, implementer context,
+challenger context, or attestation identity.
+
+A trusted native Adapter or Evaluator may inject `host-attested` independence.
+The current generated Markdown adapters are thin skills and therefore receive
+no automatic independent Challenge action. They project the unresolved failure
+hypothesis directly into Handoff as a concrete Human review obligation. A
+manually recorded thin-context Challenge remains `unverified`, never fake
+enforcement. Missing, adverse, or unverified Challenge caps related conclusions;
+`supported` is rejected when required Challenge evidence is absent. Recording a
+Challenge satisfies the lifecycle's challenge action; it does not repeatedly
+route back to Challenge merely because the outcome or independence is adverse.
+The thin-Host direct-review projection is preserved after diagnosis and Human
+resolution as well as immediately after collection; no later route may silently
+restore a trusted-Challenge requirement.
+
+Host tool policy is a separate partition from Runtime execution environment:
 
 ```text
-Generated host adapter -> CLI -> Core
+Host policy requirement
+  -> Host capability/configuration
+  -> Host enforcement attestation
 ```
 
-- `@sovea/stetra-core` provides deterministic contract compilation,
-  fact binding, and handoff evaluation through `compileDelegation` and
-  `evaluateHandoff`.
-- `@sovea/stetra` provides the CLI lifecycle, Git and check collection,
-  task-run IO, review-packet assembly, project initialization, and generated
-  adapters.
+Thin skills record `instruction-only`. Only a programmatic trusted provider may
+record `enforced`; required unverified policy pauses prepare for an exact Human
+resolution. Preferred gaps remain visible during adoption review.
 
-Core does not read a repository, execute commands, format CLI output, know
-host-specific files, or call an LLM. The CLI does not decide semantic truth or
-invent machine facts. Generated adapters contain workflow instructions and
-leave repository reasoning to the host agent.
+## Task-specific Authoring Projection
 
-The workspace has exactly these two publishable packages. A new package needs
-an independent consumer, public API, version, and release boundary.
+Every input-requiring Host Action can carry a transient `authoringPacket` with:
 
-## Persistent aggregate
+- current task/revision/contract/Attempt/fact bindings;
+- the exact Human Event beside a separately labeled Agent interpretation of
+  outcome, constraints, non-goals, and focus;
+- a directly fillable input draft;
+- field requirements that name the exact draft path, accepted enum values or
+  object variants, and whether the choice belongs to Agent judgment or Human
+  decision;
+- only the current stage's necessary Condition, Obligation, Definition,
+  changed-file, Challenge, repository-evidence, or Attention references;
+- outstanding structural obligations.
 
-One `.stetra/runs/<runId>/` directory owns the contract, baseline,
-facts, handoff, evaluation, patch, and bounded non-empty check logs for one
-task. The minimum states are `prepared`, `facts-collected`, and `completed`.
+Packets cover diagnosis, Verification Revision, Challenge, handoff, decision,
+and Human resolution. CLI generates boilerplate artifact, Human Event, Challenge,
+Handoff, Review Question, and Decision IDs.
 
-Non-runnable prepare results create no run. Completed-run retention removes
-only whole completed directories; incomplete runs remain recoverable. A run is
-never an authoritative cache for another task.
+The containing Host Action declares an `inputBinding`: serialize the completed
+draft as JSON and attach it to the exact command's stdin in one non-interactive
+process. This prevents an interactive transport failure from being confused
+with invalid protocol input. It changes no authority and is not persisted.
 
-Every new persistent field or lifecycle stage must answer three questions:
+Authoring Packets are derived output. They are not persisted, do not create a
+mode or lifecycle state, and cannot hide adoption-changing information. Exact
+canonical artifacts remain available through `change explain`. Field
+requirements share the CLI input-schema constants; they do not recommend a
+semantic value or provide a second validation schema.
 
-1. Which compile, collection, review, recovery, adoption, or future activation
-   decision can it change?
-2. Can the developer inspect that decision and its authority or evidence?
-3. Can its value be tested against a simpler workflow?
+JSON presentation places `hostAction` first. `change explain --section action`
+regenerates the current action and draft without writing lifecycle state, so a
+Host never needs to probe a write command with `{}` merely to recover its input
+shape.
 
-If it cannot, it does not belong in the kernel.
+## Cognitive Handoff and Human decision
 
-## Invariants
+The Agent supplies:
 
-1. Developer authority is tied to an inspectable event or decision.
-2. Runtime-collected facts have workflow collection provenance.
-3. Agent interpretation is never relabeled as developer intent or machine
-   proof.
-4. Handoff claims are written after and bound to the complete actual change.
-5. A post-collection edit invalidates the fact-bound handoff.
-6. Contradictory and insufficient evidence remains visible.
-7. Passing checks do not establish semantic correctness or adoption.
-8. Focus paths are not permissions or a predicted blast radius.
-9. Routine local reversible work does not require per-file or per-command
-   approval.
-10. Persistent product state needs a decision-changing, inspectable consumer.
-11. Core and CLI never call an LLM; the host agent owns semantic judgment.
-12. Product effectiveness is established by adoption evidence, not protocol
-    tests.
-13. Assurance requirements are explicit and may escalate; no heuristic or
-    profile label may silently lower the fixed fact and authority invariants.
-14. Timeout recovery preserves prior Runtime attempts and cannot retry a
-    completed failure or non-timeout unavailability as if it merely needed more
-    time.
-15. Host instructions may be projected dynamically only from deterministic
-    Runtime decisions; projection never changes lifecycle state or semantic
-    authority.
-16. Runtime and CLI own handoff structure, not user-facing narrative; the Host
-    may change language and wording but not facts, status, provenance, or
-    adoption authority.
+- decision-oriented summary;
+- exactly one conclusion per Evidence Obligation;
+- exactly one bounded conclusion per Condition;
+- important system effects;
+- residual unknowns and next actions;
+- consequence-directed review questions;
+- recommendation distinct from adoption.
 
-## Evidence boundary
+Runtime first checks worktree currency, then evaluates evidence references,
+Obligation/Condition ceilings, Challenge outcomes, Host policy provenance, and
+Review Map coverage. It derives consolidated Attention groups rather than one
+item per changed file.
 
-The repository's deterministic gate establishes that the implementation is
-internally consistent and distributable. Claims that the harness lowers total
-adoption cost or preserves developer cognition require paired results under
-[`evaluation/paired-agent/PROTOCOL.md`](../evaluation/paired-agent/PROTOCOL.md)
-and an explicit scoped product-owner conclusion. Until committed evidence
-meets that contract, effectiveness remains unverified.
+`handoff-ready` means ready for Human review, never adopted. Acceptance with
+Attention must explicitly name an exception for every current Attention item.
+`correction-requested` persists the original Handoff and Decision, pauses for an
+exact Human Resolution, then creates a lineage-linked correction Attempt.
+
+The returned Decision Packet is a normalized view rather than an embedding of
+the full Contract, Fact Bundle, Challenge list, Handoff, Evaluation, and a
+second review tree. It contains the compact Semantic Contract, one condition and
+Obligation view, system meaning, current Runtime fact summary and log
+references, evidence-judgment summaries, Review Questions, and full Attention
+exactly once. Canonical detail remains available through named `change explain`
+sections.
+
+## State and persistence
+
+Task state lives under `.stetra/tasks/<taskId>/`. `events.jsonl` is append-only;
+`task.json` is a rebuildable projection. Prepare and Collect hold one
+project-worktree lease only while observing or executing against the shared
+worktree. The lease records PID and process-start identity and is reclaimed only
+after the owner is confirmed dead; elapsed time alone never authorizes
+recovery. Prepare publishes a complete staged task by atomic rename. Collect
+stages logs, patch, and facts outside the task, then uses expected revision and
+a short task commit lock to publish artifacts and append its event. No external
+check runs while the task commit lock is held.
+
+```text
+contracts/<revision>.json
+contracts/<revision>.plan.json
+contracts/<revision>.baseline.json
+contracts/<revision>.baseline-verification.json
+verification-revisions/<revisionId>.json
+attempts/<attemptId>/attempt.json
+attempts/<attemptId>/facts/<factCollectionId>.json
+attempts/<attemptId>/evidence-disposition.json
+attempts/<attemptId>/checks/...
+attempts/<attemptId>/change-<revision>.patch
+challenges/<challengeId>.json
+handoffs/<handoffId>.json
+handoffs/<handoffId>.evaluation.json
+decisions/<decisionId>.json
+decisions/<decisionId>.evaluation.json
+resolutions/<resolutionId>.json
+events.jsonl
+task.json
+```
+
+As the initial persisted schema, it has no translator, alias, dual read/write,
+or migration state.
+
+## Package and API boundary
+
+```text
+Generated Host adapter -> CLI -> Core
+```
+
+- `@sovea/stetra-core` owns deterministic authority validation, contract and
+  revision compilation, fact binding, Challenge obligations, handoff evaluation,
+  Attention, and Human-decision binding. Its root runtime values remain exactly
+  `compileDelegation` and `evaluateHandoff`.
+- `@sovea/stetra` owns commands, IO validation, task sequencing, Git/check
+  collection, persistence, trusted Host-attestation injection, transient
+  authoring projection, packet assembly, presentation, and generated workflows.
+
+There is no third package, global memory, cloud service, or provider SDK.
+
+## Complexity movement in the initial MVP
+
+Removed:
+
+- Agent-authored downstream boilerplate IDs;
+- Agent-authored `host-attested` Challenge provenance;
+- parallel Condition-level evidence strategy and Challenge policy structures;
+- the immutable-check dead end that forced an unrelated new task;
+- prose-only Human-resolution and correction routes;
+- duplicated CLI Challenge-trigger implementations.
+
+Added:
+
+- Evidence Obligation and Obligation Conclusion artifacts inside existing
+  Contract/Handoff boundaries;
+- separated semantic, verification, and effective identities;
+- immutable Verification Definition lineage and revision artifacts;
+- exact Human Resolution artifacts and successor correction Attempts;
+- Host policy evaluations with explicit provenance;
+- transient task-specific Authoring Packets;
+- explicit Prepare request identity and exact-input replay binding;
+- authoritative Check timing facts.
+
+The new persistent fields change compilation, collection, recovery, challenge,
+handoff, or adoption decisions directly. No cross-task state was introduced.
+
+The final MVP convergence removes the single-valued
+`expectedObservation: passed` input boilerplate and avoids thin-Host Challenge
+artifacts that cannot have independent provenance. It adds no persistent state:
+Prepare uses a deterministic task destination derived from existing request
+identity, mixed-cause repair changes only route validation, and the full
+baseline moved behind a named inspection section while normal Prepare output
+uses a compact summary.

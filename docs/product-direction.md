@@ -21,12 +21,13 @@ that the developer can confidently adopt, while preserving the developer's
 first-class understanding of the system and the quality of their engineering
 decisions.
 
-The current implementation is more precisely a task-scoped semantic assurance
-kernel. It is strong at partitioning authority, binding facts, evaluating
-claims, and directing review. That implemented strength is the foundation, not
-the final product boundary. Stetra must eventually improve how the Agent
-investigates, implements, verifies, and repairs a change as well as how the
-result is handed off.
+The initial MVP is a task-scoped cognition and adoption loop. It combines
+authority partitioning, falsifiable Evidence Obligations, selective baseline
+facts, explicit post-collection judgment, immutable Attempt and Verification
+Definition lineage, fact-triggered Challenge, task-specific Authoring Packets,
+Host-attested execution boundaries, a layered handoff, and exact task-scoped
+Human decisions and resolutions. That implementation remains narrower than the
+long-term product boundary.
 
 Relative to execution Hosts, Stetra is the cognition-preserving delivery and
 assurance control plane. It owns the domain-specific delegation control system
@@ -87,18 +88,24 @@ The present kernel contributes four durable principles:
 4. **Human adoption remains a separate decision.** Evidence readiness never
    becomes automatic approval.
 
-The target product adds four equally important principles:
+The initial MVP adds six equally important principles:
 
-5. **Delivery uses bounded feedback loops.** Investigation, implementation,
-   verification, and repair evolve from observed results rather than one-shot
-   execution.
-6. **Critical conclusions receive independent challenge when it changes the
-   adoption decision.** Independence is explicit provenance, not ceremony.
-7. **Dynamic workflows stay inside a typed, inspectable, effect-aware, and
-   budgeted control envelope.** Open-ended scripts are not product authority.
-8. **Human adoption, correction, and rejection become scoped longitudinal
-   evidence.** They may inform later work but never silently expand Agent
-   authority.
+5. **Non-passing evidence is judged before it is acted on.** A failed command
+   is not itself a diagnosis or authorization to edit code.
+6. **Falsifiable Evidence Obligations bound conclusions.** Runtime enforces
+   declared coverage and contradiction limits without pretending to prove
+   natural-language semantics.
+7. **Authoring and handoff minimize ceremony without collapsing authority.**
+   Runtime generates boilerplate identities; the developer event remains exact,
+   and decision information is layered before raw facts.
+8. **Human adoption, correction, and rejection remain exact task-scoped
+   authority.** Cross-task activation is deferred until it has an explicit
+   Human-authorized consumer and measured benefit.
+9. **Verification can be revised without rewriting history.** Semantic,
+   verification, and effective identities remain separate; exact Definitions
+   supersede rather than overwrite one another.
+10. **Host enforcement is attested at the Host boundary.** Thin instructions
+    cannot self-promote into enforced policy or independent context provenance.
 
 ## Product boundary and Host relationship
 
@@ -197,8 +204,8 @@ tradeoffs, or promote an Agent conclusion into a fact.
 
 ### Append-only task and run ledger
 
-The target persistence model is an append-only, task-scoped event ledger with
-derived projections. It should preserve immutable attempts and allow safe
+The initial persistence model is an append-only, task-scoped event ledger with
+derived projections. It preserves immutable attempts and allows safe
 crash recovery, optimistic concurrency, replay, and lineage without making one
 run authoritative for another task.
 
@@ -223,9 +230,10 @@ adoption-recorded
 outcome-observed
 ```
 
-This vocabulary is staged. P0 adds only events required by task recovery and
-attempt lineage; adoption and outcome events do not enter the product until
-P4 has a Human-authorized consumer and supporting evidence.
+This vocabulary is staged. The MVP adds only events required by task recovery,
+attempt lineage, handoff, and the exact current-task decision. Outcome events
+and cross-task activation do not enter the product until P4 has a
+Human-authorized consumer and supporting evidence.
 
 Each event needs an identity, prior revision, actor partition, referenced input
 and output artifacts, relevant worktree and environment identity, and a
@@ -395,17 +403,18 @@ rounds occurred, which evidence changed, and which exact attempt the Human
 eventually reviewed. It does not permit a later attempt to rewrite an earlier
 fact.
 
-### Separate delivery, assurance, and adoption states
+### Separate delivery, evidence, and decision states
 
-The target model keeps three state dimensions distinct:
+The initial MVP keeps three state dimensions distinct:
 
 ```text
-Delivery:  planned | executing | blocked | repairing
+Delivery:  waiting-for-implementation | implementing | repairing
            implementation-complete | exhausted
 
-Assurance: evidence-incomplete | needs-attention | rejected | handoff-ready
+Evidence:  not-collected | awaiting-evidence-judgment | incomplete | needs-attention
+           facts-stale | handoff-ready
 
-Adoption:  pending | correction-requested | accepted | rejected | deferred
+Decision:  pending | correction-requested | accepted | rejected | deferred | aborted
 ```
 
 For example, implementation can be complete while assurance needs attention
@@ -433,10 +442,11 @@ Human-owned choice back for a decision.
 patch -> collect facts -> classify failure -> diagnose -> repair -> recollect
 ```
 
-It requires enforced attempt and resource budgets, repeated-failure and
-no-progress detection, preserved attempts, and explicit replan or Human
-escalation. A retry is not a repair, and a material semantic change is not a
-retry.
+It requires enforced attempt and resource budgets, preserved attempts, an
+explicit Agent cause judgment, and explicit replan or Human escalation. A
+repeated mechanical observation may inform diagnosis but cannot establish
+cause or automatically authorize repair. A retry is not a repair, and a
+material semantic change is not a retry.
 
 ### Independent Challenge Loop
 
@@ -477,40 +487,45 @@ facts. The following foundations precede broad orchestration.
 
 ### Transactional collection and concurrency
 
-Atomic file replacement is not a run-level transaction. Collection and
-finalization should use a short-lived run lease, expected revision or
-compare-and-swap, worktree-fingerprint preconditions, and expired-lease
-recovery. They must reject conflicting writers deterministically rather than
-silently overwrite a newer projection.
+Atomic file replacement is not a run-level transaction. Current Prepare and
+Collect use one project-worktree lease while observing the shared worktree,
+staged artifacts, expected revision, and a short task commit lock. Lease
+recovery is based on confirmed process death and process-start identity, never
+elapsed age. Conflicting writers are rejected rather than silently overwriting
+a newer projection.
 
 A collection transaction should conceptually:
 
 ```text
-acquire run lease
+acquire project-worktree lease
   -> capture implementation snapshot
   -> run checks under declared write policy
   -> capture post-check snapshot
   -> classify check-induced mutations
-  -> append event with expected revision
-  -> release lease
+  -> stage complete artifacts
+  -> acquire short task commit lock and compare revision
+  -> publish artifacts and append event
+  -> release task lock and project-worktree lease
 ```
 
 The repository should not remain globally locked between Agent actions.
 
-### Baseline, current result, and regression classification
+### Baseline and current observation
 
-The Git worktree baseline is not a baseline check result. When regression
-classification changes adoption, checks should have a traceable prior result:
+The Git worktree baseline is not a baseline check result. When a before/current
+comparison changes adoption, checks should have a traceable prior observation:
 
 - a suitable trusted recent CI result;
 - a task-start baseline attempt;
 - or an explicit unavailable/unknown baseline.
 
-Baseline execution should remain selective and cost-aware, driven by explicit
-acceptance needs rather than run for every routine command. Facts should keep
-baseline status, current status, regression classification, and environment
-identity distinct so a pre-existing failure, new regression, environment
-failure, and flake are not collapsed.
+Baseline execution remains selective and driven by explicit acceptance needs
+rather than run for every routine command. Facts keep baseline status, current
+status, their mechanical relation, and environment identity distinct. Runtime
+does not label the relation a regression or infer its cause. The initial protocol supports
+task-start, unknown, and an honest unknown-after-revision observation; trusted
+CI remains a later source because the current Host boundary cannot attest it as
+a Runtime-observed fact.
 
 ### Check side effects
 
@@ -540,86 +555,91 @@ original Human Events and every basis. Only material semantic forks,
 adoption-changing unknowns, exceptions, or external effects should interrupt
 the developer.
 
+Task-specific Authoring Packets should expose exact current identities and the
+accepted values or object variants for every unfilled structural choice. They
+must not preselect Agent conclusions or Human decisions, and they remain
+transient rather than becoming another persisted workflow layer.
+
+They should also place the exact developer event beside the explicitly labeled
+Agent interpretation, and tell the Host exactly how to bind the completed draft
+to one non-interactive command invocation. Transport boilerplate must not force
+an Agent to rediscover schema details or lose the developer's exact wording.
+
 Low friction cannot mean Runtime inference of semantic importance, hidden
 facts, automatic adoption, or a weaker evidence boundary.
 
-## Current implementation boundary
+## Current task-scoped MVP boundary
 
-As of this document, Stetra implements one task-scoped path:
+The initial MVP implements one task-scoped path:
 
 ```text
-prepare -> Host implementation -> collect -> Host handoff -> finalize
+prepare -> Host implementation -> collect -> evidence judgment when needed
+        -> optional repair or challenge -> handoff -> Human decide
 ```
 
-It implements:
+It includes:
 
-- basis-bearing Semantic Contract compilation;
-- Proportional Assurance over explicit dimensions;
+- exact-input Prepare replay through an explicit Host request identity, without
+  semantic deduplication or repeated baseline execution;
+- one exact developer event separated from Host-authored task meaning;
+- readable, evidence-directed Adoption Conditions;
+- a generated fixed lifecycle with a bounded repair budget;
+- selective task-start or unknown check baselines and mechanical comparisons;
 - complete baseline-to-current Git change collection;
-- frozen current-state checks with bounded logs and same-run monotonic timeout
-  recovery;
-- fact-bound Cognitive Handoff evaluation and Review Map obligations;
+- immutable implementation Attempts and same-Attempt monotonic timeout recovery;
+- check-side-effect and bounded environment observations;
+- fact-bound Agent diagnosis before any non-timeout failure route;
+- fresh-context challenge for explicit requirements and fact-triggered
+  Obligations whose declared verifier acceptance surface changed;
+- compact fact-bound Cognitive Handoff, review questions, consolidated Attention,
+  and a transient decision/condition/fact presentation;
+- an exact current-task Human decision with explicit exception coverage;
 - dynamic Host instruction projection over a fixed lifecycle;
-- one isolated run aggregate with atomic individual-file replacement.
+- task-specific semantic context, prefilled drafts, exact structural choices,
+  and one-shot stdin bindings for input-bearing Host actions;
+- one task-scoped event source, derived projection, short write lock, and
+  revision-checked mutation.
 
-It does **not** currently implement:
+It does **not** implement:
 
-- an Acceptance Contract distinct from verification commands;
-- a Delivery Plan IR or adaptive delivery controller;
-- an independent fresh-context challenger;
-- baseline check results or regression classification;
-- an Execution Environment or Host Capability Manifest;
-- run-level lease, revision, compare-and-swap, or check-side-effect policy;
-- general immutable implementation-attempt and collection lineage;
-- separate Delivery, Assurance, and Adoption state machines;
-- Human adoption-outcome capture, three graph models, or Decision Continuity.
+- a general delivery graph or parallel writer scheduler;
+- broad repository intelligence or ownership inference;
+- remote environment attestation;
+- multi-task or organization memory;
+- outcome observation after the task decision;
+- cross-task Decision Continuity or automatic policy activation.
 
-Current full collection runs frozen checks and then captures the worktree, so
-check-induced changes are honestly included but not separately classified.
-Normal recollection replaces the current Fact Bundle; only same-run timeout
-recovery preserves prior timed-out check attempts. Persisted run envelope
-validation still delegates several nested artifacts to later deep validation.
-
-The deterministic implementation is technically verified, but product
-effectiveness remains `unverified`: the paired evaluation ledger has no
-completed trials.
+The deterministic implementation establishes protocol consistency and
+distributability only. The first historical-replay pilot is recorded as
+inconclusive: proxy review exposed two treatment defects and one treatment win,
+but Human blind review, timing evidence, and a preregistered repair/recollection
+pair are absent. Product effectiveness remains `unverified` until a qualifying
+paired evaluation and scoped product-owner conclusion exist.
 
 ## Architectural change accounting
 
-The target direction adds real complexity:
+The current design removes Host-authored identity boilerplate, unevaluated Delivery Plan
+step fields, direct failure-to-repair routing, a public repair command, and
+duplicated handoff claim/review structures. It added one selective baseline
+artifact, one optional evidence-disposition artifact per diagnosed Attempt,
+mechanical check comparisons, fact-triggered challenge relationships, and a
+transient three-layer decision view.
 
-- Acceptance and Delivery Plan contracts;
-- bounded execution and challenge loops;
-- environment, capability, and attempt identity;
-- short-lived concurrency control and append-only task events;
-- separate delivery, assurance, and adoption states;
-- eventually, three graph views with different authority and lifetime.
+Each added value changes a collection, diagnosis, repair, challenge, handoff,
+review, or adoption decision and is inspectable. No cross-task state, global
+memory, general scheduler, or additional package was added. Detailed current
+accounting is in [Architecture](architecture.md).
 
-It should remove or consolidate other complexity:
+The target direction may add real complexity only when an executable consumer
+and measured advantage exist: richer Acceptance and Delivery Plan contracts,
+bounded conditional execution, capability identity, and eventually three graph
+views with different authority and lifetime. Capability adapters should reuse
+Host runtimes instead of creating another coding-agent platform.
 
-- one validated Plan IR replaces Host-specific workflow policy as the
-  authority source;
-- one canonical identity and transition implementation replaces duplicated
-  Core/CLI fingerprint logic;
-- one append-only event source plus derived projections replaces ambiguous
-  in-place lifecycle history;
-- capability adapters reuse Host runtimes instead of creating another coding
-  agent platform;
-- generated routine authoring removes manual JSON ceremony without deleting
-  canonical protocol objects.
-
-Persistent state moves in stages. The current one-run aggregate remains until
-a task-scoped ledger demonstrates better recovery and lineage. That ledger may
-group immutable attempts for one developer request, but it remains isolated
-from other tasks. Human adoption events and cross-task Decision Records arrive
-only in P4 and never share authority with Runtime observations or Agent
-summaries.
-
-The intended user-visible change is also staged: routine work gains a smaller
-front door; failed delivery gains bounded repair and a clear stop reason;
-critical work gains visibly independent challenge; status distinguishes
-implementation, evidence, and adoption; and only later can the developer
-record an exact adoption decision for scoped future use.
+Persistent state moves in stages. The current task ledger groups immutable
+Attempts for one developer request and remains isolated from every other task.
+Cross-task Decision Records arrive only in P4 and never share authority with
+Runtime observations or Agent summaries.
 
 ## Relationship to adjacent harnesses
 
@@ -634,8 +654,8 @@ objects:
 | System role | Typical first-class objects |
 |---|---|
 | General execution harness | project work, session, milestone, task, workspace memory, auto-mode state |
-| Current Stetra | Human authority, Semantic Contract, Fact Bundle, Assurance Claim, Review Map |
-| Target Stetra | current objects plus Acceptance Contract, Delivery Plan, bounded loops, Adoption Decision, and scoped Decision Continuity |
+| Current Stetra | exact Human authority, Semantic Contract, selective baseline and Fact Bundle, Agent evidence disposition, condition conclusions, layered handoff |
+| Target Stetra | current objects plus richer Acceptance Contract, conditional Delivery Plan, bounded loops, and scoped Decision Continuity |
 
 The preferred ecosystem split is:
 
@@ -652,48 +672,50 @@ Adapter backends, not canonical Stetra authority.
 
 The direction is a sequence of testable hypotheses, not a feature checklist.
 
-### P0: prove current value and make facts consistent
+### P0: prove the shipped task-scoped cognition and adoption loop
 
-First run the existing paired-agent protocol and harden the task-scoped
-runtime. P0 should cover:
+P0 evaluates the initial task loop. It covers:
 
 - at least the protocol-required paired trials, task diversity, blinded review,
   adverse results, and scoped product-owner conclusion;
 - short-lived run lease, revision/CAS, deterministic conflict handling, and
   crash recovery;
-- selective baseline evidence and regression classification;
+- selective baseline observations and mechanical comparison;
 - Execution Environment Manifest and check-side-effect classification;
 - complete persisted schemas with canonical Core identity rules;
-- the smallest append-only task ledger and projection that support recovery
-  and attempt lineage;
+- the smallest append-only task ledger and projection that support recovery,
+  Attempt and Verification Definition lineage, and exact current-task Human
+  decisions and resolutions;
 - a routine single front door that reduces authoring ceremony without
-  weakening the canonical contract.
+  weakening the canonical contract;
+- Evidence Obligations before Condition conclusions, evidence judgment before
+  repair, changed-verifier fact-triggered Challenge, and Host attestation.
 
-Freeze and record the current-kernel evaluation before protocol-changing
-hardening, then evaluate material P0 changes against that baseline. P0 must
-establish whether current Stetra lowers review and adoption cost or mostly adds
-protocol overhead. If the present kernel is not useful, remove ceremony before
-adding orchestration.
+The first frozen three-pair pilot is useful product evidence but not a completed
+effectiveness evaluation. It exposed false confidence from self-authored
+verifiers and waste from treating environment failures as repair, directly
+motivating the current initial design. The next P0 evaluation must establish
+whether the loop
+lowers review and adoption cost or mostly adds protocol overhead. If it is not
+useful, remove ceremony before adding orchestration.
 
-### P1: build the minimum Delivery Loop
+### P1: improve the minimum Delivery Loop
 
-Add only chain, conditional branch, and bounded loop capabilities:
+Add only improvements that earn their cost in the shipped loop:
 
-- Acceptance Criterion model;
-- Delivery Plan IR v1 with enforced budgets and failure routes;
-- bounded implementation repair with no-progress detection;
-- fresh-context challenge for adoption-critical Agent conclusions;
-- Host Capability Manifest;
-- separate Delivery, Assurance, and Adoption statuses;
-- immutable task and attempt lineage.
+- richer evidence strategies and selective trusted baseline inputs;
+- conditional Agent strategy inside the fixed task lifecycle;
+- better Agent-facing diagnosis and evidence comparison without automatic
+  cause inference;
+- additional Host capability adapters;
+- improved low-friction authoring and review presentation.
 
 Evaluate this phase as an ablation sequence:
 
 ```text
 ordinary coding Agent
-current Stetra
-current Stetra + repair loop
-current Stetra + repair loop + independent challenge
+initial task loop
+initial task loop with individual capabilities removed
 ```
 
 The comparison should reveal which capability changes implementation,
@@ -727,11 +749,11 @@ The graph needs typed dependencies, read/write conflict checks, fan-in
 completeness, node and resource budgets, and end-to-end artifact/evidence
 traceability. Simple tasks should still compile to one node or a short chain.
 
-### P4: close Human adoption and Decision Continuity
+### P4: add outcome observation and Decision Continuity
 
-Only after task-level value is demonstrated should Stetra persist exact Human
-acceptance, correction, rejection, or deferral; later merge, revert, incident,
-or post-deploy correction; and Human-authorized Decision Records.
+Only after task-level value is demonstrated should Stetra extend the existing
+exact current-task decision with later merge, revert, incident, or post-deploy
+correction observations and Human-authorized cross-task Decision Records.
 
 A Decision Record needs a statement, scope, authorizing Human Event, rationale,
 alternatives, validity, supersession, supporting attempts, and observed
