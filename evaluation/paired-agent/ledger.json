@@ -2,7 +2,7 @@
   "protocol": "cognitive-adoption-paired-evaluation",
   "schemaVersion": "1",
   "treatmentProtocol": "cognitive-adoption",
-  "status": "in-progress",
+  "status": "inconclusive",
   "effectivenessClaim": "unverified",
   "minimumCompletedPairs": 3,
   "updatedAt": "2026-08-10T14:36:23.000Z",
@@ -12,7 +12,9 @@
     "tasks/click-argument-help.json"
   ],
   "resultFiles": [],
-  "observationFiles": [],
+  "observationFiles": [
+    "observations/pilot-2026-08-10.json"
+  ],
   "productOwnerConclusion": null,
-  "conclusion": "Three historical replay tasks are registered, but no protocol-complete paired result has been recorded. Effectiveness remains unverified."
+  "conclusion": "Three preregistered historical replay pairs produced useful implementation observations, but they are not protocol-complete paired results: Human blind review and timing data are absent, and the required repair/recollection pair was not preregistered. Effectiveness remains unverified."
 }
