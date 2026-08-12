@@ -56,12 +56,13 @@ export function formatChangeCollect(output: JsonObject, colors: Colors): string 
 
 export function formatChangeFinalize(output: JsonObject, colors: Colors): string {
   const lines = [heading('Cognitive Handoff evaluated', colors), statusLine(String(output.status ?? 'unknown'), colors)];
-  if (isRecord(output.decisionPacket) && isRecord(output.decisionPacket.review)) {
-    appendDecisionLayer(lines, output.decisionPacket.review, colors);
-  }
-  appendAttention(lines, output.attention, colors);
-  if (isRecord(output.adoption)) {
-    lines.push(`${colors.bold('Human decision:')} ${String(output.adoption.status ?? 'pending')}`);
+  if (isRecord(output.decisionPacket)) {
+    appendDecisionLayer(lines, output.decisionPacket, colors);
+    appendAttention(lines, output.decisionPacket.attention, colors);
+    if (isRecord(output.decisionPacket.decision)
+      && isRecord(output.decisionPacket.decision.adoption)) {
+      lines.push(`${colors.bold('Human decision:')} ${String(output.decisionPacket.decision.adoption.status ?? 'pending')}`);
+    }
   }
   lines.push(colors.dim('Use --json to inspect the condition layer and exact Runtime fact drill-down.'));
   appendHostAction(lines, output.hostAction, colors);
@@ -112,12 +113,12 @@ function appendAttention(lines: string[], value: unknown, colors: Colors): void 
   }
 }
 
-function appendDecisionLayer(lines: string[], review: JsonObject, colors: Colors): void {
-  if (!isRecord(review.decision)) return;
-  const decision = review.decision;
+function appendDecisionLayer(lines: string[], packet: JsonObject, colors: Colors): void {
+  if (!isRecord(packet.decision) || !isRecord(packet.semanticContract)) return;
+  const decision = packet.decision;
   lines.push('', colors.bold('Decision summary'));
-  if (typeof decision.desiredOutcome === 'string') {
-    lines.push(`${colors.bold('Desired outcome:')} ${decision.desiredOutcome}`);
+  if (typeof packet.semanticContract.desiredOutcome === 'string') {
+    lines.push(`${colors.bold('Desired outcome:')} ${packet.semanticContract.desiredOutcome}`);
   }
   if (isRecord(decision.recommendation)) {
     lines.push(
@@ -125,11 +126,11 @@ function appendDecisionLayer(lines: string[], review: JsonObject, colors: Colors
       String(decision.recommendation.rationale ?? ''),
     );
   }
-  if (Array.isArray(decision.conditionStatuses) && decision.conditionStatuses.length) {
+  if (Array.isArray(packet.conditions) && packet.conditions.length) {
     lines.push(colors.bold('Condition conclusions'));
-    for (const condition of decision.conditionStatuses) {
-      if (isRecord(condition)) {
-        lines.push(`${colors.cyan('•')} ${String(condition.conditionId)} — ${String(condition.status)}`);
+    for (const condition of packet.conditions) {
+      if (isRecord(condition) && isRecord(condition.conclusion)) {
+        lines.push(`${colors.cyan('•')} ${String(condition.id)} — ${String(condition.conclusion.status)}`);
       }
     }
   }

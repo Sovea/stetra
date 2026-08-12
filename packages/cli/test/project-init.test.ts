@@ -11,14 +11,23 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 
+import { DELEGATION_PREPARE_EXAMPLE } from '../src/adapters/templates.ts';
 import {
   initializeProject,
   inspectProjectInstallation,
 } from '../src/project/init.ts';
+import { DelegationPrepareDocumentSchema } from '../src/schemas/delegation.ts';
 import {
   compareSemanticVersions,
   PRODUCT_VERSION,
 } from '../src/version.ts';
+
+test('generated prepare example is an exact schema-valid document with complete evidence windows', () => {
+  const parsed = DelegationPrepareDocumentSchema.parse(DELEGATION_PREPARE_EXAMPLE);
+  assert.deepEqual(parsed.repositoryEvidence, [{
+    key: 'relevant-source', path: 'src/example.ts', startLine: 1, endLine: 20,
+  }]);
+});
 
 test('generator versions follow semantic prerelease precedence', () => {
   const ordered = [
@@ -49,7 +58,7 @@ test('project init generates the Cognitive Adoption host projection and manifest
     assert.equal(initialized.status, 'initialized');
     assert.equal(initialized.protocol, 'cognitive-adoption');
     assert.equal(initialized.schemaVersion, '1');
-    assert.equal(initialized.adapterProtocolVersion, '4');
+    assert.equal(initialized.adapterProtocolVersion, '1');
     assert.deepEqual(initialized.readiness, { required: [], recommended: [], optional: [] });
 
     const skillPath = join(root, '.agents', 'skills', 'stetra', 'SKILL.md');
@@ -79,11 +88,16 @@ test('project init generates the Cognitive Adoption host projection and manifest
     assert.match(change, /developerEvent/);
     assert.match(change, /conditions/);
     assert.match(change, /commandDefinitionPaths.*acceptanceSurfacePaths/s);
+    assert.match(change, /\{"mode":"unknown"\}/);
+    assert.match(change, /Do not\s+add rationale or obligationKeys to unknown/);
     assert.match(delivery, /baseline-to-current change/);
     assert.match(delivery, /evidence\s+disposition/);
+    assert.match(delivery, /fieldRequirements/);
     assert.match(challenge, /fresh Host context/);
     assert.match(challenge, /Challenge output remains Agent judgment/);
+    assert.match(challenge, /canonical identities, not paths/);
     assert.match(handoff, /decisionPacket/);
+    assert.match(handoff, /residual-unknown and\s+review-question item shapes/);
     assert.match(handoff, /accepted\/correction-requested\/rejected\/deferred/);
     assert.match(skill, /Preserve paths, IDs, enum\s+values, commands, numeric facts/);
     assert.match(recovery, /retry-timed-out-check/);
@@ -99,7 +113,7 @@ test('project init generates the Cognitive Adoption host projection and manifest
     assert.equal(manifest.protocol, 'cognitive-adoption');
     assert.equal(manifest.schemaVersion, '1');
     assert.equal(manifest.generatorVersion, PRODUCT_VERSION);
-    assert.equal(manifest.adapterProtocolVersion, '4');
+    assert.equal(manifest.adapterProtocolVersion, '1');
     assert.deepEqual(
       manifest.artifacts.map((artifact: { path: string }) => artifact.path),
       [

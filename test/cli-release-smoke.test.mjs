@@ -15,12 +15,8 @@ import { join, resolve } from 'node:path';
 import { verifyReleaseInstallation } from '../scripts/verify-release-install.mjs';
 
 const workspace = resolve(import.meta.dirname, '..');
-const sourceCoreManifest = JSON.parse(
-  readFileSync(resolve(workspace, 'packages', 'core', 'package.json'), 'utf8'),
-);
-const sourceCliManifest = JSON.parse(
-  readFileSync(resolve(workspace, 'packages', 'cli', 'package.json'), 'utf8'),
-);
+const sourceCoreManifest = JSON.parse(readFileSync(resolve(workspace, 'packages/core/package.json'), 'utf8'));
+const sourceCliManifest = JSON.parse(readFileSync(resolve(workspace, 'packages/cli/package.json'), 'utf8'));
 assert.equal(sourceCoreManifest.version, sourceCliManifest.version);
 const expectedVersion = sourceCoreManifest.version;
 const temporary = mkdtempSync(join(tmpdir(), 'stetra-cli-release-'));
@@ -33,10 +29,10 @@ try {
   mkdirSync(consumer, { recursive: true });
   mkdirSync(join(project, 'src'), { recursive: true });
   writeFileSync(join(project, 'package.json'), '{"name":"packed-cli-smoke","type":"module"}\n', 'utf8');
-  writeFileSync(join(project, 'src', 'example.ts'), 'export const value = 1;\n', 'utf8');
+  writeFileSync(join(project, 'src/example.ts'), 'export const value = 1;\n', 'utf8');
 
-  const coreTarball = packPackage(join(workspace, 'packages', 'core'), packDirectory);
-  const cliTarball = packPackage(join(workspace, 'packages', 'cli'), packDirectory);
+  const coreTarball = packPackage(join(workspace, 'packages/core'), packDirectory);
+  const cliTarball = packPackage(join(workspace, 'packages/cli'), packDirectory);
   writeFileSync(join(consumer, 'package.json'), `${JSON.stringify({
     private: true,
     dependencies: {
@@ -47,185 +43,140 @@ try {
   run(npmCommand(), ['install', '--ignore-scripts', '--no-audit', '--no-fund'], consumer);
   await verifyReleaseInstallation(consumer, expectedVersion);
 
-  const installedCore = join(consumer, 'node_modules', '@sovea', 'stetra-core');
-  const installedCli = join(consumer, 'node_modules', '@sovea', 'stetra');
-  const coreManifest = JSON.parse(readFileSync(join(installedCore, 'package.json'), 'utf8'));
+  const installedCli = join(consumer, 'node_modules/@sovea/stetra');
   const cliManifest = JSON.parse(readFileSync(join(installedCli, 'package.json'), 'utf8'));
-  assert.equal(coreManifest.version, expectedVersion);
   assert.equal(cliManifest.version, expectedVersion);
   assert.equal(cliManifest.dependencies['@sovea/stetra-core'], expectedVersion);
-  assert.equal(cliManifest.bin['stetra'], './dist/index.mjs');
-  assert.equal(existsSync(join(installedCore, 'assets')), false);
-  const cliEntrypoint = resolve(installedCli, cliManifest.bin['stetra']);
-  const binary = join(
-    consumer,
-    'node_modules',
-    '.bin',
-    process.platform === 'win32' ? 'stetra.cmd' : 'stetra',
-  );
+  const cliEntrypoint = resolve(installedCli, cliManifest.bin.stetra);
+  const binary = join(consumer, 'node_modules/.bin', process.platform === 'win32' ? 'stetra.cmd' : 'stetra');
   assert.equal(run(binary, ['--version'], consumer).stdout.trim(), expectedVersion);
-  const runInstalledCli = (args) => runJson(
-    process.execPath,
-    [cliEntrypoint, ...args],
-    consumer,
-    { shell: false },
-  );
+  const runInstalledCli = (args) => runJson(process.execPath, [cliEntrypoint, ...args], consumer, { shell: false });
 
   const initialized = runInstalledCli(['init', project, '--adapter', 'codex', '--json']);
   assert.equal(initialized.status, 'initialized');
-  assert.equal(initialized.protocol, 'semantic-delegation');
+  assert.equal(initialized.protocol, 'cognitive-adoption');
+  assert.equal(initialized.schemaVersion, '1');
   assert.deepEqual(initialized.adapters, ['codex']);
-  const changeReference = join(
-    project,
-    '.agents',
-    'skills',
-    'stetra',
-    'references',
-    'change.md',
-  );
-  const routineReference = join(
-    project,
-    '.agents',
-    'skills',
-    'stetra',
-    'references',
-    'routine.md',
-  );
-  assert.match(readFileSync(changeReference, 'utf8'), /change prepare/);
-  assert.match(
-    readFileSync(routineReference, 'utf8'),
-    /ready for Human review, never\s+adopted/s,
-  );
-  assert.equal(existsSync(join(project, '.agents', 'skills', 'stetra', 'references', 'assurance.md')), true);
-  assert.equal(existsSync(join(project, '.agents', 'skills', 'stetra', 'references', 'recovery.md')), true);
-  assert.equal(existsSync(join(project, '.agents', 'skills', 'stetra', 'references', 'bootstrap.md')), false);
+  const references = join(project, '.agents/skills/stetra/references');
+  for (const name of ['change', 'delivery', 'challenge', 'handoff', 'recovery']) {
+    assert.equal(existsSync(join(references, `${name}.md`)), true);
+  }
+  assert.equal(existsSync(join(references, 'routine.md')), false);
+  assert.match(readFileSync(join(references, 'handoff.md'), 'utf8'), /decisionPacket/);
 
   git(project, ['init', '-q']);
   git(project, ['config', 'user.email', 'release@example.invalid']);
   git(project, ['config', 'user.name', 'CLI Release Smoke']);
   git(project, ['add', '.']);
   git(project, ['commit', '-qm', 'initial']);
-  const task = 'Change the packed fixture behavior and preserve an inspectable handoff.';
-  const inputPath = join(temporary, 'semantic-contract.json');
-  writeFileSync(inputPath, `${JSON.stringify({
-    protocol: 'semantic-delegation',
-    schemaVersion: '1',
-    humanEvents: [{ id: 'event:task', kind: 'task', content: task }],
-    semantic: {
-      desiredOutcome: {
-        value: 'Change the exported fixture value with a fact-bound handoff.',
-        basis: { humanEventIds: ['event:task'], repositoryEvidenceIds: [] },
-      },
-      constraints: [],
-      nonGoals: [],
-      focus: [],
-      consequence: {
-        value: 'medium',
-        basis: { humanEventIds: ['event:task'], repositoryEvidenceIds: [] },
-      },
-      assuranceDimensions: [{
-        dimension: 'behavior',
-        criticality: 'adoption-critical',
-        rationale: 'The packed fixture behavior determines whether the change can be adopted.',
-        basis: { humanEventIds: ['event:task'], repositoryEvidenceIds: [] },
-      }],
+  const task = 'Change the packed fixture behavior and preserve the Human adoption decision.';
+  const preparePath = join(temporary, 'task-contract.json');
+  writeFileSync(preparePath, `${JSON.stringify({
+    protocol: 'cognitive-adoption', schemaVersion: '1',
+    prepareRequestId: 'prepare:cli-release-smoke',
+    developerEvent: { content: task },
+    repositoryEvidence: [],
+    task: {
+      desiredOutcome: 'Change the exported fixture value with current facts.',
+      constraints: ['Human adoption remains explicit.'],
+      nonGoals: [], focus: ['src/example.ts'],
     },
-    verification: {
-      checks: [{
-        id: 'fixture-check',
-        rationale: 'Exercise the packed CLI check runner.',
-        argv: [process.execPath, '-e', 'process.exit(0)'],
-        source: 'host-task',
-        commandDefinitionPaths: ['package.json'],
-        acceptanceSurfacePaths: [],
+    conditions: [{
+      key: 'export', statement: 'The packed fixture exports value 2 and its check passes.',
+      rationale: 'Consumers observe this exported value.', criticality: 'adoption-critical',
+      evidenceObligations: [{
+        key: 'fixture-value',
+        statement: 'The packed fixture check observes the intended exported value.',
+        failureHypothesis: 'The command may pass without exercising the changed export.',
+        strategies: [
+          { kind: 'runtime-check', checkKeys: ['fixture-check'] },
+          { kind: 'independent-challenge', policy: 'fact-triggered' },
+        ],
       }],
-    },
+    }],
+    hostPolicyRequirements: [],
+    delivery: { maxRepairAttempts: 1 },
+    checks: [{
+      key: 'fixture-check', rationale: 'Exercise the packed CLI check runner.',
+      argv: [
+        process.execPath,
+        '-e',
+        "process.exit(require('node:fs').readFileSync('src/example.ts','utf8').includes('value = 2') ? 0 : 1)",
+      ],
+      baseline: { mode: 'unknown' },
+      commandDefinitionPaths: ['package.json'], acceptanceSurfacePaths: ['src/example.ts'],
+    }],
   }, null, 2)}\n`, 'utf8');
-  const prepared = runInstalledCli([
-    'change', 'prepare', project, '--input', inputPath, '--json',
-  ]);
+  const prepared = runInstalledCli(['change', 'prepare', project, '--input', preparePath, '--json']);
   assert.equal(prepared.status, 'prepared');
-  assert.deepEqual(prepared.semanticContract.authority.humanEventIds, ['event:task']);
-  assert.equal(
-    prepared.semanticContract.semantic.desiredOutcome.value,
-    'Change the exported fixture value with a fact-bound handoff.',
-  );
-  assert.equal(Object.hasOwn(prepared, 'contract'), false);
-  const preparedRun = JSON.parse(readFileSync(prepared.details.runPath, 'utf8'));
-  assert.equal(preparedRun.workflow, 'semantic-handoff');
-  assert.equal(preparedRun.state, 'prepared');
-  assert.equal(preparedRun.packageIdentity.core.version, expectedVersion);
-  assert.equal(Object.hasOwn(preparedRun, 'pluginRoot'), false);
+  assert.equal(prepared.taskContract.understanding.desiredOutcome.value, 'Change the exported fixture value with current facts.');
+  const taskProjection = JSON.parse(readFileSync(prepared.details.taskPath, 'utf8'));
+  assert.equal(taskProjection.workflow, 'cognitive-adoption');
+  assert.equal(taskProjection.packageIdentity.core.version, expectedVersion);
 
-  writeFileSync(join(project, 'src', 'example.ts'), 'export const value = 2;\n', 'utf8');
-  const collected = runInstalledCli([
-    'change', 'collect', project, '--run', prepared.runId, '--json',
-  ]);
+  writeFileSync(join(project, 'src/example.ts'), 'export const value = 2;\n', 'utf8');
+  const collected = runInstalledCli(['change', 'collect', project, '--task', prepared.taskId, '--json']);
   assert.equal(collected.status, 'facts-collected');
-  assert.deepEqual(
-    collected.changedFiles.map((file) => [file.path, file.operation]),
-    [['src/example.ts', 'modified']],
-  );
+  assert.deepEqual(collected.changedFiles.map((file) => [file.path, file.operation]), [['src/example.ts', 'modified']]);
   assert.equal(collected.checks[0].status, 'passed');
-  assert.ok(readFileSync(join(resolve(prepared.details.runPath, '..'), 'change.patch'), 'utf8'));
-  const changedFile = collected.changedFiles[0].path;
-  writeFileSync(collected.handoffPath, `${JSON.stringify({
-    protocol: 'semantic-delegation',
-    schemaVersion: '1',
-    systemMeaningUpdate: 'The packed fixture now exports value 2 instead of value 1.',
-    materialClaims: [{
-      id: 'claim:behavior',
-      dimension: 'behavior',
-      statement: 'The fixture export changed from 1 to 2.',
-      adoptionConsequence: 'Consumers observe the new exported value.',
-      adoptionCritical: true,
-      basis: 'agent-judgment',
-      evidence: { changedFiles: [changedFile], checks: ['fixture-check'] },
-      falsification: {
-        failureHypothesis: 'The packed fixture could retain the prior exported value.',
-        attempt: 'Inspected the complete patch and ran the frozen fixture check.',
-        status: 'supported',
-        supportingEvidence: { changedFiles: [changedFile], checks: ['fixture-check'] },
-        counterEvidence: {},
-        conclusion: 'No conflicting export remained in the complete collected change.',
-      },
-    }],
-    residualUnknowns: [],
-    reviewMap: [{
-      id: 'review:export',
-      priority: 'must-read',
-      changedFiles: [changedFile],
-      checkIds: ['fixture-check'],
-      claimIds: ['claim:behavior'],
-      unknownIds: [],
-      rationale: 'The only changed file owns the public fixture behavior.',
-      prevents: 'Adopting an unintended exported value.',
-    }],
-  }, null, 2)}\n`, 'utf8');
-  const finalized = runInstalledCli([
-    'change', 'finalize', project, '--run', prepared.runId, '--json',
+  assert.equal(existsSync(join(project, collected.patch.path)), true);
+  assert.equal(collected.hostAction.kind, 'author-handoff');
+  assert.ok(collected.hostAction.authoringPacket.outstandingObligations.some(
+    (item) => item.code === 'direct-human-review-required',
+  ));
+
+  const handoffPath = join(temporary, 'handoff.json');
+  const handoffDraft = structuredClone(collected.hostAction.authoringPacket.draft);
+  const changedFileIds = collected.hostAction.authoringPacket.referenceCatalog.changedFiles
+    .map((file) => file.id);
+  const checkIds = collected.hostAction.authoringPacket.referenceCatalog.checks
+    .map((check) => check.definitionId);
+  handoffDraft.summary = 'The packed fixture now exports value 2 instead of value 1.';
+  for (const conclusion of handoffDraft.obligationConclusions) {
+    conclusion.status = 'partial';
+    conclusion.falsificationAttempt = 'Inspected whether the passing command observes the changed export boundary.';
+    conclusion.conclusion = 'The current check passes, while independent falsification is unavailable in the thin Host.';
+  }
+  for (const conclusion of handoffDraft.conditionConclusions) {
+    conclusion.status = 'partial';
+    conclusion.summary = 'The missing independent challenge prevents full support.';
+  }
+  handoffDraft.importantSystemEffects = ['The export is now 2.'];
+  for (const question of handoffDraft.reviewQuestions) {
+    question.question = 'Does the changed verifier still distinguish the intended exported value?';
+    question.evidence = [
+      ...changedFileIds.map((id) => ({ kind: 'changed-file', id })),
+      ...checkIds.map((id) => ({ kind: 'check', id })),
+    ];
+  }
+  handoffDraft.recommendation = {
+    action: 'defer',
+    rationale: 'Current facts support review, while the thin Host cannot attest challenge independence.',
+    caveats: ['Challenge independence remains a direct Human review concern.'],
+  };
+  writeFileSync(handoffPath, `${JSON.stringify(handoffDraft, null, 2)}\n`, 'utf8');
+  const handedOff = runInstalledCli(['change', 'handoff', project, '--task', prepared.taskId, '--input', handoffPath, '--json']);
+  assert.equal(handedOff.status, 'needs-attention');
+  assert.equal(handedOff.decisionPacket.runtimeFacts.checks[0].latestAttempt.status, 'passed');
+  assert.equal(handedOff.decisionPacket.systemMeaning.summary, 'The packed fixture now exports value 2 instead of value 1.');
+  assert.deepEqual(handedOff.decisionPacket.decision.adoption, { authority: 'human', status: 'pending' });
+
+  const decisionPath = join(temporary, 'decision.json');
+  writeFileSync(decisionPath, `${JSON.stringify({
+    humanEvent: { content: 'Accept the packed fixture.' },
+    action: 'accepted', reason: 'The current packet is acceptable.',
+    exceptions: handedOff.decisionPacket.attention.map((item) => ({
+      attentionId: item.id,
+      rationale: 'The exact Attention item was inspected and is accepted for this bounded fixture.',
+    })),
+  })}\n`, 'utf8');
+  const decided = runInstalledCli(['change', 'decide', project, '--task', prepared.taskId, '--input', decisionPath, '--json']);
+  assert.equal(decided.decisionStatus, 'accepted');
+  assert.equal(decided.externalEffects.committed, false);
+  const explained = runInstalledCli(['change', 'explain', project, '--task', prepared.taskId, '--section', 'events', '--json']);
+  assert.deepEqual(explained.events.map((event) => event.type), [
+    'task-prepared', 'facts-collected', 'handoff-evaluated', 'decision-recorded',
   ]);
-  assert.equal(finalized.status, 'handoff-ready');
-  assert.equal(finalized.state, 'completed');
-  assert.deepEqual(finalized.adoption, { authority: 'human', decisionRecorded: false });
-  assert.deepEqual(
-    finalized.handoffPacket.runtimeFacts.changedFiles.map((file) => [file.path, file.operation]),
-    [['src/example.ts', 'modified']],
-  );
-  assert.equal(finalized.handoffPacket.runtimeFacts.checks[0].attempts[0].status, 'passed');
-  assert.equal(
-    finalized.handoffPacket.hostHandoff.systemMeaningUpdate,
-    'The packed fixture now exports value 2 instead of value 1.',
-  );
-  assert.equal(finalized.handoffPacket.evaluation.status, 'handoff-ready');
-  assert.deepEqual(finalized.handoffPacket.evaluation.adoption, finalized.adoption);
-  assert.equal(Object.hasOwn(finalized, 'presentationMarkdown'), false);
-  assert.equal(Object.hasOwn(finalized, 'runtimeFacts'), false);
-  const explained = runInstalledCli([
-    'change', 'explain', project, '--run', prepared.runId, '--json',
-  ]);
-  assert.equal(explained.state, 'completed');
-  assert.equal(explained.evaluation.status, 'handoff-ready');
 
   const status = runInstalledCli(['status', project, '--json']);
   assert.equal(status.controlPlane.kind, 'cli');
@@ -234,11 +185,10 @@ try {
   assert.equal(doctor.status, 'ok');
   assert.equal(doctor.worktree, 'supported');
 
-  const legacy = run(process.execPath, [cliEntrypoint, 'change', 'complete'], consumer, {
-    shell: false,
-    expectStatus: 2,
+  const legacy = run(process.execPath, [cliEntrypoint, 'change', 'finalize'], consumer, {
+    shell: false, expectStatus: 2,
   });
-  assert.match(legacy.stderr, /unknown command 'complete'/i);
+  assert.match(legacy.stderr, /unknown command 'finalize'/i);
 } finally {
   rmSync(temporary, { recursive: true, force: true });
 }
@@ -247,22 +197,10 @@ function runJson(command, args, cwd, options) {
   return JSON.parse(run(command, args, cwd, options).stdout);
 }
 
-function run(
-  command,
-  args,
-  cwd,
-  { shell = process.platform === 'win32', expectStatus = 0 } = {},
-) {
-  const result = spawnSync(command, args, {
-    cwd,
-    encoding: 'utf8',
-    maxBuffer: 20 * 1024 * 1024,
-    shell,
-  });
+function run(command, args, cwd, { shell = process.platform === 'win32', expectStatus = 0 } = {}) {
+  const result = spawnSync(command, args, { cwd, encoding: 'utf8', maxBuffer: 20 * 1024 * 1024, shell });
   assert.equal(result.status, expectStatus, [
-    `Command returned unexpected status: ${command} ${args.join(' ')}`,
-    result.stdout,
-    result.stderr,
+    `Command returned unexpected status: ${command} ${args.join(' ')}`, result.stdout, result.stderr,
   ].join('\n'));
   return result;
 }
@@ -278,8 +216,7 @@ function npmCommand() {
 function packPackage(packageDirectory, destination) {
   const before = new Set(readdirSync(destination));
   run('corepack', ['pnpm', 'pack', '--pack-destination', destination], packageDirectory);
-  const created = readdirSync(destination)
-    .filter((name) => name.endsWith('.tgz') && !before.has(name));
+  const created = readdirSync(destination).filter((name) => name.endsWith('.tgz') && !before.has(name));
   assert.equal(created.length, 1, `Expected one tarball from ${packageDirectory}.`);
   return join(destination, created[0]);
 }

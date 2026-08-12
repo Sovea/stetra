@@ -27,6 +27,15 @@ JSON result, follow its structured **hostAction**. If **hostAction.reference**
 names a page, ensure that page is available in context; do not reread an
 unchanged page already present in one continuous context. Projection changes
 instructions, never lifecycle state, authority, evidence, or adoption meaning.
+When **hostAction.authoringPacket** is present, copy its **draft**, preserve its
+prefilled identities, and use **fieldRequirements** for exact allowed values and
+object variants. Those requirements describe input structure; they never choose
+an Agent judgment or Human decision. Read **semanticContext.exactDeveloperEvent**
+as Human authority and **semanticContext.agentInterpretation** as a separate
+Agent-authored interpretation; resolve discrepancies explicitly. Serialize the
+completed draft as JSON and attach it to the returned command's stdin in the
+same non-interactive process, exactly as **inputBinding** specifies. Do not start
+an interactive command and then try to type JSON into it.
 
 Keep the exact developer event, Host-authored task meaning and conditions,
 Runtime facts, Agent diagnoses/conclusions/recommendation, and Human decision
@@ -34,8 +43,9 @@ visibly separate. Passing checks and challenges support review but do not
 record adoption. Never invent changed files or outcomes, hide Attention, or
 treat focus as write permission. The CLI never calls an LLM.
 
-When **decisionPacket** is returned, explain its decision layer first, condition
-layer second, and raw facts only for drill-down. Preserve paths, IDs, enum
+When **decisionPacket** is returned, explain its **decision** and
+**semanticContract** first, **conditions** second, and **runtimeFacts** only for
+drill-down. Preserve paths, IDs, enum
 values, commands, numeric facts, quoted developer events, Attention, and raw
 tool output exactly.
 `;
@@ -60,6 +70,54 @@ For production coding changes, read and follow [the generated Stetra skill](${sk
 ${markers.end}`;
 }
 
+export const DELEGATION_PREPARE_EXAMPLE = {
+  protocol: 'cognitive-adoption',
+  schemaVersion: '1',
+  prepareRequestId: 'prepare:host-generated-once',
+  developerEvent: { content: 'exact developer message', provider: 'host' },
+  repositoryEvidence: [{
+    key: 'relevant-source',
+    path: 'src/example.ts',
+    startLine: 1,
+    endLine: 20,
+  }],
+  task: {
+    desiredOutcome: 'observable outcome',
+    constraints: [],
+    nonGoals: [],
+    focus: [],
+  },
+  conditions: [{
+    key: 'behavior',
+    statement: 'what must be true',
+    rationale: 'why this changes adoption',
+    criticality: 'material',
+    evidenceObligations: [{
+      key: 'public-path',
+      statement: 'bounded conclusion the evidence must support',
+      failureHypothesis: 'plausible wrong implementation to try to exclude',
+      strategies: [
+        { kind: 'runtime-check', checkKeys: ['test'] },
+        { kind: 'independent-challenge', policy: 'fact-triggered' },
+      ],
+    }],
+  }],
+  hostPolicyRequirements: [],
+  delivery: { maxRepairAttempts: 2 },
+  checks: [{
+    key: 'test',
+    rationale: 'decision-relevant observation',
+    argv: ['package-manager', 'test'],
+    baseline: {
+      mode: 'task-start',
+      rationale: 'why before/after changes this decision',
+      obligationKeys: [{ conditionKey: 'behavior', obligationKey: 'public-path' }],
+    },
+    commandDefinitionPaths: ['package.json'],
+    acceptanceSurfacePaths: [],
+  }],
+} as const;
+
 const CHANGE_REFERENCE = `# Understand and prepare one change
 
 The fixed path is **prepare -> implement -> collect -> judge evidence ->
@@ -73,39 +131,19 @@ Runtime generates event, evidence, condition, obligation, verifier, definition,
 plan, and contract IDs:
 
 ~~~json
-{
-  "protocol":"cognitive-adoption",
-  "schemaVersion":"1",
-  "developerEvent":{"content":"exact developer message","provider":"host"},
-  "repositoryEvidence":[],
-  "task":{"desiredOutcome":"observable outcome","constraints":[],"nonGoals":[],"focus":[]},
-  "conditions":[{
-    "key":"behavior","statement":"what must be true",
-    "rationale":"why this changes adoption","criticality":"material",
-    "evidenceObligations":[{
-      "key":"public-path","statement":"bounded conclusion the evidence must support",
-      "failureHypothesis":"plausible wrong implementation to try to exclude",
-      "strategies":[
-        {"kind":"runtime-check","checkKeys":["test"],"expectedObservation":"passed"},
-        {"kind":"independent-challenge","policy":"fact-triggered"}
-      ]
-    }]
-  }],
-  "hostPolicyRequirements":[],
-  "delivery":{"maxRepairAttempts":2},
-  "checks":[{"key":"test","rationale":"decision-relevant observation",
-    "argv":["package-manager","test"],
-    "baseline":{"mode":"task-start","rationale":"why before/after changes this decision",
-      "obligationKeys":[{"conditionKey":"behavior","obligationKey":"public-path"}]},
-    "commandDefinitionPaths":["package.json"],"acceptanceSurfacePaths":[]}]
-}
+${JSON.stringify(DELEGATION_PREPARE_EXAMPLE, null, 2)}
 ~~~
 
-Evidence windows contain **key/path/startLine/endLine**. Checks are shell-free
+Replace or remove the example Evidence window after repository inspection;
+every retained window contains **key/path/startLine/endLine**. Checks are shell-free
 argv. Choose **task-start** only when a task-start observation is useful; use
-**unknown** otherwise. Runtime records a mechanical before/current relation,
-never a semantic regression. If no command applies, omit checks and provide a
-concrete **noCommandRationale**. Routine work may use an empty conditions array.
+**unknown** otherwise. The two exact baseline shapes are
+**{"mode":"unknown"}** and **{"mode":"task-start","rationale":"...",
+"obligationKeys":[{"conditionKey":"...","obligationKey":"..."}]}**. Do not
+add rationale or obligationKeys to unknown. Runtime records a mechanical
+before/current relation, never a semantic regression. If no command applies,
+omit checks and provide a concrete **noCommandRationale**. Routine work may use
+an empty conditions array.
 
 Do not infer importance from paths, keywords, file counts, dependency counts,
 diff size, error text, or a scalar score. Every declared condition must contain
@@ -116,8 +154,16 @@ reference logical verifier identities; observations bind exact definitions.
 stetra change prepare . --input - --json
 ~~~
 
-Only **prepared** creates a task. Inspect the returned Task Contract, then
-follow the exact **hostAction.command.argv**.
+Generate **prepareRequestId** once for this concrete Host request and reuse that
+exact value and input when retrying an interrupted call. Runtime returns the
+already-published task without rerunning baseline checks. A changed input needs
+a new request ID; Runtime never guesses request identity from semantic content.
+If another worktree observation still owns the lease, wait for that process to
+finish and retry with the same request ID.
+
+Only **prepared** creates a task; **prepare-replayed** returns that same task.
+Inspect the returned Task Contract, then follow the exact
+**hostAction.command.argv**.
 `;
 
 const DELIVERY_REFERENCE = `# Implement, collect, and judge evidence
@@ -139,6 +185,8 @@ disposition covering each current non-passing check exactly once:
 ~~~json
 {
   "semanticImpact":"none",
+  "proposedRoute":"repair-implementation",
+  "routeRationale":"why this next step addresses every declared cause",
   "entries":[{
     "definitionId":"definition id prefilled by hostAction.authoringPacket",
     "cause":"implementation",
@@ -155,13 +203,19 @@ disposition covering each current non-passing check exactly once:
 stetra change diagnose . --task <task-id> --input - --json
 ~~~
 
-Cause is exactly **implementation/environment/verification/unknown**. This is
-Agent judgment, not Runtime fact. Runtime validates current references and
-coverage only. It creates a repair successor only for **implementation** with
-**semanticImpact: none** and remaining budget. Do not propose code changes for
-another cause. A bounded **verification** diagnosis may route to an immutable
-Verification Revision; semantic impact and mechanical relaxation require exact
-Human authority. Environment, unknown, and exhausted routes remain visible.
+Cause is exactly **implementation/environment/verification/unknown**. Choose
+**proposedRoute** explicitly and explain it in **routeRationale**. These are
+Agent judgments, not Runtime facts. Runtime validates current references,
+coverage, and cause/route compatibility only; it does not inspect error text to
+choose a route. Implementation can repair or hand off. Environment and
+verification can revise the immutable Verification Plan or hand off. Unknown
+can challenge, hand off, or ask the developer. Material semantic impact must
+ask the developer. Repair-budget exhaustion mechanically changes an otherwise
+valid repair route to handoff while preserving the proposal. Do not propose
+code changes for another cause. Mechanical verification relaxation requires
+exact Human authority.
+The returned **fieldRequirements** names every enum choice; do not infer a
+default from the ordering.
 `;
 
 const CHALLENGE_REFERENCE = `# Challenge a falsifiable Evidence Obligation
@@ -171,6 +225,12 @@ happens for an explicitly required obligation and when a **fact-triggered**
 obligation relies on a verifier acceptance surface changed by the patch. The
 route uses only explicit obligation/verifier/mutation relationships. Never
 infer it from filenames, test names, error text, or diff shape.
+
+Start from **hostAction.authoringPacket.draft**. Its changedFiles, checks,
+repositoryEvidence, and humanEvents are canonical identities, not paths or
+display labels. Compare **semanticContext.exactDeveloperEvent** with the
+separately labeled Agent interpretation before testing the failure hypothesis.
+Use **fieldRequirements** for the exact outcome choices and evidence-item shape.
 
 ~~~json
 {
@@ -186,8 +246,11 @@ infer it from filenames, test names, error text, or diff shape.
 
 Challenge output remains Agent judgment. Independence and context identities
 are injected only by a trusted Host integration; Agent JSON cannot claim them.
-Thin generated skills therefore remain **unverified**. Partial, contradicted,
-unknown, or missing required challenge caps the related obligation conclusion.
+This Challenge page is loaded only when that integration is available. A thin
+generated skill is routed directly to Handoff with an explicit direct-review
+obligation; it must not manufacture independence. A manually recorded thin
+challenge remains **unverified**. Partial, contradicted, unknown, or missing
+required challenge caps the related obligation conclusion.
 `;
 
 const HANDOFF_REFERENCE = `# Author the Cognitive Handoff and obtain a Human decision
@@ -197,7 +260,9 @@ diagnoses, and Challenges, submit a handoff on stdin. Runtime injects contract,
 Attempt, fact-collection, and fingerprint identities; do not author machine facts.
 
 Fill the exact **hostAction.authoringPacket.draft**; it already contains current
-immutable IDs and outstanding obligations. The handoff contains a decision
+immutable IDs and outstanding obligations. **fieldRequirements** lists the
+allowed conclusion/recommendation values and the full residual-unknown and
+review-question item shapes without selecting an answer. The handoff contains a decision
 summary, exactly one conclusion per Evidence Obligation and condition,
 important system effects, residual unknowns,
 consequence-directed review questions, and an Agent recommendation. Evidence is
@@ -206,12 +271,19 @@ an array of exact references such as **{"kind":"check","id":"..."}** or
 falsification attempt. Do not repeat Runtime facts as Agent prose or create one
 review item per changed file.
 
+For every input-bearing action, serialize the completed draft and provide those
+bytes as stdin to the exact argv in one process. A Host API should bind stdin
+directly. If it cannot, use a temporary input outside the project worktree and
+delete it after the command; never add task-authoring files to the repository.
+
 ~~~sh
 stetra change handoff . --task <task-id> --input - --json
 ~~~
 
-Explain **decisionPacket.review.decision** first, its condition layer second,
-and raw facts only on demand. **handoff-ready** means structurally ready for a
+Explain **decisionPacket.decision** and **semanticContract** first, its
+**conditions** second, and compact **runtimeFacts** only on demand. Full
+contracts, Attempt history, challenges, handoff, and events remain available
+through the named **detailSections**. **handoff-ready** means structurally ready for a
 Human decision, never adopted. **needs-attention** preserves unresolved facts
 or conclusions in consolidated groups.
 
@@ -241,7 +313,9 @@ Follow **hostAction.kind** exactly:
   falsifiable evidence disposition. Do not assume repair.
 - **revise-verification**: fill the projected revision draft. Logical verifier
   identity remains stable; exact definitions gain a revision and supersedes
-  link. Never claim an original baseline was observed in the modified worktree.
+  link. Kind is exactly **execution-rebinding** or **verification-plan**. The
+  packet lists both accepted baseline shapes. Never claim an original baseline
+  was observed in the modified worktree.
 - **recollect-stale-facts**: post-collection edits invalidated current facts;
   collect again before semantic evaluation.
 - **resolve-evidence-decision**: preserve facts and diagnosis, fill the returned
@@ -255,7 +329,7 @@ independence, residual unknowns, and exhausted delivery remain exact Attention.
 They may add review obligations but never become a score or automatic rejection.
 
 Use **stetra change explain . --task <task-id> --section
-contract|plan|attempts|challenge|revision|handoff|decision|events --json** for exact
+contract|baseline|plan|attempts|challenge|revision|handoff|decision|events --json** for exact
 artifacts. Supplemental Host probes remain labeled Agent evidence.
 `;
 

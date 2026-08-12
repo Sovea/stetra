@@ -54,7 +54,7 @@ const coreModule = await import(pathToFileURL(resolve(root, 'packages/core/dist/
 assert.deepEqual(
   Object.keys(coreModule).sort(),
   ['compileDelegation', 'evaluateHandoff'],
-  'Core root must expose exactly the two Semantic Handoff operations.',
+  'Core root must expose exactly the two Cognitive Adoption operations.',
 );
 
 for (const path of ['.claude-plugin', '.codex-plugin', '.codex', 'skills']) {
