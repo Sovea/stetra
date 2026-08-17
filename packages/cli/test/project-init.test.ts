@@ -179,6 +179,45 @@ test('installation inspection reports generated adapter drift', () => {
   }
 });
 
+test('generated Challenger profiles coexist with Trellis agents and hook ownership', () => {
+  const root = mkdtempSync(join(tmpdir(), 'stetra-trellis-coexistence-'));
+  try {
+    const codexHookPath = join(root, '.codex', 'hooks.json');
+    const codexTrellisAgentPath = join(root, '.codex', 'agents', 'trellis-check.toml');
+    const claudeSettingsPath = join(root, '.claude', 'settings.json');
+    const claudeTrellisAgentPath = join(root, '.claude', 'agents', 'trellis-check.md');
+    mkdirSync(join(root, '.codex', 'agents'), { recursive: true });
+    mkdirSync(join(root, '.claude', 'agents'), { recursive: true });
+    writeFileSync(codexHookPath, '{"hooks":{"SubagentStart":[]}}\n', 'utf8');
+    writeFileSync(codexTrellisAgentPath, 'name = "trellis-check"\n', 'utf8');
+    writeFileSync(claudeSettingsPath, '{"hooks":{"PreToolUse":[]}}\n', 'utf8');
+    writeFileSync(claudeTrellisAgentPath, '---\nname: trellis-check\n---\n', 'utf8');
+
+    const initialized = initializeProject({
+      projectRoot: root,
+      adapters: ['codex', 'claude'],
+    });
+    assert.equal(initialized.status, 'initialized');
+    assert.equal(readFileSync(codexHookPath, 'utf8'), '{"hooks":{"SubagentStart":[]}}\n');
+    assert.equal(readFileSync(codexTrellisAgentPath, 'utf8'), 'name = "trellis-check"\n');
+    assert.equal(readFileSync(claudeSettingsPath, 'utf8'), '{"hooks":{"PreToolUse":[]}}\n');
+    assert.equal(
+      readFileSync(claudeTrellisAgentPath, 'utf8'),
+      '---\nname: trellis-check\n---\n',
+    );
+    assert.equal(
+      existsSync(join(root, '.codex', 'agents', 'stetra-challenger.toml')),
+      true,
+    );
+    assert.equal(
+      existsSync(join(root, '.claude', 'agents', 'stetra-challenger.md')),
+      true,
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('legacy artifacts block init without migration or deletion', () => {
   const root = mkdtempSync(join(tmpdir(), 'stetra-legacy-'));
   try {

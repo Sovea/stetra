@@ -718,6 +718,16 @@ test('a thin Host runs the bounded Challenger but preserves unverified direct re
       collected.hostAction.challengeExecutionRequest.agentProfile,
       'stetra-challenger',
     );
+    const guardedChallenge = await guardFinalResponse({
+      projectRoot: root,
+      taskId: prepared.taskId,
+    });
+    assert.equal(guardedChallenge.disposition, 'continue-workflow');
+    assert.equal(guardedChallenge.hostAction?.kind, 'perform-independent-challenge');
+    assert.equal(
+      guardedChallenge.hostAction?.challengeExecutionRequest?.requestId,
+      collected.hostAction.challengeExecutionRequest.requestId,
+    );
     const challengeDraft = structuredClone(collected.hostAction.authoringPacket.draft);
     challengeDraft.falsificationAttempt = 'Inspected the changed verifier in a separate but unattested context.';
     challengeDraft.observedResult = 'The selected evidence did not expose the frozen failure hypothesis.';
@@ -730,6 +740,11 @@ test('a thin Host runs the bounded Challenger but preserves unverified direct re
     const challenged = await challenge(root, prepared.taskId, challengeDraft);
     assert.equal(challenged.challenge.independence, 'unverified');
     assert.equal(challenged.hostAction.kind, 'author-handoff');
+    const guardedHandoff = await guardFinalResponse({
+      projectRoot: root,
+      taskId: prepared.taskId,
+    });
+    assert.equal(guardedHandoff.hostAction?.kind, 'author-handoff');
     assert.deepEqual(
       fieldRequirement(
         challenged.hostAction.authoringPacket,
@@ -1050,6 +1065,39 @@ test('Challenge receipts require current request, exact output, trusted verifica
         hostAttestations: trustedHost,
       }),
       /does not request an Independent Challenge|already been consumed/,
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('Challenge receipt cannot outlive the collected worktree facts', async () => {
+  const root = createRepository();
+  try {
+    const prepared = await prepare(root, prepareDocument({
+      baseline: 'unknown',
+      argv: [process.execPath, '-e', 'process.exit(0)'],
+      critical: true,
+    }));
+    writeFileSync(join(root, 'source.txt'), 'collected implementation\n', 'utf8');
+    const collected = await collect(root, prepared.taskId, trustedHost);
+    const draft = structuredClone(collected.hostAction.authoringPacket.draft);
+    draft.falsificationAttempt = 'Inspected the current collected implementation.';
+    draft.observedResult = 'The current collected boundary was supported.';
+    draft.outcome = 'supported';
+    draft.conclusion = 'The bounded conclusion applies only to the collected worktree.';
+    const submission = challengeSubmission(root, prepared.taskId, draft, trustedHost);
+
+    writeFileSync(join(root, 'source.txt'), 'changed after challenge observation\n', 'utf8');
+    await assert.rejects(
+      recordChallenge({
+        projectRoot: root,
+        taskId: prepared.taskId,
+        inputPath: '-',
+        input: jsonStream(submission),
+        hostAttestations: trustedHost,
+      }),
+      /Facts changed before challenge/,
     );
   } finally {
     rmSync(root, { recursive: true, force: true });

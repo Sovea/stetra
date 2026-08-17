@@ -66,7 +66,15 @@ assert.deepEqual(
 const hostModule = await import(pathToFileURL(resolve(root, 'packages/cli/dist/host.mjs')).href);
 assert.deepEqual(
   Object.keys(hostModule).sort(),
-  ['CliError', 'formatCliError', 'formatCliOutput', 'guardFinalResponse', 'normalizeCliError', 'runCli'],
+  [
+    'CliError',
+    'HostChallengeLifecycle',
+    'formatCliError',
+    'formatCliOutput',
+    'guardFinalResponse',
+    'normalizeCliError',
+    'runCli',
+  ],
   'The Host subpath must stay narrow and explicit.',
 );
 

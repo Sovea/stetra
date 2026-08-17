@@ -44,10 +44,12 @@ try {
   await verifyReleaseInstallation(consumer, expectedVersion);
   const hostSurfacePath = join(consumer, 'host-surface.mjs');
   writeFileSync(hostSurfacePath, [
-    "import { guardFinalResponse, runCli } from '@sovea/stetra/host';",
+    "import { guardFinalResponse, HostChallengeLifecycle, runCli } from '@sovea/stetra/host';",
     "const execution = await runCli(['--version'], { interactive: false, color: false });",
+    "const lifecycle = new HostChallengeLifecycle('release-smoke');",
     'process.stdout.write(JSON.stringify({',
     '  guardType: typeof guardFinalResponse,',
+    '  lifecycleType: typeof lifecycle.observeStart,',
     '  runType: typeof runCli,',
     '  version: execution.output,',
     '}));',
@@ -55,6 +57,7 @@ try {
   ].join('\n'), 'utf8');
   assert.deepEqual(runJson(process.execPath, [hostSurfacePath], consumer, { shell: false }), {
     guardType: 'function',
+    lifecycleType: 'function',
     runType: 'function',
     version: expectedVersion,
   });
@@ -167,16 +170,34 @@ try {
   assert.match(readFileSync(join(project, collected.checks[0].stdout.logPath), 'utf8'), /fixture-check-stdout/);
   assert.match(readFileSync(join(project, collected.checks[0].stderr.logPath), 'utf8'), /fixture-check-stderr/);
   assert.equal(existsSync(join(project, collected.patch.path)), true);
-  assert.equal(collected.hostAction.kind, 'author-handoff');
-  assert.ok(collected.hostAction.authoringPacket.outstandingObligations.some(
+  assert.equal(collected.hostAction.kind, 'perform-independent-challenge');
+  assert.equal(collected.hostAction.challengeExecutionRequest.agentProfile, 'stetra-challenger');
+
+  const challengePath = join(temporary, 'challenge.json');
+  const challengeDraft = structuredClone(collected.hostAction.authoringPacket.draft);
+  challengeDraft.falsificationAttempt = 'Inspected whether the passing command depends on the changed export.';
+  challengeDraft.observedResult = 'The packed command observes value 2, but the thin Host cannot attest context independence.';
+  challengeDraft.supportingEvidence = [{
+    statement: 'The current Runtime check supports the bounded export observation.',
+    references: challengeDraft.evidence.checks.map((id) => ({ kind: 'check', id })),
+  }];
+  challengeDraft.outcome = 'supported';
+  challengeDraft.conclusion = 'The bounded observation is supported without trusted Host attestation.';
+  writeFileSync(challengePath, `${JSON.stringify({ challenge: challengeDraft }, null, 2)}\n`, 'utf8');
+  const challenged = runInstalledCli([
+    'change', 'challenge', project, '--task', prepared.taskId, '--input', challengePath, '--json',
+  ]);
+  assert.equal(challenged.challenge.independence, 'unverified');
+  assert.equal(challenged.hostAction.kind, 'author-handoff');
+  assert.ok(challenged.hostAction.authoringPacket.outstandingObligations.some(
     (item) => item.code === 'direct-human-review-required',
   ));
 
   const handoffPath = join(temporary, 'handoff.json');
-  const handoffDraft = structuredClone(collected.hostAction.authoringPacket.draft);
-  const changedFileIds = collected.hostAction.authoringPacket.referenceCatalog.changedFiles
+  const handoffDraft = structuredClone(challenged.hostAction.authoringPacket.draft);
+  const changedFileIds = challenged.hostAction.authoringPacket.referenceCatalog.changedFiles
     .map((file) => file.id);
-  const checkIds = collected.hostAction.authoringPacket.referenceCatalog.checks
+  const checkIds = challenged.hostAction.authoringPacket.referenceCatalog.checks
     .map((check) => check.definitionId);
   handoffDraft.summary = 'The packed fixture now exports value 2 instead of value 1.';
   for (const conclusion of handoffDraft.obligationConclusions) {
@@ -230,7 +251,7 @@ try {
   assert.equal(decided.externalEffects.committed, false);
   const explained = runInstalledCli(['change', 'explain', project, '--task', prepared.taskId, '--section', 'events', '--json']);
   assert.deepEqual(explained.events.map((event) => event.type), [
-    'task-prepared', 'facts-collected', 'handoff-evaluated', 'decision-recorded',
+    'task-prepared', 'facts-collected', 'challenge-recorded', 'handoff-evaluated', 'decision-recorded',
   ]);
 
   const status = runInstalledCli(['status', project, '--json']);

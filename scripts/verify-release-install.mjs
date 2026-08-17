@@ -45,6 +45,7 @@ export async function verifyReleaseInstallation(installationRoot, expectedVersio
   const host = await import(pathToFileURL(resolve(cliRoot, 'dist/host.mjs')).href);
   assert.deepEqual(Object.keys(host).sort(), [
     'CliError',
+    'HostChallengeLifecycle',
     'formatCliError',
     'formatCliOutput',
     'guardFinalResponse',
