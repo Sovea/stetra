@@ -1,7 +1,7 @@
 import { validateCompiledContract } from '../delegation/compile.ts';
 import type { EvidenceObligation, TaskContract } from '../delegation/types.ts';
 import { validateFactBundle } from '../facts/validate.ts';
-import type { FactBundle } from '../facts/types.ts';
+import type { EvidenceDisposition, FactBundle } from '../facts/types.ts';
 import {
   assertProtocol,
   hasExactKeys,
@@ -119,9 +119,9 @@ function validateCurrentEvidenceDisposition(input: EvaluateHandoffInput): void {
     || disposition.attemptId !== input.factBundle.attemptId
     || disposition.factCollectionId !== input.factBundle.factCollectionId
     || !['none', 'material'].includes(disposition.semanticImpact)
-    || !['repair-implementation', 'revise-verification', 'challenge', 'handoff', 'ask-human'].includes(disposition.proposedRoute)
+    || !['repair-delivery', 'revise-verification', 'challenge', 'handoff', 'ask-human'].includes(disposition.proposedRoute)
     || !isNonEmptyString(disposition.routeRationale)
-    || !['repair-implementation', 'revise-verification', 'challenge', 'handoff', 'ask-human'].includes(disposition.route)
+    || !['repair-delivery', 'revise-verification', 'challenge', 'handoff', 'ask-human'].includes(disposition.route)
     || !Array.isArray(disposition.entries) || !disposition.entries.length) {
     throw new Error('evaluateHandoff current evidence disposition identity is invalid.');
   }
@@ -137,33 +137,36 @@ function validateCurrentEvidenceDisposition(input: EvaluateHandoffInput): void {
       || !['implementation', 'environment', 'verification', 'unknown'].includes(entry.cause)
       || !isNonEmptyString(entry.diagnosis)
       || !isNonEmptyString(entry.falsificationAttempt)
-      || typeof entry.codeChangeCanAlterObservation !== 'boolean'
+      || typeof entry.repositoryChangeCanAlterObservation !== 'boolean'
+      || !['production', 'verification-surface', 'none'].includes(entry.changeSurface)
       || !isNonEmptyString(entry.expectedDifferentObservation)
       || !Array.isArray(entry.intendedChanges)
-      || entry.intendedChanges.some((item) => !isNonEmptyString(item))) {
+      || entry.intendedChanges.some((item) => !isNonEmptyString(item))
+      || !validDispositionChange(entry)) {
       throw new Error('evaluateHandoff current evidence disposition entry is invalid.');
     }
     selected.add(sourceIdentity);
   }
   const compatibleRoutes: Record<string, string[]> = {
-    implementation: ['repair-implementation', 'handoff'],
+    implementation: ['repair-delivery', 'handoff'],
     environment: ['revise-verification', 'handoff'],
-    verification: ['revise-verification', 'handoff'],
+    verification: ['repair-delivery', 'revise-verification', 'handoff'],
     unknown: ['challenge', 'handoff', 'ask-human'],
   };
-  const hasImplementationCause = disposition.entries.some((entry) =>
-    entry.cause === 'implementation');
+  const hasRepositoryRepair = disposition.entries.some((entry) =>
+    entry.repositoryChangeCanAlterObservation);
   const proposedRouteValid = disposition.semanticImpact === 'material'
     ? disposition.proposedRoute === 'ask-human'
     : disposition.entries.every((entry) =>
         (entry.source.kind !== 'challenge' || disposition.proposedRoute !== 'challenge')
         && (compatibleRoutes[entry.cause]?.includes(disposition.proposedRoute)
-        || (disposition.proposedRoute === 'repair-implementation'
-          && hasImplementationCause
-          && ['environment', 'verification'].includes(entry.cause))));
+        || (disposition.proposedRoute === 'repair-delivery'
+          && hasRepositoryRepair
+          && entry.cause === 'environment')))
+      && (disposition.proposedRoute !== 'repair-delivery' || hasRepositoryRepair);
   const effectiveRouteValid = disposition.route === disposition.proposedRoute
     || (input.deliveryExhausted
-      && disposition.proposedRoute === 'repair-implementation'
+      && disposition.proposedRoute === 'repair-delivery'
       && disposition.route === 'handoff');
   if (!proposedRouteValid || !effectiveRouteValid) {
     throw new Error('evaluateHandoff current evidence disposition route is incompatible with its declared causes.');
@@ -172,6 +175,26 @@ function validateCurrentEvidenceDisposition(input: EvaluateHandoffInput): void {
   if (disposition.dispositionId !== stableFingerprint(projection)) {
     throw new Error('evaluateHandoff current evidence disposition fingerprint is invalid.');
   }
+}
+
+function validDispositionChange(entry: EvidenceDisposition['entries'][number]): boolean {
+  const hasChanges = entry.intendedChanges.length > 0;
+  if (entry.cause === 'implementation') {
+    return entry.repositoryChangeCanAlterObservation
+      && entry.changeSurface === 'production'
+      && hasChanges;
+  }
+  if (entry.cause === 'verification') {
+    return (entry.repositoryChangeCanAlterObservation
+        && entry.changeSurface === 'verification-surface'
+        && hasChanges)
+      || (!entry.repositoryChangeCanAlterObservation
+        && entry.changeSurface === 'none'
+        && !hasChanges);
+  }
+  return !entry.repositoryChangeCanAlterObservation
+    && entry.changeSurface === 'none'
+    && !hasChanges;
 }
 
 function validateChallenges(input: EvaluateHandoffInput): void {

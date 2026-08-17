@@ -153,7 +153,8 @@ export function diagnosisAuthoringPacket(input: {
         cause: '',
         diagnosis: '',
         falsificationAttempt: '',
-        codeChangeCanAlterObservation: false,
+        repositoryChangeCanAlterObservation: false,
+        changeSurface: '',
         expectedDifferentObservation: '',
         intendedChanges: [],
       })),
@@ -175,6 +176,11 @@ export function diagnosisAuthoringPacket(input: {
         choiceRequirement(
           `draft.entries[${index}].cause`, 'agent-judgment', EVIDENCE_CAUSES,
           'Classify the observed cause from current evidence; Runtime does not infer it.',
+        ),
+        choiceRequirement(
+          `draft.entries[${index}].changeSurface`, 'agent-judgment',
+          ['production', 'verification-surface', 'none'],
+          'Declare whether the next observation can change through production code, a repository verifier surface, or no repository edit.',
         ),
         textRequirement(
           `draft.entries[${index}].diagnosis`, 'agent-judgment',

@@ -696,7 +696,7 @@ export async function diagnoseCollectedEvidence(options: {
       const facts = readFacts(task, current.attemptId, current.factCollectionId);
       validateEvidenceDispositionInput(source, contract, facts, readCurrentChallenges(task));
       route = source.proposedRoute;
-      const budgetExhausted = route === 'repair-implementation'
+      const budgetExhausted = route === 'repair-delivery'
         && task.projection.repairCount >= contract.plan.maxRepairAttempts;
       if (budgetExhausted) route = 'handoff';
       const dispositionProjection = {
@@ -724,7 +724,7 @@ export async function diagnoseCollectedEvidence(options: {
         ...(budgetExhausted ? { deliveryStatus: 'exhausted' as const } : {}),
       };
       const cleared = clearPostCollectionArtifacts(task.projection);
-      if (route !== 'repair-implementation') {
+      if (route !== 'repair-delivery') {
         return {
           projection: {
             ...cleared,
@@ -752,7 +752,7 @@ export async function diagnoseCollectedEvidence(options: {
         ordinal: current.ordinal + 1,
         parentAttemptId: current.attemptId,
         effectiveContractId: contract.effectiveContractId,
-        trigger: 'repair' as const,
+        trigger: 'delivery-repair' as const,
         deliveryStatus: 'repairing' as const,
         createdAt,
       };
@@ -779,8 +779,8 @@ export async function diagnoseCollectedEvidence(options: {
     },
   });
   const currentContract = readContract(transitioned);
-  const currentFacts = route === 'repair-implementation' ? undefined : readCurrentFacts(transitioned);
-  const challenges = route === 'repair-implementation' ? [] : readCurrentChallenges(transitioned);
+  const currentFacts = route === 'repair-delivery' ? undefined : readCurrentFacts(transitioned);
+  const challenges = route === 'repair-delivery' ? [] : readCurrentChallenges(transitioned);
   const required = currentFacts
     ? requiredChallengeObligationIds(currentContract, currentFacts) : [];
   const challengeAttestationAvailable = Boolean(options.hostAttestations?.verifyChallengeRun);
@@ -812,7 +812,7 @@ export async function diagnoseCollectedEvidence(options: {
   return {
     protocol: DELEGATION_PROTOCOL,
     schemaVersion: DELEGATION_SCHEMA_VERSION,
-    status: route === 'repair-implementation'
+    status: route === 'repair-delivery'
       ? 'repair-prepared' as const
       : 'evidence-diagnosed' as const,
     taskId: transitioned.taskId,
@@ -2395,12 +2395,10 @@ function validateEvidenceDispositionInput(
     if (entry.source.kind === 'challenge' && !availableChallenges.has(entry.source.challengeId)) {
       throw inputError(`Unknown or non-adverse Challenge ${JSON.stringify(entry.source.challengeId)} in evidence disposition.`);
     }
-    if (entry.cause === 'implementation'
-      && (!entry.codeChangeCanAlterObservation || !entry.intendedChanges.length)) {
-      throw inputError(`Evidence disposition entry ${index} classifies implementation cause but supplies no code-change path.`);
-    }
-    if (entry.cause !== 'implementation' && entry.intendedChanges.length) {
-      throw inputError(`Evidence disposition entry ${index} proposes code changes without classifying an implementation cause.`);
+    if (!validDispositionChange(entry)) {
+      throw inputError(
+        `Evidence disposition entry ${index} has an inconsistent cause, change surface, or intended repository changes.`,
+      );
     }
   }
   if (source.semanticImpact === 'material') {
@@ -2410,17 +2408,18 @@ function validateEvidenceDispositionInput(
     return;
   }
   const compatibleRoutes = {
-    implementation: new Set(['repair-implementation', 'handoff']),
+    implementation: new Set(['repair-delivery', 'handoff']),
     environment: new Set(['revise-verification', 'handoff']),
-    verification: new Set(['revise-verification', 'handoff']),
+    verification: new Set(['repair-delivery', 'revise-verification', 'handoff']),
     unknown: new Set(['challenge', 'handoff', 'ask-human']),
   } satisfies Record<EvidenceDispositionDocument['entries'][number]['cause'], Set<string>>;
-  const hasImplementationCause = source.entries.some((entry) => entry.cause === 'implementation');
+  const hasRepositoryRepair = source.entries.some((entry) =>
+    entry.repositoryChangeCanAlterObservation);
   const incompatible = source.entries.filter((entry) => {
     if (entry.source.kind === 'challenge' && source.proposedRoute === 'challenge') return true;
-    if (source.proposedRoute === 'repair-implementation'
-      && hasImplementationCause
-      && ['environment', 'verification'].includes(entry.cause)) {
+    if (source.proposedRoute === 'repair-delivery'
+      && hasRepositoryRepair
+      && entry.cause === 'environment') {
       return false;
     }
     return !compatibleRoutes[entry.cause].has(source.proposedRoute);
@@ -2431,6 +2430,31 @@ function validateEvidenceDispositionInput(
       + unique(incompatible.map((entry) => entry.cause)).join(', ') + '.',
     );
   }
+  if (source.proposedRoute === 'repair-delivery' && !hasRepositoryRepair) {
+    throw inputError('Delivery repair requires at least one explicit production or verification-surface change.');
+  }
+}
+
+function validDispositionChange(
+  entry: EvidenceDispositionDocument['entries'][number],
+): boolean {
+  const hasChanges = entry.intendedChanges.length > 0;
+  if (entry.cause === 'implementation') {
+    return entry.repositoryChangeCanAlterObservation
+      && entry.changeSurface === 'production'
+      && hasChanges;
+  }
+  if (entry.cause === 'verification') {
+    return (entry.repositoryChangeCanAlterObservation
+        && entry.changeSurface === 'verification-surface'
+        && hasChanges)
+      || (!entry.repositoryChangeCanAlterObservation
+        && entry.changeSurface === 'none'
+        && !hasChanges);
+  }
+  return !entry.repositoryChangeCanAlterObservation
+    && entry.changeSurface === 'none'
+    && !hasChanges;
 }
 
 function evidenceConcernIdentity(source: EvidenceDispositionDocument['entries'][number]['source']): string {

@@ -181,7 +181,7 @@ export function collectedHostAction(input: {
 
 export function diagnosisHostAction(
   route:
-    | 'repair-implementation'
+    | 'repair-delivery'
     | 'revise-verification'
     | 'challenge'
     | 'handoff'
@@ -189,7 +189,7 @@ export function diagnosisHostAction(
   taskId: string,
   packet?: AuthoringPacket | ChallengeExecutionPacket,
 ): HostAction {
-  if (route === 'repair-implementation') return preparedHostAction(taskId);
+  if (route === 'repair-delivery') return preparedHostAction(taskId);
   if (route === 'revise-verification') {
     return inputAction(
       'revise-verification', 'recovery', 'revise-verification', taskId,

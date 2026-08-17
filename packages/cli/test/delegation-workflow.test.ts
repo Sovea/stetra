@@ -403,7 +403,7 @@ test('a non-passing check requires an explicit fact-bound route and environment 
     );
     assert.deepEqual(
       fieldRequirement(collected.hostAction.authoringPacket, 'draft.proposedRoute').allowedValues,
-      ['repair-implementation', 'revise-verification', 'challenge', 'handoff', 'ask-human'],
+      ['repair-delivery', 'revise-verification', 'challenge', 'handoff', 'ask-human'],
     );
     assert.deepEqual(
       fieldRequirement(collected.hostAction.authoringPacket, 'draft.entries[0].cause').allowedValues,
@@ -411,10 +411,10 @@ test('a non-passing check requires an explicit fact-bound route and environment 
     );
     const definitionId = collected.checks[0].definitionId;
     const incompatible = disposition(definitionId, 'environment');
-    incompatible.proposedRoute = 'repair-implementation';
+    incompatible.proposedRoute = 'repair-delivery';
     await assert.rejects(
       diagnose(root, prepared.taskId, incompatible),
-      /Proposed route repair-implementation is incompatible with declared cause\(s\): environment/,
+      /Proposed route repair-delivery is incompatible with declared cause\(s\): environment/,
     );
     const diagnosed = await diagnose(root, prepared.taskId, disposition(definitionId, 'environment'));
     assert.equal(diagnosed.disposition.route, 'revise-verification');
@@ -428,7 +428,7 @@ test('a non-passing check requires an explicit fact-bound route and environment 
   }
 });
 
-test('mixed implementation and environment failures may repair the bounded implementation cause', async () => {
+test('mixed implementation and environment failures may repair the bounded delivery cause', async () => {
   const root = createRepository();
   try {
     const document = prepareDocument({
@@ -449,13 +449,14 @@ test('mixed implementation and environment failures may repair the bounded imple
       cause: 'environment',
       diagnosis: 'The second command is unavailable for an environment-specific reason.',
       falsificationAttempt: 'Inspected the independent second command and its exact Runtime exit.',
-      codeChangeCanAlterObservation: false,
+      repositoryChangeCanAlterObservation: false,
+      changeSurface: 'none',
       expectedDifferentObservation: 'The environment failure remains visible after repair.',
       intendedChanges: [],
     });
     input.routeRationale = 'Repair the bounded implementation defect and recollect every check while retaining the environment failure.';
     const diagnosed = await diagnose(root, prepared.taskId, input);
-    assert.equal(diagnosed.disposition.route, 'repair-implementation');
+    assert.equal(diagnosed.disposition.route, 'repair-delivery');
     assert.equal(diagnosed.successorAttemptId, 'attempt:2');
     assert.equal(diagnosed.hostAction.kind, 'implement-and-collect');
   } finally {
@@ -463,7 +464,35 @@ test('mixed implementation and environment failures may repair the bounded imple
   }
 });
 
-test('only implementation diagnosis creates a successor and exhausted budget returns to handoff with lineage intact', async () => {
+test('a repository verifier gap uses delivery repair without revising its frozen definition', async () => {
+  const root = createRepository();
+  try {
+    const prepared = await prepare(root, prepareDocument({
+      baseline: 'unknown', argv: [process.execPath, '-e', 'process.exit(1)'],
+    }));
+    const collected = await collect(root, prepared.taskId);
+    const input = disposition(collected.checks[0].definitionId, 'verification');
+    input.proposedRoute = 'repair-delivery';
+    input.routeRationale = 'Add the missing repository assertion without changing the frozen command definition.';
+    input.entries[0].repositoryChangeCanAlterObservation = true;
+    input.entries[0].changeSurface = 'verification-surface';
+    input.entries[0].intendedChanges = ['Add the missing counterexample to the existing test surface.'];
+
+    const diagnosed = await diagnose(root, prepared.taskId, input);
+    assert.equal(diagnosed.status, 'repair-prepared');
+    assert.equal(diagnosed.disposition.route, 'repair-delivery');
+    assert.equal(diagnosed.successorAttemptId, 'attempt:2');
+    const stored = readDelegationTask(root, prepared.taskId);
+    assert.equal(stored.projection.effectiveContractId, prepared.taskContract.effectiveContractId);
+    assert.equal(stored.projection.verificationPlanId, prepared.taskContract.verificationPlanId);
+    assert.deepEqual(stored.projection.verificationRevisionIds, []);
+    assert.equal(stored.projection.attempts[1].trigger, 'delivery-repair');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('explicit delivery repair creates a successor and exhausted budget returns to handoff with lineage intact', async () => {
   const root = createRepository();
   try {
     const prepared = await prepare(root, prepareDocument({
@@ -473,7 +502,7 @@ test('only implementation diagnosis creates a successor and exhausted budget ret
     const firstDiagnosis = await diagnose(
       root, prepared.taskId, disposition(firstCollection.checks[0].definitionId, 'implementation'),
     );
-    assert.equal(firstDiagnosis.disposition.route, 'repair-implementation');
+    assert.equal(firstDiagnosis.disposition.route, 'repair-delivery');
     assert.equal(firstDiagnosis.successorAttemptId, 'attempt:2');
     assert.equal(firstDiagnosis.hostAction.kind, 'implement-and-collect');
 
@@ -1178,14 +1207,15 @@ test('an adverse Challenge returns to bounded diagnosis and a successor Attempt 
 
     const diagnosis = structuredClone(challenged.hostAction.authoringPacket.draft);
     diagnosis.semanticImpact = 'none';
-    diagnosis.proposedRoute = 'repair-implementation';
+    diagnosis.proposedRoute = 'repair-delivery';
     diagnosis.routeRationale = 'The counterexample identifies a bounded implementation defect inside the current contract.';
     diagnosis.entries[0] = {
       ...diagnosis.entries[0],
       cause: 'implementation',
       diagnosis: 'The implementation omits the counterexample path.',
       falsificationAttempt: 'Inspected whether verification or environment state explains the adverse observation.',
-      codeChangeCanAlterObservation: true,
+      repositoryChangeCanAlterObservation: true,
+      changeSurface: 'production',
       expectedDifferentObservation: 'The same fresh counterexample is supported after repair.',
       intendedChanges: ['Repair the bounded source path without changing task meaning.'],
     };
@@ -1245,7 +1275,8 @@ test('an adverse Challenge preserves its exact counter-evidence through Handoff 
       cause: 'verification',
       diagnosis: 'The current verifier does not protect the complete declared boundary.',
       falsificationAttempt: 'Compared the verifier surface with the frozen failure hypothesis.',
-      codeChangeCanAlterObservation: false,
+      repositoryChangeCanAlterObservation: false,
+      changeSurface: 'none',
       expectedDifferentObservation: 'No different observation is claimed without expanding persistent verification.',
       intendedChanges: [],
     };
@@ -1461,20 +1492,21 @@ function prepareDocument(options: {
 
 function disposition(definitionId: string, cause: 'implementation' | 'environment' | 'verification' | 'unknown') {
   const proposedRoute = cause === 'implementation'
-    ? 'repair-implementation' as const
+    ? 'repair-delivery' as const
     : cause === 'environment' || cause === 'verification'
       ? 'revise-verification' as const
       : 'challenge' as const;
   return {
     semanticImpact: 'none' as 'none' | 'material',
     proposedRoute: proposedRoute as
-      | 'repair-implementation' | 'revise-verification' | 'challenge' | 'handoff' | 'ask-human',
+      | 'repair-delivery' | 'revise-verification' | 'challenge' | 'handoff' | 'ask-human',
     routeRationale: `The declared ${cause} cause requires the selected explicit next step.`,
     entries: [{
       source: { kind: 'check' as const, definitionId }, cause,
       diagnosis: `The observed cause is ${cause}.`,
       falsificationAttempt: 'Inspected the command, environment, and changed implementation.',
-      codeChangeCanAlterObservation: cause === 'implementation',
+      repositoryChangeCanAlterObservation: cause === 'implementation',
+      changeSurface: cause === 'implementation' ? 'production' as const : 'none' as const,
       expectedDifferentObservation: 'A subsequent Runtime attempt records the expected status.',
       intendedChanges: cause === 'implementation' ? ['Change source.txt within the contract.'] : [],
     }],

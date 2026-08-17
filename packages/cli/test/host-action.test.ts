@@ -22,7 +22,7 @@ test('host actions route the initial lifecycle with executable task argv', () =>
     kind: 'implement-and-collect', reference: 'delivery',
     command: { argv: ['stetra', 'change', 'collect', '.', '--task', 'task-id', '--json'] },
   });
-  assert.equal(diagnosisHostAction('repair-implementation', 'task-id').kind, 'implement-and-collect');
+  assert.equal(diagnosisHostAction('repair-delivery', 'task-id').kind, 'implement-and-collect');
   const challenge = diagnosisHostAction('challenge', 'task-id', challengePacket());
   assert.equal(challenge.kind, 'perform-independent-challenge');
   assert.equal(challenge.challengeExecutionRequest?.role, 'independent-challenger');

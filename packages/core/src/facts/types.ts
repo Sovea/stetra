@@ -107,7 +107,8 @@ export interface EvidenceDispositionEntry {
   cause: EvidenceCause;
   diagnosis: string;
   falsificationAttempt: string;
-  codeChangeCanAlterObservation: boolean;
+  repositoryChangeCanAlterObservation: boolean;
+  changeSurface: 'production' | 'verification-surface' | 'none';
   expectedDifferentObservation: string;
   intendedChanges: string[];
 }
@@ -119,7 +120,7 @@ export interface EvidenceDisposition extends ProtocolEnvelope {
   factCollectionId: string;
   semanticImpact: 'none' | 'material';
   proposedRoute:
-    | 'repair-implementation'
+    | 'repair-delivery'
     | 'revise-verification'
     | 'challenge'
     | 'handoff'
@@ -127,7 +128,7 @@ export interface EvidenceDisposition extends ProtocolEnvelope {
   routeRationale: string;
   entries: EvidenceDispositionEntry[];
   route:
-    | 'repair-implementation'
+    | 'repair-delivery'
     | 'revise-verification'
     | 'challenge'
     | 'handoff'

@@ -320,7 +320,7 @@ Check and current adverse Challenge exactly once:
 ```json
 {
   "semanticImpact": "none",
-  "proposedRoute": "repair-implementation",
+  "proposedRoute": "repair-delivery",
   "routeRationale": "Why this route addresses every declared cause.",
   "entries": [
     {
@@ -331,7 +331,8 @@ Check and current adverse Challenge exactly once:
       "cause": "implementation",
       "diagnosis": "Concrete fact-bound cause judgment.",
       "falsificationAttempt": "What was inspected or attempted.",
-      "codeChangeCanAlterObservation": true,
+      "repositoryChangeCanAlterObservation": true,
+      "changeSurface": "production",
       "expectedDifferentObservation": "What the next Runtime Attempt should observe.",
       "intendedChanges": ["Bounded intended edit."]
     }
@@ -341,18 +342,23 @@ Check and current adverse Challenge exactly once:
 
 `source` is exactly a frozen Check definition or a current adverse Challenge.
 Cause is exactly `implementation`, `environment`, `verification`, or `unknown`.
-Only implementation cause may propose code edits. Runtime validates identity and
-coverage and checks that every cause is compatible with the proposed route; it
-never guesses cause or route from output. Implementation may repair or hand
-off. Environment and verification may revise verification or hand off. Unknown
-may challenge, hand off, or ask the developer. Material semantic impact must ask
-the developer. Explicit routing is documented in [Architecture](architecture.md).
+Implementation may declare a `production` edit. Verification may declare a
+`verification-surface` repository edit, or `none` when the frozen definition
+itself must be revised. Environment and unknown causes declare `none`. Runtime
+validates identity, coverage, these explicit change declarations, and route
+compatibility; it never guesses cause or route from output. Implementation and
+repository verifier gaps may use delivery repair. Environment and frozen
+verification-definition gaps may revise verification. Unknown may challenge,
+hand off, or ask the developer. Material semantic impact must ask the developer.
+Explicit routing is documented in [Architecture](architecture.md).
 
-When one collection has both implementation and environment or verification
-failures, `repair-implementation` is valid if at least one entry supplies the
-bounded implementation edit. The other entries authorize no edits, remain
-visible, and are rerun in the successor Attempt. An unknown cause still cannot
-be repaired.
+`repair-delivery` creates a successor Attempt under the unchanged Semantic
+Contract and Verification Plan. It applies when at least one entry supplies a
+bounded production or repository verifier-surface edit. Other environment or
+verification entries may remain visible and are rerun in that Attempt. An
+unknown cause still cannot be repaired. `revise-verification` is reserved for
+changes to frozen argv, baseline policy, selectors, or Obligation bindings; a
+test-content edit alone does not require a Verification Revision.
 
 ## Revise verification
 

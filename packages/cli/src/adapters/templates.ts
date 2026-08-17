@@ -263,14 +263,15 @@ disposition covering each current non-passing check exactly once:
 ~~~json
 {
   "semanticImpact":"none",
-  "proposedRoute":"repair-implementation",
+  "proposedRoute":"repair-delivery",
   "routeRationale":"why this next step addresses every declared cause",
   "entries":[{
     "source":{"kind":"check","definitionId":"definition id prefilled by hostAction.authoringPacket"},
     "cause":"implementation",
     "diagnosis":"fact-bound cause judgment",
     "falsificationAttempt":"what was inspected or tried",
-    "codeChangeCanAlterObservation":true,
+    "repositoryChangeCanAlterObservation":true,
+    "changeSurface":"production",
     "expectedDifferentObservation":"specific next Runtime observation",
     "intendedChanges":["bounded intended edit"]
   }]
@@ -286,11 +287,14 @@ Cause is exactly **implementation/environment/verification/unknown**. Choose
 Agent judgments, not Runtime facts. Runtime validates current references,
 coverage, and cause/route compatibility only; it does not inspect error text to
 choose a route. Implementation can repair or hand off. Environment and
-verification can revise the immutable Verification Plan or hand off. Unknown
-can challenge, hand off, or ask the developer. Material semantic impact must
-ask the developer. Repair-budget exhaustion mechanically changes an otherwise
-valid repair route to handoff while preserving the proposal. Do not propose
-code changes for another cause. Mechanical verification relaxation requires
+frozen-definition failures can revise the immutable Verification Plan or hand
+off. A verification cause may instead declare a **verification-surface**
+repository edit and use **repair-delivery** without revising the frozen
+definition. Implementation edits declare **production**; environment and
+unknown causes declare **none**. Unknown can challenge, hand off, or ask the
+developer. Material semantic impact must ask the developer. Repair-budget
+exhaustion mechanically changes an otherwise valid repair route to handoff
+while preserving the proposal. Mechanical verification relaxation requires
 exact Human authority.
 The returned **fieldRequirements** names every enum choice and references
 reusable object variants through **shapeCatalog**; do not infer a default from

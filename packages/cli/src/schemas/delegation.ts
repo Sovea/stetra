@@ -5,7 +5,7 @@ import { DELEGATION_PROTOCOL, DELEGATION_SCHEMA_VERSION } from '../protocol.ts';
 export const EVIDENCE_SEMANTIC_IMPACTS = ['none', 'material'] as const;
 export const EVIDENCE_CAUSES = ['implementation', 'environment', 'verification', 'unknown'] as const;
 export const EVIDENCE_ROUTES = [
-  'repair-implementation',
+  'repair-delivery',
   'revise-verification',
   'challenge',
   'handoff',
@@ -204,7 +204,8 @@ export const EvidenceDispositionDocumentSchema = z.strictObject({
     cause: z.enum(EVIDENCE_CAUSES),
     diagnosis: NonEmptyStringSchema,
     falsificationAttempt: NonEmptyStringSchema,
-    codeChangeCanAlterObservation: z.boolean(),
+    repositoryChangeCanAlterObservation: z.boolean(),
+    changeSurface: z.enum(['production', 'verification-surface', 'none']),
     expectedDifferentObservation: NonEmptyStringSchema,
     intendedChanges: z.array(NonEmptyStringSchema),
   })).min(1),
@@ -390,7 +391,7 @@ export const AttemptProjectionSchema = z.strictObject({
   ordinal: z.number().int().positive(),
   parentAttemptId: StableIdSchema.nullable(),
   effectiveContractId: Sha256Schema,
-  trigger: z.enum(['initial', 'repair', 'correction', 'verification-revision']),
+  trigger: z.enum(['initial', 'delivery-repair', 'correction', 'verification-revision']),
   deliveryStatus: z.enum([
     'waiting-for-implementation', 'implementing', 'repairing',
     'implementation-complete', 'exhausted',
