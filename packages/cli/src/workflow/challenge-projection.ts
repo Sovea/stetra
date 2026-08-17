@@ -23,6 +23,7 @@ export interface ChallengeExecutionPacket {
     effectiveContractId: string;
     attemptId: string;
     factCollectionId: string;
+    worktreeFingerprint: string;
   };
   target: {
     condition: Pick<
@@ -155,6 +156,7 @@ export function challengeExecutionPacket(input: {
       effectiveContractId: input.contract.effectiveContractId,
       attemptId: input.task.currentAttemptId,
       factCollectionId: input.facts.factCollectionId,
+      worktreeFingerprint: input.facts.current.fingerprint,
     },
     target: {
       condition: {

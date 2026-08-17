@@ -12,7 +12,6 @@ import { challengeReferenceIssues } from '../workflow/challenge-references.ts';
 import type { ChallengeExecutionRequest } from '../workflow/host-action.ts';
 
 export type ChallengeHostProvider = 'codex' | 'claude' | 'evaluation-runner';
-export type ChallengeMutationAttestation = 'host-read-only' | 'tool-restricted';
 
 export interface ChallengeRunStartObservation {
   request: ChallengeExecutionRequest;
@@ -20,7 +19,10 @@ export interface ChallengeRunStartObservation {
   agentType: 'stetra-challenger';
   parentContextId: string;
   challengerContextId: string;
-  mutationPolicy: ChallengeMutationAttestation;
+  targetWorktree: 'read-only';
+  executionWorkspace: 'isolated-writable';
+  sourceSnapshotFingerprint: string;
+  externalEffects: 'forbidden';
 }
 
 export type ChallengeRunStopObservation =
@@ -45,7 +47,10 @@ interface StartedRun {
   requestFingerprint: string;
   parentContextId: string;
   challengerContextId: string;
-  mutationPolicy: ChallengeMutationAttestation;
+  targetWorktree: 'read-only';
+  executionWorkspace: 'isolated-writable';
+  sourceSnapshotFingerprint: string;
+  externalEffects: 'forbidden';
   invalidOutputCount: number;
   counterEvidenceRepairConstraint?: ChallengeDocument['counterEvidence'];
   completed?: {
@@ -79,12 +84,18 @@ export class HostChallengeLifecycle {
       throw new Error('Independent Challenge requires a context distinct from the implementer.');
     }
     if (input.request.contextPolicy !== 'fresh-required'
-      || input.request.mutationPolicy !== 'forbidden') {
+      || input.request.workspacePolicy.targetWorktree !== input.targetWorktree
+      || input.request.workspacePolicy.executionWorkspace !== input.executionWorkspace
+      || input.request.workspacePolicy.externalEffects !== input.externalEffects) {
       throw new Error('Unsupported Challenge execution policy.');
     }
     if (input.request.bindsTo.challengeExecutionPacketFingerprint
       !== stableFingerprint(input.challengeExecutionPacket)) {
       throw new Error('Challenge execution packet does not match the Host request binding.');
+    }
+    if (input.sourceSnapshotFingerprint !== input.request.bindsTo.worktreeFingerprint
+      || input.sourceSnapshotFingerprint !== input.challengeExecutionPacket.bindsTo.worktreeFingerprint) {
+      throw new Error('Challenge execution workspace does not match the current worktree snapshot.');
     }
     if (this.#runs.has(input.request.requestId)) {
       throw new Error(`Challenge execution request ${input.request.requestId} already started.`);
@@ -95,7 +106,10 @@ export class HostChallengeLifecycle {
       requestFingerprint: stableFingerprint(input.request),
       parentContextId: input.parentContextId,
       challengerContextId: input.challengerContextId,
-      mutationPolicy: input.mutationPolicy,
+      targetWorktree: input.targetWorktree,
+      executionWorkspace: input.executionWorkspace,
+      sourceSnapshotFingerprint: input.sourceSnapshotFingerprint,
+      externalEffects: input.externalEffects,
       invalidOutputCount: 0,
     });
   }
@@ -183,10 +197,16 @@ export class HostChallengeLifecycle {
         provider: this.provider,
         parentContextId: run.parentContextId,
         challengerContextId: run.challengerContextId,
-        mutationPolicy: run.mutationPolicy,
+        targetWorktree: run.targetWorktree,
+        executionWorkspace: run.executionWorkspace,
+        sourceSnapshotFingerprint: run.sourceSnapshotFingerprint,
+        externalEffects: run.externalEffects,
       }),
       outputFingerprint,
-      mutationPolicy: run.mutationPolicy,
+      targetWorktree: run.targetWorktree,
+      executionWorkspace: run.executionWorkspace,
+      sourceSnapshotFingerprint: run.sourceSnapshotFingerprint,
+      externalEffects: run.externalEffects,
     };
     run.completed = { challenge, receipt, consumed: false };
     return {

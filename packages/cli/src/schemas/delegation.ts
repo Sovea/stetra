@@ -270,7 +270,10 @@ export const HostChallengeRunReceiptSchema = z.strictObject({
   lifecycle: z.literal('start-and-stop-observed'),
   contextFingerprint: Sha256Schema,
   outputFingerprint: Sha256Schema,
-  mutationPolicy: z.enum(['host-read-only', 'tool-restricted']),
+  targetWorktree: z.literal('read-only'),
+  executionWorkspace: z.literal('isolated-writable'),
+  sourceSnapshotFingerprint: Sha256Schema,
+  externalEffects: z.literal('forbidden'),
 }).refine((value) => value.parentContextId !== value.challengerContextId, {
   path: ['challengerContextId'],
   message: 'must identify a context distinct from the implementer context',

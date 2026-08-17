@@ -17,7 +17,7 @@ test('Host Challenge lifecycle binds start, stop, exact output, and single consu
     agentType: 'stetra-challenger',
     parentContextId: 'context:implementer',
     challengerContextId: 'context:challenger',
-    mutationPolicy: 'host-read-only',
+    ...workspaceObservation(),
   });
 
   const stopped = lifecycle.observeStop({
@@ -29,7 +29,9 @@ test('Host Challenge lifecycle binds start, stop, exact output, and single consu
   assert.equal(stopped.status, 'completed');
   if (stopped.status !== 'completed') return;
   assert.equal(stopped.submission.hostReceipt.lifecycle, 'start-and-stop-observed');
-  assert.equal(stopped.submission.hostReceipt.mutationPolicy, 'host-read-only');
+  assert.equal(stopped.submission.hostReceipt.targetWorktree, 'read-only');
+  assert.equal(stopped.submission.hostReceipt.executionWorkspace, 'isolated-writable');
+  assert.equal(stopped.submission.hostReceipt.sourceSnapshotFingerprint, digest('w'));
   assert.deepEqual(stopped.submission.challenge, challenge);
 
   assert.equal(await lifecycle.verifyChallengeRun({
@@ -65,7 +67,7 @@ test('Host Challenge lifecycle allows one structured-output repair and never inv
     agentType: 'stetra-challenger',
     parentContextId: 'context:implementer',
     challengerContextId: 'context:challenger',
-    mutationPolicy: 'tool-restricted',
+    ...workspaceObservation(),
   });
 
   const first = lifecycle.observeStop({
@@ -106,7 +108,7 @@ test('Host Challenge lifecycle repairs unavailable nested evidence before issuin
     agentType: 'stetra-challenger',
     parentContextId: 'context:implementer',
     challengerContextId: 'context:challenger',
-    mutationPolicy: 'host-read-only',
+    ...workspaceObservation(),
   });
 
   const invalid = challengeFixture();
@@ -146,7 +148,7 @@ test('Host Challenge lifecycle requires repair when a supported result retains c
     agentType: 'stetra-challenger',
     parentContextId: 'context:implementer',
     challengerContextId: 'context:challenger',
-    mutationPolicy: 'host-read-only',
+    ...workspaceObservation(),
   });
 
   const inconsistent = challengeFixture();
@@ -187,7 +189,7 @@ test('Host Challenge lifecycle does not let output repair erase authored counter
     agentType: 'stetra-challenger',
     parentContextId: 'context:implementer',
     challengerContextId: 'context:challenger',
-    mutationPolicy: 'host-read-only',
+    ...workspaceObservation(),
   });
   const inconsistent = challengeFixture();
   inconsistent.counterEvidence = [{
@@ -229,7 +231,7 @@ test('Host Challenge lifecycle rejects reused requests and same-context claims',
     agentType: 'stetra-challenger',
     parentContextId: 'context:same',
     challengerContextId: 'context:same',
-    mutationPolicy: 'host-read-only',
+    ...workspaceObservation(),
   }), /context distinct/);
   lifecycle.observeStart({
     request,
@@ -237,7 +239,7 @@ test('Host Challenge lifecycle rejects reused requests and same-context claims',
     agentType: 'stetra-challenger',
     parentContextId: 'context:parent',
     challengerContextId: 'context:child',
-    mutationPolicy: 'host-read-only',
+    ...workspaceObservation(),
   });
   assert.throws(() => lifecycle.observeStart({
     request,
@@ -245,8 +247,22 @@ test('Host Challenge lifecycle rejects reused requests and same-context claims',
     agentType: 'stetra-challenger',
     parentContextId: 'context:parent',
     challengerContextId: 'context:other-child',
-    mutationPolicy: 'host-read-only',
+    ...workspaceObservation(),
   }), /already started/);
+});
+
+test('Host Challenge lifecycle requires an exact isolated workspace snapshot', () => {
+  const lifecycle = new HostChallengeLifecycle('evaluation-runner');
+  const request = requestFixture('8');
+  assert.throws(() => lifecycle.observeStart({
+    request,
+    challengeExecutionPacket: packetFixture(),
+    agentType: 'stetra-challenger',
+    parentContextId: 'context:parent',
+    challengerContextId: 'context:child',
+    ...workspaceObservation(),
+    sourceSnapshotFingerprint: digest('x'),
+  }), /does not match the current worktree snapshot/);
 });
 
 function requestFixture(character: string): ChallengeExecutionRequest {
@@ -259,10 +275,15 @@ function requestFixture(character: string): ChallengeExecutionRequest {
       effectiveContractId: digest('e'),
       attemptId: 'attempt:1',
       factCollectionId: digest('f'),
+      worktreeFingerprint: digest('w'),
       challengeExecutionPacketFingerprint: stableFingerprint(packetFixture()),
     },
     contextPolicy: 'fresh-required',
-    mutationPolicy: 'forbidden',
+    workspacePolicy: {
+      targetWorktree: 'read-only',
+      executionWorkspace: 'isolated-writable',
+      externalEffects: 'forbidden',
+    },
     parallelism: 'single',
     outputRepairBudget: 1,
     expectedOutput: {
@@ -275,8 +296,18 @@ function requestFixture(character: string): ChallengeExecutionRequest {
 
 function packetFixture(): ChallengeExecutionPacket {
   return {
+    bindsTo: { worktreeFingerprint: digest('w') },
     draft: { evidence: challengeFixture().evidence },
   } as ChallengeExecutionPacket;
+}
+
+function workspaceObservation() {
+  return {
+    targetWorktree: 'read-only' as const,
+    executionWorkspace: 'isolated-writable' as const,
+    sourceSnapshotFingerprint: digest('w'),
+    externalEffects: 'forbidden' as const,
+  };
 }
 
 function challengeFixture(): ChallengeDocument {

@@ -17,10 +17,13 @@ test the frozen failure hypothesis. Do not broaden the task. If the packet is
 structurally insufficient, report partial or unknown instead of recovering
 generic workflow context.
 
-You are read-only. Do not edit, format, repair, install, commit, or mutate files.
-Do not spawn another agent. Do not choose an implementation route or make the
-Human adoption decision. If the available read-only evidence cannot support the
-requested observation, return partial or unknown and name the missing evidence.
+The target worktree is read-only. A trusted Host may place the exact bound
+snapshot in an isolated writable workspace so repository tests can create or
+modify their normal fixtures and caches there. Do not author implementation or
+assertion edits in either workspace. Do not install, commit, spawn another
+agent, choose an implementation route, or make the Human adoption decision. If
+no isolated workspace is available and inspection cannot support the requested
+observation, return partial or unknown and name that limitation.
 A supported outcome must contain no counterEvidence. If any counter-evidence
 remains, use partial, contradicted, or unknown according to the observation.
 

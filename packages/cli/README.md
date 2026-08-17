@@ -113,7 +113,9 @@ const guard = await guardFinalResponse({
 When `hostAction.challengeExecutionRequest` is present, the embedding Host
 starts exactly one `stetra-challenger` context and calls
 `challengeLifecycle.observeStart(...)` with that request and its exact
-`challengeExecutionPacket`. At the matching Host stop event it
+`challengeExecutionPacket`. The Host also attests that the target worktree is
+read-only while an exact-fingerprint isolated workspace is writable for test
+execution. At the matching Host stop event it
 passes the exact Agent output to `observeStop(...)`; a completed observation
 returns the `hostChallengeSubmission` bytes for the action command. Invalid
 structure or an evidence reference outside the packet receives at most the

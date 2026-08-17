@@ -8,7 +8,6 @@ export { runCli } from './main.ts';
 export {
   HostChallengeLifecycle,
   type ChallengeHostProvider,
-  type ChallengeMutationAttestation,
   type ChallengeRunStartObservation,
   type ChallengeRunStopObservation,
 } from './host/challenge-lifecycle.ts';
@@ -43,6 +42,7 @@ export type {
 export type { DeveloperDecisionBrief } from './workflow/decision-brief.ts';
 export type {
   ChallengeExecutionRequest,
+  HostExecutionRequirements,
   ClarificationBrief,
   FinalResponseGuard,
   HostAction,

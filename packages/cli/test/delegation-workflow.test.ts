@@ -15,7 +15,10 @@ import { join } from 'node:path';
 import { Readable } from 'node:stream';
 import test from 'node:test';
 
-import type { DelegationPrepareDocument } from '../src/schemas/delegation.ts';
+import type {
+  DelegationPrepareDocument,
+  EvidenceDispositionDocument,
+} from '../src/schemas/delegation.ts';
 import { HostChallengeLifecycle } from '../src/host/challenge-lifecycle.ts';
 import type { HostAttestationProvider } from '../src/runtime-context.ts';
 import { stableFingerprint, taskIdForPrepareRequest } from '../src/protocol.ts';
@@ -535,7 +538,11 @@ test('material diagnosis and critical unknowns route from explicit semantics rat
     const unknown = await diagnose(root, prepared.taskId, disposition(collected.checks[0].definitionId, 'unknown'));
     assert.equal(unknown.disposition.route, 'challenge');
     assert.equal(unknown.hostAction.kind, 'perform-independent-challenge');
-    assert.equal(unknown.hostAction.challengeExecutionRequest.mutationPolicy, 'forbidden');
+    assert.deepEqual(unknown.hostAction.challengeExecutionRequest.workspacePolicy, {
+      targetWorktree: 'read-only',
+      executionWorkspace: 'isolated-writable',
+      externalEffects: 'forbidden',
+    });
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -1490,16 +1497,18 @@ function prepareDocument(options: {
   };
 }
 
-function disposition(definitionId: string, cause: 'implementation' | 'environment' | 'verification' | 'unknown') {
+function disposition(
+  definitionId: string,
+  cause: 'implementation' | 'environment' | 'verification' | 'unknown',
+): EvidenceDispositionDocument {
   const proposedRoute = cause === 'implementation'
     ? 'repair-delivery' as const
     : cause === 'environment' || cause === 'verification'
       ? 'revise-verification' as const
       : 'challenge' as const;
   return {
-    semanticImpact: 'none' as 'none' | 'material',
-    proposedRoute: proposedRoute as
-      | 'repair-delivery' | 'revise-verification' | 'challenge' | 'handoff' | 'ask-human',
+    semanticImpact: 'none',
+    proposedRoute,
     routeRationale: `The declared ${cause} cause requires the selected explicit next step.`,
     entries: [{
       source: { kind: 'check' as const, definitionId }, cause,
@@ -1573,7 +1582,10 @@ function challengeSubmission(
     agentType: 'stetra-challenger',
     parentContextId: 'context:implementer',
     challengerContextId: `context:challenger:${request.requestId.slice(-8)}`,
-    mutationPolicy: 'host-read-only',
+    targetWorktree: 'read-only',
+    executionWorkspace: 'isolated-writable',
+    sourceSnapshotFingerprint: request.bindsTo.worktreeFingerprint,
+    externalEffects: 'forbidden',
   });
   const stopped = testChallengeLifecycle.observeStop({
     requestId: request.requestId,

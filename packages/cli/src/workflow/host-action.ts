@@ -18,6 +18,14 @@ export type HostWorkflowReference =
   | 'handoff'
   | 'recovery';
 
+export interface HostExecutionRequirements {
+  context: 'continuous' | 'fresh-required';
+  targetWorktree: 'read-only' | 'read-write';
+  stetraState: 'none' | 'read-only' | 'read-write';
+  workspace: 'target' | 'isolated-writable';
+  externalEffects: 'forbidden' | 'contract-policy';
+}
+
 export interface ChallengeExecutionRequest {
   requestId: string;
   role: 'independent-challenger';
@@ -27,10 +35,15 @@ export interface ChallengeExecutionRequest {
     effectiveContractId: string;
     attemptId: string;
     factCollectionId: string;
+    worktreeFingerprint: string;
     challengeExecutionPacketFingerprint: string;
   };
   contextPolicy: 'fresh-required';
-  mutationPolicy: 'forbidden';
+  workspacePolicy: {
+    targetWorktree: 'read-only';
+    executionWorkspace: 'isolated-writable';
+    externalEffects: 'forbidden';
+  };
   parallelism: 'single';
   outputRepairBudget: 1;
   expectedOutput: {
@@ -55,6 +68,7 @@ export interface HostAction {
     | 'correct-protocol-input'
     | 'resolve-evidence-decision';
   reference: HostWorkflowReference | null;
+  executionRequirements: HostExecutionRequirements;
   command?: { argv: string[] };
   inputBinding?: {
     transport: 'stdin';
@@ -76,6 +90,7 @@ export interface HostAction {
   decisionContinuation?: {
     requiresNewHumanEvent: true;
     command: { argv: string[] };
+    executionRequirements: HostExecutionRequirements;
     inputBinding: NonNullable<HostAction['inputBinding']>;
     authoringPacket: AuthoringPacket;
   };
@@ -119,6 +134,7 @@ export function compileProblemHostAction(
     return {
       kind: 'resolve-human-choice',
       reference: 'change',
+      executionRequirements: INSPECTION_EXECUTION,
       clarificationBrief,
       clarificationContinuation: {
         kind: 'reprepare',
@@ -128,19 +144,20 @@ export function compileProblemHostAction(
     };
   }
   if (status === 'verification-required') {
-    return { kind: 'configure-verification', reference: 'change' };
+    return { kind: 'configure-verification', reference: 'change', executionRequirements: INSPECTION_EXECUTION };
   }
-  return { kind: 'correct-protocol-input', reference: 'change' };
+  return { kind: 'correct-protocol-input', reference: 'change', executionRequirements: INSPECTION_EXECUTION };
 }
 
 export function unavailableVerificationHostAction(): HostAction {
-  return { kind: 'configure-verification', reference: 'recovery' };
+  return { kind: 'configure-verification', reference: 'recovery', executionRequirements: INSPECTION_EXECUTION };
 }
 
 export function preparedHostAction(taskId: string): HostAction {
   return {
     kind: 'implement-and-collect',
     reference: 'delivery',
+    executionRequirements: DELIVERY_EXECUTION,
     command: taskCommand('collect', taskId),
   };
 }
@@ -164,6 +181,7 @@ export function collectedHostAction(input: {
     return {
       kind: 'retry-timed-out-check',
       reference: 'recovery',
+      executionRequirements: DELIVERY_EXECUTION,
       command: { argv },
     };
   }
@@ -242,6 +260,7 @@ export function staleFactsHostAction(taskId: string): HostAction {
   return {
     kind: 'recollect-stale-facts',
     reference: 'recovery',
+    executionRequirements: DELIVERY_EXECUTION,
     command: taskCommand('collect', taskId),
   };
 }
@@ -258,6 +277,7 @@ export function handoffHostAction(
   return {
     kind: 'present-handoff-and-await-human-decision',
     reference: 'handoff',
+    executionRequirements: INSPECTION_EXECUTION,
     developerDecisionBrief: brief,
     presentationRequirements: {
       leadWithDecisionState: true,
@@ -270,6 +290,7 @@ export function handoffHostAction(
     decisionContinuation: {
       requiresNewHumanEvent: true,
       command: continuation.command!,
+      executionRequirements: continuation.executionRequirements,
       inputBinding: continuation.inputBinding!,
       authoringPacket: packet,
     },
@@ -296,6 +317,7 @@ function inputAction(
   return {
     kind,
     reference,
+    executionRequirements: AUTHORING_EXECUTION,
     command: {
       argv: ['stetra', 'change', stage, '.', '--task', taskId, '--input', '-', '--json'],
     },
@@ -323,10 +345,15 @@ function challengeInputAction(
       effectiveContractId: challengeExecutionPacket.bindsTo.effectiveContractId,
       attemptId: challengeExecutionPacket.bindsTo.attemptId,
       factCollectionId,
+      worktreeFingerprint: challengeExecutionPacket.bindsTo.worktreeFingerprint,
       challengeExecutionPacketFingerprint,
     },
     contextPolicy: 'fresh-required' as const,
-    mutationPolicy: 'forbidden' as const,
+    workspacePolicy: {
+      targetWorktree: 'read-only' as const,
+      executionWorkspace: 'isolated-writable' as const,
+      externalEffects: 'forbidden' as const,
+    },
     parallelism: 'single' as const,
     outputRepairBudget: 1 as const,
     expectedOutput: {
@@ -338,6 +365,7 @@ function challengeInputAction(
   return {
     kind: 'perform-independent-challenge',
     reference: 'challenge',
+    executionRequirements: AUTHORING_EXECUTION,
     command: {
       argv: ['stetra', 'change', 'challenge', '.', '--task', taskId, '--input', '-', '--json'],
     },
@@ -354,6 +382,30 @@ function challengeInputAction(
     },
   };
 }
+
+const INSPECTION_EXECUTION: HostExecutionRequirements = {
+  context: 'continuous',
+  targetWorktree: 'read-only',
+  stetraState: 'read-only',
+  workspace: 'target',
+  externalEffects: 'forbidden',
+};
+
+const AUTHORING_EXECUTION: HostExecutionRequirements = {
+  context: 'continuous',
+  targetWorktree: 'read-only',
+  stetraState: 'read-write',
+  workspace: 'target',
+  externalEffects: 'forbidden',
+};
+
+const DELIVERY_EXECUTION: HostExecutionRequirements = {
+  context: 'continuous',
+  targetWorktree: 'read-write',
+  stetraState: 'read-write',
+  workspace: 'target',
+  externalEffects: 'contract-policy',
+};
 
 function requiredAuthoringPacket(
   packet: AuthoringPacket | ChallengeExecutionPacket | undefined,

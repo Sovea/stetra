@@ -25,6 +25,10 @@ stage returns a structured `hostAction` with action kind, optional exact argv,
 optional generated-reference name, and—when Agent or Human authoring is
 required—a task-specific `authoringPacket`. Independent Challenge instead uses
 the smaller `challengeExecutionPacket` described below.
+Every action also declares `executionRequirements`: continuous or fresh
+context, target-worktree access, Stetra-state access, target or isolated
+workspace, and the external-effect boundary. These requirements do not attest
+their own enforcement; a trusted Host must apply the controls it claims.
 
 Use the packet's binding metadata, exact reference catalog, outstanding
 obligations, prefilled draft, and `fieldRequirements`. Each field requirement
@@ -415,9 +419,12 @@ the current MVP does not claim isolated reconstruction.
 When a trusted Host integration is available, the action contains a bounded
 `challengeExecutionRequest`. It binds one `stetra-challenger` run to the exact
 task, effective Contract, Attempt, Fact Collection, and Challenge Execution
-Packet fingerprint. It requires one fresh context, forbids mutation and
-fan-out, and allows one structured-output repair. The generated Codex profile
-is sandboxed read-only; the Claude profile allows only Read, Grep, and Glob.
+Packet fingerprint and current worktree fingerprint. It requires one fresh
+context, keeps the target worktree read-only, requires an isolated writable
+execution workspace, forbids external effects and fan-out, and allows one
+structured-output repair. The isolated workspace permits repository tests to
+write their normal fixtures and caches without modifying the target. Generated
+thin profiles remain read-only fallbacks and cannot attest this isolation.
 
 The transient `challengeExecutionPacket` is a deterministic projection for one
 Evidence Obligation. It contains:
@@ -493,7 +500,10 @@ After observing both lifecycle boundaries, the Host submits:
     "lifecycle": "start-and-stop-observed",
     "contextFingerprint": "sha256:host-context-binding",
     "outputFingerprint": "sha256:exact-challenge-document",
-    "mutationPolicy": "host-read-only"
+    "targetWorktree": "read-only",
+    "executionWorkspace": "isolated-writable",
+    "sourceSnapshotFingerprint": "sha256:current-worktree",
+    "externalEffects": "forbidden"
   },
   "challenge": { "...": "the exact Challenger document above" }
 }
@@ -501,7 +511,8 @@ After observing both lifecycle boundaries, the Host submits:
 
 The CLI generates Challenge ID and derives Condition IDs. It accepts
 `host-attested` only when the trusted provider verifies the current request,
-distinct contexts, lifecycle receipt, and exact output. Receipts are
+distinct contexts, exact source snapshot, target protection, isolated writable
+execution workspace, lifecycle receipt, and exact output. Receipts are
 single-use, persisted beside the Challenge, and inspectable through
 `change explain --section challenge`. Thin skills remain `unverified`. A
 supported Challenge advances to the next required Challenge or Handoff. A

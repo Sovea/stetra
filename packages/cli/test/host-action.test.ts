@@ -20,6 +20,10 @@ import {
 test('host actions route the initial lifecycle with executable task argv', () => {
   assert.deepEqual(preparedHostAction('task-id'), {
     kind: 'implement-and-collect', reference: 'delivery',
+    executionRequirements: {
+      context: 'continuous', targetWorktree: 'read-write', stetraState: 'read-write',
+      workspace: 'target', externalEffects: 'contract-policy',
+    },
     command: { argv: ['stetra', 'change', 'collect', '.', '--task', 'task-id', '--json'] },
   });
   assert.equal(diagnosisHostAction('repair-delivery', 'task-id').kind, 'implement-and-collect');
@@ -31,12 +35,17 @@ test('host actions route the initial lifecycle with executable task argv', () =>
   assert.equal(challenge.challengeExecutionRequest?.bindsTo.effectiveContractId, digest('e'));
   assert.equal(challenge.challengeExecutionRequest?.bindsTo.attemptId, 'attempt:1');
   assert.equal(challenge.challengeExecutionRequest?.bindsTo.factCollectionId, digest('c'));
+  assert.equal(challenge.challengeExecutionRequest?.bindsTo.worktreeFingerprint, digest('w'));
   assert.match(
     challenge.challengeExecutionRequest?.bindsTo.challengeExecutionPacketFingerprint ?? '',
     /^sha256:[0-9a-f]{64}$/,
   );
   assert.match(challenge.challengeExecutionRequest?.requestId ?? '', /^sha256:[0-9a-f]{64}$/);
-  assert.equal(challenge.challengeExecutionRequest?.mutationPolicy, 'forbidden');
+  assert.deepEqual(challenge.challengeExecutionRequest?.workspacePolicy, {
+    targetWorktree: 'read-only',
+    executionWorkspace: 'isolated-writable',
+    externalEffects: 'forbidden',
+  });
   assert.equal(challenge.challengeExecutionRequest?.contextPolicy, 'fresh-required');
   assert.equal(challenge.challengeExecutionRequest?.outputRepairBudget, 1);
   assert.deepEqual(challenge.challengeExecutionRequest?.expectedOutput, {
@@ -45,6 +54,10 @@ test('host actions route the initial lifecycle with executable task argv', () =>
   assert.equal(challenge.authoringPacket, undefined);
   assert.equal(challenge.challengeExecutionPacket?.target.obligation.id, 'obligation:test');
   assert.equal(challenge.inputBinding?.source, 'hostChallengeSubmission');
+  assert.deepEqual(challenge.executionRequirements, {
+    context: 'continuous', targetWorktree: 'read-only', stetraState: 'read-write',
+    workspace: 'target', externalEffects: 'forbidden',
+  });
   assert.equal(diagnosisHostAction(
     'revise-verification', 'task-id', packet('verification-revision'),
   ).kind, 'revise-verification');
@@ -61,6 +74,8 @@ test('host actions route the initial lifecycle with executable task argv', () =>
   assert.equal(handoff.command, undefined);
   assert.equal(handoff.authoringPacket, undefined);
   assert.equal(handoff.decisionContinuation?.requiresNewHumanEvent, true);
+  assert.equal(handoff.executionRequirements.stetraState, 'read-only');
+  assert.equal(handoff.decisionContinuation?.executionRequirements.stetraState, 'read-write');
   assert.deepEqual(handoff.decisionContinuation?.command.argv.slice(0, 4), [
     'stetra', 'change', 'decide', '.',
   ]);
@@ -193,7 +208,7 @@ function challengePacket(): ChallengeExecutionPacket {
     inputKind: 'challenge',
     bindsTo: {
       taskId: 'task-id', revision: 1, effectiveContractId: digest('e'),
-      attemptId: 'attempt:1', factCollectionId: digest('c'),
+      attemptId: 'attempt:1', factCollectionId: digest('c'), worktreeFingerprint: digest('w'),
     },
     target: {
       condition: {
