@@ -93,6 +93,87 @@ test('Host Challenge lifecycle allows one structured-output repair and never inv
   }), /exhausted its output repair budget/);
 });
 
+test('Host Challenge lifecycle requires repair when a supported result retains counter-evidence', () => {
+  const lifecycle = new HostChallengeLifecycle('codex');
+  const request = requestFixture('5');
+  lifecycle.observeStart({
+    request,
+    agentType: 'stetra-challenger',
+    parentContextId: 'context:implementer',
+    challengerContextId: 'context:challenger',
+    mutationPolicy: 'host-read-only',
+  });
+
+  const inconsistent = challengeFixture();
+  inconsistent.counterEvidence = [{
+    statement: 'The persistent verifier does not cover the declared boundary.',
+    references: [{ kind: 'check', id: digest('c') }],
+  }];
+  const first = lifecycle.observeStop({
+    requestId: request.requestId,
+    agentType: 'stetra-challenger',
+    challengerContextId: 'context:challenger',
+    output: inconsistent,
+  });
+  assert.equal(first.status, 'invalid-output');
+  if (first.status !== 'invalid-output') return;
+  assert.equal(first.mayRetry, true);
+  assert.deepEqual(first.issues, [{
+    path: 'counterEvidence',
+    message: 'must be preserved and outcome changed to partial, contradicted, or unknown while counter-evidence remains',
+  }]);
+
+  inconsistent.outcome = 'partial';
+  const repaired = lifecycle.observeStop({
+    requestId: request.requestId,
+    agentType: 'stetra-challenger',
+    challengerContextId: 'context:challenger',
+    output: inconsistent,
+  });
+  assert.equal(repaired.status, 'completed');
+});
+
+test('Host Challenge lifecycle does not let output repair erase authored counter-evidence', () => {
+  const lifecycle = new HostChallengeLifecycle('codex');
+  const request = requestFixture('6');
+  lifecycle.observeStart({
+    request,
+    agentType: 'stetra-challenger',
+    parentContextId: 'context:implementer',
+    challengerContextId: 'context:challenger',
+    mutationPolicy: 'host-read-only',
+  });
+  const inconsistent = challengeFixture();
+  inconsistent.counterEvidence = [{
+    statement: 'The persistent verifier omits the declared boundary.',
+    references: [{ kind: 'check', id: digest('c') }],
+  }];
+  const first = lifecycle.observeStop({
+    requestId: request.requestId,
+    agentType: 'stetra-challenger',
+    challengerContextId: 'context:challenger',
+    output: inconsistent,
+  });
+  assert.equal(first.status, 'invalid-output');
+
+  inconsistent.counterEvidence = [];
+  const erased = lifecycle.observeStop({
+    requestId: request.requestId,
+    agentType: 'stetra-challenger',
+    challengerContextId: 'context:challenger',
+    output: inconsistent,
+  });
+  assert.deepEqual(erased, {
+    status: 'invalid-output',
+    requestId: request.requestId,
+    mayRetry: false,
+    issues: [{
+      path: 'counterEvidence',
+      message: 'must preserve the counter-evidence authored before structural repair',
+    }],
+  });
+});
+
 test('Host Challenge lifecycle rejects reused requests and same-context claims', () => {
   const lifecycle = new HostChallengeLifecycle('evaluation-runner');
   const request = requestFixture('4');

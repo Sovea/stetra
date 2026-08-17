@@ -43,6 +43,7 @@ interface StartedRun {
   challengerContextId: string;
   mutationPolicy: ChallengeMutationAttestation;
   invalidOutputCount: number;
+  counterEvidenceRepairConstraint?: ChallengeDocument['counterEvidence'];
   completed?: {
     challenge: ChallengeDocument;
     receipt: HostChallengeRunReceipt;
@@ -109,6 +110,10 @@ export class HostChallengeLifecycle {
       ? ChallengeDocumentSchema.safeParse(parsedJson.value)
       : undefined;
     if (!parsed?.success) {
+      const constraint = parsedJson.ok
+        ? supportedCounterEvidenceConstraint(parsedJson.value, parsed!.error.issues)
+        : undefined;
+      if (constraint) run.counterEvidenceRepairConstraint = constraint;
       run.invalidOutputCount += 1;
       const mayRetry = run.invalidOutputCount <= run.request.outputRepairBudget;
       return {
@@ -128,6 +133,20 @@ export class HostChallengeLifecycle {
       throw new Error(`Challenge execution request ${input.requestId} exhausted its output repair budget.`);
     }
     const challenge = parsed.data;
+    if (run.counterEvidenceRepairConstraint
+      && stableFingerprint(challenge.counterEvidence)
+        !== stableFingerprint(run.counterEvidenceRepairConstraint)) {
+      run.invalidOutputCount += 1;
+      return {
+        status: 'invalid-output',
+        requestId: input.requestId,
+        mayRetry: run.invalidOutputCount <= run.request.outputRepairBudget,
+        issues: [{
+          path: 'counterEvidence',
+          message: 'must preserve the counter-evidence authored before structural repair',
+        }],
+      };
+    }
     const outputFingerprint = stableFingerprint(challenge);
     const receipt: HostChallengeRunReceipt = {
       receiptId: `receipt:${randomUUID()}`,
@@ -174,6 +193,20 @@ export class HostChallengeLifecycle {
     run.completed.consumed = true;
     return true;
   };
+}
+
+function supportedCounterEvidenceConstraint(
+  value: unknown,
+  issues: Array<{ path: PropertyKey[]; message: string }>,
+): ChallengeDocument['counterEvidence'] | undefined {
+  if (issues.length !== 1
+    || issues[0].path.join('.') !== 'counterEvidence'
+    || !issues[0].message.includes('outcome changed')) return undefined;
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const counterEvidence = (value as { counterEvidence?: unknown }).counterEvidence;
+  return Array.isArray(counterEvidence) && counterEvidence.length
+    ? structuredClone(counterEvidence) as ChallengeDocument['counterEvidence']
+    : undefined;
 }
 
 function parseJsonOutput(input: unknown):

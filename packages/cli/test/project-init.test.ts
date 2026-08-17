@@ -22,11 +22,14 @@ import {
   PRODUCT_VERSION,
 } from '../src/version.ts';
 
-test('generated prepare example is an exact schema-valid document with deterministic whole-file evidence', () => {
+test('generated prepare example is schema-valid and uses bounded repository evidence', () => {
   const parsed = DelegationPrepareDocumentSchema.parse(DELEGATION_PREPARE_EXAMPLE);
   assert.deepEqual(parsed.repositoryEvidence, [{
-    key: 'relevant-source', path: 'src/example.ts', wholeFile: true,
+    key: 'relevant-source', path: 'src/example.ts', startLine: 1, endLine: 20,
   }]);
+  assert.deepEqual(parsed.conditions[0].evidenceObligations.map((obligation) => obligation.key), [
+    'public-path',
+  ]);
 });
 
 test('generator versions follow semantic prerelease precedence', () => {
@@ -92,6 +95,7 @@ test('project init generates the Cognitive Adoption host projection and manifest
     assert.match(challengerAgent, /Never\s+author request identity, context identity, independence/);
     assert.match(challengerAgent, /do not load the\s+general Stetra skill/);
     assert.match(challengerAgent, /challengeExecutionPacket\.draft/);
+    assert.match(challengerAgent, /supported outcome must contain no counterEvidence/);
     assert.match(skill, /do not reread an\s+unchanged page/);
     assert.match(change, /change prepare/);
     assert.match(change, /developerEvent/);
@@ -99,6 +103,8 @@ test('project init generates the Cognitive Adoption host projection and manifest
     assert.match(change, /verifierSelectors/);
     assert.match(change, /\{"mode":"unknown"\}/);
     assert.match(change, /Do not\s+add rationale, expectation, or obligationKeys to unknown/);
+    assert.match(change, /Obligations are independently concludable/);
+    assert.match(change, /persistent verifier protection/);
     assert.match(delivery, /baseline-to-current change/);
     assert.match(delivery, /evidence\s+disposition/);
     assert.match(delivery, /fieldRequirements/);
@@ -107,6 +113,7 @@ test('project init generates the Cognitive Adoption host projection and manifest
     assert.match(challenge, /canonical identities, not paths/);
     assert.match(skill, /owns the final\s+cognitive handoff/);
     assert.match(handoff, /hostAction\.developerDecisionBrief/);
+    assert.match(handoff, /Challenge conclusion and exact counter-evidence/);
     assert.match(handoff, /Do not execute\s+\*\*hostAction\.decisionContinuation\*\*/);
     assert.match(handoff, /shapeRef.*resolves to one\s+reusable variant set/s);
     assert.match(handoff, /accepted\/correction-requested\/rejected\/deferred/);

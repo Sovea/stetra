@@ -21,6 +21,8 @@ You are read-only. Do not edit, format, repair, install, commit, or mutate files
 Do not spawn another agent. Do not choose an implementation route or make the
 Human adoption decision. If the available read-only evidence cannot support the
 requested observation, return partial or unknown and name the missing evidence.
+A supported outcome must contain no counterEvidence. If any counter-evidence
+remains, use partial, contradicted, or unknown according to the observation.
 
 Return exactly one JSON Challenge Document matching the prefilled
 challengeExecutionPacket.draft. Fill only its open judgment fields. Do not wrap
@@ -123,7 +125,8 @@ export const DELEGATION_PREPARE_EXAMPLE = {
   repositoryEvidence: [{
     key: 'relevant-source',
     path: 'src/example.ts',
-    wholeFile: true,
+    startLine: 1,
+    endLine: 20,
   }],
   task: {
     basis: { developerEventKeys: ['request'], repositoryEvidenceKeys: [] },
@@ -218,9 +221,11 @@ already completed clarification, submit the resolved forks once; Stetra must
 not ask again.
 
 Do not infer importance from paths, keywords, file counts, dependency counts,
-diff size, error text, or a scalar score. Every declared condition must contain
-falsifiable Evidence Obligations and explicit strategies. Runtime checks
-reference logical verifier identities; observations bind exact definitions.
+diff size, error text, or a scalar score. Conditions use explicit falsifiable
+Obligations and strategies. Obligations are independently concludable; split
+claims with different conclusions. Behavior and persistent verifier protection
+are separate when either changes adoption;
+Runtime never infers this split.
 
 ~~~sh
 stetra change prepare . --input - --json
@@ -319,6 +324,8 @@ repositoryEvidence, and humanEvents are canonical identities, not paths or
 display labels. Preserve its obligation IDs, falsification design, and evidence
 selection exactly. Use **output.allowedOutcomes** and
 **output.evidenceItemShape** for the open Agent-judgment fields.
+A **supported** outcome requires an empty **counterEvidence** array. If any
+counter-evidence remains, use partial, contradicted, or unknown.
 
 ~~~json
 {
@@ -386,7 +393,8 @@ stetra change handoff . --task <task-id> --input - --json
 The returned **hostAction.developerDecisionBrief** is the delivery surface for
 the developer. It distinguishes delivery state, evidence state, Agent
 recommendation, and Human adoption; contrasts desired outcome with actual
-system meaning; preserves every condition conclusion; and turns each exact
+system meaning; preserves every Condition and Obligation conclusion, including
+each Challenge conclusion and exact counter-evidence; and turns each exact
 Attention cause into a decision issue with its relevant review questions.
 Causes with the same exact group and references share one issue while retaining
 all underlying Attention IDs, codes, and resolutions. Prior evidence diagnosis

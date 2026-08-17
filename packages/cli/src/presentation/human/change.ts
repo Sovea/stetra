@@ -165,6 +165,21 @@ function appendDeveloperDecisionBrief(
         `${colors.cyan('•')} ${String(condition.statement ?? condition.id)} — ${String(condition.status ?? 'unknown')}`,
         `  ${String(condition.summary ?? '')}`,
       );
+      if (!Array.isArray(condition.obligations)) continue;
+      for (const obligation of condition.obligations) {
+        if (!isRecord(obligation) || !isRecord(obligation.evidenceBoundary)) continue;
+        lines.push(`  ${colors.cyan('↳')} ${String(obligation.statement ?? obligation.id)} — ${String(obligation.status ?? 'unknown')}`);
+        const findings = obligation.evidenceBoundary.challengeFindings;
+        if (!Array.isArray(findings)) continue;
+        for (const finding of findings) {
+          if (!isRecord(finding) || !Array.isArray(finding.counterEvidence)) continue;
+          for (const counterEvidence of finding.counterEvidence) {
+            if (isRecord(counterEvidence)) {
+              lines.push(`    Challenge counter-evidence: ${String(counterEvidence.statement ?? '')}`);
+            }
+          }
+        }
+      }
     }
   }
   if (Array.isArray(brief.decisionIssues) && brief.decisionIssues.length) {

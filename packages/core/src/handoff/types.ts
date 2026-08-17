@@ -234,7 +234,8 @@ export interface DecisionPacket extends ProtocolEnvelope {
       'dispositionId' | 'attemptId' | 'semanticImpact' | 'proposedRoute' | 'routeRationale' | 'route' | 'entries'>>;
     challenges: Array<Pick<IndependentChallenge,
       'id' | 'obligationIds' | 'conditionIds' | 'independence' | 'falsification'
-      | 'falsificationAttempt' | 'observedResult' | 'outcome' | 'conclusion'>>;
+      | 'falsificationAttempt' | 'observedResult' | 'supportingEvidence'
+      | 'counterEvidence' | 'outcome' | 'conclusion'>>;
   };
   detailSections: Array<'contract' | 'attempts' | 'challenge' | 'handoff' | 'events'>;
 }

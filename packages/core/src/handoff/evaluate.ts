@@ -226,6 +226,16 @@ function validateChallenges(input: EvaluateHandoffInput): void {
     if (!['supported', 'partial', 'contradicted', 'unknown'].includes(challenge.outcome)) {
       issues.push(issue('challenge-outcome-invalid', `${path}.outcome`, 'Challenge outcome is invalid.', 'Use supported, partial, contradicted, or unknown.'));
     }
+    if (challenge.outcome === 'supported'
+      && Array.isArray(challenge.counterEvidence)
+      && challenge.counterEvidence.length > 0) {
+      issues.push(issue(
+        'challenge-supported-with-counter-evidence',
+        `${path}.counterEvidence`,
+        'A supported Challenge cannot retain counter-evidence.',
+        'Preserve the counter-evidence and use partial, contradicted, or unknown.',
+      ));
+    }
     if (!isNonEmptyString(challenge.conclusion)) {
       issues.push(issue('challenge-conclusion-required', `${path}.conclusion`, 'A concrete challenge conclusion is required.', 'Explain the bounded result of the challenge.'));
     }
