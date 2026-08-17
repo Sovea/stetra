@@ -449,6 +449,29 @@ test('challenge changed-file evidence uses the canonical Runtime fact identity',
   });
 });
 
+test('a Challenge cannot promote an ad hoc observation into a Challenge reference', () => {
+  const contract = compiledContract();
+  const facts = factBundle(contract);
+  const challenges = supportedChallenges(contract, facts);
+  challenges[0].supportingEvidence[0].references = [{
+    kind: 'challenge', id: 'challenge:ad-hoc-tool-output',
+  }] as never;
+  const handoff = handoffFor(contract, facts, challenges);
+
+  assert.throws(() => evaluateHandoff({
+    ...envelope, contract, factBundle: facts,
+    currentWorktreeFingerprint: facts.current.fingerprint,
+    challenges, currentEvidenceDisposition: undefined, hostPolicyEvaluations: [],
+    deliveryExhausted: false, verificationRevised: false, handoff,
+  }), (error: unknown) => {
+    const candidate = error as { issues?: Array<{ code: string; path: string }> };
+    assert.ok(candidate.issues?.some((item) =>
+      item.code === 'challenge-evidence-kind-invalid'
+      && item.path === 'challenges[0].supportingEvidence[0].references[0].kind'));
+    return true;
+  });
+});
+
 test('a challenge cannot rewrite the frozen falsification design', () => {
   const contract = compiledContract();
   const facts = factBundle(contract);

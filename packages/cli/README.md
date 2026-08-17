@@ -112,11 +112,13 @@ const guard = await guardFinalResponse({
 
 When `hostAction.challengeExecutionRequest` is present, the embedding Host
 starts exactly one `stetra-challenger` context and calls
-`challengeLifecycle.observeStart(...)`. At the matching Host stop event it
+`challengeLifecycle.observeStart(...)` with that request and its exact
+`challengeExecutionPacket`. At the matching Host stop event it
 passes the exact Agent output to `observeStop(...)`; a completed observation
 returns the `hostChallengeSubmission` bytes for the action command. Invalid
-structured output receives at most the request's single repair. No receipt is
-created without both lifecycle observations.
+structure or an evidence reference outside the packet receives at most the
+request's single repair. No receipt is created without both lifecycle
+observations.
 
 The provider must report only controls the embedding Host actually enforces.
 Importing this subpath does not itself create a hook or make a thin Markdown

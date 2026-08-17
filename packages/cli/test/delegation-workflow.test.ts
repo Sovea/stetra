@@ -973,6 +973,44 @@ test('a bounded Challenge Execution Packet completes the persisted challenge-to-
   }
 });
 
+test('unavailable nested Challenge evidence cannot mutate task state', async () => {
+  const root = createRepository();
+  try {
+    const document = prepareDocument({
+      baseline: 'unknown', argv: [process.execPath, '-e', 'process.exit(0)'], critical: true,
+      acceptanceSurfaceSelectors: [{ kind: 'file', path: 'source.txt' }],
+    });
+    const prepared = await prepare(root, document);
+    writeFileSync(join(root, 'source.txt'), 'changed verifier surface\n', 'utf8');
+    const collected = await collect(root, prepared.taskId);
+    const draft = structuredClone(collected.hostAction.challengeExecutionPacket.draft);
+    draft.falsificationAttempt = 'Inspected the selected evidence in a separate context.';
+    draft.observedResult = 'The selected evidence did not expose the failure hypothesis.';
+    draft.supportingEvidence = [{
+      statement: 'An unavailable check must not be accepted as current evidence.',
+      references: [{ kind: 'check', id: `sha256:${'f'.repeat(64)}` }],
+    }];
+    draft.outcome = 'supported';
+    draft.conclusion = 'This structurally valid but unavailable reference must be rejected.';
+    const before = await guardFinalResponse({ projectRoot: root, taskId: prepared.taskId });
+
+    await assert.rejects(() => challenge(root, prepared.taskId, draft), (error: unknown) => {
+      const candidate = error as { issues?: Array<{ path: string; code?: string }> };
+      assert.ok(candidate.issues?.some((issue) =>
+        issue.code === 'challenge-evidence-reference-invalid'
+        && issue.path === 'supportingEvidence[0].references[0].id'));
+      return true;
+    });
+
+    const after = await guardFinalResponse({ projectRoot: root, taskId: prepared.taskId });
+    assert.equal(after.revision, before.revision);
+    assert.equal(after.actionFingerprint, before.actionFingerprint);
+    assert.equal(after.hostAction?.kind, 'perform-independent-challenge');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('Challenge receipts require current request, exact output, trusted verification, and single use', async () => {
   const root = createRepository();
   try {
@@ -1499,6 +1537,7 @@ function challengeSubmission(
   if (!hostAttestations) return { challenge: document };
   testChallengeLifecycle.observeStart({
     request,
+    challengeExecutionPacket: current.hostAction.challengeExecutionPacket,
     agentType: 'stetra-challenger',
     parentContextId: 'context:implementer',
     challengerContextId: `context:challenger:${request.requestId.slice(-8)}`,

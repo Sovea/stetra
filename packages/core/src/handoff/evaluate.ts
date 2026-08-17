@@ -252,11 +252,23 @@ function validateChallenges(input: EvaluateHandoffInput): void {
       }
     }
   }
-  if (issues.length) throw new HandoffValidationError(issues);
-  for (const challenge of input.challenges) {
-    validateChallengeEvidenceItems(challenge.supportingEvidence, 'supportingEvidence', input, challengeIds);
-    validateChallengeEvidenceItems(challenge.counterEvidence, 'counterEvidence', input, challengeIds);
+  for (const [index, challenge] of input.challenges.entries()) {
+    validateChallengeEvidenceItems(
+      challenge.supportingEvidence,
+      `challenges[${index}].supportingEvidence`,
+      input,
+      challengeIds,
+      issues,
+    );
+    validateChallengeEvidenceItems(
+      challenge.counterEvidence,
+      `challenges[${index}].counterEvidence`,
+      input,
+      challengeIds,
+      issues,
+    );
   }
+  if (issues.length) throw new HandoffValidationError(issues);
 }
 
 function validateChallengeFalsification(
@@ -319,20 +331,42 @@ function validIndependence(challenge: EvaluateHandoffInput['challenges'][number]
 
 function validateChallengeEvidenceItems(
   value: unknown,
-  label: string,
+  path: string,
   input: EvaluateHandoffInput,
   challengeIds: Set<string>,
+  issues: HandoffValidationIssue[],
 ): void {
-  if (!Array.isArray(value)) throw new Error(`evaluateHandoff challenge ${label} must be an array.`);
-  for (const item of value) {
+  if (!Array.isArray(value)) {
+    issues.push(issue(
+      'challenge-evidence-items-invalid',
+      path,
+      'Challenge evidence items must be an array.',
+      'Use the exact Challenge Document shape.',
+    ));
+    return;
+  }
+  for (const [index, item] of value.entries()) {
+    const itemPath = `${path}[${index}]`;
     if (!isRecord(item) || !hasOnlyKeys(item, ['statement', 'references'])
       || !isNonEmptyString(item.statement) || !Array.isArray(item.references)
       || !item.references.length) {
-      throw new Error(`evaluateHandoff challenge ${label} item is invalid.`);
+      issues.push(issue(
+        'challenge-evidence-item-invalid',
+        itemPath,
+        'Challenge evidence item must contain a statement and non-empty exact references.',
+        'Use the exact Challenge Execution Packet output shape.',
+      ));
+      continue;
     }
-    const issues: HandoffValidationIssue[] = [];
-    validateEvidence(item.references, label, input.contract, input.factBundle, challengeIds, issues);
-    if (issues.length) throw new Error(`evaluateHandoff challenge ${label} references are invalid.`);
+    validateEvidence(
+      item.references,
+      `${itemPath}.references`,
+      input.contract,
+      input.factBundle,
+      challengeIds,
+      issues,
+      new Set(['changed-file', 'check', 'repository-evidence', 'human-event', 'patch']),
+    );
   }
 }
 
@@ -774,6 +808,9 @@ function validateEvidence(
   facts: FactBundle,
   challengeIds: Set<string>,
   issues: HandoffValidationIssue[],
+  allowedKinds: ReadonlySet<HandoffEvidenceReference['kind']> = new Set([
+    'changed-file', 'check', 'repository-evidence', 'human-event', 'challenge', 'patch',
+  ]),
 ): HandoffEvidenceReference[] {
   if (!Array.isArray(value)) {
     issues.push(issue('evidence-invalid', path, 'Evidence must be an array of exact references.', 'Supply an array.'));
@@ -799,6 +836,15 @@ function validateEvidence(
       ? raw.kind as HandoffEvidenceReference['kind'] : undefined;
     if (!kind) {
       issues.push(issue('evidence-kind-invalid', `${itemPath}.kind`, 'Evidence kind is invalid.', 'Use an evidence kind from the initial protocol.'));
+      continue;
+    }
+    if (!allowedKinds.has(kind)) {
+      issues.push(issue(
+        'challenge-evidence-kind-invalid',
+        `${itemPath}.kind`,
+        `Evidence kind ${kind} is not valid inside a Challenge.`,
+        'Use only patch, changed-file, check, repository-evidence, or human-event references selected by the Challenge Execution Packet.',
+      ));
       continue;
     }
     if (kind === 'patch') {

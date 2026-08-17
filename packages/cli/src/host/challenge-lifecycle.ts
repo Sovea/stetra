@@ -7,6 +7,8 @@ import {
   type HostChallengeRunReceipt,
 } from '../schemas/delegation.ts';
 import { stableFingerprint } from '../protocol.ts';
+import type { ChallengeExecutionPacket } from '../workflow/challenge-projection.ts';
+import { challengeReferenceIssues } from '../workflow/challenge-references.ts';
 import type { ChallengeExecutionRequest } from '../workflow/host-action.ts';
 
 export type ChallengeHostProvider = 'codex' | 'claude' | 'evaluation-runner';
@@ -14,6 +16,7 @@ export type ChallengeMutationAttestation = 'host-read-only' | 'tool-restricted';
 
 export interface ChallengeRunStartObservation {
   request: ChallengeExecutionRequest;
+  challengeExecutionPacket: ChallengeExecutionPacket;
   agentType: 'stetra-challenger';
   parentContextId: string;
   challengerContextId: string;
@@ -38,6 +41,7 @@ export type ChallengeRunStopObservation =
 
 interface StartedRun {
   request: ChallengeExecutionRequest;
+  challengeExecutionPacket: ChallengeExecutionPacket;
   requestFingerprint: string;
   parentContextId: string;
   challengerContextId: string;
@@ -78,11 +82,16 @@ export class HostChallengeLifecycle {
       || input.request.mutationPolicy !== 'forbidden') {
       throw new Error('Unsupported Challenge execution policy.');
     }
+    if (input.request.bindsTo.challengeExecutionPacketFingerprint
+      !== stableFingerprint(input.challengeExecutionPacket)) {
+      throw new Error('Challenge execution packet does not match the Host request binding.');
+    }
     if (this.#runs.has(input.request.requestId)) {
       throw new Error(`Challenge execution request ${input.request.requestId} already started.`);
     }
     this.#runs.set(input.request.requestId, {
       request: structuredClone(input.request),
+      challengeExecutionPacket: structuredClone(input.challengeExecutionPacket),
       requestFingerprint: stableFingerprint(input.request),
       parentContextId: input.parentContextId,
       challengerContextId: input.challengerContextId,
@@ -133,6 +142,19 @@ export class HostChallengeLifecycle {
       throw new Error(`Challenge execution request ${input.requestId} exhausted its output repair budget.`);
     }
     const challenge = parsed.data;
+    const referenceIssues = challengeReferenceIssues(
+      challenge,
+      run.challengeExecutionPacket.draft.evidence,
+    );
+    if (referenceIssues.length) {
+      run.invalidOutputCount += 1;
+      return {
+        status: 'invalid-output',
+        requestId: input.requestId,
+        mayRetry: run.invalidOutputCount <= run.request.outputRepairBudget,
+        issues: referenceIssues,
+      };
+    }
     if (run.counterEvidenceRepairConstraint
       && stableFingerprint(challenge.counterEvidence)
         !== stableFingerprint(run.counterEvidenceRepairConstraint)) {

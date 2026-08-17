@@ -2,7 +2,9 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import { HostChallengeLifecycle } from '../src/host/challenge-lifecycle.ts';
+import { stableFingerprint } from '../src/protocol.ts';
 import type { ChallengeDocument } from '../src/schemas/delegation.ts';
+import type { ChallengeExecutionPacket } from '../src/workflow/challenge-projection.ts';
 import type { ChallengeExecutionRequest } from '../src/workflow/host-action.ts';
 
 test('Host Challenge lifecycle binds start, stop, exact output, and single consumption', async () => {
@@ -11,6 +13,7 @@ test('Host Challenge lifecycle binds start, stop, exact output, and single consu
   const challenge = challengeFixture();
   lifecycle.observeStart({
     request,
+    challengeExecutionPacket: packetFixture(),
     agentType: 'stetra-challenger',
     parentContextId: 'context:implementer',
     challengerContextId: 'context:challenger',
@@ -58,6 +61,7 @@ test('Host Challenge lifecycle allows one structured-output repair and never inv
   const request = requestFixture('3');
   lifecycle.observeStart({
     request,
+    challengeExecutionPacket: packetFixture(),
     agentType: 'stetra-challenger',
     parentContextId: 'context:implementer',
     challengerContextId: 'context:challenger',
@@ -93,11 +97,52 @@ test('Host Challenge lifecycle allows one structured-output repair and never inv
   }), /exhausted its output repair budget/);
 });
 
+test('Host Challenge lifecycle repairs unavailable nested evidence before issuing a receipt', () => {
+  const lifecycle = new HostChallengeLifecycle('codex');
+  const request = requestFixture('7');
+  lifecycle.observeStart({
+    request,
+    challengeExecutionPacket: packetFixture(),
+    agentType: 'stetra-challenger',
+    parentContextId: 'context:implementer',
+    challengerContextId: 'context:challenger',
+    mutationPolicy: 'host-read-only',
+  });
+
+  const invalid = challengeFixture();
+  invalid.supportingEvidence[0].references = [{ kind: 'check', id: digest('d') }];
+  const rejected = lifecycle.observeStop({
+    requestId: request.requestId,
+    agentType: 'stetra-challenger',
+    challengerContextId: 'context:challenger',
+    output: invalid,
+  });
+  assert.deepEqual(rejected, {
+    status: 'invalid-output',
+    requestId: request.requestId,
+    mayRetry: true,
+    issues: [{
+      path: 'supportingEvidence[0].references[0].id',
+      message: `references unavailable check identity ${JSON.stringify(digest('d'))}`,
+    }],
+  });
+
+  invalid.supportingEvidence[0].references = [{ kind: 'check', id: digest('c') }];
+  const completed = lifecycle.observeStop({
+    requestId: request.requestId,
+    agentType: 'stetra-challenger',
+    challengerContextId: 'context:challenger',
+    output: invalid,
+  });
+  assert.equal(completed.status, 'completed');
+});
+
 test('Host Challenge lifecycle requires repair when a supported result retains counter-evidence', () => {
   const lifecycle = new HostChallengeLifecycle('codex');
   const request = requestFixture('5');
   lifecycle.observeStart({
     request,
+    challengeExecutionPacket: packetFixture(),
     agentType: 'stetra-challenger',
     parentContextId: 'context:implementer',
     challengerContextId: 'context:challenger',
@@ -138,6 +183,7 @@ test('Host Challenge lifecycle does not let output repair erase authored counter
   const request = requestFixture('6');
   lifecycle.observeStart({
     request,
+    challengeExecutionPacket: packetFixture(),
     agentType: 'stetra-challenger',
     parentContextId: 'context:implementer',
     challengerContextId: 'context:challenger',
@@ -179,6 +225,7 @@ test('Host Challenge lifecycle rejects reused requests and same-context claims',
   const request = requestFixture('4');
   assert.throws(() => lifecycle.observeStart({
     request,
+    challengeExecutionPacket: packetFixture(),
     agentType: 'stetra-challenger',
     parentContextId: 'context:same',
     challengerContextId: 'context:same',
@@ -186,6 +233,7 @@ test('Host Challenge lifecycle rejects reused requests and same-context claims',
   }), /context distinct/);
   lifecycle.observeStart({
     request,
+    challengeExecutionPacket: packetFixture(),
     agentType: 'stetra-challenger',
     parentContextId: 'context:parent',
     challengerContextId: 'context:child',
@@ -193,6 +241,7 @@ test('Host Challenge lifecycle rejects reused requests and same-context claims',
   });
   assert.throws(() => lifecycle.observeStart({
     request,
+    challengeExecutionPacket: packetFixture(),
     agentType: 'stetra-challenger',
     parentContextId: 'context:parent',
     challengerContextId: 'context:other-child',
@@ -210,7 +259,7 @@ function requestFixture(character: string): ChallengeExecutionRequest {
       effectiveContractId: digest('e'),
       attemptId: 'attempt:1',
       factCollectionId: digest('f'),
-      challengeExecutionPacketFingerprint: digest('a'),
+      challengeExecutionPacketFingerprint: stableFingerprint(packetFixture()),
     },
     contextPolicy: 'fresh-required',
     mutationPolicy: 'forbidden',
@@ -222,6 +271,12 @@ function requestFixture(character: string): ChallengeExecutionRequest {
       source: 'challengeExecutionPacket.draft',
     },
   };
+}
+
+function packetFixture(): ChallengeExecutionPacket {
+  return {
+    draft: { evidence: challengeFixture().evidence },
+  } as ChallengeExecutionPacket;
 }
 
 function challengeFixture(): ChallengeDocument {

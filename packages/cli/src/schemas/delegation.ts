@@ -226,9 +226,17 @@ const HandoffEvidenceReferenceSchema = z.union([
   }),
 ]);
 
+const ChallengeEvidenceReferenceSchema = z.union([
+  z.strictObject({ kind: z.literal('patch') }),
+  z.strictObject({
+    kind: z.enum(['changed-file', 'check', 'repository-evidence', 'human-event']),
+    id: z.string().min(1),
+  }),
+]);
+
 const ChallengeEvidenceItemSchema = z.strictObject({
   statement: NonEmptyStringSchema,
-  references: z.array(HandoffEvidenceReferenceSchema).min(1),
+  references: z.array(ChallengeEvidenceReferenceSchema).min(1),
 });
 
 export const ChallengeDocumentSchema = z.strictObject({

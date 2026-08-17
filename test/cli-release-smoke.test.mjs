@@ -192,6 +192,7 @@ try {
     project,
     taskId: prepared.taskId,
     request: collected.hostAction.challengeExecutionRequest,
+    challengeExecutionPacket: collected.hostAction.challengeExecutionPacket,
     challenge: challengeDraft,
   }, null, 2)}\n`, 'utf8');
   const trustedChallengePath = join(consumer, 'trusted-challenge.mjs');
@@ -203,6 +204,7 @@ try {
     "const lifecycle = new HostChallengeLifecycle('evaluation-runner');",
     'lifecycle.observeStart({',
     '  request: input.request,',
+    '  challengeExecutionPacket: input.challengeExecutionPacket,',
     "  agentType: 'stetra-challenger',",
     "  parentContextId: 'context:packed-implementer',",
     "  challengerContextId: 'context:packed-challenger',",

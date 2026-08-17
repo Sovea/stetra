@@ -223,9 +223,12 @@ export function challengeExecutionPacket(input: {
       allowedOutcomes: CONCLUSION_STATUSES,
       evidenceItemShape: {
         statement: '<bounded evidence statement>',
-        references: [{ kind: '<patch or exact evidence kind>', id: '<omit id only for patch>' }],
+        references: [{
+          kind: '<patch, changed-file, check, repository-evidence, or human-event>',
+          id: '<omit id only for patch>',
+        }],
       },
-      instruction: 'Fill only the open judgment fields in draft and return that exact JSON object without Markdown.',
+      instruction: 'Fill only the open judgment fields in draft, cite only evidence selected by this packet, and return that exact JSON object without Markdown.',
     },
   };
 }

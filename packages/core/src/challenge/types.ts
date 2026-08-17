@@ -1,4 +1,3 @@
-import type { HandoffEvidenceReference } from '../handoff/types.ts';
 import type { EvidenceObligationFalsification } from '../delegation/types.ts';
 import type { ProtocolEnvelope } from '../shared/protocol.ts';
 
@@ -13,9 +12,16 @@ export interface ChallengeEvidenceSelection {
   patch: boolean;
 }
 
+export type ChallengeEvidenceReference =
+  | { kind: 'patch' }
+  | {
+      kind: 'changed-file' | 'check' | 'repository-evidence' | 'human-event';
+      id: string;
+    };
+
 export interface ChallengeEvidenceItem {
   statement: string;
-  references: HandoffEvidenceReference[];
+  references: ChallengeEvidenceReference[];
 }
 
 export interface IndependentChallenge extends ProtocolEnvelope {

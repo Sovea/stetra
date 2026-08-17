@@ -12,6 +12,7 @@ export type {
 } from './authority/types.ts';
 export type {
   ChallengeEvidenceItem,
+  ChallengeEvidenceReference,
   ChallengeEvidenceSelection,
   ChallengeIndependence,
   ChallengeOutcome,

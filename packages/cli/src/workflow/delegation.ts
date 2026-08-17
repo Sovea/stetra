@@ -97,6 +97,7 @@ import {
   verificationRevisionAuthoringPacket,
 } from './authoring.ts';
 import { challengeExecutionPacket } from './challenge-projection.ts';
+import { challengeReferenceIssues } from './challenge-references.ts';
 import { buildDeveloperDecisionBrief } from './decision-brief.ts';
 import {
   canonicalProjectRoot,
@@ -2169,6 +2170,19 @@ function validateChallengeReferences(
     'Human Event',
   );
   if (source.evidence.patch && !facts.patch) throw inputError('Challenge selected a patch that does not exist.');
+  const nestedIssues = challengeReferenceIssues(source);
+  if (nestedIssues.length) {
+    throw inputError(
+      'Challenge evidence claims contain unavailable references.',
+      undefined,
+      nestedIssues.map((item) => ({
+        code: 'challenge-evidence-reference-invalid',
+        path: item.path,
+        message: item.message,
+        remediation: 'Use only exact references selected by the current Challenge Execution Packet.',
+      })),
+    );
+  }
 }
 
 function assertReferences(selected: string[], available: string[], label: string): void {

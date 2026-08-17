@@ -437,6 +437,11 @@ Agent-owned document. It preserves the prefilled Obligation IDs,
 falsification design, and evidence selection exactly. It contains no request,
 context, receipt, or independence claim:
 
+Supporting and counter-evidence may cite only patch, changed-file, Check,
+Repository Evidence, or Human Event references selected by this packet. An ad
+hoc tool observation belongs in `observedResult`; it cannot be promoted into a
+fact or another Challenge identity.
+
 ```json
 {
   "obligationIds": ["obligation:exact"],

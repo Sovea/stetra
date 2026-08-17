@@ -324,6 +324,10 @@ repositoryEvidence, and humanEvents are canonical identities, not paths or
 display labels. Preserve its obligation IDs, falsification design, and evidence
 selection exactly. Use **output.allowedOutcomes** and
 **output.evidenceItemShape** for the open Agent-judgment fields.
+A Challenge may cite only patch, changed-file, check, repository-evidence, or
+human-event references selected by that packet. Describe additional read-only
+tool observations in **observedResult**; never manufacture a Challenge or fact
+identity for them.
 A **supported** outcome requires an empty **counterEvidence** array. If any
 counter-evidence remains, use partial, contradicted, or unknown.
 
