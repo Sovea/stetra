@@ -31,7 +31,11 @@ import {
   type VerifierMutation,
 } from '@sovea/stetra-core';
 
-import { inputError, usageError } from '../errors.ts';
+import {
+  attachProtocolInputCorrection,
+  inputError,
+  usageError,
+} from '../errors.ts';
 import {
   DEFAULT_CHECK_TIMEOUT_MS,
   runFrozenChecks,
@@ -1528,7 +1532,7 @@ export function explainDelegationTask(options: {
   hostAttestations?: HostAttestationProvider;
 }) {
   const task = loadTask(options.projectRoot, options.taskId);
-  const section = options.section ?? 'all';
+  const section = options.section ?? 'index';
   const common = {
     protocol: task.projection.protocol,
     schemaVersion: task.projection.schemaVersion,
@@ -1596,29 +1600,40 @@ export function explainDelegationTask(options: {
     };
   }
   if (section === 'events') return { ...common, events: task.events };
-  if (section !== 'all') {
-    throw usageError('Invalid explain section; use action, contract, baseline, plan, attempts, challenge, revision, handoff, decision, events, or all.');
+  if (section !== 'index') {
+    throw usageError('Invalid explain section; use index, action, contract, baseline, plan, attempts, challenge, revision, handoff, decision, or events.');
   }
-  const challenges = readChallenges(task);
   return {
     ...common,
-    contract: readContract(task),
-    plan: readContract(task).plan,
-    attempts: task.projection.attempts,
-    challenges,
-    hostReceipts: readHostChallengeReceipts(task, challenges),
-    verificationRevisions: readVerificationRevisions(task),
-    handoff: task.projection.currentHandoffId ? readCurrentHandoff(task) : null,
-    decision: task.projection.decisionId
-      ? readJsonArtifact(taskArtifactPath(task.taskDirectory, decisionPath(task.projection.decisionId)), 'Human Decision')
-      : null,
-    events: task.events,
+    availableSections: [
+      { name: 'action', available: task.projection.decisionStatus === 'pending' },
+      { name: 'contract', available: true },
+      { name: 'baseline', available: true },
+      { name: 'plan', available: true },
+      { name: 'attempts', available: true, count: task.projection.attempts.length },
+      { name: 'challenge', available: task.projection.challengeIds.length > 0, count: task.projection.challengeIds.length },
+      { name: 'revision', available: task.projection.verificationRevisionIds.length > 0, count: task.projection.verificationRevisionIds.length },
+      { name: 'handoff', available: Boolean(task.projection.currentHandoffId) },
+      { name: 'decision', available: Boolean(task.projection.decisionId) },
+      { name: 'events', available: true, count: task.events.length },
+    ],
+    artifactIndex: {
+      attempts: task.projection.attempts.map((attempt) => ({
+        attemptId: attempt.attemptId,
+        factCollectionId: attempt.factCollectionId ?? null,
+      })),
+      challengeIds: task.projection.challengeIds,
+      verificationRevisionIds: task.projection.verificationRevisionIds,
+      handoffId: task.projection.currentHandoffId ?? null,
+      decisionId: task.projection.decisionId ?? null,
+    },
   };
 }
 
 export async function guardFinalResponse(options: {
   projectRoot: string;
   taskId: string;
+  knownActionFingerprint?: string;
   hostAttestations?: HostAttestationProvider;
 }): Promise<FinalResponseGuard> {
   const task = loadTask(options.projectRoot, options.taskId);
@@ -1648,6 +1663,9 @@ export async function guardFinalResponse(options: {
     disposition = 'continue-workflow';
   }
 
+  const actionFingerprint = stableFingerprint(hostAction);
+  const actionUnchanged = options.knownActionFingerprint !== undefined
+    && options.knownActionFingerprint === actionFingerprint;
   return {
     protocol: DELEGATION_PROTOCOL,
     schemaVersion: DELEGATION_SCHEMA_VERSION,
@@ -1656,8 +1674,9 @@ export async function guardFinalResponse(options: {
     revision: task.projection.revision,
     disposition,
     factsCurrent,
-    actionFingerprint: stableFingerprint(hostAction),
-    hostAction,
+    actionFingerprint,
+    actionUnchanged,
+    hostAction: actionUnchanged ? null : hostAction,
     stateWritten: false,
   };
 }
@@ -1812,7 +1831,17 @@ async function readInputDocument<Schema extends Parameters<typeof parseArtifact>
   } catch (error) {
     throw inputError(`${label} from ${sourceLabel} is not valid JSON.`, error);
   }
-  return parseArtifact(schema, value, label) as ReturnType<typeof parseArtifact<Schema>>;
+  try {
+    return parseArtifact(schema, value, label) as ReturnType<typeof parseArtifact<Schema>>;
+  } catch (error) {
+    throw attachProtocolInputCorrection(error, {
+      label,
+      source: pathInput === '-'
+        ? { transport: 'stdin' }
+        : { transport: 'file', path: sourceLabel },
+      submittedDocument: value,
+    });
+  }
 }
 
 function safeInputPath(projectRoot: string, input: string, label: string): string {

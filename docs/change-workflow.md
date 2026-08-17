@@ -17,7 +17,7 @@ stetra change decide . --task <task-id> --input - --json
 stetra change resolve . --task <task-id> --input - --json
 stetra change guard-final . --task <task-id> --json
 stetra change explain . --task <task-id> --section action --json
-stetra change explain . --task <task-id> --section all --json
+stetra change explain . --task <task-id> --section index --json
 ```
 
 All authoring input uses stdin or a file outside the worktree. Every successful
@@ -95,8 +95,13 @@ current worktree without writing state. It returns one disposition:
 - `human-decision-recorded`: report the recorded terminal decision.
 
 The guard also returns fact currency, task revision, and a fingerprint of the
-projected action. The brief appears only inside `hostAction`, avoiding a second
-copy in the same JSON response. Generated skills instruct this call but do not claim that a
+projected action. A Host that still holds the exact preceding action may pass
+that fingerprint as `--known-action-fingerprint`; when it still matches, the
+guard returns `actionUnchanged: true` and omits the duplicate action Packet by
+returning `hostAction: null`. The Host may reuse only the exact Action bound to
+that fingerprint. A missing or stale fingerprint returns the complete current
+Action. The brief appears only inside `hostAction`, avoiding a second copy in
+the same JSON response. Generated skills instruct this call but do not claim that a
 Markdown file enforces a Host hook. A native Host integration may enforce the
 same command at its final-response boundary. The published
 `@sovea/stetra/host` subpath exposes `runCli`, `guardFinalResponse`, exact Host
@@ -653,6 +658,7 @@ command with a packet-prefilled target. Actions are
 ## Inspect
 
 ```sh
+stetra change explain . --task <task-id> --section index --json
 stetra change explain . --task <task-id> --section contract --json
 stetra change explain . --task <task-id> --section baseline --json
 stetra change explain . --task <task-id> --section action --json
@@ -665,4 +671,12 @@ stetra change explain . --task <task-id> --section decision --json
 stetra change explain . --task <task-id> --section events --json
 ```
 
-Unsupported shapes fail with actionable errors and write no compatibility state.
+`index` is the default. It lists section availability, counts, and artifact IDs
+without expanding the Contract, Facts, Handoff, Decision, or Event Ledger.
+Call one exact detail section only when it is needed for a current judgment.
+
+Unsupported shapes fail with actionable errors and write no compatibility
+state. A schema-invalid JSON document returns a transient `inputCorrection`
+with the submitted document, exact issue paths, and `stateWritten: false`; the
+Host repairs that document and retries the same lifecycle command. Invalid JSON
+that cannot be parsed has no submitted document to project.

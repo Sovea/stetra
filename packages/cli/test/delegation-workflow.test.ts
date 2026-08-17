@@ -249,7 +249,18 @@ test('final-response guard exposes the current workflow action without writing s
     });
     assert.equal(preparedGuard.disposition, 'continue-workflow');
     assert.equal(preparedGuard.hostAction?.kind, 'implement-and-collect');
+    assert.equal(preparedGuard.actionUnchanged, false);
     assert.equal(preparedGuard.stateWritten, false);
+
+    const repeatedPreparedGuard = await guardFinalResponse({
+      projectRoot: root,
+      taskId: prepared.taskId,
+      knownActionFingerprint: preparedGuard.actionFingerprint,
+    });
+    assert.equal(repeatedPreparedGuard.disposition, 'continue-workflow');
+    assert.equal(repeatedPreparedGuard.actionUnchanged, true);
+    assert.equal(repeatedPreparedGuard.hostAction, null);
+    assert.equal(repeatedPreparedGuard.actionFingerprint, preparedGuard.actionFingerprint);
 
     writeFileSync(join(root, 'source.txt'), 'first implementation\n', 'utf8');
     let collected = await collect(root, prepared.taskId);
@@ -267,6 +278,7 @@ test('final-response guard exposes the current workflow action without writing s
     assert.equal(staleGuard.disposition, 'continue-workflow');
     assert.equal(staleGuard.factsCurrent, false);
     assert.equal(staleGuard.hostAction?.kind, 'recollect-stale-facts');
+    assert.equal(staleGuard.actionUnchanged, false);
     collected = await collect(root, prepared.taskId);
 
     const handoffDraft = structuredClone(collected.hostAction.authoringPacket.draft);

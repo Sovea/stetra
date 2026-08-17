@@ -25,6 +25,10 @@ interface TaskOptions {
   task: string;
 }
 
+interface GuardFinalOptions extends TaskOptions {
+  knownActionFingerprint?: string;
+}
+
 interface TaskInputOptions extends TaskOptions, InputOptions {}
 
 interface CollectOptions extends TaskOptions {
@@ -102,10 +106,12 @@ export function registerChangeCommands(
     .description('Read the current task state before a Host sends its final response')
     .argument('[project-root]', 'Git worktree root', '.')
     .requiredOption('--task <id>', 'task ID returned by prepare')
-    .action(async (projectRoot: string, options: TaskOptions, command: Command) => {
+    .option('--known-action-fingerprint <sha256>', 'omit an unchanged Host Action already held by the caller')
+    .action(async (projectRoot: string, options: GuardFinalOptions, command: Command) => {
       environment.emit('change guard-final', await guardFinalResponse({
         projectRoot,
         taskId: options.task,
+        knownActionFingerprint: options.knownActionFingerprint,
         hostAttestations: environment.runtime.hostAttestations,
       }), command);
     });
@@ -115,7 +121,7 @@ export function registerChangeCommands(
     .description('Regenerate the current action or inspect durable workflow artifacts')
     .argument('[project-root]', 'Git worktree root', '.')
     .requiredOption('--task <id>', 'task ID returned by prepare')
-    .option('--section <name>', 'action, contract, baseline, plan, attempts, challenge, revision, handoff, decision, events, or all', 'all')
+    .option('--section <name>', 'index, action, contract, baseline, plan, attempts, challenge, revision, handoff, decision, or events', 'index')
     .action((projectRoot: string, options: ExplainOptions, command: Command) => {
       environment.emit('change explain', explainDelegationTask({
         projectRoot,

@@ -146,7 +146,11 @@ try {
   const guardPath = join(consumer, 'host-guard.mjs');
   writeFileSync(guardPath, [
     "import { guardFinalResponse } from '@sovea/stetra/host';",
-    'const result = await guardFinalResponse({ projectRoot: process.argv[2], taskId: process.argv[3] });',
+    'const result = await guardFinalResponse({',
+    '  projectRoot: process.argv[2],',
+    '  taskId: process.argv[3],',
+    '  ...(process.argv[4] ? { knownActionFingerprint: process.argv[4] } : {}),',
+    '});',
     'process.stdout.write(JSON.stringify(result));',
     '',
   ].join('\n'), 'utf8');
@@ -158,7 +162,17 @@ try {
   );
   assert.equal(preparedGuard.disposition, 'continue-workflow');
   assert.equal(preparedGuard.hostAction.kind, 'implement-and-collect');
+  assert.equal(preparedGuard.actionUnchanged, false);
   assert.equal(preparedGuard.stateWritten, false);
+  const repeatedGuard = runJson(
+    process.execPath,
+    [guardPath, project, prepared.taskId, preparedGuard.actionFingerprint],
+    consumer,
+    { shell: false },
+  );
+  assert.equal(repeatedGuard.actionUnchanged, true);
+  assert.equal(repeatedGuard.hostAction, null);
+  assert.equal(repeatedGuard.actionFingerprint, preparedGuard.actionFingerprint);
 
   writeFileSync(join(project, 'src/example.ts'), 'export const value = 2;\n', 'utf8');
   const collected = runInstalledCli(['change', 'collect', project, '--task', prepared.taskId, '--json']);
@@ -303,6 +317,11 @@ try {
   assert.deepEqual(explained.events.map((event) => event.type), [
     'task-prepared', 'facts-collected', 'challenge-recorded', 'handoff-evaluated', 'decision-recorded',
   ]);
+  const artifactIndex = runInstalledCli(['change', 'explain', project, '--task', prepared.taskId, '--json']);
+  assert.equal(artifactIndex.section, 'index');
+  assert.equal(artifactIndex.availableSections.find((section) => section.name === 'events').count, explained.events.length);
+  assert.equal('events' in artifactIndex, false);
+  assert.equal('contract' in artifactIndex, false);
 
   const status = runInstalledCli(['status', project, '--json']);
   assert.equal(status.controlPlane.kind, 'cli');

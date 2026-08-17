@@ -13,23 +13,58 @@ export interface CliIssue {
   remediation?: string;
 }
 
+export interface ProtocolInputCorrection {
+  kind: 'correct-protocol-input';
+  label: string;
+  source: { transport: 'stdin' } | { transport: 'file'; path: string };
+  submittedDocument: unknown;
+  issues: CliIssue[];
+  stateWritten: false;
+}
+
 export class CliError extends Error {
   readonly code: CliErrorCode;
   readonly exitCode: number;
   readonly issues?: CliIssue[];
+  readonly inputCorrection?: ProtocolInputCorrection;
 
   constructor(
     code: CliErrorCode,
     message: string,
     exitCode: number,
-    options: { cause?: unknown; issues?: CliIssue[] } = {},
+    options: {
+      cause?: unknown;
+      issues?: CliIssue[];
+      inputCorrection?: ProtocolInputCorrection;
+    } = {},
   ) {
     super(message, options.cause === undefined ? undefined : { cause: options.cause });
     this.name = 'CliError';
     this.code = code;
     this.exitCode = exitCode;
     this.issues = options.issues;
+    this.inputCorrection = options.inputCorrection;
   }
+}
+
+export function attachProtocolInputCorrection(
+  error: unknown,
+  input: Omit<ProtocolInputCorrection, 'kind' | 'issues' | 'stateWritten'>,
+): CliError {
+  const normalized = normalizeCliError(error);
+  if (normalized.code !== 'INVALID_INPUT' || !normalized.issues?.length) {
+    return normalized;
+  }
+  return new CliError(normalized.code, normalized.message, normalized.exitCode, {
+    cause: normalized,
+    issues: normalized.issues,
+    inputCorrection: {
+      kind: 'correct-protocol-input',
+      ...input,
+      issues: normalized.issues,
+      stateWritten: false,
+    },
+  });
 }
 
 export function usageError(message: string, cause?: unknown): CliError {

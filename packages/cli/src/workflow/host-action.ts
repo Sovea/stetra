@@ -121,6 +121,7 @@ export interface FinalResponseGuard {
     | 'human-decision-recorded';
   factsCurrent: boolean;
   actionFingerprint: string;
+  actionUnchanged: boolean;
   hostAction: HostAction | null;
   stateWritten: false;
 }

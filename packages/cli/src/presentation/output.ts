@@ -37,6 +37,7 @@ export function formatCliError(error: CliError, json: boolean, color: boolean): 
       code: error.code,
       message: error.message,
       ...(error.issues?.length ? { issues: error.issues } : {}),
+      ...(error.inputCorrection ? { inputCorrection: error.inputCorrection } : {}),
     }, null, 2)}\n`;
   }
   const colors = pc.createColors(color);

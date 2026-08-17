@@ -16,6 +16,7 @@ export {
   normalizeCliError,
   type CliErrorCode,
   type CliIssue,
+  type ProtocolInputCorrection,
 } from './errors.ts';
 export {
   formatCliError,
@@ -52,6 +53,7 @@ export type {
 export interface FinalResponseGuardOptions {
   projectRoot: string;
   taskId: string;
+  knownActionFingerprint?: string;
   hostAttestations?: HostAttestationProvider;
 }
 

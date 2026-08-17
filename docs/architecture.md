@@ -722,11 +722,20 @@ one Host turn.
 The CLI also provides a read-only final-response guard. Given an exact task ID,
 it checks fact currency and projects whether the Host must continue the
 workflow, present the current Developer Decision Brief, or report an already
-recorded Human decision. This closes the final delivery boundary without a new
-lifecycle state or persisted mode. Generated Markdown adapters can instruct the
-guard but cannot claim enforcement. A native Host integration may bind the
-same deterministic guard to a real before-final-response hook; Stetra does not
-invent a general hook engine or infer the active task from repository state.
+recorded Human decision. A Host may provide the fingerprint of an exact Action
+it still holds; the guard can then report that the Action is unchanged without
+repeating its Packet. A mismatch always returns the complete current Action.
+On-demand inspection defaults to an artifact index and expands only a named
+canonical section. Schema-invalid Agent input may return an ephemeral
+correction packet containing the submitted document and exact structural
+issues, but this writes no task state and adds no repair lifecycle. These
+projections reduce repeated context without weakening identity or currency.
+
+The guard closes the final delivery boundary without a new lifecycle state or
+persisted mode. Generated Markdown adapters can instruct the guard but cannot
+claim enforcement. A native Host integration may bind the same deterministic
+guard to a real before-final-response hook; Stetra does not invent a general
+hook engine or infer the active task from repository state.
 
 ## Persistence model
 

@@ -65,34 +65,26 @@ description: Preserve developer understanding and decision authority while a cod
 
 # Stetra
 
-Use this workflow when a production change needs a complete path from exact
-developer intent to an informed adoption decision. ${host} owns investigation,
-interpretation, implementation, evidence diagnosis, bounded repair, challenge,
-and handoff. The developer owns goals, long-lived tradeoffs, exceptions, and
-the final decision. Runtime owns only facts it directly collects.
+Use this for a production change from exact intent to informed adoption.
+${host} owns investigation, implementation, diagnosis, repair, challenge, and
+handoff. The developer owns goals, long-lived tradeoffs, exceptions, and the
+final decision. Runtime owns only facts it collects.
 
-Read [references/change.md](references/change.md) before prepare. After every
-JSON result, follow its structured **hostAction**. If **hostAction.reference**
-names a page, ensure that page is available in context; do not reread an
-unchanged page already present in one continuous context. Projection changes
-instructions, never lifecycle state, authority, evidence, or adoption meaning.
-For an **authoringPacket**, fill its pre-bound **draft** using
-**fieldRequirements** and **shapeCatalog**, then send it through the exact **inputBinding**.
-Requirements define structure, not judgment. Treat
-**semanticContext.exactDeveloperEvents** as Human authority and the separately
-labeled Agent interpretation as Agent judgment.
+Read [references/change.md](references/change.md) before prepare, then follow
+each **hostAction**. Load a named reference; do not reread an unchanged page in
+one continuous context. Projection adds no state or authority. Fill a projected
+**draft** by its requirements and send it through the exact **inputBinding**.
+Exact developer events are Human authority; interpretations are Agent judgment.
 
-Before final response, run **stetra change guard-final . --task
-<task-id> --json**. Continue the returned workflow, present its current brief,
-or report its recorded Human decision according to **disposition**. This skill
-does not claim native Host enforcement.
+Before responding, run **stetra change guard-final . --task <task-id> --json**.
+If its exact prior Action remains in context, pass
+**--known-action-fingerprint <sha256>**; **actionUnchanged** means reuse it.
+Obey **disposition**. This skill does not claim native Host enforcement.
 
-When **hostAction.developerDecisionBrief** is present, it owns the final
-cognitive handoff even if another workflow requests a summary. Follow every
-**presentationRequirements** reference, preserve the four decision states,
-contrast intended with actual meaning, state that adoption is pending, ask for
-the decision, and stop. Never execute **decisionContinuation** before a new
-developer message supplies that decision.
+**hostAction.developerDecisionBrief** owns the final cognitive handoff. Preserve
+every required reference and decision state, contrast intended and actual
+meaning, state adoption is pending, ask for the decision, and stop. Execute
+**decisionContinuation** only after a new developer message supplies it.
 
 Keep Human authority, Agent judgment, Runtime facts, and adoption separate.
 Passing evidence is not adoption. Never invent facts, hide Attention, or treat
@@ -420,8 +412,10 @@ Human decision, never adopted. **needs-attention** preserves unresolved facts
 or conclusions as direct-cause decision issues.
 
 Immediately before presenting it, run the read-only **change guard-final**
-command. Present only the current brief returned by that guard; if facts became
-stale or another action is pending, follow the guard's hostAction first.
+command, passing the known Action fingerprint when the exact prior Action is
+still in context. **actionUnchanged** permits reuse only of that fingerprinted
+Action. Present only its current brief; if facts became stale or another action
+is pending, follow the newly returned hostAction first.
 
 State that adoption is pending, ask the developer to accept, request a
 correction, reject, or defer, and stop. Do not execute
@@ -470,7 +464,11 @@ They may add review obligations but never become a score or automatic rejection.
 
 Use **stetra change explain . --task <task-id> --section
 contract|baseline|plan|attempts|challenge|revision|handoff|decision|events --json** for exact
-artifacts. Supplemental Host probes remain labeled Agent evidence.
+artifacts. Omit **--section** (or use **index**) to list available artifacts
+without expanding the Ledger. An invalid input returns an ephemeral
+**inputCorrection** containing the submitted document and exact schema issues;
+repair that document and retry the unchanged command. Supplemental Host probes
+remain labeled Agent evidence.
 `;
 
 const WORKFLOW_REFERENCES: Record<HostWorkflowReference, string> = {

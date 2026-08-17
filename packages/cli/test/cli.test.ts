@@ -116,6 +116,24 @@ test('CLI JSON mode executes compact prepare, baseline-aware collect, layered ha
       'change', 'explain', root, '--task', prepared.taskId, '--section', 'events',
     ]);
     assert.match(formatCliOutput(explainExecution), /Events:/);
+
+    const index = (await runCli([
+      'change', 'explain', root, '--task', prepared.taskId, '--json',
+    ])).output as Record<string, unknown> & {
+      section: string;
+      availableSections: Array<{ name: string; available: boolean; count?: number }>;
+      artifactIndex: { attempts: Array<{ attemptId: string; factCollectionId: string | null }> };
+    };
+    assert.equal(index.section, 'index');
+    assert.equal(index.availableSections.find((item) => item.name === 'events')?.count, 4);
+    assert.equal(index.artifactIndex.attempts.length, 1);
+    for (const expanded of ['contract', 'plan', 'attempts', 'challenges', 'events']) {
+      assert.equal(Object.hasOwn(index, expanded), false);
+    }
+    await assert.rejects(
+      runCli(['change', 'explain', root, '--task', prepared.taskId, '--section', 'all', '--json']),
+      /Invalid explain section/,
+    );
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -128,8 +146,23 @@ test('unsupported input is rejected without migration or compatibility state', a
       runCli(['change', 'prepare', root, '--input', '-', '--json'], {
         input: jsonStream({ ...prepareDocument(), schemaVersion: 'unsupported' }),
       }),
-      (error: unknown) => Boolean(error && typeof error === 'object'
-        && (error as { code?: string }).code === 'INVALID_INPUT'),
+      (error: unknown) => {
+        if (!error || typeof error !== 'object') return false;
+        const candidate = error as {
+          code?: string;
+          inputCorrection?: {
+            kind: string;
+            submittedDocument: { schemaVersion?: string };
+            issues: Array<{ path: string }>;
+            stateWritten: boolean;
+          };
+        };
+        assert.equal(candidate.inputCorrection?.kind, 'correct-protocol-input');
+        assert.equal(candidate.inputCorrection?.submittedDocument.schemaVersion, 'unsupported');
+        assert.equal(candidate.inputCorrection?.issues[0].path, 'schemaVersion');
+        assert.equal(candidate.inputCorrection?.stateWritten, false);
+        return candidate.code === 'INVALID_INPUT';
+      },
     );
   } finally {
     rmSync(root, { recursive: true, force: true });
