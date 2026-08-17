@@ -466,6 +466,30 @@ test('a challenge cannot rewrite the frozen falsification design', () => {
   }), /falsification design/);
 });
 
+test('a supported challenge cannot retain counter-evidence even when it bypasses CLI validation', () => {
+  const contract = compiledContract();
+  const facts = factBundle(contract);
+  const challenges = supportedChallenges(contract, facts);
+  challenges[0].counterEvidence = [{
+    statement: 'The persistent verifier leaves the declared boundary unprotected.',
+    references: facts.checks.map((item) => ({ kind: 'check' as const, id: item.definitionId })),
+  }];
+  const handoff = handoffFor(contract, facts, challenges);
+
+  assert.throws(() => evaluateHandoff({
+    ...envelope, contract, factBundle: facts,
+    currentWorktreeFingerprint: facts.current.fingerprint,
+    challenges, currentEvidenceDisposition: undefined, hostPolicyEvaluations: [],
+    deliveryExhausted: false, verificationRevised: false, handoff,
+  }), (error: unknown) => {
+    const candidate = error as { issues?: Array<{ code: string; path: string }> };
+    assert.ok(candidate.issues?.some((item) =>
+      item.code === 'challenge-supported-with-counter-evidence'
+      && item.path === 'challenges[0].counterEvidence'));
+    return true;
+  });
+});
+
 test('a condition cannot claim support beyond its obligation conclusions', () => {
   const contract = compiledContract();
   const facts = factBundle(contract);

@@ -241,6 +241,14 @@ export const ChallengeDocumentSchema = z.strictObject({
   counterEvidence: z.array(ChallengeEvidenceItemSchema),
   outcome: z.enum(CONCLUSION_STATUSES),
   conclusion: NonEmptyStringSchema,
+}).superRefine((value, context) => {
+  if (value.outcome === 'supported' && value.counterEvidence.length > 0) {
+    context.addIssue({
+      code: 'custom',
+      path: ['counterEvidence'],
+      message: 'must be empty when outcome is supported; use partial, contradicted, or unknown while counter-evidence remains',
+    });
+  }
 });
 
 export const HostChallengeRunReceiptSchema = z.strictObject({
