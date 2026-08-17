@@ -99,7 +99,7 @@ export interface HumanDecision extends ProtocolEnvelope {
 
 export type HandoffAttentionCode =
   | 'verification-nonpassing'
-  | 'baseline-observation-different'
+  | 'baseline-expectation-mismatch'
   | 'baseline-unknown-after-revision'
   | 'verifier-surface-changed'
   | 'verification-revised'

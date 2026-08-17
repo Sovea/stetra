@@ -22,9 +22,16 @@ export interface AuthoringFieldRequirement {
   path: string;
   authority: 'agent-judgment' | 'human-decision';
   allowedValues?: string[];
-  acceptedShapes?: unknown[];
+  shapeRef?: AuthoringShapeName;
   instruction: string;
 }
+
+export type AuthoringShapeName =
+  | 'verification-baseline'
+  | 'challenge-evidence-item'
+  | 'handoff-evidence-reference'
+  | 'residual-unknown'
+  | 'review-question';
 
 export interface AuthoringPacket {
   inputKind:
@@ -57,6 +64,7 @@ export interface AuthoringPacket {
   };
   draft: unknown;
   fieldRequirements: AuthoringFieldRequirement[];
+  shapeCatalog?: Partial<Record<AuthoringShapeName, unknown[]>>;
   referenceCatalog: {
     conditions?: Array<{
       id: string;
@@ -247,11 +255,11 @@ export function challengeAuthoringPacket(input: {
         'State the bounded conclusion without exceeding the exact evidence references.',
       ),
       shapeRequirement(
-        'draft.supportingEvidence[]', 'agent-judgment', [challengeEvidenceItemShape()],
+        'draft.supportingEvidence[]', 'agent-judgment', 'challenge-evidence-item',
         'Each support claim must cite one or more exact current evidence references.',
       ),
       shapeRequirement(
-        'draft.counterEvidence[]', 'agent-judgment', [challengeEvidenceItemShape()],
+        'draft.counterEvidence[]', 'agent-judgment', 'challenge-evidence-item',
         'Use exact references for adverse evidence; leave the array empty only when none was found.',
       ),
     ] : [],
@@ -283,6 +291,7 @@ export function verificationRevisionAuthoringPacket(input: {
           ? {
               mode: 'task-start',
               rationale: definition.baseline.rationale,
+              expectation: definition.baseline.expectation,
               obligationKeys: definition.baseline.obligationIds.map((id) =>
                 obligationKeys.get(id)!),
             }
@@ -321,7 +330,7 @@ export function verificationRevisionAuthoringPacket(input: {
         'State the bounded engineering-equivalence claim; Runtime records but does not prove it.',
       ),
       ...(checks ?? []).map((_, index) => shapeRequirement(
-        `draft.checks[${index}].baseline`, 'agent-judgment', baselineShapes(),
+        `draft.checks[${index}].baseline`, 'agent-judgment', 'verification-baseline',
         'Use exactly one baseline variant. For execution-rebinding, preserve this prefilled object and its array ordering exactly; only argv may change. Unknown has no rationale or obligationKeys fields.',
       )),
     ],
@@ -441,12 +450,12 @@ export function handoffAuthoringPacket(input: {
         ),
         shapeRequirement(
           `draft.obligationConclusions[${index}].evidence[]`, 'agent-judgment',
-          handoffEvidenceReferenceShapes(),
+          'handoff-evidence-reference',
           'Use a direct exact evidence reference; this array does not accept a statement/references wrapper.',
         ),
         shapeRequirement(
           `draft.obligationConclusions[${index}].counterEvidence[]`, 'agent-judgment',
-          handoffEvidenceReferenceShapes(),
+          'handoff-evidence-reference',
           'Use direct exact references for adverse evidence; leave the array empty only when none was found.',
         ),
       ]),
@@ -462,11 +471,11 @@ export function handoffAuthoringPacket(input: {
         ),
       ]),
       shapeRequirement(
-        'draft.residualUnknowns[]', 'agent-judgment', [residualUnknownShape()],
+        'draft.residualUnknowns[]', 'agent-judgment', 'residual-unknown',
         'Add one item for each adoption-relevant unknown; keep the array empty only when none remains.',
       ),
       shapeRequirement(
-        'draft.reviewQuestions[]', 'agent-judgment', [reviewQuestionShape()],
+        'draft.reviewQuestions[]', 'agent-judgment', 'review-question',
         'Review questions use exact current condition, obligation, and evidence references.',
       ),
       choiceRequirement(
@@ -591,6 +600,8 @@ function packetBase(
   const comparisons = new Map(facts?.checkComparisons.map((item) =>
     [item.definitionId, item.relation]) ?? []);
   const factChecks = new Map(facts?.checks.map((item) => [item.definitionId, item]) ?? []);
+  const shapeNames = [...new Set(content.fieldRequirements.flatMap((requirement) =>
+    requirement.shapeRef ? [requirement.shapeRef] : []))];
   return {
     ...content,
     bindsTo: {
@@ -613,6 +624,9 @@ function packetBase(
         focus: contract.understanding.focus.map((item) => item.value),
       },
     },
+    ...(shapeNames.length ? {
+      shapeCatalog: Object.fromEntries(shapeNames.map((name) => [name, AUTHORING_SHAPES[name]])),
+    } : {}),
     referenceCatalog: selectedCatalog(catalogSelection, {
       conditions: contract.adoptionConditions.map((condition) => ({
         id: condition.id,
@@ -682,10 +696,10 @@ function choiceRequirement(
 function shapeRequirement(
   path: string,
   authority: AuthoringFieldRequirement['authority'],
-  acceptedShapes: unknown[],
+  shapeRef: AuthoringShapeName,
   instruction: string,
 ): AuthoringFieldRequirement {
-  return { path, authority, acceptedShapes, instruction };
+  return { path, authority, shapeRef, instruction };
 }
 
 function textRequirement(
@@ -713,6 +727,10 @@ function baselineShapes(): unknown[] {
     {
       mode: 'task-start',
       rationale: '<non-empty reason why before/after changes this decision>',
+      expectation: {
+        baselineStatus: '<passed | failed | unavailable>',
+        currentStatus: '<passed | failed | unavailable>',
+      },
       obligationKeys: [{
         conditionKey: '<referenceCatalog condition key>',
         obligationKey: '<referenceCatalog obligation key>',
@@ -759,6 +777,14 @@ function reviewQuestionShape() {
     evidence: [{ kind: '<evidence kind>', id: '<exact referenceCatalog id>' }],
   };
 }
+
+const AUTHORING_SHAPES: Record<AuthoringShapeName, unknown[]> = {
+  'verification-baseline': baselineShapes(),
+  'challenge-evidence-item': [challengeEvidenceItemShape()],
+  'handoff-evidence-reference': handoffEvidenceReferenceShapes(),
+  'residual-unknown': [residualUnknownShape()],
+  'review-question': [reviewQuestionShape()],
+};
 
 function targetDocument(pending: NonNullable<TaskProjection['pendingResolution']>) {
   if (pending.kind === 'semantic-impact') {

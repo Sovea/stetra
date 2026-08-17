@@ -46,6 +46,10 @@ interface CheckDraft extends Omit<VerificationDefinition, 'definitionId' | 'base
         mode: 'task-start';
         rationale: string;
         obligationKeys: Array<{ conditionKey: string; obligationKey: string }>;
+        expectation: {
+          baselineStatus: 'passed' | 'failed' | 'unavailable';
+          currentStatus: 'passed' | 'failed' | 'unavailable';
+        };
       };
 }
 
@@ -500,8 +504,33 @@ function validateBaseline(value: unknown, path: string, issues: ValidationIssue[
     issues.push(issue('verification-baseline-invalid', `${path}.mode`, 'Baseline mode must be task-start or unknown.'));
     return undefined;
   }
-  rejectExtraKeys(value, ['mode', 'rationale', 'obligationKeys'], path, issues);
+  rejectExtraKeys(value, ['mode', 'rationale', 'obligationKeys', 'expectation'], path, issues);
   const rationale = normalized(value.rationale, `${path}.rationale`, issues);
+  const allowedStatuses = ['passed', 'failed', 'unavailable'];
+  let expectation: {
+    baselineStatus: 'passed' | 'failed' | 'unavailable';
+    currentStatus: 'passed' | 'failed' | 'unavailable';
+  } | undefined;
+  if (!isRecord(value.expectation)) {
+    issues.push(issue(
+      'verification-baseline-expectation-required', `${path}.expectation`,
+      'Task-start baseline must state the expected baseline and current check statuses.',
+    ));
+  } else {
+    rejectExtraKeys(value.expectation, ['baselineStatus', 'currentStatus'], `${path}.expectation`, issues);
+    if (!allowedStatuses.includes(String(value.expectation.baselineStatus))
+      || !allowedStatuses.includes(String(value.expectation.currentStatus))) {
+      issues.push(issue(
+        'verification-baseline-expectation-invalid', `${path}.expectation`,
+        'Expected baseline and current statuses must be passed, failed, or unavailable.',
+      ));
+    } else {
+      expectation = {
+        baselineStatus: value.expectation.baselineStatus as 'passed' | 'failed' | 'unavailable',
+        currentStatus: value.expectation.currentStatus as 'passed' | 'failed' | 'unavailable',
+      };
+    }
+  }
   if (!Array.isArray(value.obligationKeys) || !value.obligationKeys.length) {
     issues.push(issue('verification-baseline-obligations-required', `${path}.obligationKeys`, 'Task-start baseline must name the obligations whose decision uses the comparison.'));
   }
@@ -522,8 +551,8 @@ function validateBaseline(value: unknown, path: string, issues: ValidationIssue[
   if (new Set(identities).size !== identities.length) {
     issues.push(issue('verification-baseline-obligation-duplicate', `${path}.obligationKeys`, 'Baseline obligation references must be unique.'));
   }
-  return issues.length === before && rationale
-    ? { mode: 'task-start', rationale, obligationKeys: references }
+  return issues.length === before && rationale && expectation
+    ? { mode: 'task-start', rationale, obligationKeys: references, expectation }
     : undefined;
 }
 
@@ -749,6 +778,7 @@ function materializeDefinitions(
       : {
           mode: 'task-start' as const,
           rationale: draft.baselineSource.rationale,
+          expectation: draft.baselineSource.expectation,
           obligationIds: draft.baselineSource.obligationKeys.flatMap((reference) => {
             const obligation = obligationsByKey.get(obligationKey(reference.conditionKey, reference.obligationKey));
             if (!obligation) {

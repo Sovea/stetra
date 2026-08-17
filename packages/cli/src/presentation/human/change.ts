@@ -171,7 +171,9 @@ function appendDeveloperDecisionBrief(
     lines.push('', colors.bold('Decision issues'));
     for (const issue of brief.decisionIssues) {
       if (!isRecord(issue)) continue;
-      lines.push(`${colors.yellow('•')} ${String(issue.code ?? 'unknown')} — ${String(issue.resolution ?? 'inspect')} (${String(issue.id ?? '')})`);
+      const codes = Array.isArray(issue.codes) ? issue.codes.join(' + ') : 'unknown';
+      const resolutions = Array.isArray(issue.resolutions) ? issue.resolutions.join(' / ') : 'inspect';
+      lines.push(`${colors.yellow('•')} ${codes} — ${resolutions} (${String(issue.id ?? '')})`);
       if (Array.isArray(issue.residualUnknowns)) {
         for (const unknown of issue.residualUnknowns) {
           if (isRecord(unknown)) {
@@ -182,6 +184,20 @@ function appendDeveloperDecisionBrief(
       if (Array.isArray(issue.reviewQuestions)) {
         for (const question of issue.reviewQuestions) {
           if (isRecord(question)) lines.push(`  Review: ${String(question.question ?? '')}`);
+        }
+      }
+    }
+  }
+  if (Array.isArray(brief.evidenceHistory) && brief.evidenceHistory.length) {
+    lines.push('', colors.bold('Evidence and recovery history'));
+    for (const history of brief.evidenceHistory) {
+      if (!isRecord(history) || !isRecord(history.resolution)) continue;
+      lines.push(`${colors.cyan('•')} ${String(history.attemptId ?? '')} — ${String(history.resolution.actualRoute ?? 'unknown')}`);
+      if (Array.isArray(history.concerns)) {
+        for (const concern of history.concerns) {
+          if (isRecord(concern)) {
+            lines.push(`  ${String(concern.cause ?? 'unknown')}: ${String(concern.diagnosis ?? '')}`);
+          }
         }
       }
     }

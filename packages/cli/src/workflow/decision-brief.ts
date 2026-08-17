@@ -9,6 +9,7 @@ import type {
 } from '@sovea/stetra-core';
 
 import { HUMAN_DECISION_ACTIONS, type TaskProjection } from '../schemas/delegation.ts';
+import { stableFingerprint } from '../protocol.ts';
 
 export interface DeveloperDecisionBrief {
   decisionState: {
@@ -34,15 +35,29 @@ export interface DeveloperDecisionBrief {
       status: DecisionPacket['conditions'][number]['obligations'][number]['conclusion']['status'];
       conclusion: string;
       evidenceBoundary: {
-        plannedFalsification: DecisionPacket['conditions'][number]['obligations'][number]['falsification'];
-        agentFalsification: DecisionPacket['conditions'][number]['obligations'][number]['conclusion']['falsification'];
-        supportingEvidence: DecisionPacket['conditions'][number]['obligations'][number]['conclusion']['evidence'];
-        counterEvidence: DecisionPacket['conditions'][number]['obligations'][number]['conclusion']['counterEvidence'];
-        challenges: DecisionPacket['evidenceJudgments']['challenges'];
+        failureHypothesis: string;
+        observedResult: string;
+        supportingEvidenceCount: number;
+        counterEvidenceCount: number;
+        challengeOutcomes: Array<{ id: string; outcome: string }>;
       };
     }>;
   }>;
   decisionIssues: DeveloperDecisionIssue[];
+  evidenceHistory: Array<{
+    dispositionId: string;
+    attemptId: string;
+    concerns: Array<{
+      source: DecisionPacket['evidenceJudgments']['dispositions'][number]['entries'][number]['source'];
+      cause: DecisionPacket['evidenceJudgments']['dispositions'][number]['entries'][number]['cause'];
+      diagnosis: string;
+    }>;
+    resolution: {
+      proposedRoute: DecisionPacket['evidenceJudgments']['dispositions'][number]['proposedRoute'];
+      actualRoute: DecisionPacket['evidenceJudgments']['dispositions'][number]['route'];
+      rationale: string;
+    };
+  }>;
   runtimeEvidence: {
     changedFiles: Array<{
       path: string;
@@ -56,8 +71,6 @@ export interface DeveloperDecisionBrief {
       termination: DecisionPacket['runtimeFacts']['checks'][number]['latestAttempt']['termination'];
       baselineRelation: DecisionPacket['runtimeFacts']['checks'][number]['baselineRelation'];
       attemptCount: number;
-      stdout: DecisionPacket['runtimeFacts']['checks'][number]['latestAttempt']['stdout'];
-      stderr: DecisionPacket['runtimeFacts']['checks'][number]['latestAttempt']['stderr'];
     }>;
   };
   requestedDecision: {
@@ -69,10 +82,10 @@ export interface DeveloperDecisionBrief {
 
 export interface DeveloperDecisionIssue {
   id: string;
-  attentionId: string;
-  code: HandoffAttentionCode;
+  attentionIds: string[];
+  codes: HandoffAttentionCode[];
   group: HandoffAttentionItem['group'];
-  resolution: HandoffAttentionItem['resolution']['kind'];
+  resolutions: HandoffAttentionItem['resolution']['kind'][];
   references: HandoffAttentionItem['references'];
   conditionIds: string[];
   obligationIds: string[];
@@ -125,17 +138,20 @@ export function buildDeveloperDecisionBrief(input: {
         status: obligation.conclusion.status,
         conclusion: obligation.conclusion.conclusion,
         evidenceBoundary: {
-          plannedFalsification: obligation.falsification,
-          agentFalsification: obligation.conclusion.falsification,
-          supportingEvidence: obligation.conclusion.evidence,
-          counterEvidence: obligation.conclusion.counterEvidence,
-          challenges: obligation.challengeIds.map((id) => challengeById.get(id)!),
+          failureHypothesis: obligation.falsification.failureHypothesis,
+          observedResult: obligation.conclusion.falsification.observedResult,
+          supportingEvidenceCount: obligation.conclusion.evidence.length,
+          counterEvidenceCount: obligation.conclusion.counterEvidence.length,
+          challengeOutcomes: obligation.challengeIds.flatMap((id) => {
+            const challenge = challengeById.get(id);
+            return challenge ? [{ id, outcome: challenge.outcome }] : [];
+          }),
         },
       })),
     })),
-    decisionIssues: input.packet.attention.map((item) => {
-      const obligationIds = new Set(item.references.obligations ?? []);
-      for (const definitionId of item.references.checks ?? []) {
+    decisionIssues: aggregateAttention(input.packet.attention).map((group) => {
+      const obligationIds = new Set(group.references.obligations ?? []);
+      for (const definitionId of group.references.checks ?? []) {
         const verifierId = verifierByDefinition.get(definitionId);
         if (!verifierId) continue;
         for (const [obligationId, obligation] of obligationById) {
@@ -145,7 +161,7 @@ export function buildDeveloperDecisionBrief(input: {
           }
         }
       }
-      const conditionIds = new Set(item.references.conditions ?? []);
+      const conditionIds = new Set(group.references.conditions ?? []);
       for (const obligationId of obligationIds) {
         const conditionId = conditionByObligation.get(obligationId);
         if (conditionId) conditionIds.add(conditionId);
@@ -153,15 +169,17 @@ export function buildDeveloperDecisionBrief(input: {
       const target = {
         conditionIds: [...conditionIds].sort(),
         obligationIds: [...obligationIds].sort(),
-        evidenceKeys: attentionEvidenceKeys(item, changedFileIdByPath),
+        evidenceKeys: attentionEvidenceKeys(group.references, changedFileIdByPath),
       };
       return {
-        id: `decision-issue:${item.id.slice('attention:'.length)}`,
-        attentionId: item.id,
-        code: item.codes[0],
-        group: item.group,
-        resolution: item.resolution.kind,
-        references: item.references,
+        id: `decision-issue:${stableFingerprint({
+          group: group.group, references: group.references,
+        }).slice('sha256:'.length)}`,
+        attentionIds: group.items.map((item) => item.id).sort(),
+        codes: [...new Set(group.items.flatMap((item) => item.codes))].sort(),
+        group: group.group,
+        resolutions: [...new Set(group.items.map((item) => item.resolution.kind))].sort(),
+        references: group.references,
         conditionIds: target.conditionIds,
         obligationIds: target.obligationIds,
         residualUnknowns: input.packet.systemMeaning.residualUnknowns.filter((unknown) =>
@@ -170,6 +188,20 @@ export function buildDeveloperDecisionBrief(input: {
           questionMatchesTarget(question, target)),
       };
     }),
+    evidenceHistory: input.packet.evidenceJudgments.dispositions.map((disposition) => ({
+      dispositionId: disposition.dispositionId,
+      attemptId: disposition.attemptId,
+      concerns: disposition.entries.map((entry) => ({
+        source: entry.source,
+        cause: entry.cause,
+        diagnosis: entry.diagnosis,
+      })),
+      resolution: {
+        proposedRoute: disposition.proposedRoute,
+        actualRoute: disposition.route,
+        rationale: disposition.routeRationale,
+      },
+    })),
     runtimeEvidence: {
       changedFiles: input.packet.runtimeFacts.changedFiles.map((file) => ({
         path: file.path,
@@ -183,8 +215,6 @@ export function buildDeveloperDecisionBrief(input: {
         termination: check.latestAttempt.termination,
         baselineRelation: check.baselineRelation,
         attemptCount: check.attemptCount,
-        stdout: check.latestAttempt.stdout,
-        stderr: check.latestAttempt.stderr,
       })),
     },
     requestedDecision: {
@@ -196,17 +226,46 @@ export function buildDeveloperDecisionBrief(input: {
 }
 
 function attentionEvidenceKeys(
-  item: HandoffAttentionItem,
+  references: HandoffAttentionItem['references'],
   changedFileIdByPath: Map<string, string>,
 ): Set<string> {
   const keys = new Set<string>();
-  for (const id of item.references.checks ?? []) keys.add(`check:${id}`);
-  for (const id of item.references.challenges ?? []) keys.add(`challenge:${id}`);
-  for (const path of item.references.changedFiles ?? []) {
+  for (const id of references.checks ?? []) keys.add(`check:${id}`);
+  for (const id of references.challenges ?? []) keys.add(`challenge:${id}`);
+  for (const path of references.changedFiles ?? []) {
     const id = changedFileIdByPath.get(path);
     if (id) keys.add(`changed-file:${id}`);
   }
   return keys;
+}
+
+function aggregateAttention(items: HandoffAttentionItem[]): Array<{
+  group: HandoffAttentionItem['group'];
+  references: HandoffAttentionItem['references'];
+  items: HandoffAttentionItem[];
+}> {
+  const grouped = new Map<string, {
+    group: HandoffAttentionItem['group'];
+    references: HandoffAttentionItem['references'];
+    items: HandoffAttentionItem[];
+  }>();
+  for (const item of items) {
+    const references = normalizedReferences(item.references);
+    const key = stableFingerprint({ group: item.group, references });
+    const existing = grouped.get(key);
+    if (existing) existing.items.push(item);
+    else grouped.set(key, { group: item.group, references, items: [item] });
+  }
+  return [...grouped.values()].sort((left, right) =>
+    left.items[0].id.localeCompare(right.items[0].id));
+}
+
+function normalizedReferences(
+  references: HandoffAttentionItem['references'],
+): HandoffAttentionItem['references'] {
+  return Object.fromEntries(Object.entries(references)
+    .filter(([, values]) => values?.length)
+    .map(([key, values]) => [key, [...new Set(values)].sort()]));
 }
 
 function questionMatchesTarget(

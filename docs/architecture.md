@@ -636,6 +636,9 @@ participate in this decision.
 
 The Git worktree baseline is not a baseline test result. A task-start check runs
 only when the before/current comparison changes an exact Evidence Obligation.
+Its definition freezes the expected baseline and current statuses. Runtime
+records the actual mechanical relation and escalates an expectation mismatch;
+it does not infer whether a different result is a semantic regression.
 Otherwise the baseline is honestly unknown.
 
 After collection, every current non-passing Definition receives explicit Agent

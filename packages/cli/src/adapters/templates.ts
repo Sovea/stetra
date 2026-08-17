@@ -27,8 +27,8 @@ JSON result, follow its structured **hostAction**. If **hostAction.reference**
 names a page, ensure that page is available in context; do not reread an
 unchanged page already present in one continuous context. Projection changes
 instructions, never lifecycle state, authority, evidence, or adoption meaning.
-For an **authoringPacket**, fill its pre-bound **draft** according to
-**fieldRequirements** and send it once through the exact **inputBinding**.
+For an **authoringPacket**, fill its pre-bound **draft** using
+**fieldRequirements** and **shapeCatalog**, then send it through the exact **inputBinding**.
 Requirements define structure, not judgment. Treat
 **semanticContext.exactDeveloperEvents** as Human authority and the separately
 labeled Agent interpretation as Agent judgment.
@@ -79,8 +79,7 @@ export const DELEGATION_PREPARE_EXAMPLE = {
   repositoryEvidence: [{
     key: 'relevant-source',
     path: 'src/example.ts',
-    startLine: 1,
-    endLine: 20,
+    wholeFile: true,
   }],
   task: {
     basis: { developerEventKeys: ['request'], repositoryEvidenceKeys: [] },
@@ -120,10 +119,12 @@ export const DELEGATION_PREPARE_EXAMPLE = {
     baseline: {
       mode: 'task-start',
       rationale: 'why before/after changes this decision',
+      expectation: { baselineStatus: 'passed', currentStatus: 'passed' },
       obligationKeys: [{ conditionKey: 'behavior', obligationKey: 'public-path' }],
     },
     verifierSelectors: [
       { kind: 'file', path: 'package.json', role: 'command-definition' },
+      { kind: 'tree', path: 'test', role: 'acceptance-surface' },
     ],
   }],
 } as const;
@@ -143,17 +144,21 @@ Runtime generates event, evidence, condition, obligation, verifier, definition,
 plan, and contract IDs:
 
 ~~~json
-${JSON.stringify(DELEGATION_PREPARE_EXAMPLE, null, 1)}
+${JSON.stringify(DELEGATION_PREPARE_EXAMPLE)}
 ~~~
 
-Replace or remove the example Evidence window after repository inspection;
-every retained window contains **key/path/startLine/endLine**. Checks are shell-free
-argv. Choose **task-start** only when a task-start observation is useful; use
-**unknown** otherwise. The two exact baseline shapes are
-**{"mode":"unknown"}** and **{"mode":"task-start","rationale":"...",
+Replace or remove the example Evidence after inspection. Use exact **key/path**
+plus **startLine/endLine**, or **wholeFile:true**; Runtime materializes either as
+an immutable UTF-8 line window. Checks are shell-free argv. Verifier role is
+exactly **command-definition** for invocation definitions or
+**acceptance-surface** for artifacts that decide whether the command passes.
+Use **task-start** only for a useful initial observation. Exact baselines are
+**{"mode":"unknown"}** and
+**{"mode":"task-start","rationale":"...","expectation":{"baselineStatus":
+"passed|failed|unavailable","currentStatus":"passed|failed|unavailable"},
 "obligationKeys":[{"conditionKey":"...","obligationKey":"..."}]}**. Do not
-add rationale or obligationKeys to unknown. Runtime records a mechanical
-before/current relation, never a semantic regression. If no command applies,
+add rationale, expectation, or obligationKeys to unknown. Runtime alerts only
+when observations violate that expectation; it never infers a regression. If no command applies,
 omit checks and provide a concrete **noCommandRationale**. Routine work may use
 an empty conditions array.
 
@@ -238,8 +243,9 @@ ask the developer. Repair-budget exhaustion mechanically changes an otherwise
 valid repair route to handoff while preserving the proposal. Do not propose
 code changes for another cause. Mechanical verification relaxation requires
 exact Human authority.
-The returned **fieldRequirements** names every enum choice; do not infer a
-default from the ordering.
+The returned **fieldRequirements** names every enum choice and references
+reusable object variants through **shapeCatalog**; do not infer a default from
+the ordering.
 `;
 
 const CHALLENGE_REFERENCE = `# Challenge a falsifiable Evidence Obligation
@@ -254,7 +260,8 @@ Start from **hostAction.authoringPacket.draft**. Its changedFiles, checks,
 repositoryEvidence, and humanEvents are canonical identities, not paths or
 display labels. Compare **semanticContext.exactDeveloperEvents** with the
 separately labeled Agent interpretation before testing the failure hypothesis.
-Use **fieldRequirements** for the exact outcome choices and evidence-item shape.
+Use **fieldRequirements** for the exact outcome choices and its **shapeRef** for
+the evidence-item shape defined once in **shapeCatalog**.
 
 ~~~json
 {
@@ -290,8 +297,8 @@ Attempt, fact-collection, and fingerprint identities; do not author machine fact
 
 Fill the exact **hostAction.authoringPacket.draft**; it already contains current
 immutable IDs and outstanding obligations. **fieldRequirements** lists the
-allowed conclusion/recommendation values and the full residual-unknown and
-review-question item shapes without selecting an answer. The handoff contains a decision
+allowed conclusion/recommendation values; each **shapeRef** resolves to one
+reusable variant set in **shapeCatalog** without selecting an answer. The handoff contains a decision
 summary, exactly one conclusion per Evidence Obligation and condition,
 important system effects, residual unknowns,
 consequence-directed review questions, and an Agent recommendation. Evidence is
@@ -318,7 +325,10 @@ The returned **hostAction.developerDecisionBrief** is the delivery surface for
 the developer. It distinguishes delivery state, evidence state, Agent
 recommendation, and Human adoption; contrasts desired outcome with actual
 system meaning; preserves every condition conclusion; and turns each exact
-Attention cause into one decision issue with its relevant review questions.
+Attention cause into a decision issue with its relevant review questions.
+Causes with the same exact group and references share one issue while retaining
+all underlying Attention IDs, codes, and resolutions. Prior evidence diagnosis
+and recovery routes remain visible in **evidenceHistory**.
 Present that brief as the final task summary even when another active workflow
 has its own completion template. Do not collapse, rename, or omit any item named
 by **presentationRequirements**. Compact Runtime evidence is supporting detail,
@@ -372,7 +382,7 @@ Follow **hostAction.kind** exactly:
 - **correct-protocol-input/configure-verification/resolve-human-choice**:
   correct only the named missing authority or evidence input.
 
-Non-passing checks, changed baseline observations, verifier mutations,
+Non-passing checks, baseline expectation mismatches, verifier mutations,
 check-induced changes, unrepresentable changes, adverse conditions, challenge
 independence, residual unknowns, and exhausted delivery remain exact Attention.
 They may add review obligations but never become a score or automatic rejection.

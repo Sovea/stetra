@@ -270,6 +270,55 @@ test('clean handoff keeps Runtime facts, Agent recommendation, and Human adoptio
   assert.equal(handoff.recommendation.action, 'accept');
 });
 
+test('expected failing-to-passing baseline evidence does not create attention', () => {
+  const input = criticalInput();
+  input.checks![0].baseline = {
+    ...input.checks![0].baseline,
+    expectation: { baselineStatus: 'failed', currentStatus: 'passed' },
+  } as Extract<NonNullable<CompileDelegationInput['checks']>[number]['baseline'], { mode: 'task-start' }>;
+  const compiled = compileDelegation(input);
+  assert.equal(compiled.status, 'delegation-compiled');
+  if (compiled.status !== 'delegation-compiled') return;
+  const facts = factBundle(compiled.contract, { baselineStatus: 'failed', currentStatus: 'passed' });
+  const challenges = supportedChallenges(compiled.contract, facts);
+  const evaluation = evaluateHandoff({
+    ...envelope,
+    contract: compiled.contract,
+    factBundle: facts,
+    currentWorktreeFingerprint: facts.current.fingerprint,
+    challenges,
+    currentEvidenceDisposition: undefined,
+    hostPolicyEvaluations: [],
+    deliveryExhausted: false,
+    verificationRevised: false,
+    handoff: handoffFor(compiled.contract, facts, challenges),
+  });
+  assert.equal(evaluation.status, 'handoff-ready');
+  assert.ok(!evaluation.attention.some((item) =>
+    item.codes.includes('baseline-expectation-mismatch')));
+});
+
+test('baseline observation outside the explicit expectation creates attention', () => {
+  const contract = compiledContract();
+  const facts = factBundle(contract, { baselineStatus: 'failed', currentStatus: 'passed' });
+  const challenges = supportedChallenges(contract, facts);
+  const handoff = handoffFor(contract, facts, challenges);
+  const evaluation = evaluateHandoff({
+    ...envelope,
+    contract,
+    factBundle: facts,
+    currentWorktreeFingerprint: facts.current.fingerprint,
+    challenges,
+    currentEvidenceDisposition: undefined,
+    hostPolicyEvaluations: [],
+    deliveryExhausted: false,
+    verificationRevised: false,
+    handoff,
+  });
+  assert.ok(evaluation.attention.some((item) =>
+    item.codes.includes('baseline-expectation-mismatch')));
+});
+
 test('facts-stale takes priority over malformed Agent handoff', () => {
   const contract = compiledContract();
   const facts = factBundle(contract);
@@ -651,6 +700,7 @@ function criticalInput(policy: 'required' | 'fact-triggered' = 'required'): Comp
       baseline: {
         mode: 'task-start',
         rationale: 'The before/after result distinguishes a regression from a pre-existing failure.',
+        expectation: { baselineStatus: 'passed', currentStatus: 'passed' },
         obligationKeys: [{ conditionKey: 'compatibility', obligationKey: 'legacy-path' }],
       },
       verifierSelectors: [

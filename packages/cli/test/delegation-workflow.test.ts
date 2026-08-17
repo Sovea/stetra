@@ -277,7 +277,8 @@ test('final-response guard exposes the current workflow action without writing s
     });
     assert.equal(handoffGuard.disposition, 'present-decision-brief');
     assert.equal(handoffGuard.hostAction?.kind, 'present-handoff-and-await-human-decision');
-    assert.ok(handoffGuard.developerDecisionBrief);
+    assert.ok(handoffGuard.hostAction.developerDecisionBrief);
+    assert.equal(Object.hasOwn(handoffGuard, 'developerDecisionBrief'), false);
 
     const decisionDraft = structuredClone(
       handedOff.hostAction.decisionContinuation.authoringPacket.draft,
@@ -774,14 +775,16 @@ test('a thin Host routes a required verifier challenge to explicit direct review
     assert.ok(handedOff.decisionPacket.attention.some((item: { codes: string[] }) =>
       item.codes.includes('challenge-missing')));
     const issue = handedOff.hostAction.developerDecisionBrief.decisionIssues.find(
-      (item: { code: string }) => item.code === 'challenge-missing',
+      (item: { codes: string[] }) => item.codes.includes('challenge-missing'),
     );
+    assert.deepEqual(issue.codes, ['challenge-missing', 'direct-review-required']);
+    assert.equal(issue.attentionIds.length, 2);
     assert.deepEqual(issue.conditionIds, [condition.id]);
     assert.deepEqual(issue.obligationIds, [obligation.id]);
     assert.equal(issue.reviewQuestions.length, 1);
     assert.ok(
       handedOff.hostAction.developerDecisionBrief.requestedDecision
-        .acceptanceRequiresExceptionsFor.includes(issue.attentionId),
+        .acceptanceRequiresExceptionsFor.includes(issue.attentionIds[0]),
     );
   } finally {
     rmSync(root, { recursive: true, force: true });
@@ -889,11 +892,11 @@ test('a canonical Challenge Authoring Packet completes the persisted challenge-t
       ).allowedValues,
       ['accept', 'request-correction', 'reject', 'defer'],
     );
-    assert.ok(
-      fieldRequirement(
-        challenged.hostAction.authoringPacket, 'draft.residualUnknowns[]',
-      ).acceptedShapes?.length,
+    const unknownRequirement = fieldRequirement(
+      challenged.hostAction.authoringPacket, 'draft.residualUnknowns[]',
     );
+    assert.equal(unknownRequirement.shapeRef, 'residual-unknown');
+    assert.ok(challenged.hostAction.authoringPacket.shapeCatalog['residual-unknown'].length);
 
     const handoffDraft = structuredClone(challenged.hostAction.authoringPacket.draft);
     handoffDraft.summary = 'The changed verifier and implementation are ready for bounded review.';
@@ -1014,10 +1017,12 @@ test('verification revision preserves history and completes handoff against curr
       fieldRequirement(diagnosed.hostAction.authoringPacket, 'draft.kind').allowedValues,
       ['execution-rebinding', 'verification-plan'],
     );
+    const baselineRequirement = fieldRequirement(
+      diagnosed.hostAction.authoringPacket, 'draft.checks[0].baseline',
+    );
+    assert.equal(baselineRequirement.shapeRef, 'verification-baseline');
     assert.deepEqual(
-      fieldRequirement(
-        diagnosed.hostAction.authoringPacket, 'draft.checks[0].baseline',
-      ).acceptedShapes?.[0],
+      diagnosed.hostAction.authoringPacket.shapeCatalog['verification-baseline'][0],
       { mode: 'unknown' },
     );
     const draft = diagnosed.hostAction.authoringPacket.draft;
@@ -1070,6 +1075,11 @@ test('verification revision preserves history and completes handoff against curr
     assert.equal(handedOff.decisionPacket.runtimeFacts.attemptId, 'attempt:2');
     assert.equal(handedOff.decisionPacket.evidenceJudgments.dispositions.length, 1);
     assert.equal(handedOff.decisionPacket.evidenceJudgments.dispositions[0].attemptId, 'attempt:1');
+    assert.equal(handedOff.hostAction.developerDecisionBrief.evidenceHistory.length, 1);
+    assert.equal(
+      handedOff.hostAction.developerDecisionBrief.evidenceHistory[0].resolution.actualRoute,
+      'revise-verification',
+    );
     assert.ok(handedOff.decisionPacket.attention.some((item: { codes: string[] }) =>
       item.codes.includes('verification-revised')));
 
@@ -1147,6 +1157,7 @@ function prepareDocument(options: {
       baseline: options.baseline === 'task-start' ? {
         mode: 'task-start',
         rationale: 'The before/after observation distinguishes a regression.',
+        expectation: { baselineStatus: 'passed', currentStatus: 'passed' },
         obligationKeys: [{ conditionKey: 'behavior', obligationKey: 'observation' }],
       } : { mode: 'unknown' },
       verifierSelectors: (options.acceptanceSurfaceSelectors ?? []).map((selector) => ({

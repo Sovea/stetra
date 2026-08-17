@@ -1602,7 +1602,6 @@ export async function guardFinalResponse(options: {
     disposition = 'continue-workflow';
   }
 
-  const developerDecisionBrief = hostAction?.developerDecisionBrief;
   return {
     protocol: DELEGATION_PROTOCOL,
     schemaVersion: DELEGATION_SCHEMA_VERSION,
@@ -1613,7 +1612,6 @@ export async function guardFinalResponse(options: {
     factsCurrent,
     actionFingerprint: stableFingerprint(hostAction),
     hostAction,
-    ...(developerDecisionBrief ? { developerDecisionBrief } : {}),
     stateWritten: false,
   };
 }

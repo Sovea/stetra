@@ -28,7 +28,9 @@ optional generated-reference name, and—when input is required—a task-specifi
 Use the packet's binding metadata, exact reference catalog, outstanding
 obligations, prefilled draft, and `fieldRequirements`. Each field requirement
 names an exact draft path, its Agent/Human authority, and either accepted enum
-values or object variants. It supplies structure without selecting a judgment.
+values or a `shapeRef`. Reusable object variants are defined once in the
+packet's `shapeCatalog`, avoiding a repeated schema copy for every Obligation.
+It supplies structure without selecting a judgment.
 The packet's `semanticContext` presents the exact developer events as Human
 authority and the Host-authored task meaning as a separate Agent interpretation.
 Do not silently substitute one for the other.
@@ -59,9 +61,14 @@ After a current Handoff is evaluated, `hostAction` changes role. It returns a
 transient `developerDecisionBrief` containing the four separate delivery,
 evidence, Agent-recommendation, and Human-adoption states; desired outcome and
 actual system meaning; every condition conclusion; direct-cause decision
-issues; linked review questions; and compact Runtime evidence. The accompanying
-`presentationRequirements` names every condition, issue, and question that the
-Host must preserve in its final cognitive handoff.
+issues; linked review questions; compact Runtime evidence; and diagnosis and
+recovery routes from earlier Attempts. Decision issues with the same exact
+group and references are projected once while retaining every underlying
+Attention ID, code, and resolution. Detailed evidence references, logs, and
+immutable artifacts remain available through `change explain`; they are not
+copied into the primary brief. The accompanying `presentationRequirements`
+names every condition, aggregated issue, and question that the Host must
+preserve in its final cognitive handoff.
 
 The Human decision command is not the current action at that point. It appears
 under `decisionContinuation` with `requiresNewHumanEvent: true`. The Host
@@ -78,7 +85,8 @@ current worktree without writing state. It returns one disposition:
 - `human-decision-recorded`: report the recorded terminal decision.
 
 The guard also returns fact currency, task revision, and a fingerprint of the
-projected action. Generated skills instruct this call but do not claim that a
+projected action. The brief appears only inside `hostAction`, avoiding a second
+copy in the same JSON response. Generated skills instruct this call but do not claim that a
 Markdown file enforces a Host hook. A native Host integration may enforce the
 same command at its final-response boundary. The published
 `@sovea/stetra/host` subpath exposes `runCli`, `guardFinalResponse`, exact Host
@@ -100,7 +108,7 @@ enforcement or independent-context provenance.
     "provider": "host"
   }],
   "repositoryEvidence": [
-    { "key": "ownership", "path": "src/file.ts", "startLine": 1, "endLine": 20 }
+    { "key": "ownership", "path": "src/file.ts", "wholeFile": true }
   ],
   "task": {
     "basis": {
@@ -162,6 +170,7 @@ enforcement or independent-context provenance.
       "baseline": {
         "mode": "task-start",
         "rationale": "Before/after distinguishes a new regression from a prior failure.",
+        "expectation": { "baselineStatus": "passed", "currentStatus": "passed" },
         "obligationKeys": [
           { "conditionKey": "compatibility", "obligationKey": "legacy-path" }
         ]
@@ -191,10 +200,19 @@ Verifier selectors are explicit `file` or `tree` boundaries with one role.
 and descendants by repository path boundary. There are no globs, regular
 expressions, filesystem-type guesses, or framework filename rules.
 
+Repository Evidence uses either an exact `startLine`/`endLine` range or
+`wholeFile: true`. The latter is not a persisted shortcut: CLI deterministically
+materializes the current UTF-8 file into an exact line range, text, and digest
+before Core compiles the Contract. Empty files are rejected rather than given
+an invented line number.
+
 `task-start` baseline requires a decision-relevant rationale and exact
-Obligation keys. Use `{ "mode": "unknown" }` when before/after comparison does
-not change the decision. If no command applies, omit `checks` and provide
-`noCommandRationale`.
+Obligation keys. It also freezes explicit expected baseline and current statuses
+(`passed`, `failed`, or `unavailable`). Runtime always records the actual
+mechanical relation, but raises baseline Attention only when an observed status
+violates that expectation. Use `{ "mode": "unknown" }` when before/after
+comparison does not change the decision. If no command applies, omit `checks`
+and provide `noCommandRationale`.
 
 Core generates canonical Human Event, Condition, Obligation, logical Verifier,
 exact Definition, Contract, Verification Plan, and effective identities. Focus
@@ -321,6 +339,7 @@ A noncritical verification diagnosis returns an exact revision draft:
       "baseline": {
         "mode": "task-start",
         "rationale": "Before/after distinguishes a new regression from a prior failure.",
+        "expectation": { "baselineStatus": "passed", "currentStatus": "passed" },
         "obligationKeys": [
           { "conditionKey": "compatibility", "obligationKey": "legacy-path" }
         ]

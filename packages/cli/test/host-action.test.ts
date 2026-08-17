@@ -191,14 +191,15 @@ function brief(): DeveloperDecisionBrief {
       status: 'partial', summary: 'Partially supported.', obligations: [],
     }],
     decisionIssues: [{
-      id: 'decision-issue:test', attentionId: 'attention:test',
-      code: 'verification-nonpassing', group: 'verification', resolution: 'inspect',
+      id: 'decision-issue:test', attentionIds: ['attention:test'],
+      codes: ['verification-nonpassing'], group: 'verification', resolutions: ['inspect'],
       references: {}, conditionIds: ['condition:test'], obligationIds: [],
       residualUnknowns: [], reviewQuestions: [{
         id: 'review:test', conditionIds: ['condition:test'], obligationIds: [],
         question: 'Inspect?', adoptionImpact: 'Changes adoption.', evidence: [],
       }],
     }],
+    evidenceHistory: [],
     runtimeEvidence: { changedFiles: [], checks: [] },
     requestedDecision: {
       actions: ['accepted', 'correction-requested', 'rejected', 'deferred'],

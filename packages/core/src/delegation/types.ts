@@ -11,6 +11,7 @@ export type RepositorySelectorKind = 'file' | 'tree';
 export type AdoptionCriticality = 'material' | 'adoption-critical';
 export type ChallengePolicy = 'required' | 'fact-triggered';
 export type VerificationBaselineMode = 'task-start' | 'unknown';
+export type VerificationExpectedStatus = 'passed' | 'failed' | 'unavailable';
 export type HostPolicyCapability =
   | 'web-search'
   | 'network'
@@ -121,6 +122,10 @@ export type VerificationBaselineInput =
       mode: 'task-start';
       rationale: string;
       obligationKeys: ObligationKeyReferenceInput[];
+      expectation: {
+        baselineStatus: VerificationExpectedStatus;
+        currentStatus: VerificationExpectedStatus;
+      };
     }
   | {
       mode: 'unknown';
@@ -195,9 +200,13 @@ export interface VerificationDefinition {
   argv: string[];
   baseline:
     | {
-        mode: 'task-start';
+      mode: 'task-start';
         rationale: string;
         obligationIds: string[];
+        expectation: {
+          baselineStatus: VerificationExpectedStatus;
+          currentStatus: VerificationExpectedStatus;
+        };
       }
     | { mode: 'unknown' };
   verifierRefs: VerifierRef[];

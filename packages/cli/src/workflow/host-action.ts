@@ -81,7 +81,6 @@ export interface FinalResponseGuard {
   factsCurrent: boolean;
   actionFingerprint: string;
   hostAction: HostAction | null;
-  developerDecisionBrief?: DeveloperDecisionBrief;
   stateWritten: false;
 }
 

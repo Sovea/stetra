@@ -49,6 +49,7 @@ export type {
   VerificationDefinition,
   VerificationDefinitionInput,
   VerificationBaselineMode,
+  VerificationExpectedStatus,
   VerificationPlan,
   VerificationRevisionInput,
   VerifierRef,

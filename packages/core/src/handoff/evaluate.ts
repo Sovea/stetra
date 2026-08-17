@@ -823,9 +823,21 @@ function deriveAttention(
 ): HandoffAttentionItem[] {
   const items: HandoffAttentionItem[] = [];
   const nonpassing = input.factBundle.checks.filter((check) => check.attempts.at(-1)?.status !== 'passed');
-  const changedRelations = input.factBundle.checkComparisons.filter((item) =>
-    !['baseline-unknown', 'baseline-unknown-after-revision', 'passed-before-passed-now',
-      'failed-before-failed-now', 'unavailable-before-unavailable-now'].includes(item.relation));
+  const baselineExpectationMismatches = input.contract.verificationPlan.mode === 'checks'
+    ? input.contract.verificationPlan.definitions.filter((definition) => {
+        if (definition.baseline.mode !== 'task-start') return false;
+        const baseline = input.factBundle.baselineVerification.checks.find((item) =>
+          item.definitionId === definition.definitionId);
+        const current = input.factBundle.checks.find((item) =>
+          item.definitionId === definition.definitionId);
+        if (!baseline || !current
+          || !['task-start', 'isolated-original'].includes(baseline.mode)
+          || !baseline.observation) return false;
+        return baseline.observation.attempts.at(-1)?.status
+            !== definition.baseline.expectation.baselineStatus
+          || current.attempts.at(-1)?.status
+            !== definition.baseline.expectation.currentStatus;
+      }) : [];
   const unknownAfterRevision = input.factBundle.checkComparisons.filter((item) =>
     item.relation === 'baseline-unknown-after-revision');
   const verifierDefinitions = sortedUnique(input.factBundle.verifierMutations.map((item) => item.definitionId));
@@ -834,9 +846,9 @@ function deriveAttention(
       checks: sortedUnique(nonpassing.map((item) => item.definitionId)),
     }, 'inspect'));
   }
-  if (changedRelations.length) {
-    items.push(attention('verification', ['baseline-observation-different'], {
-      checks: sortedUnique(changedRelations.map((item) => item.definitionId)),
+  if (baselineExpectationMismatches.length) {
+    items.push(attention('verification', ['baseline-expectation-mismatch'], {
+      checks: sortedUnique(baselineExpectationMismatches.map((item) => item.definitionId)),
     }, 'inspect'));
   }
   if (unknownAfterRevision.length) {

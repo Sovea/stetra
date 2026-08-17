@@ -50,7 +50,7 @@ export const HumanEventSchema = z.strictObject({
   nativeId: NonEmptyStringSchema.optional(),
 });
 
-const EvidenceWindowSchema = z.strictObject({
+const EvidenceRangeSchema = z.strictObject({
   key: StableIdSchema,
   path: SafeRepositoryPathSchema,
   startLine: z.number().int().positive(),
@@ -59,6 +59,14 @@ const EvidenceWindowSchema = z.strictObject({
   path: ['endLine'],
   message: 'must be greater than or equal to startLine',
 });
+
+const WholeFileEvidenceSchema = z.strictObject({
+  key: StableIdSchema,
+  path: SafeRepositoryPathSchema,
+  wholeFile: z.literal(true),
+});
+
+const EvidenceWindowSchema = z.union([EvidenceRangeSchema, WholeFileEvidenceSchema]);
 
 const CompactBasisSchema = z.strictObject({
   developerEventKeys: z.array(StableIdSchema),
@@ -95,6 +103,10 @@ const VerificationBaselineSchema = z.discriminatedUnion('mode', [
     mode: z.literal('task-start'),
     rationale: NonEmptyStringSchema,
     obligationKeys: z.array(ObligationKeyReferenceSchema).min(1),
+    expectation: z.strictObject({
+      baselineStatus: z.enum(['passed', 'failed', 'unavailable']),
+      currentStatus: z.enum(['passed', 'failed', 'unavailable']),
+    }),
   }),
   z.strictObject({ mode: z.literal('unknown') }),
 ]);

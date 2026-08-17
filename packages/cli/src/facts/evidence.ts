@@ -11,12 +11,9 @@ import type { RepositoryEvidenceInput } from '@sovea/stetra-core';
 import { inputError } from '../errors.ts';
 import { sha256 } from '../protocol.ts';
 
-export interface RepositoryEvidenceWindow {
-  key: string;
-  path: string;
-  startLine: number;
-  endLine: number;
-}
+export type RepositoryEvidenceWindow =
+  | { key: string; path: string; startLine: number; endLine: number }
+  | { key: string; path: string; wholeFile: true };
 
 export function materializeEvidenceWindows(
   projectRootInput: string,
@@ -41,21 +38,28 @@ export function materializeEvidenceWindow(
     throw inputError(`Repository evidence ${window.key} cannot represent non-UTF-8 content at ${window.path}.`);
   }
   const lines = splitLinesPreservingEndings(source);
-  if (!Number.isInteger(window.startLine)
-    || !Number.isInteger(window.endLine)
-    || window.startLine < 1
-    || window.endLine < window.startLine
-    || window.endLine > lines.length) {
+  if ('wholeFile' in window && !lines.length) {
     throw inputError(
-      `Repository evidence ${window.key} line range ${window.startLine}-${window.endLine} is outside ${window.path} (${lines.length} lines).`,
+      `Repository evidence ${window.key} cannot materialize empty file ${window.path} as a line window.`,
     );
   }
-  const text = lines.slice(window.startLine - 1, window.endLine).join('');
+  const startLine = 'wholeFile' in window ? 1 : window.startLine;
+  const endLine = 'wholeFile' in window ? lines.length : window.endLine;
+  if (!Number.isInteger(startLine)
+    || !Number.isInteger(endLine)
+    || startLine < 1
+    || endLine < startLine
+    || endLine > lines.length) {
+    throw inputError(
+      `Repository evidence ${window.key} line range ${startLine}-${endLine} is outside ${window.path} (${lines.length} lines).`,
+    );
+  }
+  const text = lines.slice(startLine - 1, endLine).join('');
   return {
     key: window.key,
     path: window.path,
-    startLine: window.startLine,
-    endLine: window.endLine,
+    startLine,
+    endLine,
     text,
     digest: sha256(text),
   };
