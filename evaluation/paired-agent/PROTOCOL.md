@@ -152,6 +152,16 @@ source repository or tests. A routine task should require zero schema
 corrections; a conditioned, challenged, or attention-bearing task may require
 at most one. Failure is a product-usability finding, not Agent noncompliance.
 
+Focused Challenger component reruns that apply preregistered candidate patches
+must additionally pass `assertChallengeStagePreflight` from
+`challenge-stage-preflight.mjs` before starting the Challenger. The evaluator
+supplies exact registered and observed values for repository/Stetra identity,
+the clean worktree fingerprint before Prepare, absence of the candidate change
+at that boundary, candidate Patch digest, changed paths, and Check baseline
+relations. Any mismatch makes the component run invalid. This record is
+evaluator-only: it is not a Runtime fact, task artifact, or substitute for an
+effectiveness pair.
+
 1. Materialize a clean workspace at the registered state for each condition;
    the workspaces may run sequentially when resources are constrained.
 2. Apply identical fixtures, dependencies, and environment.

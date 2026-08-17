@@ -9,7 +9,7 @@
     "test": "corepack pnpm --filter @sovea/stetra-core build && corepack pnpm -r test",
     "test:coverage": "corepack pnpm --filter @sovea/stetra-core build && c8 --all --include \"packages/core/src/**/*.ts\" --include \"packages/cli/src/**/*.ts\" --check-coverage --lines 75 --statements 75 --functions 85 --branches 60 tsx --test packages/core/test/semantic-handoff.test.ts packages/cli/test/challenge-projection.test.ts packages/cli/test/check-facts.test.ts packages/cli/test/cli.test.ts packages/cli/test/delegation-workflow.test.ts packages/cli/test/evidence.test.ts packages/cli/test/host-action.test.ts packages/cli/test/host-challenge-lifecycle.test.ts packages/cli/test/process.test.ts packages/cli/test/project-init.test.ts packages/cli/test/task-store.test.ts",
     "verify:dist": "node test/verify-dist.test.mjs",
-    "verify:evaluation": "node test/verify-evaluation.test.mjs",
+    "verify:evaluation": "node --test test/challenge-stage-preflight.test.mjs && node test/verify-evaluation.test.mjs",
     "verify:packages": "node test/verify-packages.test.mjs",
     "verify:release": "node --test test/release-contract.test.mjs && node test/verify-release-workflow.test.mjs",
     "verify:smoke": "node test/release-smoke.test.mjs && node test/cli-release-smoke.test.mjs",
