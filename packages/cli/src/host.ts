@@ -37,7 +37,6 @@ export type {
   ChallengeRepositoryEvidence,
 } from './workflow/challenge-projection.ts';
 export type {
-  ChallengeDocument,
   ChallengeSubmission,
   HostChallengeRunReceipt,
 } from './schemas/delegation.ts';

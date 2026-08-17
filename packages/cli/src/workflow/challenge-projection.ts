@@ -48,7 +48,7 @@ export interface ChallengeExecutionPacket {
   draft: ChallengeDocumentDraft;
   output: {
     authority: 'agent-judgment';
-    allowedOutcomes: typeof CONCLUSION_STATUSES;
+    allowedOutcomes: readonly ['supported', 'partial', 'contradicted', 'unknown'];
     evidenceItemShape: {
       statement: string;
       references: Array<{ kind: string; id?: string }>;
