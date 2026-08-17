@@ -246,7 +246,7 @@ export const ChallengeDocumentSchema = z.strictObject({
     context.addIssue({
       code: 'custom',
       path: ['counterEvidence'],
-      message: 'must be empty when outcome is supported; use partial, contradicted, or unknown while counter-evidence remains',
+      message: 'must be preserved and outcome changed to partial, contradicted, or unknown while counter-evidence remains',
     });
   }
 });

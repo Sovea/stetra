@@ -233,7 +233,7 @@ function validateChallenges(input: EvaluateHandoffInput): void {
         'challenge-supported-with-counter-evidence',
         `${path}.counterEvidence`,
         'A supported Challenge cannot retain counter-evidence.',
-        'Use partial, contradicted, or unknown while counter-evidence remains.',
+        'Preserve the counter-evidence and use partial, contradicted, or unknown.',
       ));
     }
     if (!isNonEmptyString(challenge.conclusion)) {
