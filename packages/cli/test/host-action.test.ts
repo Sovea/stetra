@@ -22,7 +22,22 @@ test('host actions route the initial lifecycle with executable task argv', () =>
     command: { argv: ['stetra', 'change', 'collect', '.', '--task', 'task-id', '--json'] },
   });
   assert.equal(diagnosisHostAction('repair-implementation', 'task-id').kind, 'implement-and-collect');
-  assert.equal(diagnosisHostAction('challenge', 'task-id', packet('challenge')).kind, 'perform-independent-challenge');
+  const challenge = diagnosisHostAction('challenge', 'task-id', packet('challenge'));
+  assert.equal(challenge.kind, 'perform-independent-challenge');
+  assert.equal(challenge.challengeExecutionRequest?.role, 'independent-challenger');
+  assert.equal(challenge.challengeExecutionRequest?.agentProfile, 'stetra-challenger');
+  assert.equal(challenge.challengeExecutionRequest?.bindsTo.taskId, 'task-id');
+  assert.equal(challenge.challengeExecutionRequest?.bindsTo.effectiveContractId, digest('e'));
+  assert.equal(challenge.challengeExecutionRequest?.bindsTo.attemptId, 'attempt:1');
+  assert.equal(challenge.challengeExecutionRequest?.bindsTo.factCollectionId, digest('c'));
+  assert.match(
+    challenge.challengeExecutionRequest?.bindsTo.authoringPacketFingerprint ?? '',
+    /^sha256:[0-9a-f]{64}$/,
+  );
+  assert.match(challenge.challengeExecutionRequest?.requestId ?? '', /^sha256:[0-9a-f]{64}$/);
+  assert.equal(challenge.challengeExecutionRequest?.mutationPolicy, 'forbidden');
+  assert.equal(challenge.challengeExecutionRequest?.contextPolicy, 'fresh-required');
+  assert.equal(challenge.challengeExecutionRequest?.outputRepairBudget, 1);
   assert.equal(diagnosisHostAction(
     'challenge', 'task-id', packet('handoff'), false,
   ).kind, 'author-handoff');
@@ -152,7 +167,7 @@ function packet(inputKind: AuthoringPacket['inputKind']): AuthoringPacket {
     inputKind,
     bindsTo: {
       taskId: 'task-id', revision: 1, effectiveContractId: digest('e'),
-      attemptId: 'attempt:1',
+      attemptId: 'attempt:1', factCollectionId: digest('c'),
     },
     semanticContext: {
       exactDeveloperEvents: {

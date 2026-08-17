@@ -24,6 +24,7 @@ export type {
 export type { AuthoringPacket } from './workflow/authoring.ts';
 export type { DeveloperDecisionBrief } from './workflow/decision-brief.ts';
 export type {
+  ChallengeExecutionRequest,
   ClarificationBrief,
   FinalResponseGuard,
   HostAction,

@@ -8,6 +8,7 @@ import type {
 
 import type { AuthoringPacket } from './authoring.ts';
 import type { DeveloperDecisionBrief } from './decision-brief.ts';
+import { stableFingerprint } from '../protocol.ts';
 
 export type HostWorkflowReference =
   | 'change'
@@ -15,6 +16,28 @@ export type HostWorkflowReference =
   | 'challenge'
   | 'handoff'
   | 'recovery';
+
+export interface ChallengeExecutionRequest {
+  requestId: string;
+  role: 'independent-challenger';
+  agentProfile: 'stetra-challenger';
+  bindsTo: {
+    taskId: string;
+    effectiveContractId: string;
+    attemptId: string;
+    factCollectionId: string;
+    authoringPacketFingerprint: string;
+  };
+  contextPolicy: 'fresh-required';
+  mutationPolicy: 'forbidden';
+  parallelism: 'single';
+  outputRepairBudget: 1;
+  expectedOutput: {
+    serialization: 'json';
+    schema: 'challenge-submission';
+    challengeSource: 'authoringPacket.draft';
+  };
+}
 
 export interface HostAction {
   kind:
@@ -39,6 +62,7 @@ export interface HostAction {
     execution: 'one-shot';
   };
   authoringPacket?: AuthoringPacket;
+  challengeExecutionRequest?: ChallengeExecutionRequest;
   developerDecisionBrief?: DeveloperDecisionBrief;
   presentationRequirements?: {
     leadWithDecisionState: true;
@@ -147,7 +171,7 @@ export function collectedHostAction(input: {
   }
   if (input.pendingChallengeObligationIds.length) {
     return input.challengeAttestationAvailable
-      ? inputAction('perform-independent-challenge', 'challenge', 'challenge', input.taskId, input.challengePacket)
+      ? challengeInputAction(input.taskId, input.challengePacket)
       : inputAction('author-handoff', 'handoff', 'handoff', input.taskId, input.handoffPacket);
   }
   return inputAction('author-handoff', 'handoff', 'handoff', input.taskId, input.handoffPacket);
@@ -173,10 +197,7 @@ export function diagnosisHostAction(
   }
   if (route === 'challenge') {
     return challengeAttestationAvailable
-      ? inputAction(
-          'perform-independent-challenge', 'challenge', 'challenge', taskId,
-          requiredAuthoringPacket(packet, route),
-        )
+      ? challengeInputAction(taskId, requiredAuthoringPacket(packet, route))
       : inputAction(
           'author-handoff', 'handoff', 'handoff', taskId,
           requiredAuthoringPacket(packet, route),
@@ -197,7 +218,7 @@ export function challengeHostAction(
   packet: AuthoringPacket,
 ): HostAction {
   return needsAnotherChallenge
-    ? inputAction('perform-independent-challenge', 'challenge', 'challenge', taskId, packet)
+    ? challengeInputAction(taskId, packet)
     : inputAction('author-handoff', 'handoff', 'handoff', taskId, packet);
 }
 
@@ -286,6 +307,46 @@ function inputAction(
       execution: 'one-shot',
     },
     authoringPacket,
+  };
+}
+
+function challengeInputAction(
+  taskId: string,
+  authoringPacket: AuthoringPacket,
+): HostAction {
+  const factCollectionId = authoringPacket.bindsTo.factCollectionId;
+  if (!factCollectionId) {
+    throw new Error('Independent Challenge requires an Authoring Packet bound to collected facts.');
+  }
+  const authoringPacketFingerprint = stableFingerprint(authoringPacket);
+  const requestBody = {
+    role: 'independent-challenger' as const,
+    agentProfile: 'stetra-challenger' as const,
+    bindsTo: {
+      taskId,
+      effectiveContractId: authoringPacket.bindsTo.effectiveContractId,
+      attemptId: authoringPacket.bindsTo.attemptId,
+      factCollectionId,
+      authoringPacketFingerprint,
+    },
+    contextPolicy: 'fresh-required' as const,
+    mutationPolicy: 'forbidden' as const,
+    parallelism: 'single' as const,
+    outputRepairBudget: 1 as const,
+    expectedOutput: {
+      serialization: 'json' as const,
+      schema: 'challenge-submission' as const,
+      challengeSource: 'authoringPacket.draft' as const,
+    },
+  };
+  return {
+    ...inputAction(
+      'perform-independent-challenge', 'challenge', 'challenge', taskId, authoringPacket,
+    ),
+    challengeExecutionRequest: {
+      requestId: stableFingerprint(requestBody),
+      ...requestBody,
+    },
   };
 }
 
