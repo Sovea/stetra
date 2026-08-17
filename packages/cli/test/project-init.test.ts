@@ -62,6 +62,7 @@ test('project init generates the Cognitive Adoption host projection and manifest
     assert.deepEqual(initialized.readiness, { required: [], recommended: [], optional: [] });
 
     const skillPath = join(root, '.agents', 'skills', 'stetra', 'SKILL.md');
+    const challengerAgentPath = join(root, '.codex', 'agents', 'stetra-challenger.toml');
     const referencesPath = join(root, '.agents', 'skills', 'stetra', 'references');
     const changePath = join(referencesPath, 'change.md');
     const deliveryPath = join(referencesPath, 'delivery.md');
@@ -69,6 +70,7 @@ test('project init generates the Cognitive Adoption host projection and manifest
     const handoffPath = join(referencesPath, 'handoff.md');
     const recoveryPath = join(referencesPath, 'recovery.md');
     assert.equal(existsSync(skillPath), true);
+    assert.equal(existsSync(challengerAgentPath), true);
     assert.equal(existsSync(changePath), true);
     assert.equal(existsSync(deliveryPath), true);
     assert.equal(existsSync(challengePath), true);
@@ -77,12 +79,17 @@ test('project init generates the Cognitive Adoption host projection and manifest
     assert.equal(existsSync(join(root, '.agents', 'skills', 'stetra', 'references', 'bootstrap.md')), false);
     assert.equal(existsSync(join(root, '.agents', 'skills', 'stetra', 'references', 'context.md')), false);
     const skill = readFileSync(skillPath, 'utf8');
+    const challengerAgent = readFileSync(challengerAgentPath, 'utf8');
     const change = readFileSync(changePath, 'utf8');
     const delivery = readFileSync(deliveryPath, 'utf8');
     const challenge = readFileSync(challengePath, 'utf8');
     const handoff = readFileSync(handoffPath, 'utf8');
     const recovery = readFileSync(recoveryPath, 'utf8');
     assert.match(skill, /developer owns goals, long-lived tradeoffs, exceptions/);
+    assert.match(challengerAgent, /name = "stetra-challenger"/);
+    assert.match(challengerAgent, /sandbox_mode = "read-only"/);
+    assert.match(challengerAgent, /Return exactly one JSON Challenge Document/);
+    assert.match(challengerAgent, /Never author request identity, context identity, independence/);
     assert.match(skill, /do not reread an\s+unchanged page/);
     assert.match(change, /change prepare/);
     assert.match(change, /developerEvent/);
@@ -125,6 +132,7 @@ test('project init generates the Cognitive Adoption host projection and manifest
         '.agents/skills/stetra/references/handoff.md',
         '.agents/skills/stetra/references/recovery.md',
         '.agents/skills/stetra/SKILL.md',
+        '.codex/agents/stetra-challenger.toml',
         '.gitignore',
         'AGENTS.md',
       ],
@@ -133,7 +141,7 @@ test('project init generates the Cognitive Adoption host projection and manifest
 
     const unchanged = initializeProject({ projectRoot: root, adapters: ['codex'] });
     assert.equal(unchanged.status, 'initialized');
-    assert.equal(unchanged.counts.unchanged, 8);
+    assert.equal(unchanged.counts.unchanged, 9);
 
     writeFileSync(skillPath, `${skill}\nowner note\n`, 'utf8');
     const blocked = initializeProject({ projectRoot: root, adapters: ['codex'] });
@@ -153,6 +161,13 @@ test('installation inspection reports generated adapter drift', () => {
   const root = mkdtempSync(join(tmpdir(), 'stetra-drift-'));
   try {
     initializeProject({ projectRoot: root, adapters: ['claude'] });
+    const challengerAgent = readFileSync(
+      join(root, '.claude', 'agents', 'stetra-challenger.md'),
+      'utf8',
+    );
+    assert.match(challengerAgent, /tools: Read, Grep, Glob/);
+    assert.match(challengerAgent, /permissionMode: plan/);
+    assert.doesNotMatch(challengerAgent, /Bash|Write|Edit|Agent,/);
     const changePath = join(root, '.claude', 'skills', 'stetra', 'references', 'change.md');
     rmSync(changePath);
     const inspection = inspectProjectInstallation(root);
