@@ -6,6 +6,13 @@ import {
 
 export { runCli } from './main.ts';
 export {
+  HostChallengeLifecycle,
+  type ChallengeHostProvider,
+  type ChallengeMutationAttestation,
+  type ChallengeRunStartObservation,
+  type ChallengeRunStopObservation,
+} from './host/challenge-lifecycle.ts';
+export {
   CliError,
   normalizeCliError,
   type CliErrorCode,
@@ -22,8 +29,20 @@ export type {
   RunCliOptions,
 } from './runtime-context.ts';
 export type { AuthoringPacket } from './workflow/authoring.ts';
+export type {
+  ChallengeChangedFile,
+  ChallengeCheck,
+  ChallengeDocumentDraft,
+  ChallengeExecutionPacket,
+  ChallengeRepositoryEvidence,
+} from './workflow/challenge-projection.ts';
+export type {
+  ChallengeSubmission,
+  HostChallengeRunReceipt,
+} from './schemas/delegation.ts';
 export type { DeveloperDecisionBrief } from './workflow/decision-brief.ts';
 export type {
+  ChallengeExecutionRequest,
   ClarificationBrief,
   FinalResponseGuard,
   HostAction,

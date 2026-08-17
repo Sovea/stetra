@@ -22,8 +22,9 @@ stetra change explain . --task <task-id> --section all --json
 
 All authoring input uses stdin or a file outside the worktree. Every successful
 stage returns a structured `hostAction` with action kind, optional exact argv,
-optional generated-reference name, and—when input is required—a task-specific
-`authoringPacket`.
+optional generated-reference name, and—when Agent or Human authoring is
+required—a task-specific `authoringPacket`. Independent Challenge instead uses
+the smaller `challengeExecutionPacket` described below.
 
 Use the packet's binding metadata, exact reference catalog, outstanding
 obligations, prefilled draft, and `fieldRequirements`. Each field requirement
@@ -51,6 +52,11 @@ An input-bearing action also returns:
 Serialize the completed draft and attach it to the exact argv process at
 creation time. Do not start an interactive process and then attempt to type the
 document. A temporary fallback input must live outside the worktree.
+Challenge is the exception to both the generic packet and draft source. Its
+input binding names `hostChallengeSubmission`. The fresh-context Agent receives
+only the bounded `challengeExecutionPacket` and returns its completed Challenge
+Document; the controlling Host wraps that document with the current request ID
+and a Host Challenge Run Receipt before invoking the command.
 The packet is transient projection, not persisted authority or lifecycle state.
 JSON output places `hostAction` before result detail. Authoring catalogs are
 stage-specific rather than a universal copy of all task facts. Use
@@ -374,7 +380,36 @@ the current MVP does not claim isolated reconstruction.
 
 ## Challenge
 
-Use the Challenge packet. Agent input contains no ID or independence claim:
+When a trusted Host integration is available, the action contains a bounded
+`challengeExecutionRequest`. It binds one `stetra-challenger` run to the exact
+task, effective Contract, Attempt, Fact Collection, and Challenge Execution
+Packet fingerprint. It requires one fresh context, forbids mutation and
+fan-out, and allows one structured-output repair. The generated Codex profile
+is sandboxed read-only; the Claude profile allows only Read, Grep, and Glob.
+
+The transient `challengeExecutionPacket` is a deterministic projection for one
+Evidence Obligation. It contains:
+
+- that Obligation and its owning Condition;
+- only the exact Human Events in the Condition basis;
+- only Check definitions named by the Obligation's Runtime-check strategies;
+- only Repository Evidence named by the Condition basis or Obligation strategy;
+- only Verifier mutations for those Check definitions;
+- a compact inventory of every changed file, with declared relations derived
+  only from exact evidence paths and Runtime-recorded selector matches;
+- one Patch path, digest, and byte length when a Patch exists;
+- one prefilled Challenge draft and its bounded output choices.
+
+It does not contain other Conditions, other Obligations, unrelated Checks,
+generic reference catalogs, reusable authoring shapes, or the general Stetra
+workflow. It uses no filename, token, dependency, diff-size, or keyword
+relevance heuristic. The generated Challenger profile treats this packet as
+complete and does not reload the general Stetra skill or reference pages.
+
+The Challenger fills `challengeExecutionPacket.draft` and returns only this
+Agent-owned document. It preserves the prefilled Obligation IDs,
+falsification design, and evidence selection exactly. It contains no request,
+context, receipt, or independence claim:
 
 ```json
 {
@@ -406,8 +441,32 @@ Use the Challenge packet. Agent input contains no ID or independence claim:
 }
 ```
 
-CLI generates Challenge ID and derives Condition IDs. A trusted Host provider
-may inject fresh-context attestation. Thin skills remain `unverified`. A
+After observing both lifecycle boundaries, the Host submits:
+
+```json
+{
+  "requestId": "sha256:current-request",
+  "hostReceipt": {
+    "receiptId": "receipt:host-generated",
+    "requestId": "sha256:current-request",
+    "provider": "codex",
+    "agentType": "stetra-challenger",
+    "parentContextId": "host-parent-context",
+    "challengerContextId": "host-child-context",
+    "lifecycle": "start-and-stop-observed",
+    "contextFingerprint": "sha256:host-context-binding",
+    "outputFingerprint": "sha256:exact-challenge-document",
+    "mutationPolicy": "host-read-only"
+  },
+  "challenge": { "...": "the exact Challenger document above" }
+}
+```
+
+The CLI generates Challenge ID and derives Condition IDs. It accepts
+`host-attested` only when the trusted provider verifies the current request,
+distinct contexts, lifecycle receipt, and exact output. Receipts are
+single-use, persisted beside the Challenge, and inspectable through
+`change explain --section challenge`. Thin skills remain `unverified`. A
 supported Challenge advances to the next required Challenge or Handoff. A
 partial, contradicted, or unknown Challenge returns to the Implementer through
 the existing evidence-diagnosis action. The diagnosis may choose bounded
@@ -424,13 +483,13 @@ selected Obligation. Obligations with different designs are challenged
 separately. The Agent records both the action and observed result before
 choosing a bounded outcome.
 
-Generated Markdown skills do not control a fresh Host context, so Dynamic Host
-Projection does not ask them to manufacture an independent Challenge. It routes
-directly to Handoff, marks the missing Challenge as a concrete direct-review
-obligation, and rejects `supported` for the affected obligation. A native
-Adapter or Evaluator with an attestation provider retains the executable
-Challenge action. A manually submitted thin-context Challenge is still recorded
-as `unverified`.
+Generated Markdown skills do not control or attest a fresh Host context, but
+the generated Codex and Claude profiles can still perform the bounded Challenge
+in a separate context. Without a trusted provider, the Host submits
+`{"challenge": ...}` without a Receipt. Runtime records that result as
+`unverified`, rejects `supported` for the affected required obligation, and
+adds a concrete direct-review obligation. A native Adapter or Evaluator that
+observes both lifecycle boundaries may instead submit the verified Receipt.
 
 ## Handoff
 

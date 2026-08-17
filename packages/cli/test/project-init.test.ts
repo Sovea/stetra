@@ -62,6 +62,7 @@ test('project init generates the Cognitive Adoption host projection and manifest
     assert.deepEqual(initialized.readiness, { required: [], recommended: [], optional: [] });
 
     const skillPath = join(root, '.agents', 'skills', 'stetra', 'SKILL.md');
+    const challengerAgentPath = join(root, '.codex', 'agents', 'stetra-challenger.toml');
     const referencesPath = join(root, '.agents', 'skills', 'stetra', 'references');
     const changePath = join(referencesPath, 'change.md');
     const deliveryPath = join(referencesPath, 'delivery.md');
@@ -69,6 +70,7 @@ test('project init generates the Cognitive Adoption host projection and manifest
     const handoffPath = join(referencesPath, 'handoff.md');
     const recoveryPath = join(referencesPath, 'recovery.md');
     assert.equal(existsSync(skillPath), true);
+    assert.equal(existsSync(challengerAgentPath), true);
     assert.equal(existsSync(changePath), true);
     assert.equal(existsSync(deliveryPath), true);
     assert.equal(existsSync(challengePath), true);
@@ -77,12 +79,19 @@ test('project init generates the Cognitive Adoption host projection and manifest
     assert.equal(existsSync(join(root, '.agents', 'skills', 'stetra', 'references', 'bootstrap.md')), false);
     assert.equal(existsSync(join(root, '.agents', 'skills', 'stetra', 'references', 'context.md')), false);
     const skill = readFileSync(skillPath, 'utf8');
+    const challengerAgent = readFileSync(challengerAgentPath, 'utf8');
     const change = readFileSync(changePath, 'utf8');
     const delivery = readFileSync(deliveryPath, 'utf8');
     const challenge = readFileSync(challengePath, 'utf8');
     const handoff = readFileSync(handoffPath, 'utf8');
     const recovery = readFileSync(recoveryPath, 'utf8');
     assert.match(skill, /developer owns goals, long-lived tradeoffs, exceptions/);
+    assert.match(challengerAgent, /name = "stetra-challenger"/);
+    assert.match(challengerAgent, /sandbox_mode = "read-only"/);
+    assert.match(challengerAgent, /Return exactly one JSON Challenge Document/);
+    assert.match(challengerAgent, /Never\s+author request identity, context identity, independence/);
+    assert.match(challengerAgent, /do not load the\s+general Stetra skill/);
+    assert.match(challengerAgent, /challengeExecutionPacket\.draft/);
     assert.match(skill, /do not reread an\s+unchanged page/);
     assert.match(change, /change prepare/);
     assert.match(change, /developerEvent/);
@@ -125,6 +134,7 @@ test('project init generates the Cognitive Adoption host projection and manifest
         '.agents/skills/stetra/references/handoff.md',
         '.agents/skills/stetra/references/recovery.md',
         '.agents/skills/stetra/SKILL.md',
+        '.codex/agents/stetra-challenger.toml',
         '.gitignore',
         'AGENTS.md',
       ],
@@ -133,7 +143,7 @@ test('project init generates the Cognitive Adoption host projection and manifest
 
     const unchanged = initializeProject({ projectRoot: root, adapters: ['codex'] });
     assert.equal(unchanged.status, 'initialized');
-    assert.equal(unchanged.counts.unchanged, 8);
+    assert.equal(unchanged.counts.unchanged, 9);
 
     writeFileSync(skillPath, `${skill}\nowner note\n`, 'utf8');
     const blocked = initializeProject({ projectRoot: root, adapters: ['codex'] });
@@ -153,12 +163,58 @@ test('installation inspection reports generated adapter drift', () => {
   const root = mkdtempSync(join(tmpdir(), 'stetra-drift-'));
   try {
     initializeProject({ projectRoot: root, adapters: ['claude'] });
+    const challengerAgent = readFileSync(
+      join(root, '.claude', 'agents', 'stetra-challenger.md'),
+      'utf8',
+    );
+    assert.match(challengerAgent, /tools: Read, Grep, Glob/);
+    assert.match(challengerAgent, /permissionMode: plan/);
+    assert.doesNotMatch(challengerAgent, /Bash|Write|Edit|Agent,/);
     const changePath = join(root, '.claude', 'skills', 'stetra', 'references', 'change.md');
     rmSync(changePath);
     const inspection = inspectProjectInstallation(root);
     assert.equal(inspection.status, 'drifted');
     assert.ok(inspection.artifacts.some((artifact) =>
       artifact.path.endsWith('change.md') && artifact.status === 'missing'));
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('generated Challenger profiles coexist with Trellis agents and hook ownership', () => {
+  const root = mkdtempSync(join(tmpdir(), 'stetra-trellis-coexistence-'));
+  try {
+    const codexHookPath = join(root, '.codex', 'hooks.json');
+    const codexTrellisAgentPath = join(root, '.codex', 'agents', 'trellis-check.toml');
+    const claudeSettingsPath = join(root, '.claude', 'settings.json');
+    const claudeTrellisAgentPath = join(root, '.claude', 'agents', 'trellis-check.md');
+    mkdirSync(join(root, '.codex', 'agents'), { recursive: true });
+    mkdirSync(join(root, '.claude', 'agents'), { recursive: true });
+    writeFileSync(codexHookPath, '{"hooks":{"SubagentStart":[]}}\n', 'utf8');
+    writeFileSync(codexTrellisAgentPath, 'name = "trellis-check"\n', 'utf8');
+    writeFileSync(claudeSettingsPath, '{"hooks":{"PreToolUse":[]}}\n', 'utf8');
+    writeFileSync(claudeTrellisAgentPath, '---\nname: trellis-check\n---\n', 'utf8');
+
+    const initialized = initializeProject({
+      projectRoot: root,
+      adapters: ['codex', 'claude'],
+    });
+    assert.equal(initialized.status, 'initialized');
+    assert.equal(readFileSync(codexHookPath, 'utf8'), '{"hooks":{"SubagentStart":[]}}\n');
+    assert.equal(readFileSync(codexTrellisAgentPath, 'utf8'), 'name = "trellis-check"\n');
+    assert.equal(readFileSync(claudeSettingsPath, 'utf8'), '{"hooks":{"PreToolUse":[]}}\n');
+    assert.equal(
+      readFileSync(claudeTrellisAgentPath, 'utf8'),
+      '---\nname: trellis-check\n---\n',
+    );
+    assert.equal(
+      existsSync(join(root, '.codex', 'agents', 'stetra-challenger.toml')),
+      true,
+    );
+    assert.equal(
+      existsSync(join(root, '.claude', 'agents', 'stetra-challenger.md')),
+      true,
+    );
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

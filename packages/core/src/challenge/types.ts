@@ -3,7 +3,7 @@ import type { EvidenceObligationFalsification } from '../delegation/types.ts';
 import type { ProtocolEnvelope } from '../shared/protocol.ts';
 
 export type ChallengeOutcome = 'supported' | 'partial' | 'contradicted' | 'unknown';
-export type ChallengeIndependence = 'host-attested' | 'host-claimed' | 'unverified';
+export type ChallengeIndependence = 'host-attested' | 'unverified';
 
 export interface ChallengeEvidenceSelection {
   changedFiles: string[];

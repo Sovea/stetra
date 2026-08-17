@@ -28,7 +28,6 @@ export interface AuthoringFieldRequirement {
 
 export type AuthoringShapeName =
   | 'verification-baseline'
-  | 'challenge-evidence-item'
   | 'handoff-evidence-reference'
   | 'residual-unknown'
   | 'review-question';
@@ -37,7 +36,6 @@ export interface AuthoringPacket {
   inputKind:
     | 'diagnosis'
     | 'verification-revision'
-    | 'challenge'
     | 'handoff'
     | 'decision'
     | 'resolution';
@@ -198,78 +196,6 @@ export function diagnosisAuthoringPacket(input: {
       requiredAction: concern.action,
     })),
   });
-}
-
-export function challengeAuthoringPacket(input: {
-  task: TaskProjection;
-  contract: TaskContract;
-  facts: FactBundle;
-  challenges: IndependentChallenge[];
-  requiredObligationIds: string[];
-}): AuthoringPacket {
-  const completed = new Set(input.challenges.flatMap((item) => item.obligationIds));
-  const targetId = input.requiredObligationIds.find((id) => !completed.has(id));
-  const obligation = allObligations(input.contract).find((item) => item.id === targetId);
-  const draft = obligation ? {
-    obligationIds: [obligation.id],
-    falsification: obligation.falsification,
-    evidence: {
-      changedFiles: input.facts.changedFiles.map((item) => item.id),
-      checks: currentDefinitionIds(obligation, input.contract),
-      repositoryEvidence: repositoryEvidenceIds(obligation),
-      humanEvents: input.contract.authority.developerEvents.map((item) => item.id),
-      patch: Boolean(input.facts.patch),
-    },
-    falsificationAttempt: '',
-    observedResult: '',
-    supportingEvidence: [],
-    counterEvidence: [],
-    outcome: '',
-    conclusion: '',
-  } : {};
-  return packetBase(
-    input.task,
-    input.contract,
-    input.facts,
-    input.challenges,
-    [],
-    ['conditions', 'obligations', 'checks', 'changedFiles', 'challenges', 'repositoryEvidence'],
-    {
-    inputKind: 'challenge',
-    draft,
-    fieldRequirements: obligation ? [
-      textRequirement(
-        'draft.falsificationAttempt', 'agent-judgment',
-        'Describe how the frozen scenario was executed or inspected independently.',
-      ),
-      textRequirement(
-        'draft.observedResult', 'agent-judgment',
-        'State the actual observation before selecting an outcome.',
-      ),
-      choiceRequirement(
-        'draft.outcome', 'agent-judgment', CONCLUSION_STATUSES,
-        'Choose the bounded outcome after performing the stated falsification attempt.',
-      ),
-      textRequirement(
-        'draft.conclusion', 'agent-judgment',
-        'State the bounded conclusion without exceeding the exact evidence references.',
-      ),
-      shapeRequirement(
-        'draft.supportingEvidence[]', 'agent-judgment', 'challenge-evidence-item',
-        'Each support claim must cite one or more exact current evidence references.',
-      ),
-      shapeRequirement(
-        'draft.counterEvidence[]', 'agent-judgment', 'challenge-evidence-item',
-        'Use exact references for adverse evidence; leave the array empty only when none was found.',
-      ),
-    ] : [],
-    outstandingObligations: targetId ? [{
-      code: 'perform-independent-challenge',
-      targetId,
-      requiredAction: 'Use a genuinely separate context when the Host can attest it, then test the stated failure hypothesis against exact evidence.',
-    }] : [],
-    },
-  );
 }
 
 export function verificationRevisionAuthoringPacket(input: {
@@ -507,6 +433,14 @@ export function handoffAuthoringPacket(input: {
           ? 'The current Host cannot attest a fresh challenger context. Keep the conclusion below supported and give the developer a concrete direct-review question.'
           : 'Complete and record the required challenge before claiming support.',
       })),
+      ...input.requiredObligationIds.filter((id) => {
+        const challenge = challengeByObligation.get(id);
+        return challenge && challenge.independence !== 'host-attested';
+      }).map((id) => ({
+        code: 'direct-human-review-required',
+        targetId: id,
+        requiredAction: 'The recorded Challenger output has no verified Host lifecycle receipt. Keep the conclusion below supported and direct the developer to inspect the unresolved failure hypothesis.',
+      })),
     ],
     },
   );
@@ -739,13 +673,6 @@ function baselineShapes(): unknown[] {
   ];
 }
 
-function challengeEvidenceItemShape() {
-  return {
-    statement: '<bounded evidence statement>',
-    references: [{ kind: '<evidence kind>', id: '<exact referenceCatalog id>' }],
-  };
-}
-
 function handoffEvidenceReferenceShapes(): unknown[] {
   return [
     { kind: 'changed-file', id: '<exact changed-file id>' },
@@ -780,7 +707,6 @@ function reviewQuestionShape() {
 
 const AUTHORING_SHAPES: Record<AuthoringShapeName, unknown[]> = {
   'verification-baseline': baselineShapes(),
-  'challenge-evidence-item': [challengeEvidenceItemShape()],
   'handoff-evidence-reference': handoffEvidenceReferenceShapes(),
   'residual-unknown': [residualUnknownShape()],
   'review-question': [reviewQuestionShape()],

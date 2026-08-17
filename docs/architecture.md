@@ -471,6 +471,17 @@ programmatic Host integration or Evaluator that controls the relevant boundary
 may record enforcement. Missing capability must degrade to a valid smaller
 strategy or a visible Human decision, never a fabricated guarantee.
 
+The initial Host boundary exposes one deliberately narrow lifecycle binder for
+Independent Challenge. Runtime derives a task- and fact-bound execution request;
+Runtime also projects one bounded Challenge Execution Packet containing a
+single Evidence Obligation and only its explicit evidence relations. The Host
+observes one named read-only Challenger start and stop, binds the packet and
+exact structured output, and verifies the single-use receipt when recording the
+Challenge. Generated Codex and Claude profiles constrain the role and treat the
+packet as self-contained, but those files alone do not confer attestation. This
+binder is not a subagent scheduler, generic role registry, transcript store, or
+parallel execution graph.
+
 ### Attempt and Verification lineage
 
 Completed, rejected, and superseded artifacts remain immutable. Implementation
@@ -678,6 +689,16 @@ persist a mode, create lifecycle state, choose semantic values, hide an
 adoption-changing condition, or become authority. Canonical artifacts remain
 available through on-demand inspection.
 
+Independent Challenge uses a narrower projection rather than the generic
+Authoring Packet. Its Challenge Execution Packet keeps all changed files
+compactly visible but includes only the target Condition and Obligation, their
+exact Human-event basis, explicitly referenced Repository Evidence and Checks,
+Runtime-recorded mutations for those Check definitions, and the Patch
+reference. This selection follows exact graph edges and path identities only;
+it does not rank repository content or infer relevance. The request and Host
+receipt bind the exact packet fingerprint, so context reduction cannot silently
+change the challenged evidence boundary.
+
 At the Handoff boundary, Dynamic Host Projection also derives an ephemeral
 Developer Decision Brief from the canonical Decision Packet. It is the Host's
 required delivery surface: separate delivery/evidence/recommendation/adoption
@@ -763,7 +784,8 @@ It includes:
 - fact-triggered Challenge where a trusted Host can attest independence, and
   direct Human review where it cannot; adverse Challenge evidence returns to
   bounded diagnosis while immutable prior Challenge history remains visible;
-- task-specific Authoring Packets and executable Host actions;
+- task-specific Authoring Packets, bounded Challenge Execution Packets, and
+  executable Host actions;
 - evidence-bounded Cognitive Handoff, Attention, Review Questions, and exact
   current-task Human decisions, including rejection of Agent acceptance advice
   that exceeds current evidence;

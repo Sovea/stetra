@@ -7,6 +7,50 @@ export const HOST_WORKFLOW_REFERENCES = [
 ] as const;
 export type HostWorkflowReference = typeof HOST_WORKFLOW_REFERENCES[number];
 
+const CHALLENGER_INSTRUCTIONS = `You are the Stetra Independent Challenger for one bounded Evidence Obligation.
+
+Use only the current Challenge Execution Request and its exact Challenge
+Execution Packet. The packet is complete for this bounded role: do not load the
+general Stetra skill or its workflow reference pages. Inspect the named target,
+exact Human-event basis, current repository, and Runtime evidence, then actively
+test the frozen failure hypothesis. Do not broaden the task. If the packet is
+structurally insufficient, report partial or unknown instead of recovering
+generic workflow context.
+
+You are read-only. Do not edit, format, repair, install, commit, or mutate files.
+Do not spawn another agent. Do not choose an implementation route or make the
+Human adoption decision. If the available read-only evidence cannot support the
+requested observation, return partial or unknown and name the missing evidence.
+
+Return exactly one JSON Challenge Document matching the prefilled
+challengeExecutionPacket.draft. Fill only its open judgment fields. Do not wrap
+it in Markdown or add prose. Cite only exact IDs present in the packet. Never
+author request identity, context identity, independence, or a Host receipt; the
+controlling Host owns those fields.`;
+
+export function renderCodexChallengerAgent(): string {
+  return `name = "stetra-challenger"
+description = "Independently challenge one Stetra evidence obligation in a fresh read-only context."
+sandbox_mode = "read-only"
+developer_instructions = """
+${CHALLENGER_INSTRUCTIONS}
+"""
+`;
+}
+
+export function renderClaudeChallengerAgent(): string {
+  return `---
+name: stetra-challenger
+description: Independently challenge one Stetra evidence obligation in a fresh read-only context.
+tools: Read, Grep, Glob
+permissionMode: plan
+maxTurns: 20
+---
+
+${CHALLENGER_INSTRUCTIONS}
+`;
+}
+
 export function renderHostSkill(adapter: HostAdapter): string {
   const host = adapter === 'codex' ? 'Codex' : 'Claude Code';
   return `---
@@ -250,22 +294,35 @@ the ordering.
 
 const CHALLENGE_REFERENCE = `# Challenge a falsifiable Evidence Obligation
 
-Use a fresh Host context when Runtime requests independent challenge. This
-happens for an explicitly required obligation and when a **fact-triggered**
+When **hostAction.challengeExecutionRequest** is present, dispatch exactly its
+**stetra-challenger** profile in one fresh Host context. Do not perform the
+Challenge in the Implementer context and do not substitute another Agent role.
+The request binds the task, effective contract, Attempt, fact collection, and
+exact Challenge Execution Packet fingerprint; it forbids mutation and parallel
+fan-out.
+This happens for an explicitly required obligation and when a **fact-triggered**
 obligation relies on a verifier acceptance surface changed by the patch. The
-route uses only explicit obligation/verifier/mutation relationships. Never
-infer it from filenames, test names, error text, or diff shape.
+route uses only explicit obligation/verifier/mutation relationships. Never infer
+it from filenames, test names, error text, or diff shape.
 
-Start from **hostAction.authoringPacket.draft**. Its changedFiles, checks,
+Pass **hostAction.challengeExecutionPacket** to that fresh context. It contains
+exactly one target Condition and Evidence Obligation, only their exact
+Human-event basis, only explicitly related Checks, Repository Evidence, and
+Verifier mutations, plus a compact list of every changed file and one Patch
+reference. Declared relations come only from frozen IDs, selectors, and exact
+repository-evidence paths; they are not relevance guesses. The packet is
+self-contained for this role. Do not ask the Challenger to load the general
+Stetra skill or workflow references.
+
+Start from **challengeExecutionPacket.draft**. Its changedFiles, checks,
 repositoryEvidence, and humanEvents are canonical identities, not paths or
-display labels. Compare **semanticContext.exactDeveloperEvents** with the
-separately labeled Agent interpretation before testing the failure hypothesis.
-Use **fieldRequirements** for the exact outcome choices and its **shapeRef** for
-the evidence-item shape defined once in **shapeCatalog**.
+display labels. Preserve its obligation IDs, falsification design, and evidence
+selection exactly. Use **output.allowedOutcomes** and
+**output.evidenceItemShape** for the open Agent-judgment fields.
 
 ~~~json
 {
-  "obligationIds":["obligation id prefilled by authoringPacket"],
+  "obligationIds":["obligation id prefilled by challengeExecutionPacket"],
   "falsification":{"failureHypothesis":"concrete way the conclusion could be wrong","scenario":"specific boundary to exercise","supportingObservation":"result supporting the conclusion","contradictingObservation":"result contradicting the conclusion"},
   "evidence":{"changedFiles":["changed-file id"],"checks":["definition id"],"repositoryEvidence":[],"humanEvents":["event id"],"patch":true},
   "falsificationAttempt":"what was inspected or executed",
@@ -278,11 +335,16 @@ the evidence-item shape defined once in **shapeCatalog**.
 
 Challenge output remains Agent judgment. Independence and context identities
 are injected only by a trusted Host integration; Agent JSON cannot claim them.
-This Challenge page is loaded only when that integration is available. A thin
-generated skill is routed directly to Handoff with an explicit direct-review
-obligation; it must not manufacture independence. A manually recorded thin
-challenge remains **unverified**. Partial, contradicted, unknown, or missing
-required challenge caps the related obligation conclusion. A partial,
+The Challenger returns only the JSON Challenge Document. The Host wraps that
+output as **{requestId, hostReceipt, challenge}**, and only the Host fills the
+receipt after it observed both lifecycle boundaries and bound the exact output
+fingerprint. Send that complete **hostChallengeSubmission** through the returned
+command. Without a trusted receipt, a thin Host still runs the generated
+Challenger profile and submits **{challenge}**. It must not manufacture a
+receipt: Runtime records the result as **unverified**, prevents it from
+supporting a required obligation, and adds direct Human review. Partial,
+contradicted, unknown, or
+missing required challenge caps the related obligation conclusion. A partial,
 contradicted, or unknown Challenge returns to the Implementer through the
 normal evidence-diagnosis packet. Diagnose its exact Challenge source and
 choose bounded repair, verification revision, Human resolution, or Handoff;

@@ -21,6 +21,8 @@ import {
 } from '../version.ts';
 import {
   HOST_WORKFLOW_REFERENCES,
+  renderClaudeChallengerAgent,
+  renderCodexChallengerAgent,
   renderHostPointerBlock,
   renderHostSkill,
   renderHostWorkflowReference,
@@ -69,7 +71,7 @@ export interface InitializeProjectOptions {
 }
 
 const MANIFEST_PATH = '.stetra/manifest.json';
-const TEMPLATE_REVISION = 3;
+const TEMPLATE_REVISION = 4;
 const DOC_MARKERS = {
   start: '<!-- stetra:begin -->',
   end: '<!-- stetra:end -->',
@@ -298,6 +300,16 @@ function buildDesiredArtifacts(adapters: HostAdapter[]): DesiredArtifact[] {
       kind: 'file',
       templateRevision: TEMPLATE_REVISION,
       content: renderHostSkill(adapter),
+    });
+    artifacts.push({
+      path: adapter === 'codex'
+        ? '.codex/agents/stetra-challenger.toml'
+        : '.claude/agents/stetra-challenger.md',
+      kind: 'file',
+      templateRevision: TEMPLATE_REVISION,
+      content: adapter === 'codex'
+        ? renderCodexChallengerAgent()
+        : renderClaudeChallengerAgent(),
     });
     for (const workflow of HOST_WORKFLOW_REFERENCES) {
       artifacts.push({

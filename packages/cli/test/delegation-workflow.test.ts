@@ -16,8 +16,9 @@ import { Readable } from 'node:stream';
 import test from 'node:test';
 
 import type { DelegationPrepareDocument } from '../src/schemas/delegation.ts';
+import { HostChallengeLifecycle } from '../src/host/challenge-lifecycle.ts';
 import type { HostAttestationProvider } from '../src/runtime-context.ts';
-import { taskIdForPrepareRequest } from '../src/protocol.ts';
+import { stableFingerprint, taskIdForPrepareRequest } from '../src/protocol.ts';
 import {
   collectDelegationFacts,
   diagnoseCollectedEvidence,
@@ -504,10 +505,8 @@ test('material diagnosis and critical unknowns route from explicit semantics rat
     const collected = await collect(root, prepared.taskId);
     const unknown = await diagnose(root, prepared.taskId, disposition(collected.checks[0].definitionId, 'unknown'));
     assert.equal(unknown.disposition.route, 'challenge');
-    assert.equal(unknown.hostAction.kind, 'author-handoff');
-    assert.ok(unknown.hostAction.authoringPacket.outstandingObligations.some(
-      (item: { code: string }) => item.code === 'direct-human-review-required',
-    ));
+    assert.equal(unknown.hostAction.kind, 'perform-independent-challenge');
+    assert.equal(unknown.hostAction.challengeExecutionRequest.mutationPolicy, 'forbidden');
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -702,7 +701,7 @@ test('a Human correction creates a successor Attempt and preserves the prior dec
   }
 });
 
-test('a thin Host routes a required verifier challenge to explicit direct review', async () => {
+test('a thin Host runs the bounded Challenger but preserves unverified direct review', async () => {
   const root = createRepository();
   try {
     const document = prepareDocument({
@@ -714,38 +713,69 @@ test('a thin Host routes a required verifier challenge to explicit direct review
     const obligation = condition.evidenceObligations[0];
     writeFileSync(join(root, 'source.txt'), 'changed verifier surface\n', 'utf8');
     const collected = await collect(root, prepared.taskId);
-    assert.equal(collected.hostAction.kind, 'author-handoff');
+    assert.equal(collected.hostAction.kind, 'perform-independent-challenge');
+    assert.equal(
+      collected.hostAction.challengeExecutionRequest.agentProfile,
+      'stetra-challenger',
+    );
+    const guardedChallenge = await guardFinalResponse({
+      projectRoot: root,
+      taskId: prepared.taskId,
+    });
+    assert.equal(guardedChallenge.disposition, 'continue-workflow');
+    assert.equal(guardedChallenge.hostAction?.kind, 'perform-independent-challenge');
+    assert.equal(
+      guardedChallenge.hostAction?.challengeExecutionRequest?.requestId,
+      collected.hostAction.challengeExecutionRequest.requestId,
+    );
+    const challengeDraft = structuredClone(collected.hostAction.challengeExecutionPacket.draft);
+    challengeDraft.falsificationAttempt = 'Inspected the changed verifier in a separate but unattested context.';
+    challengeDraft.observedResult = 'The selected evidence did not expose the frozen failure hypothesis.';
+    challengeDraft.supportingEvidence = [{
+      statement: 'The current check and patch support the bounded observation.',
+      references: [{ kind: 'check', id: challengeDraft.evidence.checks[0] }],
+    }];
+    challengeDraft.outcome = 'supported';
+    challengeDraft.conclusion = 'The separate review supports the bounded obligation, without Host attestation.';
+    const challenged = await challenge(root, prepared.taskId, challengeDraft);
+    assert.equal(challenged.challenge.independence, 'unverified');
+    assert.equal(challenged.hostAction.kind, 'author-handoff');
+    const guardedHandoff = await guardFinalResponse({
+      projectRoot: root,
+      taskId: prepared.taskId,
+    });
+    assert.equal(guardedHandoff.hostAction?.kind, 'author-handoff');
     assert.deepEqual(
       fieldRequirement(
-        collected.hostAction.authoringPacket,
+        challenged.hostAction.authoringPacket,
         'draft.obligationConclusions[0].status',
       ).allowedValues,
       ['partial', 'contradicted', 'unknown'],
     );
     assert.deepEqual(
       fieldRequirement(
-        collected.hostAction.authoringPacket,
+        challenged.hostAction.authoringPacket,
         'draft.conditionConclusions[0].status',
       ).allowedValues,
       ['partial', 'contradicted', 'unknown'],
     );
-    assert.ok(collected.hostAction.authoringPacket.outstandingObligations.some(
+    assert.ok(challenged.hostAction.authoringPacket.outstandingObligations.some(
       (item: { code: string }) => item.code === 'direct-human-review-required',
     ));
     assert.deepEqual(collected.verifierSurfaces.map((item: { path: string }) => item.path), ['source.txt']);
-    const draft = structuredClone(collected.hostAction.authoringPacket.draft);
-    draft.summary = 'The implementation passes its changed verifier, but independent evidence is unavailable.';
+    const draft = structuredClone(challenged.hostAction.authoringPacket.draft);
+    draft.summary = 'The implementation passes its changed verifier, but Host-attested independence is unavailable.';
     for (const conclusion of draft.obligationConclusions) {
       conclusion.status = 'partial';
       conclusion.falsification = {
-        attempt: 'Inspected the changed acceptance surface in the current context.',
-        observedResult: 'The check passed, but no independent context observed the boundary.',
+        attempt: 'Used the separate Challenger output and inspected the changed acceptance surface.',
+        observedResult: 'The check and Challenger support the boundary, but the Host lifecycle is unverified.',
       };
-      conclusion.conclusion = 'The check passes, while independent falsification remains unavailable.';
+      conclusion.conclusion = 'The check passes, while trusted independent provenance remains unavailable.';
     }
     for (const conclusion of draft.conditionConclusions) {
       conclusion.status = 'partial';
-      conclusion.summary = 'The missing independent challenge prevents full support.';
+      conclusion.summary = 'The unverified Challenge provenance prevents full support.';
     }
     for (const question of draft.reviewQuestions) {
       question.question = 'Does the changed verifier reject the stated failure hypothesis?';
@@ -767,17 +797,17 @@ test('a thin Host routes a required verifier challenge to explicit direct review
     );
     draft.recommendation = {
       action: 'defer',
-      rationale: 'Direct developer review must replace unavailable independent challenge.',
-      caveats: ['The current Host cannot attest a separate context.'],
+      rationale: 'Direct developer review must resolve the unverified Challenge provenance.',
+      caveats: ['The current Host cannot attest the separate context lifecycle.'],
     };
     const handedOff = await handoff(root, prepared.taskId, draft);
     assert.equal(handedOff.status, 'needs-attention');
     assert.ok(handedOff.decisionPacket.attention.some((item: { codes: string[] }) =>
-      item.codes.includes('challenge-missing')));
+      item.codes.includes('challenge-independence-unverified')));
     const issue = handedOff.hostAction.developerDecisionBrief.decisionIssues.find(
-      (item: { codes: string[] }) => item.codes.includes('challenge-missing'),
+      (item: { codes: string[] }) => item.codes.includes('challenge-independence-unverified'),
     );
-    assert.deepEqual(issue.codes, ['challenge-missing', 'direct-review-required']);
+    assert.deepEqual(issue.codes, ['challenge-independence-unverified', 'direct-review-required']);
     assert.equal(issue.attentionIds.length, 2);
     assert.deepEqual(issue.conditionIds, [condition.id]);
     assert.deepEqual(issue.obligationIds, [obligation.id]);
@@ -827,7 +857,7 @@ test('a tree verifier selector detects a changed descendant and triggers challen
   }
 });
 
-test('a canonical Challenge Authoring Packet completes the persisted challenge-to-handoff path', async () => {
+test('a bounded Challenge Execution Packet completes the persisted challenge-to-handoff path', async () => {
   const root = createRepository();
   try {
     const document = prepareDocument({
@@ -840,26 +870,26 @@ test('a canonical Challenge Authoring Packet completes the persisted challenge-t
     writeFileSync(join(root, 'source.txt'), 'changed verifier surface\n', 'utf8');
     const collected = await collect(root, prepared.taskId, trustedHost);
     assert.equal(collected.hostAction.kind, 'perform-independent-challenge');
-    assert.deepEqual(
-      Object.keys(collected.hostAction.authoringPacket.referenceCatalog),
-      ['conditions', 'obligations', 'checks', 'changedFiles', 'challenges', 'repositoryEvidence'],
-    );
+    assert.equal(collected.hostAction.authoringPacket, undefined);
+    assert.deepEqual(Object.keys(collected.hostAction.challengeExecutionPacket), [
+      'inputKind', 'bindsTo', 'target', 'evidence', 'draft', 'output',
+    ]);
     assert.equal(
-      collected.hostAction.authoringPacket.semanticContext.exactDeveloperEvents.events[0].content,
+      collected.hostAction.challengeExecutionPacket.target.exactDeveloperEvents.events[0].content,
       'Keep the exact developer phrase "arguments" visible.',
     );
     assert.equal(
-      collected.hostAction.authoringPacket.semanticContext.agentInterpretation.desiredOutcome,
-      'Preserve the requested public wording.',
+      collected.hostAction.challengeExecutionPacket.target.condition.statement,
+      prepared.taskContract.adoptionConditions[0].statement,
     );
-    assert.equal(collected.hostAction.authoringPacket.semanticContext.exactDeveloperEvents.authority, 'human-event');
-    assert.equal(collected.hostAction.authoringPacket.semanticContext.agentInterpretation.authority, 'agent-judgment');
+    assert.equal(collected.hostAction.challengeExecutionPacket.target.exactDeveloperEvents.authority, 'human-event');
+    assert.equal(collected.hostAction.challengeExecutionPacket.target.condition.authority, 'agent-judgment');
     assert.deepEqual(collected.hostAction.inputBinding, {
-      transport: 'stdin', source: 'authoringPacket.draft', serialization: 'json', execution: 'one-shot',
+      transport: 'stdin', source: 'hostChallengeSubmission', serialization: 'json', execution: 'one-shot',
     });
 
-    const challengeDraft = structuredClone(collected.hostAction.authoringPacket.draft);
-    const changedFileIds = collected.hostAction.authoringPacket.referenceCatalog.changedFiles
+    const challengeDraft = structuredClone(collected.hostAction.challengeExecutionPacket.draft);
+    const changedFileIds = collected.hostAction.challengeExecutionPacket.evidence.changedFiles
       .map((item: { id: string }) => item.id);
     assert.deepEqual(challengeDraft.evidence.changedFiles, changedFileIds);
     challengeDraft.falsificationAttempt = 'Inspected the changed verifier and exercised the bounded behavior independently.';
@@ -878,6 +908,15 @@ test('a canonical Challenge Authoring Packet completes the persisted challenge-t
     assert.equal(challenged.challenge.independence, 'host-attested');
     assert.deepEqual(challenged.challenge.evidence.changedFiles, changedFileIds);
     assert.equal(challenged.hostAction.kind, 'author-handoff');
+    const challengeHistory = explainDelegationTask({
+      projectRoot: root, taskId: prepared.taskId, section: 'challenge',
+    }) as any;
+    assert.equal(challengeHistory.hostReceipts.length, 1);
+    assert.equal(
+      challengeHistory.hostReceipts[0].receiptId,
+      challenged.challenge.attestationId,
+    );
+    assert.equal(challengeHistory.hostReceipts[0].lifecycle, 'start-and-stop-observed');
     const regenerated = explainDelegationTask({
       projectRoot: root, taskId: prepared.taskId, section: 'action',
     }) as any;
@@ -934,6 +973,143 @@ test('a canonical Challenge Authoring Packet completes the persisted challenge-t
   }
 });
 
+test('Challenge receipts require current request, exact output, trusted verification, and single use', async () => {
+  const root = createRepository();
+  try {
+    const prepared = await prepare(root, prepareDocument({
+      baseline: 'unknown',
+      argv: [process.execPath, '-e', 'process.exit(0)'],
+      critical: true,
+    }));
+    writeFileSync(join(root, 'source.txt'), 'challenge receipt boundary\n', 'utf8');
+    const collected = await collect(root, prepared.taskId, trustedHost);
+    const draft = structuredClone(collected.hostAction.challengeExecutionPacket.draft);
+    draft.falsificationAttempt = 'Inspected the exact bounded behavior in a separate context.';
+    draft.observedResult = 'The stated counterexample was not observed.';
+    draft.outcome = 'supported';
+    draft.conclusion = 'The bounded obligation is supported by the cited current evidence.';
+    const alteredSelection = structuredClone(draft);
+    alteredSelection.evidence.checks = [];
+    await assert.rejects(
+      challenge(root, prepared.taskId, alteredSelection),
+      /preserve the exact frozen falsification and evidence selection/,
+    );
+    const submission: any = challengeSubmission(
+      root,
+      prepared.taskId,
+      draft,
+      trustedHost,
+    );
+
+    await assert.rejects(
+      recordChallenge({
+        projectRoot: root,
+        taskId: prepared.taskId,
+        inputPath: '-',
+        input: jsonStream(submission),
+      }),
+      /requires a trusted Host integration/,
+    );
+
+    const wrongRequest = structuredClone(submission);
+    wrongRequest.requestId = stableFingerprint('different request');
+    wrongRequest.hostReceipt!.requestId = wrongRequest.requestId;
+    await assert.rejects(
+      recordChallenge({
+        projectRoot: root,
+        taskId: prepared.taskId,
+        inputPath: '-',
+        input: jsonStream(wrongRequest),
+        hostAttestations: trustedHost,
+      }),
+      /requestId does not match the current/,
+    );
+
+    const wrongOutput = structuredClone(submission);
+    wrongOutput.hostReceipt!.outputFingerprint = stableFingerprint({ altered: true });
+    await assert.rejects(
+      recordChallenge({
+        projectRoot: root,
+        taskId: prepared.taskId,
+        inputPath: '-',
+        input: jsonStream(wrongOutput),
+        hostAttestations: trustedHost,
+      }),
+      /does not bind the submitted Challenge output/,
+    );
+
+    const rejectingHost: HostAttestationProvider = {
+      provenance: 'evaluation-runner',
+      async evaluatePolicies() { return []; },
+      async verifyChallengeRun() { return false; },
+    };
+    await assert.rejects(
+      recordChallenge({
+        projectRoot: root,
+        taskId: prepared.taskId,
+        inputPath: '-',
+        input: jsonStream(submission),
+        hostAttestations: rejectingHost,
+      }),
+      /rejected the Challenge Run Receipt/,
+    );
+
+    const accepted = await recordChallenge({
+      projectRoot: root,
+      taskId: prepared.taskId,
+      inputPath: '-',
+      input: jsonStream(submission),
+      hostAttestations: trustedHost,
+    }) as any;
+    assert.equal(accepted.challenge.independence, 'host-attested');
+    await assert.rejects(
+      recordChallenge({
+        projectRoot: root,
+        taskId: prepared.taskId,
+        inputPath: '-',
+        input: jsonStream(submission),
+        hostAttestations: trustedHost,
+      }),
+      /does not request an Independent Challenge|already been consumed/,
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('Challenge receipt cannot outlive the collected worktree facts', async () => {
+  const root = createRepository();
+  try {
+    const prepared = await prepare(root, prepareDocument({
+      baseline: 'unknown',
+      argv: [process.execPath, '-e', 'process.exit(0)'],
+      critical: true,
+    }));
+    writeFileSync(join(root, 'source.txt'), 'collected implementation\n', 'utf8');
+    const collected = await collect(root, prepared.taskId, trustedHost);
+    const draft = structuredClone(collected.hostAction.challengeExecutionPacket.draft);
+    draft.falsificationAttempt = 'Inspected the current collected implementation.';
+    draft.observedResult = 'The current collected boundary was supported.';
+    draft.outcome = 'supported';
+    draft.conclusion = 'The bounded conclusion applies only to the collected worktree.';
+    const submission = challengeSubmission(root, prepared.taskId, draft, trustedHost);
+
+    writeFileSync(join(root, 'source.txt'), 'changed after challenge observation\n', 'utf8');
+    await assert.rejects(
+      recordChallenge({
+        projectRoot: root,
+        taskId: prepared.taskId,
+        inputPath: '-',
+        input: jsonStream(submission),
+        hostAttestations: trustedHost,
+      }),
+      /Facts changed before challenge/,
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('an adverse Challenge returns to bounded diagnosis and a successor Attempt requires fresh Challenge evidence', async () => {
   const root = createRepository();
   try {
@@ -946,7 +1122,7 @@ test('an adverse Challenge returns to bounded diagnosis and a successor Attempt 
     const collected = await collect(root, prepared.taskId, trustedHost);
     assert.equal(collected.hostAction.kind, 'perform-independent-challenge');
 
-    const challengeDraft = structuredClone(collected.hostAction.authoringPacket.draft);
+    const challengeDraft = structuredClone(collected.hostAction.challengeExecutionPacket.draft);
     const checkId = challengeDraft.evidence.checks[0];
     challengeDraft.falsificationAttempt = 'Exercised the declared counterexample in a fresh context.';
     challengeDraft.observedResult = 'The counterexample contradicted the bounded obligation.';
@@ -990,7 +1166,7 @@ test('an adverse Challenge returns to bounded diagnosis and a successor Attempt 
     assert.equal(recollected.attemptId, 'attempt:2');
     assert.equal(recollected.hostAction.kind, 'perform-independent-challenge');
     assert.notEqual(
-      recollected.hostAction.authoringPacket.bindsTo.factCollectionId,
+      recollected.hostAction.challengeExecutionPacket.bindsTo.factCollectionId,
       challenged.challenge.factCollectionId,
     );
   } finally {
@@ -1224,9 +1400,43 @@ async function challenge(
   document: unknown,
   hostAttestations?: HostAttestationProvider,
 ) {
+  const submission = challengeSubmission(root, taskId, document, hostAttestations);
   return await recordChallenge({
-    projectRoot: root, taskId, inputPath: '-', input: jsonStream(document), hostAttestations,
+    projectRoot: root, taskId, inputPath: '-', input: jsonStream(submission), hostAttestations,
   }) as any;
+}
+
+function challengeSubmission(
+  root: string,
+  taskId: string,
+  document: unknown,
+  hostAttestations?: HostAttestationProvider,
+) {
+  const current = explainDelegationTask({
+    projectRoot: root,
+    taskId,
+    section: 'action',
+    hostAttestations,
+  }) as any;
+  const request = current.hostAction.challengeExecutionRequest;
+  if (!hostAttestations) return { challenge: document };
+  testChallengeLifecycle.observeStart({
+    request,
+    agentType: 'stetra-challenger',
+    parentContextId: 'context:implementer',
+    challengerContextId: `context:challenger:${request.requestId.slice(-8)}`,
+    mutationPolicy: 'host-read-only',
+  });
+  const stopped = testChallengeLifecycle.observeStop({
+    requestId: request.requestId,
+    agentType: 'stetra-challenger',
+    challengerContextId: `context:challenger:${request.requestId.slice(-8)}`,
+    output: document,
+  });
+  if (stopped.status !== 'completed') {
+    throw new Error('Test Challenger output must be schema-valid.');
+  }
+  return stopped.submission;
 }
 
 async function decide(root: string, taskId: string, document: unknown) {
@@ -1257,18 +1467,14 @@ function fieldRequirement(packet: any, path: string): any {
   return requirement;
 }
 
+const testChallengeLifecycle = new HostChallengeLifecycle('evaluation-runner');
+
 const trustedHost: HostAttestationProvider = {
   provenance: 'evaluation-runner',
   async evaluatePolicies() {
     return [];
   },
-  async attestChallenge() {
-    return {
-      attestationId: 'attestation:test-host',
-      implementerContextId: 'context:implementer',
-      challengerContextId: 'context:challenger',
-    };
-  },
+  verifyChallengeRun: testChallengeLifecycle.verifyChallengeRun,
 };
 
 function git(root: string, args: string[]): void {
