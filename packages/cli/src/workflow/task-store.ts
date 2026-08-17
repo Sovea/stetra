@@ -5,6 +5,7 @@ import {
   existsSync,
   lstatSync,
   mkdirSync,
+  mkdtempSync,
   openSync,
   readFileSync,
   readdirSync,
@@ -67,8 +68,7 @@ export function createTaskWorkspace(projectRootInput: string, taskIdInput: strin
   }
   const stagingRoot = resolveStagingDirectory(projectRoot);
   mkdirSync(stagingRoot, { recursive: true });
-  const taskDirectory = join(stagingRoot, `prepare-${taskId}-${randomUUID()}`);
-  mkdirSync(taskDirectory, { recursive: false });
+  const taskDirectory = mkdtempSync(join(stagingRoot, 'prepare-'));
   const objectDirectory = join(taskDirectory, 'worktree-objects');
   mkdirSync(objectDirectory, { recursive: false });
   return { projectRoot, taskDirectory, finalTaskDirectory, objectDirectory };
@@ -94,14 +94,13 @@ export function createCollectionStagingDirectory(input: {
   revision: number;
 }): string {
   const projectRoot = canonicalProjectRoot(input.projectRoot);
-  const taskId = requiredTaskId(input.taskId);
+  requiredTaskId(input.taskId);
   if (!Number.isSafeInteger(input.revision) || input.revision < 1) {
     throw new Error('Collection staging revision is invalid.');
   }
   const stagingRoot = resolveStagingDirectory(projectRoot);
   mkdirSync(stagingRoot, { recursive: true });
-  const path = join(stagingRoot, `collect-${taskId}-${input.revision}-${randomUUID()}`);
-  mkdirSync(path, { recursive: false });
+  const path = mkdtempSync(join(stagingRoot, 'collect-'));
   mkdirSync(join(path, 'artifacts'), { recursive: false });
   mkdirSync(join(path, 'objects'), { recursive: false });
   return path;

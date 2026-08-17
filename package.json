@@ -7,7 +7,7 @@
     "clean": "corepack pnpm -r clean",
     "typecheck": "corepack pnpm --filter @sovea/stetra-core build && corepack pnpm -r typecheck",
     "test": "corepack pnpm --filter @sovea/stetra-core build && corepack pnpm -r test",
-    "test:coverage": "corepack pnpm --filter @sovea/stetra-core build && c8 --all --include \"packages/core/src/**/*.ts\" --include \"packages/cli/src/**/*.ts\" --check-coverage --lines 75 --statements 75 --functions 85 --branches 60 tsx --test packages/core/test/semantic-handoff.test.ts packages/cli/test/check-facts.test.ts packages/cli/test/cli.test.ts packages/cli/test/delegation-workflow.test.ts packages/cli/test/evidence.test.ts packages/cli/test/host-action.test.ts packages/cli/test/process.test.ts packages/cli/test/project-init.test.ts",
+    "test:coverage": "corepack pnpm --filter @sovea/stetra-core build && c8 --all --include \"packages/core/src/**/*.ts\" --include \"packages/cli/src/**/*.ts\" --check-coverage --lines 75 --statements 75 --functions 85 --branches 60 tsx --test packages/core/test/semantic-handoff.test.ts packages/cli/test/check-facts.test.ts packages/cli/test/cli.test.ts packages/cli/test/delegation-workflow.test.ts packages/cli/test/evidence.test.ts packages/cli/test/host-action.test.ts packages/cli/test/process.test.ts packages/cli/test/project-init.test.ts packages/cli/test/task-store.test.ts",
     "verify:dist": "node test/verify-dist.test.mjs",
     "verify:evaluation": "node test/verify-evaluation.test.mjs",
     "verify:packages": "node test/verify-packages.test.mjs",
