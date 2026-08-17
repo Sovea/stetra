@@ -9,10 +9,13 @@ export type HostWorkflowReference = typeof HOST_WORKFLOW_REFERENCES[number];
 
 const CHALLENGER_INSTRUCTIONS = `You are the Stetra Independent Challenger for one bounded Evidence Obligation.
 
-Use only the current Challenge Execution Request and its exact Authoring Packet.
-Compare exact Human events with the separately labeled Agent interpretation,
-inspect the cited current repository and Runtime evidence, and actively test the
-frozen failure hypothesis. Do not broaden the task.
+Use only the current Challenge Execution Request and its exact Challenge
+Execution Packet. The packet is complete for this bounded role: do not load the
+general Stetra skill or its workflow reference pages. Inspect the named target,
+exact Human-event basis, current repository, and Runtime evidence, then actively
+test the frozen failure hypothesis. Do not broaden the task. If the packet is
+structurally insufficient, report partial or unknown instead of recovering
+generic workflow context.
 
 You are read-only. Do not edit, format, repair, install, commit, or mutate files.
 Do not spawn another agent. Do not choose an implementation route or make the
@@ -20,9 +23,10 @@ Human adoption decision. If the available read-only evidence cannot support the
 requested observation, return partial or unknown and name the missing evidence.
 
 Return exactly one JSON Challenge Document matching the prefilled
-authoringPacket.draft. Do not wrap it in Markdown or add prose. Cite only exact
-catalog IDs. Never author request identity, context identity, independence, or a
-Host receipt; the controlling Host owns those fields.`;
+challengeExecutionPacket.draft. Fill only its open judgment fields. Do not wrap
+it in Markdown or add prose. Cite only exact IDs present in the packet. Never
+author request identity, context identity, independence, or a Host receipt; the
+controlling Host owns those fields.`;
 
 export function renderCodexChallengerAgent(): string {
   return `name = "stetra-challenger"
@@ -294,22 +298,31 @@ When **hostAction.challengeExecutionRequest** is present, dispatch exactly its
 **stetra-challenger** profile in one fresh Host context. Do not perform the
 Challenge in the Implementer context and do not substitute another Agent role.
 The request binds the task, effective contract, Attempt, fact collection, and
-exact Authoring Packet fingerprint; it forbids mutation and parallel fan-out.
+exact Challenge Execution Packet fingerprint; it forbids mutation and parallel
+fan-out.
 This happens for an explicitly required obligation and when a **fact-triggered**
 obligation relies on a verifier acceptance surface changed by the patch. The
 route uses only explicit obligation/verifier/mutation relationships. Never infer
 it from filenames, test names, error text, or diff shape.
 
-Start from **hostAction.authoringPacket.draft**. Its changedFiles, checks,
+Pass **hostAction.challengeExecutionPacket** to that fresh context. It contains
+exactly one target Condition and Evidence Obligation, only their exact
+Human-event basis, only explicitly related Checks, Repository Evidence, and
+Verifier mutations, plus a compact list of every changed file and one Patch
+reference. Declared relations come only from frozen IDs, selectors, and exact
+repository-evidence paths; they are not relevance guesses. The packet is
+self-contained for this role. Do not ask the Challenger to load the general
+Stetra skill or workflow references.
+
+Start from **challengeExecutionPacket.draft**. Its changedFiles, checks,
 repositoryEvidence, and humanEvents are canonical identities, not paths or
-display labels. Compare **semanticContext.exactDeveloperEvents** with the
-separately labeled Agent interpretation before testing the failure hypothesis.
-Use **fieldRequirements** for the exact outcome choices and its **shapeRef** for
-the evidence-item shape defined once in **shapeCatalog**.
+display labels. Preserve its obligation IDs, falsification design, and evidence
+selection exactly. Use **output.allowedOutcomes** and
+**output.evidenceItemShape** for the open Agent-judgment fields.
 
 ~~~json
 {
-  "obligationIds":["obligation id prefilled by authoringPacket"],
+  "obligationIds":["obligation id prefilled by challengeExecutionPacket"],
   "falsification":{"failureHypothesis":"concrete way the conclusion could be wrong","scenario":"specific boundary to exercise","supportingObservation":"result supporting the conclusion","contradictingObservation":"result contradicting the conclusion"},
   "evidence":{"changedFiles":["changed-file id"],"checks":["definition id"],"repositoryEvidence":[],"humanEvents":["event id"],"patch":true},
   "falsificationAttempt":"what was inspected or executed",

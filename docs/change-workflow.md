@@ -22,8 +22,9 @@ stetra change explain . --task <task-id> --section all --json
 
 All authoring input uses stdin or a file outside the worktree. Every successful
 stage returns a structured `hostAction` with action kind, optional exact argv,
-optional generated-reference name, and—when input is required—a task-specific
-`authoringPacket`.
+optional generated-reference name, and—when Agent or Human authoring is
+required—a task-specific `authoringPacket`. Independent Challenge instead uses
+the smaller `challengeExecutionPacket` described below.
 
 Use the packet's binding metadata, exact reference catalog, outstanding
 obligations, prefilled draft, and `fieldRequirements`. Each field requirement
@@ -51,9 +52,10 @@ An input-bearing action also returns:
 Serialize the completed draft and attach it to the exact argv process at
 creation time. Do not start an interactive process and then attempt to type the
 document. A temporary fallback input must live outside the worktree.
-Challenge is the one exception to the draft source: its input binding names
-`hostChallengeSubmission`. The fresh-context Agent returns only the completed
-Challenge Document; the controlling Host wraps it with the current request ID
+Challenge is the exception to both the generic packet and draft source. Its
+input binding names `hostChallengeSubmission`. The fresh-context Agent receives
+only the bounded `challengeExecutionPacket` and returns its completed Challenge
+Document; the controlling Host wraps that document with the current request ID
 and a Host Challenge Run Receipt before invoking the command.
 The packet is transient projection, not persisted authority or lifecycle state.
 JSON output places `hostAction` before result detail. Authoring catalogs are
@@ -380,13 +382,34 @@ the current MVP does not claim isolated reconstruction.
 
 When a trusted Host integration is available, the action contains a bounded
 `challengeExecutionRequest`. It binds one `stetra-challenger` run to the exact
-task, effective Contract, Attempt, Fact Collection, and Authoring Packet
-fingerprint. It requires one fresh context, forbids mutation and fan-out, and
-allows one structured-output repair. The generated Codex profile is sandboxed
-read-only; the Claude profile allows only Read, Grep, and Glob.
+task, effective Contract, Attempt, Fact Collection, and Challenge Execution
+Packet fingerprint. It requires one fresh context, forbids mutation and
+fan-out, and allows one structured-output repair. The generated Codex profile
+is sandboxed read-only; the Claude profile allows only Read, Grep, and Glob.
 
-The Challenger receives the Challenge packet and returns only this Agent-owned
-document. It contains no request, context, receipt, or independence claim:
+The transient `challengeExecutionPacket` is a deterministic projection for one
+Evidence Obligation. It contains:
+
+- that Obligation and its owning Condition;
+- only the exact Human Events in the Condition basis;
+- only Check definitions named by the Obligation's Runtime-check strategies;
+- only Repository Evidence named by the Condition basis or Obligation strategy;
+- only Verifier mutations for those Check definitions;
+- a compact inventory of every changed file, with declared relations derived
+  only from exact evidence paths and Runtime-recorded selector matches;
+- one Patch path, digest, and byte length when a Patch exists;
+- one prefilled Challenge draft and its bounded output choices.
+
+It does not contain other Conditions, other Obligations, unrelated Checks,
+generic reference catalogs, reusable authoring shapes, or the general Stetra
+workflow. It uses no filename, token, dependency, diff-size, or keyword
+relevance heuristic. The generated Challenger profile treats this packet as
+complete and does not reload the general Stetra skill or reference pages.
+
+The Challenger fills `challengeExecutionPacket.draft` and returns only this
+Agent-owned document. It preserves the prefilled Obligation IDs,
+falsification design, and evidence selection exactly. It contains no request,
+context, receipt, or independence claim:
 
 ```json
 {
