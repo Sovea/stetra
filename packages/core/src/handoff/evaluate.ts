@@ -212,7 +212,7 @@ function validateChallenges(input: EvaluateHandoffInput): void {
       || stableFingerprint(challenge.conditionIds) !== stableFingerprint(expectedConditions)) {
       issues.push(issue('challenge-condition-binding-invalid', `${path}.conditionIds`, 'Challenge conditions do not match the selected obligations.', 'Use the Runtime-derived condition bindings.'));
     }
-    if (!['host-attested', 'host-claimed', 'unverified'].includes(challenge.independence)
+    if (!['host-attested', 'unverified'].includes(challenge.independence)
       || !validIndependence(challenge)) {
       issues.push(issue('challenge-independence-invalid', `${path}.independence`, 'Challenge independence and its attestation fields are inconsistent.', 'Use the Host-provided independence values without modification.'));
     }
@@ -303,11 +303,6 @@ function validIndependence(challenge: EvaluateHandoffInput['challenges'][number]
       && challenge.implementerContextId !== challenge.challengerContextId;
   }
   if (challenge.attestationId !== undefined) return false;
-  if (challenge.independence === 'host-claimed') {
-    return isNonEmptyString(challenge.implementerContextId)
-      && isNonEmptyString(challenge.challengerContextId)
-      && challenge.implementerContextId !== challenge.challengerContextId;
-  }
   return challenge.implementerContextId === undefined
     && challenge.challengerContextId === undefined;
 }

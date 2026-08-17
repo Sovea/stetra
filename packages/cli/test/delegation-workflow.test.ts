@@ -16,8 +16,9 @@ import { Readable } from 'node:stream';
 import test from 'node:test';
 
 import type { DelegationPrepareDocument } from '../src/schemas/delegation.ts';
+import { HostChallengeLifecycle } from '../src/host/challenge-lifecycle.ts';
 import type { HostAttestationProvider } from '../src/runtime-context.ts';
-import { taskIdForPrepareRequest } from '../src/protocol.ts';
+import { stableFingerprint, taskIdForPrepareRequest } from '../src/protocol.ts';
 import {
   collectDelegationFacts,
   diagnoseCollectedEvidence,
@@ -855,7 +856,7 @@ test('a canonical Challenge Authoring Packet completes the persisted challenge-t
     assert.equal(collected.hostAction.authoringPacket.semanticContext.exactDeveloperEvents.authority, 'human-event');
     assert.equal(collected.hostAction.authoringPacket.semanticContext.agentInterpretation.authority, 'agent-judgment');
     assert.deepEqual(collected.hostAction.inputBinding, {
-      transport: 'stdin', source: 'authoringPacket.draft', serialization: 'json', execution: 'one-shot',
+      transport: 'stdin', source: 'hostChallengeSubmission', serialization: 'json', execution: 'one-shot',
     });
 
     const challengeDraft = structuredClone(collected.hostAction.authoringPacket.draft);
@@ -878,6 +879,15 @@ test('a canonical Challenge Authoring Packet completes the persisted challenge-t
     assert.equal(challenged.challenge.independence, 'host-attested');
     assert.deepEqual(challenged.challenge.evidence.changedFiles, changedFileIds);
     assert.equal(challenged.hostAction.kind, 'author-handoff');
+    const challengeHistory = explainDelegationTask({
+      projectRoot: root, taskId: prepared.taskId, section: 'challenge',
+    }) as any;
+    assert.equal(challengeHistory.hostReceipts.length, 1);
+    assert.equal(
+      challengeHistory.hostReceipts[0].receiptId,
+      challenged.challenge.attestationId,
+    );
+    assert.equal(challengeHistory.hostReceipts[0].lifecycle, 'start-and-stop-observed');
     const regenerated = explainDelegationTask({
       projectRoot: root, taskId: prepared.taskId, section: 'action',
     }) as any;
@@ -929,6 +939,104 @@ test('a canonical Challenge Authoring Packet completes the persisted challenge-t
     assert.ok(!handedOff.decisionPacket.attention.some((item: { codes: string[] }) =>
       item.codes.includes('challenge-independence-unverified')));
     assert.ok(readDelegationTask(root, prepared.taskId).projection.currentHandoffId);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('Challenge receipts require current request, exact output, trusted verification, and single use', async () => {
+  const root = createRepository();
+  try {
+    const prepared = await prepare(root, prepareDocument({
+      baseline: 'unknown',
+      argv: [process.execPath, '-e', 'process.exit(0)'],
+      critical: true,
+    }));
+    writeFileSync(join(root, 'source.txt'), 'challenge receipt boundary\n', 'utf8');
+    const collected = await collect(root, prepared.taskId, trustedHost);
+    const draft = structuredClone(collected.hostAction.authoringPacket.draft);
+    draft.falsificationAttempt = 'Inspected the exact bounded behavior in a separate context.';
+    draft.observedResult = 'The stated counterexample was not observed.';
+    draft.outcome = 'supported';
+    draft.conclusion = 'The bounded obligation is supported by the cited current evidence.';
+    const submission: any = challengeSubmission(
+      root,
+      prepared.taskId,
+      draft,
+      trustedHost,
+    );
+
+    await assert.rejects(
+      recordChallenge({
+        projectRoot: root,
+        taskId: prepared.taskId,
+        inputPath: '-',
+        input: jsonStream(submission),
+      }),
+      /requires a trusted Host integration/,
+    );
+
+    const wrongRequest = structuredClone(submission);
+    wrongRequest.requestId = stableFingerprint('different request');
+    wrongRequest.hostReceipt!.requestId = wrongRequest.requestId;
+    await assert.rejects(
+      recordChallenge({
+        projectRoot: root,
+        taskId: prepared.taskId,
+        inputPath: '-',
+        input: jsonStream(wrongRequest),
+        hostAttestations: trustedHost,
+      }),
+      /requestId does not match the current/,
+    );
+
+    const wrongOutput = structuredClone(submission);
+    wrongOutput.hostReceipt!.outputFingerprint = stableFingerprint({ altered: true });
+    await assert.rejects(
+      recordChallenge({
+        projectRoot: root,
+        taskId: prepared.taskId,
+        inputPath: '-',
+        input: jsonStream(wrongOutput),
+        hostAttestations: trustedHost,
+      }),
+      /does not bind the submitted Challenge output/,
+    );
+
+    const rejectingHost: HostAttestationProvider = {
+      provenance: 'evaluation-runner',
+      async evaluatePolicies() { return []; },
+      async verifyChallengeRun() { return false; },
+    };
+    await assert.rejects(
+      recordChallenge({
+        projectRoot: root,
+        taskId: prepared.taskId,
+        inputPath: '-',
+        input: jsonStream(submission),
+        hostAttestations: rejectingHost,
+      }),
+      /rejected the Challenge Run Receipt/,
+    );
+
+    const accepted = await recordChallenge({
+      projectRoot: root,
+      taskId: prepared.taskId,
+      inputPath: '-',
+      input: jsonStream(submission),
+      hostAttestations: trustedHost,
+    }) as any;
+    assert.equal(accepted.challenge.independence, 'host-attested');
+    await assert.rejects(
+      recordChallenge({
+        projectRoot: root,
+        taskId: prepared.taskId,
+        inputPath: '-',
+        input: jsonStream(submission),
+        hostAttestations: trustedHost,
+      }),
+      /does not request an Independent Challenge|already been consumed/,
+    );
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -1224,9 +1332,43 @@ async function challenge(
   document: unknown,
   hostAttestations?: HostAttestationProvider,
 ) {
+  const submission = challengeSubmission(root, taskId, document, hostAttestations);
   return await recordChallenge({
-    projectRoot: root, taskId, inputPath: '-', input: jsonStream(document), hostAttestations,
+    projectRoot: root, taskId, inputPath: '-', input: jsonStream(submission), hostAttestations,
   }) as any;
+}
+
+function challengeSubmission(
+  root: string,
+  taskId: string,
+  document: unknown,
+  hostAttestations?: HostAttestationProvider,
+) {
+  const current = explainDelegationTask({
+    projectRoot: root,
+    taskId,
+    section: 'action',
+    hostAttestations,
+  }) as any;
+  const request = current.hostAction.challengeExecutionRequest;
+  if (!hostAttestations) return { challenge: document };
+  testChallengeLifecycle.observeStart({
+    request,
+    agentType: 'stetra-challenger',
+    parentContextId: 'context:implementer',
+    challengerContextId: `context:challenger:${request.requestId.slice(-8)}`,
+    mutationPolicy: 'host-read-only',
+  });
+  const stopped = testChallengeLifecycle.observeStop({
+    requestId: request.requestId,
+    agentType: 'stetra-challenger',
+    challengerContextId: `context:challenger:${request.requestId.slice(-8)}`,
+    output: document,
+  });
+  if (stopped.status !== 'completed') {
+    throw new Error('Test Challenger output must be schema-valid.');
+  }
+  return stopped.submission;
 }
 
 async function decide(root: string, taskId: string, document: unknown) {
@@ -1257,18 +1399,14 @@ function fieldRequirement(packet: any, path: string): any {
   return requirement;
 }
 
+const testChallengeLifecycle = new HostChallengeLifecycle('evaluation-runner');
+
 const trustedHost: HostAttestationProvider = {
   provenance: 'evaluation-runner',
   async evaluatePolicies() {
     return [];
   },
-  async attestChallenge() {
-    return {
-      attestationId: 'attestation:test-host',
-      implementerContextId: 'context:implementer',
-      challengerContextId: 'context:challenger',
-    };
-  },
+  verifyChallengeRun: testChallengeLifecycle.verifyChallengeRun,
 };
 
 function git(root: string, args: string[]): void {

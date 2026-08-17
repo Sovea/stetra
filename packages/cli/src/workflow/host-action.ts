@@ -34,8 +34,8 @@ export interface ChallengeExecutionRequest {
   outputRepairBudget: 1;
   expectedOutput: {
     serialization: 'json';
-    schema: 'challenge-submission';
-    challengeSource: 'authoringPacket.draft';
+    schema: 'challenge-document';
+    source: 'authoringPacket.draft';
   };
 }
 
@@ -57,7 +57,7 @@ export interface HostAction {
   command?: { argv: string[] };
   inputBinding?: {
     transport: 'stdin';
-    source: 'authoringPacket.draft';
+    source: 'authoringPacket.draft' | 'hostChallengeSubmission';
     serialization: 'json';
     execution: 'one-shot';
   };
@@ -335,14 +335,19 @@ function challengeInputAction(
     outputRepairBudget: 1 as const,
     expectedOutput: {
       serialization: 'json' as const,
-      schema: 'challenge-submission' as const,
-      challengeSource: 'authoringPacket.draft' as const,
+      schema: 'challenge-document' as const,
+      source: 'authoringPacket.draft' as const,
     },
   };
-  return {
-    ...inputAction(
+  const action = inputAction(
       'perform-independent-challenge', 'challenge', 'challenge', taskId, authoringPacket,
-    ),
+    );
+  return {
+    ...action,
+    inputBinding: {
+      ...action.inputBinding!,
+      source: 'hostChallengeSubmission',
+    },
     challengeExecutionRequest: {
       requestId: stableFingerprint(requestBody),
       ...requestBody,

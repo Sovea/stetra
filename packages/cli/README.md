@@ -80,10 +80,12 @@ before-final-response boundary can embed the same CLI and read-only guard:
 ```ts
 import {
   guardFinalResponse,
+  HostChallengeLifecycle,
   runCli,
   type HostAttestationProvider,
 } from '@sovea/stetra/host';
 
+const challengeLifecycle = new HostChallengeLifecycle('codex');
 const attestations: HostAttestationProvider = {
   provenance: 'native-adapter',
   async evaluatePolicies({ requirements }) {
@@ -93,6 +95,7 @@ const attestations: HostAttestationProvider = {
       provenance: 'native-adapter',
     }));
   },
+  verifyChallengeRun: challengeLifecycle.verifyChallengeRun,
 };
 
 await runCli(['change', 'collect', '.', '--task', taskId, '--json'], {
@@ -106,6 +109,14 @@ const guard = await guardFinalResponse({
   hostAttestations: attestations,
 });
 ```
+
+When `hostAction.challengeExecutionRequest` is present, the embedding Host
+starts exactly one `stetra-challenger` context and calls
+`challengeLifecycle.observeStart(...)`. At the matching Host stop event it
+passes the exact Agent output to `observeStop(...)`; a completed observation
+returns the `hostChallengeSubmission` bytes for the action command. Invalid
+structured output receives at most the request's single repair. No receipt is
+created without both lifecycle observations.
 
 The provider must report only controls the embedding Host actually enforces.
 Importing this subpath does not itself create a hook or make a thin Markdown

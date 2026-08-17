@@ -5,6 +5,13 @@ import type {
 } from '@sovea/stetra-core';
 
 import type { HostAdapter } from './project/init.ts';
+import type {
+  ChallengeExecutionRequest,
+} from './workflow/host-action.ts';
+import type {
+  ChallengeDocument,
+  HostChallengeRunReceipt,
+} from './schemas/delegation.ts';
 
 export interface PromptProvider {
   selectAdapters(input: {
@@ -34,16 +41,11 @@ export interface HostAttestationProvider {
     taskId: string;
     requirements: HostPolicyRequirement[];
   }): Promise<HostPolicyEvaluation[]>;
-  attestChallenge?(input: {
-    taskId: string;
-    effectiveContractId: string;
-    attemptId: string;
-    factCollectionId: string;
-  }): Promise<{
-    attestationId: string;
-    implementerContextId: string;
-    challengerContextId: string;
-  }>;
+  verifyChallengeRun?(input: {
+    request: ChallengeExecutionRequest;
+    receipt: HostChallengeRunReceipt;
+    challenge: ChallengeDocument;
+  }): Promise<boolean>;
 }
 
 export interface CliRuntimeContext {

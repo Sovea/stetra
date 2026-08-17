@@ -471,6 +471,14 @@ programmatic Host integration or Evaluator that controls the relevant boundary
 may record enforcement. Missing capability must degrade to a valid smaller
 strategy or a visible Human decision, never a fabricated guarantee.
 
+The initial Host boundary exposes one deliberately narrow lifecycle binder for
+Independent Challenge. Runtime derives a task- and fact-bound execution request;
+the Host observes one named read-only Challenger start and stop, binds the exact
+structured output, and verifies the single-use receipt when recording the
+Challenge. Generated Codex and Claude profiles constrain the role, but those
+files alone do not confer attestation. This binder is not a subagent scheduler,
+generic role registry, transcript store, or parallel execution graph.
+
 ### Attempt and Verification lineage
 
 Completed, rejected, and superseded artifacts remain immutable. Implementation

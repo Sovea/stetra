@@ -38,6 +38,10 @@ test('host actions route the initial lifecycle with executable task argv', () =>
   assert.equal(challenge.challengeExecutionRequest?.mutationPolicy, 'forbidden');
   assert.equal(challenge.challengeExecutionRequest?.contextPolicy, 'fresh-required');
   assert.equal(challenge.challengeExecutionRequest?.outputRepairBudget, 1);
+  assert.deepEqual(challenge.challengeExecutionRequest?.expectedOutput, {
+    serialization: 'json', schema: 'challenge-document', source: 'authoringPacket.draft',
+  });
+  assert.equal(challenge.inputBinding?.source, 'hostChallengeSubmission');
   assert.equal(diagnosisHostAction(
     'challenge', 'task-id', packet('handoff'), false,
   ).kind, 'author-handoff');
