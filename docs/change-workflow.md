@@ -460,13 +460,13 @@ selected Obligation. Obligations with different designs are challenged
 separately. The Agent records both the action and observed result before
 choosing a bounded outcome.
 
-Generated Markdown skills do not control a fresh Host context, so Dynamic Host
-Projection does not ask them to manufacture an independent Challenge. It routes
-directly to Handoff, marks the missing Challenge as a concrete direct-review
-obligation, and rejects `supported` for the affected obligation. A native
-Adapter or Evaluator with an attestation provider retains the executable
-Challenge action. A manually submitted thin-context Challenge is still recorded
-as `unverified`.
+Generated Markdown skills do not control or attest a fresh Host context, but
+the generated Codex and Claude profiles can still perform the bounded Challenge
+in a separate context. Without a trusted provider, the Host submits
+`{"challenge": ...}` without a Receipt. Runtime records that result as
+`unverified`, rejects `supported` for the affected required obligation, and
+adds a concrete direct-review obligation. A native Adapter or Evaluator that
+observes both lifecycle boundaries may instead submit the verified Receipt.
 
 ## Handoff
 

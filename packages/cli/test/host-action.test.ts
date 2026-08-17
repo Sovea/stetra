@@ -43,9 +43,6 @@ test('host actions route the initial lifecycle with executable task argv', () =>
   });
   assert.equal(challenge.inputBinding?.source, 'hostChallengeSubmission');
   assert.equal(diagnosisHostAction(
-    'challenge', 'task-id', packet('handoff'), false,
-  ).kind, 'author-handoff');
-  assert.equal(diagnosisHostAction(
     'revise-verification', 'task-id', packet('verification-revision'),
   ).kind, 'revise-verification');
   assert.equal(diagnosisHostAction('handoff', 'task-id', packet('handoff')).kind, 'author-handoff');
@@ -86,7 +83,6 @@ test('collection routes timeout, diagnosis, required challenge, and ordinary han
     diagnosisPacket: packet('diagnosis'),
     challengePacket: packet('challenge'),
     handoffPacket: packet('handoff'),
-    challengeAttestationAvailable: true,
   };
   assert.equal(collectedHostAction({
     ...common, pendingChallengeObligationIds: [],
@@ -94,12 +90,6 @@ test('collection routes timeout, diagnosis, required challenge, and ordinary han
   assert.equal(collectedHostAction({
     ...common, pendingChallengeObligationIds: ['obligation:test'],
   }).kind, 'perform-independent-challenge');
-  assert.equal(collectedHostAction({
-    ...common,
-    pendingChallengeObligationIds: ['obligation:test'],
-    challengeAttestationAvailable: false,
-  }).kind, 'author-handoff');
-
   const failed = factFixture('failed');
   assert.equal(collectedHostAction({
     ...common, facts: failed, pendingChallengeObligationIds: [],

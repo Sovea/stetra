@@ -653,7 +653,6 @@ export async function collectDelegationFacts(options: {
         challengeAttestationAvailable,
       }),
       pendingChallengeObligationIds: pendingChallenges,
-      challengeAttestationAvailable,
       }),
   };
 }
@@ -795,16 +794,10 @@ export async function diagnoseCollectedEvidence(options: {
           facts: currentFacts,
         })
     : route === 'challenge' && currentFacts
-      ? challengeAttestationAvailable
-        ? challengeAuthoringPacket({
-            task: transitioned.projection, contract: currentContract, facts: currentFacts,
-            challenges, requiredObligationIds: required,
-          })
-        : handoffAuthoringPacket({
-            task: transitioned.projection, contract: currentContract, facts: currentFacts,
-            challenges, requiredObligationIds: required,
-            challengeAttestationAvailable,
-          })
+      ? challengeAuthoringPacket({
+          task: transitioned.projection, contract: currentContract, facts: currentFacts,
+          challenges, requiredObligationIds: required,
+        })
       : route === 'handoff' && currentFacts
         ? handoffAuthoringPacket({
             task: transitioned.projection, contract: currentContract, facts: currentFacts,
@@ -812,13 +805,6 @@ export async function diagnoseCollectedEvidence(options: {
             challengeAttestationAvailable,
           })
         : undefined;
-  if (route === 'challenge' && !challengeAttestationAvailable && packet) {
-    packet.outstandingObligations.push(...source.entries.map((entry) => ({
-      code: 'direct-human-review-required',
-      targetId: evidenceConcernTargetId(entry.source),
-      requiredAction: 'The current Host cannot attest a fresh challenger context. Preserve this unresolved diagnosis in the handoff and ask the developer to inspect the stated failure hypothesis directly.',
-    })));
-  }
   return {
     protocol: DELEGATION_PROTOCOL,
     schemaVersion: DELEGATION_SCHEMA_VERSION,
@@ -829,9 +815,7 @@ export async function diagnoseCollectedEvidence(options: {
     disposition: disposition!,
     ...(successorAttemptId ? { successorAttemptId } : {}),
     task: compactTask(transitioned.projection),
-    hostAction: diagnosisHostAction(
-      route!, transitioned.taskId, packet, challengeAttestationAvailable,
-    ),
+    hostAction: diagnosisHostAction(route!, transitioned.taskId, packet),
   };
 }
 
@@ -948,7 +932,7 @@ export async function recordChallenge(options: {
   const pending = pendingChallengeObligationIds(required, challenges);
   const challengeAttestationAvailable = Boolean(options.hostAttestations?.verifyChallengeRun);
   const adverse = challenge!.outcome !== 'supported';
-  const performAnotherChallenge = !adverse && pending.length > 0 && challengeAttestationAvailable;
+  const performAnotherChallenge = !adverse && pending.length > 0;
   const packet = adverse
     ? diagnosisAuthoringPacket({
         task: transitioned.projection,
@@ -1354,7 +1338,7 @@ export async function resolveHumanChoice(options: {
       const pending = pendingChallengeObligationIds(required, challenges);
       const needsChallenge = pending.length > 0;
       const challengeAttestationAvailable = Boolean(options.hostAttestations?.verifyChallengeRun);
-      const performChallenge = needsChallenge && challengeAttestationAvailable;
+      const performChallenge = needsChallenge;
       const packet = performChallenge
         ? challengeAuthoringPacket({
             task: transitioned.projection, contract, facts, challenges,
@@ -1731,16 +1715,10 @@ function currentTaskHostAction(task: LoadedTask, challengeAttestationAvailable =
     const packet = disposition.route === 'revise-verification'
       ? verificationRevisionAuthoringPacket({ task: task.projection, contract, facts })
       : disposition.route === 'challenge'
-        ? challengeAttestationAvailable
-          ? challengeAuthoringPacket({
-              task: task.projection, contract, facts, challenges,
-              requiredObligationIds: required,
-            })
-          : handoffAuthoringPacket({
-              task: task.projection, contract, facts, challenges,
-              requiredObligationIds: required,
-              challengeAttestationAvailable,
-            })
+        ? challengeAuthoringPacket({
+            task: task.projection, contract, facts, challenges,
+            requiredObligationIds: required,
+          })
         : disposition.route === 'handoff'
           ? handoffAuthoringPacket({
               task: task.projection, contract, facts, challenges,
@@ -1748,19 +1726,7 @@ function currentTaskHostAction(task: LoadedTask, challengeAttestationAvailable =
               challengeAttestationAvailable,
             })
           : undefined;
-    if (disposition.route === 'challenge' && !challengeAttestationAvailable && packet) {
-      packet.outstandingObligations.push(...disposition.entries.map((entry) => ({
-        code: 'direct-human-review-required',
-        targetId: evidenceConcernTargetId(entry.source),
-        requiredAction: 'The current Host cannot attest a fresh challenger context. Preserve this unresolved diagnosis in the handoff and ask the developer to inspect the stated failure hypothesis directly.',
-      })));
-    }
-    return diagnosisHostAction(
-      disposition.route,
-      task.taskId,
-      packet,
-      challengeAttestationAvailable,
-    );
+    return diagnosisHostAction(disposition.route, task.taskId, packet);
   }
   if (challenges.some((challenge) => challenge.outcome !== 'supported')) {
     return adverseChallengeHostAction(task.taskId, diagnosisAuthoringPacket({
@@ -1784,7 +1750,6 @@ function currentTaskHostAction(task: LoadedTask, challengeAttestationAvailable =
       challengeAttestationAvailable,
     }),
     pendingChallengeObligationIds: pending,
-    challengeAttestationAvailable,
   });
 }
 
@@ -2446,10 +2411,6 @@ function evidenceConcernIdentity(source: EvidenceDispositionDocument['entries'][
   return source.kind === 'check'
     ? `check:${source.definitionId}`
     : `challenge:${source.challengeId}`;
-}
-
-function evidenceConcernTargetId(source: EvidenceDispositionDocument['entries'][number]['source']): string {
-  return source.kind === 'check' ? source.definitionId : source.challengeId;
 }
 
 function requiredChallengeObligationIds(contract: TaskContract, facts: FactBundle): string[] {

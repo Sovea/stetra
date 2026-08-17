@@ -326,9 +326,11 @@ The Challenger returns only the JSON Challenge Document. The Host wraps that
 output as **{requestId, hostReceipt, challenge}**, and only the Host fills the
 receipt after it observed both lifecycle boundaries and bound the exact output
 fingerprint. Send that complete **hostChallengeSubmission** through the returned
-command. A thin generated skill is routed directly to Handoff with an explicit
-direct-review obligation; it must not manufacture a receipt. A manually
-recorded Challenge remains **unverified**. Partial, contradicted, unknown, or
+command. Without a trusted receipt, a thin Host still runs the generated
+Challenger profile and submits **{challenge}**. It must not manufacture a
+receipt: Runtime records the result as **unverified**, prevents it from
+supporting a required obligation, and adds direct Human review. Partial,
+contradicted, unknown, or
 missing required challenge caps the related obligation conclusion. A partial,
 contradicted, or unknown Challenge returns to the Implementer through the
 normal evidence-diagnosis packet. Diagnose its exact Challenge source and

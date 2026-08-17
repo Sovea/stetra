@@ -505,10 +505,8 @@ test('material diagnosis and critical unknowns route from explicit semantics rat
     const collected = await collect(root, prepared.taskId);
     const unknown = await diagnose(root, prepared.taskId, disposition(collected.checks[0].definitionId, 'unknown'));
     assert.equal(unknown.disposition.route, 'challenge');
-    assert.equal(unknown.hostAction.kind, 'author-handoff');
-    assert.ok(unknown.hostAction.authoringPacket.outstandingObligations.some(
-      (item: { code: string }) => item.code === 'direct-human-review-required',
-    ));
+    assert.equal(unknown.hostAction.kind, 'perform-independent-challenge');
+    assert.equal(unknown.hostAction.challengeExecutionRequest.mutationPolicy, 'forbidden');
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -703,7 +701,7 @@ test('a Human correction creates a successor Attempt and preserves the prior dec
   }
 });
 
-test('a thin Host routes a required verifier challenge to explicit direct review', async () => {
+test('a thin Host runs the bounded Challenger but preserves unverified direct review', async () => {
   const root = createRepository();
   try {
     const document = prepareDocument({
@@ -715,38 +713,54 @@ test('a thin Host routes a required verifier challenge to explicit direct review
     const obligation = condition.evidenceObligations[0];
     writeFileSync(join(root, 'source.txt'), 'changed verifier surface\n', 'utf8');
     const collected = await collect(root, prepared.taskId);
-    assert.equal(collected.hostAction.kind, 'author-handoff');
+    assert.equal(collected.hostAction.kind, 'perform-independent-challenge');
+    assert.equal(
+      collected.hostAction.challengeExecutionRequest.agentProfile,
+      'stetra-challenger',
+    );
+    const challengeDraft = structuredClone(collected.hostAction.authoringPacket.draft);
+    challengeDraft.falsificationAttempt = 'Inspected the changed verifier in a separate but unattested context.';
+    challengeDraft.observedResult = 'The selected evidence did not expose the frozen failure hypothesis.';
+    challengeDraft.supportingEvidence = [{
+      statement: 'The current check and patch support the bounded observation.',
+      references: [{ kind: 'check', id: challengeDraft.evidence.checks[0] }],
+    }];
+    challengeDraft.outcome = 'supported';
+    challengeDraft.conclusion = 'The separate review supports the bounded obligation, without Host attestation.';
+    const challenged = await challenge(root, prepared.taskId, challengeDraft);
+    assert.equal(challenged.challenge.independence, 'unverified');
+    assert.equal(challenged.hostAction.kind, 'author-handoff');
     assert.deepEqual(
       fieldRequirement(
-        collected.hostAction.authoringPacket,
+        challenged.hostAction.authoringPacket,
         'draft.obligationConclusions[0].status',
       ).allowedValues,
       ['partial', 'contradicted', 'unknown'],
     );
     assert.deepEqual(
       fieldRequirement(
-        collected.hostAction.authoringPacket,
+        challenged.hostAction.authoringPacket,
         'draft.conditionConclusions[0].status',
       ).allowedValues,
       ['partial', 'contradicted', 'unknown'],
     );
-    assert.ok(collected.hostAction.authoringPacket.outstandingObligations.some(
+    assert.ok(challenged.hostAction.authoringPacket.outstandingObligations.some(
       (item: { code: string }) => item.code === 'direct-human-review-required',
     ));
     assert.deepEqual(collected.verifierSurfaces.map((item: { path: string }) => item.path), ['source.txt']);
-    const draft = structuredClone(collected.hostAction.authoringPacket.draft);
-    draft.summary = 'The implementation passes its changed verifier, but independent evidence is unavailable.';
+    const draft = structuredClone(challenged.hostAction.authoringPacket.draft);
+    draft.summary = 'The implementation passes its changed verifier, but Host-attested independence is unavailable.';
     for (const conclusion of draft.obligationConclusions) {
       conclusion.status = 'partial';
       conclusion.falsification = {
-        attempt: 'Inspected the changed acceptance surface in the current context.',
-        observedResult: 'The check passed, but no independent context observed the boundary.',
+        attempt: 'Used the separate Challenger output and inspected the changed acceptance surface.',
+        observedResult: 'The check and Challenger support the boundary, but the Host lifecycle is unverified.',
       };
-      conclusion.conclusion = 'The check passes, while independent falsification remains unavailable.';
+      conclusion.conclusion = 'The check passes, while trusted independent provenance remains unavailable.';
     }
     for (const conclusion of draft.conditionConclusions) {
       conclusion.status = 'partial';
-      conclusion.summary = 'The missing independent challenge prevents full support.';
+      conclusion.summary = 'The unverified Challenge provenance prevents full support.';
     }
     for (const question of draft.reviewQuestions) {
       question.question = 'Does the changed verifier reject the stated failure hypothesis?';
@@ -768,17 +782,17 @@ test('a thin Host routes a required verifier challenge to explicit direct review
     );
     draft.recommendation = {
       action: 'defer',
-      rationale: 'Direct developer review must replace unavailable independent challenge.',
-      caveats: ['The current Host cannot attest a separate context.'],
+      rationale: 'Direct developer review must resolve the unverified Challenge provenance.',
+      caveats: ['The current Host cannot attest the separate context lifecycle.'],
     };
     const handedOff = await handoff(root, prepared.taskId, draft);
     assert.equal(handedOff.status, 'needs-attention');
     assert.ok(handedOff.decisionPacket.attention.some((item: { codes: string[] }) =>
-      item.codes.includes('challenge-missing')));
+      item.codes.includes('challenge-independence-unverified')));
     const issue = handedOff.hostAction.developerDecisionBrief.decisionIssues.find(
-      (item: { codes: string[] }) => item.codes.includes('challenge-missing'),
+      (item: { codes: string[] }) => item.codes.includes('challenge-independence-unverified'),
     );
-    assert.deepEqual(issue.codes, ['challenge-missing', 'direct-review-required']);
+    assert.deepEqual(issue.codes, ['challenge-independence-unverified', 'direct-review-required']);
     assert.equal(issue.attentionIds.length, 2);
     assert.deepEqual(issue.conditionIds, [condition.id]);
     assert.deepEqual(issue.obligationIds, [obligation.id]);

@@ -507,6 +507,14 @@ export function handoffAuthoringPacket(input: {
           ? 'The current Host cannot attest a fresh challenger context. Keep the conclusion below supported and give the developer a concrete direct-review question.'
           : 'Complete and record the required challenge before claiming support.',
       })),
+      ...input.requiredObligationIds.filter((id) => {
+        const challenge = challengeByObligation.get(id);
+        return challenge && challenge.independence !== 'host-attested';
+      }).map((id) => ({
+        code: 'direct-human-review-required',
+        targetId: id,
+        requiredAction: 'The recorded Challenger output has no verified Host lifecycle receipt. Keep the conclusion below supported and direct the developer to inspect the unresolved failure hypothesis.',
+      })),
     ],
     },
   );

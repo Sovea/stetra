@@ -150,7 +150,6 @@ export function collectedHostAction(input: {
   challengePacket: AuthoringPacket;
   handoffPacket: AuthoringPacket;
   pendingChallengeObligationIds: string[];
-  challengeAttestationAvailable: boolean;
 }): HostAction {
   const timedOut = input.facts.checks.filter((check) =>
     latestAttempt(check).termination.kind === 'timeout');
@@ -170,9 +169,7 @@ export function collectedHostAction(input: {
     return inputAction('diagnose-collected-evidence', 'recovery', 'diagnose', input.taskId, input.diagnosisPacket);
   }
   if (input.pendingChallengeObligationIds.length) {
-    return input.challengeAttestationAvailable
-      ? challengeInputAction(input.taskId, input.challengePacket)
-      : inputAction('author-handoff', 'handoff', 'handoff', input.taskId, input.handoffPacket);
+    return challengeInputAction(input.taskId, input.challengePacket);
   }
   return inputAction('author-handoff', 'handoff', 'handoff', input.taskId, input.handoffPacket);
 }
@@ -186,7 +183,6 @@ export function diagnosisHostAction(
     | 'ask-human',
   taskId: string,
   packet?: AuthoringPacket,
-  challengeAttestationAvailable = true,
 ): HostAction {
   if (route === 'repair-implementation') return preparedHostAction(taskId);
   if (route === 'revise-verification') {
@@ -196,12 +192,7 @@ export function diagnosisHostAction(
     );
   }
   if (route === 'challenge') {
-    return challengeAttestationAvailable
-      ? challengeInputAction(taskId, requiredAuthoringPacket(packet, route))
-      : inputAction(
-          'author-handoff', 'handoff', 'handoff', taskId,
-          requiredAuthoringPacket(packet, route),
-        );
+    return challengeInputAction(taskId, requiredAuthoringPacket(packet, route));
   }
   if (route === 'handoff') {
     return inputAction(
