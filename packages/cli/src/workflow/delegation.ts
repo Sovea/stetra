@@ -2103,6 +2103,8 @@ function buildDecisionPacket(
         falsification: challenge.falsification,
         falsificationAttempt: challenge.falsificationAttempt,
         observedResult: challenge.observedResult,
+        supportingEvidence: challenge.supportingEvidence,
+        counterEvidence: challenge.counterEvidence,
         outcome: challenge.outcome,
         conclusion: challenge.conclusion,
       })),

@@ -1174,6 +1174,83 @@ test('an adverse Challenge returns to bounded diagnosis and a successor Attempt 
   }
 });
 
+test('an adverse Challenge preserves its exact counter-evidence through Handoff and the developer brief', async () => {
+  const root = createRepository();
+  try {
+    const prepared = await prepare(root, prepareDocument({
+      baseline: 'unknown',
+      argv: [process.execPath, '-e', 'process.exit(0)'],
+      critical: true,
+    }));
+    writeFileSync(join(root, 'source.txt'), 'implementation with an unresolved boundary\n', 'utf8');
+    const collected = await collect(root, prepared.taskId, trustedHost);
+    const challengeDraft = structuredClone(collected.hostAction.challengeExecutionPacket.draft);
+    const checkId = challengeDraft.evidence.checks[0];
+    const counterStatement = 'The persistent verifier remains green without exercising the declared boundary.';
+    challengeDraft.falsificationAttempt = 'Inspected whether the frozen verifier exercises the declared boundary.';
+    challengeDraft.observedResult = 'The implementation path passed, but the verifier omitted the boundary.';
+    challengeDraft.counterEvidence = [{
+      statement: counterStatement,
+      references: [{ kind: 'check', id: checkId }],
+    }];
+    challengeDraft.outcome = 'partial';
+    challengeDraft.conclusion = 'Current behavior has some support, while persistent protection remains incomplete.';
+    const challenged = await challenge(root, prepared.taskId, challengeDraft, trustedHost);
+    assert.equal(challenged.hostAction.kind, 'diagnose-collected-evidence');
+
+    const diagnosis = structuredClone(challenged.hostAction.authoringPacket.draft);
+    diagnosis.semanticImpact = 'none';
+    diagnosis.proposedRoute = 'handoff';
+    diagnosis.routeRationale = 'Keep the unresolved persistent-verification boundary visible for developer review.';
+    diagnosis.entries[0] = {
+      ...diagnosis.entries[0],
+      cause: 'verification',
+      diagnosis: 'The current verifier does not protect the complete declared boundary.',
+      falsificationAttempt: 'Compared the verifier surface with the frozen failure hypothesis.',
+      codeChangeCanAlterObservation: false,
+      expectedDifferentObservation: 'No different observation is claimed without expanding persistent verification.',
+      intendedChanges: [],
+    };
+    const diagnosed = await diagnose(root, prepared.taskId, diagnosis);
+    assert.equal(diagnosed.hostAction.kind, 'author-handoff');
+    const handoffDraft = structuredClone(diagnosed.hostAction.authoringPacket.draft);
+    assert.deepEqual(handoffDraft.obligationConclusions[0].counterEvidence, [{
+      kind: 'challenge', id: challenged.challenge.id,
+    }]);
+    handoffDraft.summary = 'The implementation behavior is partly supported, with a persistent-verification gap.';
+    handoffDraft.obligationConclusions[0].status = 'partial';
+    handoffDraft.obligationConclusions[0].falsification = {
+      attempt: 'Reviewed the independent challenge and its omitted verifier boundary.',
+      observedResult: 'The behavior probe passed while persistent coverage remained incomplete.',
+    };
+    handoffDraft.obligationConclusions[0].conclusion = 'The obligation remains only partially supported.';
+    handoffDraft.conditionConclusions[0].status = 'partial';
+    handoffDraft.conditionConclusions[0].summary = 'Persistent protection remains unresolved.';
+    for (const question of handoffDraft.reviewQuestions) {
+      question.question = 'Is the missing persistent boundary acceptable for adoption?';
+      question.evidence = [{ kind: 'challenge', id: challenged.challenge.id }];
+    }
+    handoffDraft.recommendation = {
+      action: 'defer',
+      rationale: 'The developer should decide whether persistent protection is required before adoption.',
+      caveats: ['The independent challenge recorded an unresolved verifier boundary.'],
+    };
+    const handedOff = await handoff(root, prepared.taskId, handoffDraft);
+    const recorded = handedOff.decisionPacket.evidenceJudgments.challenges[0];
+    assert.equal(recorded.outcome, 'partial');
+    assert.equal(recorded.counterEvidence[0].statement, counterStatement);
+    assert.deepEqual(recorded.counterEvidence[0].references, [{ kind: 'check', id: checkId }]);
+    const finding = handedOff.hostAction.developerDecisionBrief
+      .conditions[0].obligations[0].evidenceBoundary.challengeFindings[0];
+    assert.equal(finding.id, challenged.challenge.id);
+    assert.equal(finding.outcome, 'partial');
+    assert.equal(finding.conclusion, challengeDraft.conclusion);
+    assert.equal(finding.counterEvidence[0].statement, counterStatement);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('verification revision preserves history and completes handoff against current evidence', async () => {
   const root = createRepository();
   try {

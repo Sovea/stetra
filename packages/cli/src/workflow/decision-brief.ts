@@ -39,7 +39,12 @@ export interface DeveloperDecisionBrief {
         observedResult: string;
         supportingEvidenceCount: number;
         counterEvidenceCount: number;
-        challengeOutcomes: Array<{ id: string; outcome: string }>;
+        challengeFindings: Array<{
+          id: string;
+          outcome: string;
+          conclusion: string;
+          counterEvidence: DecisionPacket['evidenceJudgments']['challenges'][number]['counterEvidence'];
+        }>;
       };
     }>;
   }>;
@@ -142,9 +147,14 @@ export function buildDeveloperDecisionBrief(input: {
           observedResult: obligation.conclusion.falsification.observedResult,
           supportingEvidenceCount: obligation.conclusion.evidence.length,
           counterEvidenceCount: obligation.conclusion.counterEvidence.length,
-          challengeOutcomes: obligation.challengeIds.flatMap((id) => {
+          challengeFindings: obligation.challengeIds.flatMap((id) => {
             const challenge = challengeById.get(id);
-            return challenge ? [{ id, outcome: challenge.outcome }] : [];
+            return challenge ? [{
+              id,
+              outcome: challenge.outcome,
+              conclusion: challenge.conclusion,
+              counterEvidence: challenge.counterEvidence,
+            }] : [];
           }),
         },
       })),
