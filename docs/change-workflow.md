@@ -154,6 +154,23 @@ enforcement or independent-context provenance.
             },
             { "kind": "independent-challenge", "policy": "required" }
           ]
+        },
+        {
+          "key": "persistent-protection",
+          "statement": "Persistent verification rejects a plausible compatibility regression.",
+          "falsification": {
+            "failureHypothesis": "The verifier may pass without observing the legacy path.",
+            "scenario": "Inspect or exercise whether the verifier rejects that regression.",
+            "supportingObservation": "The verifier rejects the plausible regression.",
+            "contradictingObservation": "The verifier passes without observing the changed behavior."
+          },
+          "strategies": [
+            {
+              "kind": "runtime-check",
+              "checkKeys": ["compatibility-test"]
+            },
+            { "kind": "independent-challenge", "policy": "required" }
+          ]
         }
       ]
     }
@@ -178,7 +195,8 @@ enforcement or independent-context provenance.
         "rationale": "Before/after distinguishes a new regression from a prior failure.",
         "expectation": { "baselineStatus": "passed", "currentStatus": "passed" },
         "obligationKeys": [
-          { "conditionKey": "compatibility", "obligationKey": "legacy-path" }
+          { "conditionKey": "compatibility", "obligationKey": "legacy-path" },
+          { "conditionKey": "compatibility", "obligationKey": "persistent-protection" }
         ]
       },
       "verifierSelectors": [
@@ -195,6 +213,13 @@ one falsifiable Evidence Obligation. Adoption-critical Conditions require a
 `required` independent Challenge or direct Human review strategy;
 `fact-triggered` alone is insufficient.
 
+Each Evidence Obligation must be independently concludable. If the same
+observation can support one part while another adoption-relevant part remains
+unknown, split them into separate Obligations. Current implementation behavior
+and persistent verifier protection are separate Obligations when either can
+change adoption. The Host Agent declares this split explicitly; Runtime does
+not infer it from repository text or verification filenames.
+
 Every Obligation freezes one discriminating design: the plausible failure, a
 specific scenario, the observation that supports the bounded conclusion, and
 the observation that contradicts it. Runtime validates completeness and later
@@ -210,7 +235,8 @@ Repository Evidence uses either an exact `startLine`/`endLine` range or
 `wholeFile: true`. The latter is not a persisted shortcut: CLI deterministically
 materializes the current UTF-8 file into an exact line range, text, and digest
 before Core compiles the Contract. Empty files are rejected rather than given
-an invented line number.
+an invented line number. Prefer the smallest exact line range sufficient for
+the declared decision; use the whole file only when all of it is relevant.
 
 `task-start` baseline requires a decision-relevant rationale and exact
 Obligation keys. It also freezes explicit expected baseline and current statuses
@@ -473,6 +499,11 @@ the existing evidence-diagnosis action. The diagnosis may choose bounded
 repair, verification revision, Human resolution, or Handoff, but may not send
 the same adverse Challenge to another Challenger.
 
+`supported` is structurally incompatible with non-empty `counterEvidence`.
+While any counter-evidence remains, the Challenger must use `partial`,
+`contradicted`, or `unknown`. CLI rejects the inconsistent document early and
+Core independently rejects the same combination if it bypasses CLI parsing.
+
 Repair and recollection never erase Challenge history. Only Challenges bound
 to the current effective Contract, Attempt, and Fact Collection can satisfy a
 current obligation; `change explain --section challenge` retains prior adverse
@@ -549,6 +580,10 @@ evidence coverage but does not claim the natural-language statement is true.
 Every missing, adverse, or unverified required Challenge also requires a Review
 Question bound to the exact affected Obligation; a broad Condition-only
 question cannot discharge it.
+
+The final Developer Decision Brief preserves each related Challenge conclusion
+and its exact counter-evidence under the affected Obligation. A Challenge is not
+reduced to an outcome label before the developer makes the adoption decision.
 
 Agent recommendation cannot exceed the current evidence. `accept` is rejected
 when any Condition or Obligation is not supported, a residual unknown remains,

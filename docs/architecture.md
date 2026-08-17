@@ -381,12 +381,21 @@ strategies to attempt. Challenge and Handoff separately record the action taken
 and the result actually observed. Handoff concludes Obligations before
 Conditions.
 
+An Evidence Obligation is independently concludable. If one observation can
+support part of a statement while another adoption-relevant part remains
+unknown, those parts are separate Obligations. In particular, current
+implementation behavior and persistent verifier protection are separate when
+either can independently change adoption. The Agent declares that boundary;
+Runtime does not infer it from filenames, test text, or other repository
+signals.
+
 Runtime may enforce:
 
 ```text
 contradicted obligation -> condition cannot be supported
 partial or unknown obligation -> condition cannot be unqualified support
 missing required challenge -> related conclusion cannot be supported
+supported challenge with counter-evidence -> invalid challenge document
 ```
 
 It cannot determine whether a test truly proves a natural-language statement.
@@ -703,8 +712,9 @@ At the Handoff boundary, Dynamic Host Projection also derives an ephemeral
 Developer Decision Brief from the canonical Decision Packet. It is the Host's
 required delivery surface: separate delivery/evidence/recommendation/adoption
 states, intended versus actual system meaning, condition conclusions,
-direct-cause decision issues, consequence-directed review questions, and
-compact Runtime evidence. It adds no artifact or authority. The projected
+Challenge conclusions and exact counter-evidence, direct-cause decision issues,
+consequence-directed review questions, and compact Runtime evidence. It adds no
+artifact or authority. The projected
 decision command is explicitly a continuation that requires a new exact Human
 Event; Handoff presentation and Human decision recording cannot collapse into
 one Host turn.
