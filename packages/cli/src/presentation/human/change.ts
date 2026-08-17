@@ -23,8 +23,11 @@ export function formatChangePrepare(output: JsonObject, colors: Colors): string 
       if (isRecord(issue)) lines.push(`${colors.yellow('•')} ${String(issue.path)}: ${String(issue.message)}`);
     }
   }
-  if (isRecord(output.fork)) {
-    lines.push('', colors.bold('Human decision required'), String(output.fork.question ?? ''));
+  if (Array.isArray(output.forks) && output.forks.length) {
+    lines.push('', colors.bold('Human decision required'));
+    for (const fork of output.forks) {
+      if (isRecord(fork)) lines.push(`${colors.yellow('•')} ${String(fork.question ?? '')}`);
+    }
   }
   if (isRecord(output.baseline)) {
     lines.push(`${colors.bold('Baseline:')} ${String(output.baseline.entryCount ?? 0)} entries; ${String(output.baseline.fingerprint ?? '')}`);
@@ -34,7 +37,11 @@ export function formatChangePrepare(output: JsonObject, colors: Colors): string 
 }
 
 export function formatChangeCollect(output: JsonObject, colors: Colors): string {
-  const lines = [heading('Attempt facts collected', colors), statusLine(String(output.status ?? 'unknown'), colors)];
+  const reused = output.collectionMode === 'reused-current';
+  const lines = [
+    heading(reused ? 'Current Attempt facts reused' : 'Attempt facts collected', colors),
+    statusLine(String(output.status ?? 'unknown'), colors),
+  ];
   if (typeof output.attemptId === 'string') lines.push(`${colors.bold('Attempt:')} ${output.attemptId}`);
   if (Array.isArray(output.changedFiles)) {
     const counts = countValues(output.changedFiles.filter(isRecord).map((file) => String(file.operation ?? 'unknown')));
@@ -56,15 +63,12 @@ export function formatChangeCollect(output: JsonObject, colors: Colors): string 
 
 export function formatChangeFinalize(output: JsonObject, colors: Colors): string {
   const lines = [heading('Cognitive Handoff evaluated', colors), statusLine(String(output.status ?? 'unknown'), colors)];
-  if (isRecord(output.decisionPacket)) {
-    appendDecisionLayer(lines, output.decisionPacket, colors);
-    appendAttention(lines, output.decisionPacket.attention, colors);
-    if (isRecord(output.decisionPacket.decision)
-      && isRecord(output.decisionPacket.decision.adoption)) {
-      lines.push(`${colors.bold('Human decision:')} ${String(output.decisionPacket.decision.adoption.status ?? 'pending')}`);
-    }
+  if (isRecord(output.hostAction) && isRecord(output.hostAction.developerDecisionBrief)) {
+    appendDeveloperDecisionBrief(lines, output.hostAction.developerDecisionBrief, colors);
+  } else if (isRecord(output.decisionPacket)) {
+    appendDecisionLayerFallback(lines, output.decisionPacket, colors);
   }
-  lines.push(colors.dim('Use --json to inspect the condition layer and exact Runtime fact drill-down.'));
+  lines.push(colors.dim('Use --json to inspect exact references, Runtime logs, and the decision continuation.'));
   appendHostAction(lines, output.hostAction, colors);
   return lines.join('\n');
 }
@@ -102,18 +106,7 @@ function appendContract(lines: string[], contract: JsonObject, colors: Colors): 
   }
 }
 
-function appendAttention(lines: string[], value: unknown, colors: Colors): void {
-  if (!Array.isArray(value) || !value.length) return;
-  lines.push(colors.bold('Attention'));
-  for (const item of value) {
-    if (isRecord(item)) {
-      const codes = Array.isArray(item.codes) ? item.codes.join(', ') : 'unknown';
-      lines.push(`${colors.yellow('•')} ${String(item.id)} [${String(item.group)}] — ${codes}`);
-    }
-  }
-}
-
-function appendDecisionLayer(lines: string[], packet: JsonObject, colors: Colors): void {
+function appendDecisionLayerFallback(lines: string[], packet: JsonObject, colors: Colors): void {
   if (!isRecord(packet.decision) || !isRecord(packet.semanticContract)) return;
   const decision = packet.decision;
   lines.push('', colors.bold('Decision summary'));
@@ -133,5 +126,89 @@ function appendDecisionLayer(lines: string[], packet: JsonObject, colors: Colors
         lines.push(`${colors.cyan('•')} ${String(condition.id)} — ${String(condition.conclusion.status)}`);
       }
     }
+  }
+}
+
+function appendDeveloperDecisionBrief(
+  lines: string[],
+  brief: JsonObject,
+  colors: Colors,
+): void {
+  if (isRecord(brief.decisionState)) {
+    const state = brief.decisionState;
+    lines.push(
+      '',
+      colors.bold('Decision state'),
+      `${colors.bold('Delivery:')} ${String(state.delivery ?? 'unknown')}`,
+      `${colors.bold('Evidence:')} ${String(state.evidence ?? 'unknown')}`,
+      `${colors.bold('Agent recommendation:')} ${String(state.recommendation ?? 'unknown')}`,
+      `${colors.bold('Human adoption:')} ${String(state.adoption ?? 'pending')}`,
+    );
+  }
+  if (isRecord(brief.changeMeaning)) {
+    lines.push(
+      '',
+      `${colors.bold('Desired outcome:')} ${String(brief.changeMeaning.desiredOutcome ?? '')}`,
+      `${colors.bold('Actual system meaning:')} ${String(brief.changeMeaning.actualSystemMeaning ?? '')}`,
+    );
+    if (Array.isArray(brief.changeMeaning.importantSystemEffects)) {
+      for (const effect of brief.changeMeaning.importantSystemEffects) {
+        lines.push(`${colors.cyan('•')} ${String(effect)}`);
+      }
+    }
+  }
+  if (Array.isArray(brief.conditions) && brief.conditions.length) {
+    lines.push('', colors.bold('Adoption conditions'));
+    for (const condition of brief.conditions) {
+      if (!isRecord(condition)) continue;
+      lines.push(
+        `${colors.cyan('•')} ${String(condition.statement ?? condition.id)} — ${String(condition.status ?? 'unknown')}`,
+        `  ${String(condition.summary ?? '')}`,
+      );
+    }
+  }
+  if (Array.isArray(brief.decisionIssues) && brief.decisionIssues.length) {
+    lines.push('', colors.bold('Decision issues'));
+    for (const issue of brief.decisionIssues) {
+      if (!isRecord(issue)) continue;
+      lines.push(`${colors.yellow('•')} ${String(issue.code ?? 'unknown')} — ${String(issue.resolution ?? 'inspect')} (${String(issue.id ?? '')})`);
+      if (Array.isArray(issue.residualUnknowns)) {
+        for (const unknown of issue.residualUnknowns) {
+          if (isRecord(unknown)) {
+            lines.push(`  Unknown: ${String(unknown.statement ?? '')}`, `  Next: ${String(unknown.nextAction ?? '')}`);
+          }
+        }
+      }
+      if (Array.isArray(issue.reviewQuestions)) {
+        for (const question of issue.reviewQuestions) {
+          if (isRecord(question)) lines.push(`  Review: ${String(question.question ?? '')}`);
+        }
+      }
+    }
+  }
+  if (isRecord(brief.runtimeEvidence)) {
+    const changedFiles = Array.isArray(brief.runtimeEvidence.changedFiles)
+      ? brief.runtimeEvidence.changedFiles : [];
+    const checks = Array.isArray(brief.runtimeEvidence.checks)
+      ? brief.runtimeEvidence.checks : [];
+    lines.push('', colors.bold('Runtime evidence'), `Changed files: ${changedFiles.length}`);
+    for (const check of checks) {
+      if (isRecord(check)) {
+        lines.push(`${colors.cyan('•')} ${JSON.stringify(check.argv ?? [])} — ${String(check.status ?? 'unknown')} (${String(check.baselineRelation ?? 'unknown')})`);
+      }
+    }
+  }
+  if (isRecord(brief.requestedDecision)) {
+    const actions = Array.isArray(brief.requestedDecision.actions)
+      ? brief.requestedDecision.actions.join(' / ') : '';
+    const exceptions = Array.isArray(brief.requestedDecision.acceptanceRequiresExceptionsFor)
+      ? brief.requestedDecision.acceptanceRequiresExceptionsFor.length : 0;
+    lines.push(
+      '',
+      `${colors.bold('Developer decision required:')} ${actions}`,
+      exceptions
+        ? `Acceptance requires explicit exceptions for ${exceptions} current decision issue(s).`
+        : 'No current decision issue requires an acceptance exception.',
+    );
   }
 }

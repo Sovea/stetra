@@ -43,9 +43,9 @@ export interface AuthoringPacket {
     handoffFingerprint?: string;
   };
   semanticContext: {
-    exactDeveloperEvent: {
+    exactDeveloperEvents: {
       authority: 'human-event';
-      event: TaskContract['authority']['developerEvent'];
+      events: TaskContract['authority']['developerEvents'];
     };
     agentInterpretation: {
       authority: 'agent-judgment';
@@ -69,7 +69,7 @@ export interface AuthoringPacket {
       id: string;
       conditionId: string;
       statement: string;
-      failureHypothesis: string;
+      falsification: TaskContract['adoptionConditions'][number]['evidenceObligations'][number]['falsification'];
     }>;
     checks?: Array<{
       verifierId: string;
@@ -88,6 +88,8 @@ export interface AuthoringPacket {
       id: string;
       obligationIds: string[];
       outcome: string;
+      conclusion: string;
+      counterEvidence: IndependentChallenge['counterEvidence'];
     }>;
     repositoryEvidence?: Array<{
       id: string;
@@ -108,16 +110,40 @@ export function diagnosisAuthoringPacket(input: {
   task: TaskProjection;
   contract: TaskContract;
   facts: FactBundle;
+  challenges?: IndependentChallenge[];
 }): AuthoringPacket {
   const nonpassing = input.facts.checks.filter((check) => latestStatus(check) !== 'passed');
-  return packetBase(input.task, input.contract, input.facts, [], [], ['checks'], {
+  const adverseChallenges = (input.challenges ?? []).filter((challenge) =>
+    challenge.outcome !== 'supported');
+  const concerns = [
+    ...nonpassing.map((check) => ({
+      source: { kind: 'check' as const, definitionId: check.definitionId },
+      code: 'diagnose-nonpassing-check',
+      targetId: check.definitionId,
+      action: 'Classify the observed check cause and state how that diagnosis was challenged.',
+    })),
+    ...adverseChallenges.map((challenge) => ({
+      source: { kind: 'challenge' as const, challengeId: challenge.id },
+      code: 'diagnose-adverse-challenge',
+      targetId: challenge.id,
+      action: 'Classify the adverse Challenge without asking another Challenger to choose the engineering route.',
+    })),
+  ];
+  return packetBase(
+    input.task,
+    input.contract,
+    input.facts,
+    input.challenges ?? [],
+    [],
+    adverseChallenges.length ? ['checks', 'challenges'] : ['checks'],
+    {
     inputKind: 'diagnosis',
     draft: {
       semanticImpact: '',
       proposedRoute: '',
       routeRationale: '',
-      entries: nonpassing.map((check) => ({
-        definitionId: check.definitionId,
+      entries: concerns.map((concern) => ({
+        source: concern.source,
         cause: '',
         diagnosis: '',
         falsificationAttempt: '',
@@ -135,15 +161,33 @@ export function diagnosisAuthoringPacket(input: {
         'draft.proposedRoute', 'agent-judgment', EVIDENCE_ROUTES,
         'Choose the next lifecycle route explicitly. A bounded implementation repair may coexist with environment or verification entries, which remain visible and are rerun; unknown cause cannot be repaired.',
       ),
-      ...nonpassing.map((_, index) => choiceRequirement(
-        `draft.entries[${index}].cause`, 'agent-judgment', EVIDENCE_CAUSES,
-        'Classify the observed cause from current evidence; Runtime does not infer it.',
-      )),
+      textRequirement(
+        'draft.routeRationale', 'agent-judgment',
+        'Explain why the selected route follows from the diagnosed evidence without changing the compiled task meaning implicitly.',
+      ),
+      ...concerns.flatMap((_, index) => [
+        choiceRequirement(
+          `draft.entries[${index}].cause`, 'agent-judgment', EVIDENCE_CAUSES,
+          'Classify the observed cause from current evidence; Runtime does not infer it.',
+        ),
+        textRequirement(
+          `draft.entries[${index}].diagnosis`, 'agent-judgment',
+          'State the bounded diagnosis supported by the current observation.',
+        ),
+        textRequirement(
+          `draft.entries[${index}].falsificationAttempt`, 'agent-judgment',
+          'Describe the concrete attempt made to disprove this diagnosis.',
+        ),
+        textRequirement(
+          `draft.entries[${index}].expectedDifferentObservation`, 'agent-judgment',
+          'State the observable result that would distinguish the proposed cause or route from the current one.',
+        ),
+      ]),
     ],
-    outstandingObligations: nonpassing.map((check) => ({
-      code: 'diagnose-nonpassing-check',
-      targetId: check.definitionId,
-      requiredAction: 'Classify the observed cause and state how that diagnosis was challenged.',
+    outstandingObligations: concerns.map((concern) => ({
+      code: concern.code,
+      targetId: concern.targetId,
+      requiredAction: concern.action,
     })),
   });
 }
@@ -160,15 +204,16 @@ export function challengeAuthoringPacket(input: {
   const obligation = allObligations(input.contract).find((item) => item.id === targetId);
   const draft = obligation ? {
     obligationIds: [obligation.id],
-    failureHypothesis: obligation.failureHypothesis,
+    falsification: obligation.falsification,
     evidence: {
       changedFiles: input.facts.changedFiles.map((item) => item.id),
       checks: currentDefinitionIds(obligation, input.contract),
       repositoryEvidence: repositoryEvidenceIds(obligation),
-      humanEvents: [input.contract.authority.developerEvent.id],
+      humanEvents: input.contract.authority.developerEvents.map((item) => item.id),
       patch: Boolean(input.facts.patch),
     },
     falsificationAttempt: '',
+    observedResult: '',
     supportingEvidence: [],
     counterEvidence: [],
     outcome: '',
@@ -185,9 +230,21 @@ export function challengeAuthoringPacket(input: {
     inputKind: 'challenge',
     draft,
     fieldRequirements: obligation ? [
+      textRequirement(
+        'draft.falsificationAttempt', 'agent-judgment',
+        'Describe how the frozen scenario was executed or inspected independently.',
+      ),
+      textRequirement(
+        'draft.observedResult', 'agent-judgment',
+        'State the actual observation before selecting an outcome.',
+      ),
       choiceRequirement(
         'draft.outcome', 'agent-judgment', CONCLUSION_STATUSES,
         'Choose the bounded outcome after performing the stated falsification attempt.',
+      ),
+      textRequirement(
+        'draft.conclusion', 'agent-judgment',
+        'State the bounded conclusion without exceeding the exact evidence references.',
       ),
       shapeRequirement(
         'draft.supportingEvidence[]', 'agent-judgment', [challengeEvidenceItemShape()],
@@ -230,10 +287,7 @@ export function verificationRevisionAuthoringPacket(input: {
                 obligationKeys.get(id)!),
             }
           : { mode: 'unknown' },
-        commandDefinitionPaths: definition.verifierRefs
-          .filter((item) => item.role === 'command-definition').map((item) => item.path),
-        acceptanceSurfacePaths: definition.verifierRefs
-          .filter((item) => item.role === 'acceptance-surface').map((item) => item.path),
+        verifierSelectors: definition.verifierRefs,
       })) : undefined;
   return packetBase(
     input.task,
@@ -257,6 +311,14 @@ export function verificationRevisionAuthoringPacket(input: {
       choiceRequirement(
         'draft.kind', 'agent-judgment', VERIFICATION_REVISION_KINDS,
         'Choose execution-rebinding only for a claimed equivalent execution binding; verification-plan changes the evidence plan.',
+      ),
+      textRequirement(
+        'draft.rationale', 'agent-judgment',
+        'Explain why the revision is required and what observation it is intended to restore.',
+      ),
+      textRequirement(
+        'draft.equivalenceClaim', 'agent-judgment',
+        'State the bounded engineering-equivalence claim; Runtime records but does not prove it.',
       ),
       ...(checks ?? []).map((_, index) => shapeRequirement(
         `draft.checks[${index}].baseline`, 'agent-judgment', baselineShapes(),
@@ -287,6 +349,21 @@ export function handoffAuthoringPacket(input: {
   const checkStatusByDefinition = new Map(input.facts.checks.map((check) =>
     [check.definitionId, latestStatus(check)] as const));
   const obligations = allObligations(input.contract);
+  const conclusionValuesByObligation = new Map(obligations.map((obligation) => [
+    obligation.id,
+    supportedConclusionAllowed(
+      obligation.id,
+      input.requiredObligationIds,
+      input.challenges,
+    ) ? [...CONCLUSION_STATUSES] : CONCLUSION_STATUSES.filter((status) => status !== 'supported'),
+  ] as const));
+  const conclusionValuesByCondition = new Map(input.contract.adoptionConditions.map((condition) => [
+    condition.id,
+    condition.evidenceObligations.every((obligation) =>
+      conclusionValuesByObligation.get(obligation.id)!.includes('supported'))
+      ? [...CONCLUSION_STATUSES]
+      : CONCLUSION_STATUSES.filter((status) => status !== 'supported'),
+  ] as const));
   return packetBase(
     input.task,
     input.contract,
@@ -309,7 +386,10 @@ export function handoffAuthoringPacket(input: {
           ...(challengeByObligation.get(obligation.id)?.outcome === 'supported'
             ? [{ kind: 'challenge', id: challengeByObligation.get(obligation.id)!.id }] : []),
         ],
-        falsificationAttempt: '',
+        falsification: {
+          attempt: '',
+          observedResult: '',
+        },
         counterEvidence: [
           ...currentDefinitionIds(obligation, input.contract)
             .filter((id) => checkStatusByDefinition.get(id) !== 'passed')
@@ -337,11 +417,28 @@ export function handoffAuthoringPacket(input: {
       recommendation: { action: '', rationale: '', caveats: [] },
     },
     fieldRequirements: [
-      ...obligations.map((_, index) => choiceRequirement(
-        `draft.obligationConclusions[${index}].status`, 'agent-judgment', CONCLUSION_STATUSES,
+      textRequirement(
+        'draft.summary', 'agent-judgment',
+        'Summarize what the actual collected change means for the system.',
+      ),
+      ...obligations.flatMap((obligation, index) => [
+        choiceRequirement(
+        `draft.obligationConclusions[${index}].status`, 'agent-judgment',
+        conclusionValuesByObligation.get(obligation.id)!,
         'Conclude the bounded obligation without exceeding its cited evidence and challenge outcome.',
-      )),
-      ...obligations.flatMap((_, index) => [
+        ),
+        textRequirement(
+          `draft.obligationConclusions[${index}].falsification.attempt`, 'agent-judgment',
+          'Describe how the frozen falsification scenario was executed or inspected.',
+        ),
+        textRequirement(
+          `draft.obligationConclusions[${index}].falsification.observedResult`, 'agent-judgment',
+          'State the actual observed result without converting it into a Runtime fact.',
+        ),
+        textRequirement(
+          `draft.obligationConclusions[${index}].conclusion`, 'agent-judgment',
+          'State the bounded evidence conclusion and preserve adverse or missing evidence.',
+        ),
         shapeRequirement(
           `draft.obligationConclusions[${index}].evidence[]`, 'agent-judgment',
           handoffEvidenceReferenceShapes(),
@@ -353,10 +450,17 @@ export function handoffAuthoringPacket(input: {
           'Use direct exact references for adverse evidence; leave the array empty only when none was found.',
         ),
       ]),
-      ...input.contract.adoptionConditions.map((_, index) => choiceRequirement(
-        `draft.conditionConclusions[${index}].status`, 'agent-judgment', CONCLUSION_STATUSES,
+      ...input.contract.adoptionConditions.flatMap((condition, index) => [
+        choiceRequirement(
+        `draft.conditionConclusions[${index}].status`, 'agent-judgment',
+        conclusionValuesByCondition.get(condition.id)!,
         'Conclude the condition without exceeding any of its obligation conclusions.',
-      )),
+        ),
+        textRequirement(
+          `draft.conditionConclusions[${index}].summary`, 'agent-judgment',
+          'Explain how the obligation conclusions bound this condition conclusion.',
+        ),
+      ]),
       shapeRequirement(
         'draft.residualUnknowns[]', 'agent-judgment', [residualUnknownShape()],
         'Add one item for each adoption-relevant unknown; keep the array empty only when none remains.',
@@ -367,7 +471,11 @@ export function handoffAuthoringPacket(input: {
       ),
       choiceRequirement(
         'draft.recommendation.action', 'agent-judgment', RECOMMENDATION_ACTIONS,
-        'Give Agent advice only; this value never records Human adoption.',
+        'Give Agent advice only; accept is valid only when every conclusion is supported, required Challenges are trusted and favorable, checks pass, and no adoption-changing unknown or integrity blocker remains.',
+      ),
+      textRequirement(
+        'draft.recommendation.rationale', 'agent-judgment',
+        'Explain the recommendation in terms of the current conditions, evidence, and remaining attention.',
       ),
     ],
     outstandingObligations: [
@@ -420,6 +528,12 @@ export function decisionAuthoringPacket(input: {
       fieldRequirements: [choiceRequirement(
         'draft.action', 'human-decision', HUMAN_DECISION_ACTIONS,
         'Normalize the developer\'s exact decision message to one supported action.',
+      ), textRequirement(
+        'draft.humanEvent.content', 'human-decision',
+        'Preserve the developer\'s exact new decision message.',
+      ), textRequirement(
+        'draft.reason', 'human-decision',
+        'State why the exact Human decision follows from the reviewed packet.',
       )],
       outstandingObligations: input.evaluation.attention.map((item) => ({
         code: 'resolve-attention-in-decision',
@@ -449,6 +563,12 @@ export function resolutionAuthoringPacket(input: {
     fieldRequirements: [choiceRequirement(
       'draft.action', 'human-decision', HUMAN_RESOLUTION_ACTIONS,
       'Normalize the developer\'s exact mid-task resolution without altering the prefilled target.',
+    ), textRequirement(
+      'draft.humanEvent.content', 'human-decision',
+      'Preserve the developer\'s exact new resolution message.',
+    ), textRequirement(
+      'draft.reason', 'human-decision',
+      'State why this resolution should control the pending target.',
     )],
     outstandingObligations: pending ? [{
       code: 'human-resolution-required',
@@ -481,9 +601,9 @@ function packetBase(
       ...(facts ? { factCollectionId: facts.factCollectionId } : {}),
     },
     semanticContext: {
-      exactDeveloperEvent: {
+      exactDeveloperEvents: {
         authority: 'human-event',
-        event: contract.authority.developerEvent,
+        events: contract.authority.developerEvents,
       },
       agentInterpretation: {
         authority: 'agent-judgment',
@@ -505,7 +625,7 @@ function packetBase(
         id: obligation.id,
         conditionId: obligation.conditionId,
         statement: obligation.statement,
-        failureHypothesis: obligation.failureHypothesis,
+        falsification: obligation.falsification,
       })),
       checks: contract.verificationPlan.mode === 'checks'
         ? contract.verificationPlan.definitions.map((definition) => {
@@ -529,6 +649,8 @@ function packetBase(
         id: challenge.id,
         obligationIds: challenge.obligationIds,
         outcome: challenge.outcome,
+        conclusion: challenge.conclusion,
+        counterEvidence: challenge.counterEvidence,
       })),
       repositoryEvidence: contract.repositoryEvidence.map((evidence) => ({
         id: evidence.id,
@@ -564,6 +686,25 @@ function shapeRequirement(
   instruction: string,
 ): AuthoringFieldRequirement {
   return { path, authority, acceptedShapes, instruction };
+}
+
+function textRequirement(
+  path: string,
+  authority: AuthoringFieldRequirement['authority'],
+  instruction: string,
+): AuthoringFieldRequirement {
+  return { path, authority, instruction };
+}
+
+function supportedConclusionAllowed(
+  obligationId: string,
+  requiredObligationIds: string[],
+  challenges: IndependentChallenge[],
+): boolean {
+  const relevant = challenges.filter((challenge) => challenge.obligationIds.includes(obligationId));
+  if (requiredObligationIds.includes(obligationId) && relevant.length === 0) return false;
+  return relevant.every((challenge) =>
+    challenge.independence === 'host-attested' && challenge.outcome === 'supported');
 }
 
 function baselineShapes(): unknown[] {

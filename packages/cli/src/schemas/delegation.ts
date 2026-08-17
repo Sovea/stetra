@@ -34,6 +34,13 @@ const HumanEventInputSchema = z.strictObject({
   nativeId: NonEmptyStringSchema.optional(),
 });
 
+const DeveloperEventInputSchema = z.strictObject({
+  key: StableIdSchema,
+  content: NonEmptyStringSchema,
+  provider: NonEmptyStringSchema.optional(),
+  nativeId: NonEmptyStringSchema.optional(),
+});
+
 export const HumanEventSchema = z.strictObject({
   id: StableIdSchema,
   kind: z.enum(['task', 'correction', 'exception', 'decision']),
@@ -54,8 +61,28 @@ const EvidenceWindowSchema = z.strictObject({
 });
 
 const CompactBasisSchema = z.strictObject({
-  developerEvent: z.boolean(),
+  developerEventKeys: z.array(StableIdSchema),
   repositoryEvidenceKeys: z.array(StableIdSchema),
+});
+
+const MaterialDecisionForkSchema = z.strictObject({
+  key: StableIdSchema,
+  basis: CompactBasisSchema,
+  question: NonEmptyStringSchema,
+  alternatives: z.array(z.strictObject({
+    key: StableIdSchema,
+    statement: NonEmptyStringSchema,
+    impact: NonEmptyStringSchema,
+  })).min(2),
+  recommendation: z.strictObject({
+    alternativeKey: StableIdSchema,
+    rationale: NonEmptyStringSchema,
+  }).optional(),
+  resolution: z.strictObject({
+    humanEventKey: StableIdSchema,
+    selectedAlternativeKey: StableIdSchema.optional(),
+    decisionInterpretation: NonEmptyStringSchema,
+  }).optional(),
 });
 
 const ObligationKeyReferenceSchema = z.strictObject({
@@ -77,8 +104,11 @@ export const VerificationDefinitionSchema = z.strictObject({
   rationale: NonEmptyStringSchema,
   argv: z.array(z.string().min(1)).min(1),
   baseline: VerificationBaselineSchema,
-  commandDefinitionPaths: z.array(SafeRepositoryPathSchema),
-  acceptanceSurfacePaths: z.array(SafeRepositoryPathSchema),
+  verifierSelectors: z.array(z.strictObject({
+    kind: z.enum(['file', 'tree']),
+    path: SafeRepositoryPathSchema,
+    role: z.enum(['command-definition', 'acceptance-surface']),
+  })),
 });
 
 const EvidenceObligationStrategySchema = z.discriminatedUnion('kind', [
@@ -97,6 +127,13 @@ const EvidenceObligationStrategySchema = z.discriminatedUnion('kind', [
   z.strictObject({ kind: z.literal('human-review') }),
 ]);
 
+const FalsificationDesignSchema = z.strictObject({
+  failureHypothesis: NonEmptyStringSchema,
+  scenario: NonEmptyStringSchema,
+  supportingObservation: NonEmptyStringSchema,
+  contradictingObservation: NonEmptyStringSchema,
+});
+
 const AdoptionConditionSchema = z.strictObject({
   key: StableIdSchema,
   statement: NonEmptyStringSchema,
@@ -106,7 +143,7 @@ const AdoptionConditionSchema = z.strictObject({
   evidenceObligations: z.array(z.strictObject({
     key: StableIdSchema,
     statement: NonEmptyStringSchema,
-    failureHypothesis: NonEmptyStringSchema,
+    falsification: FalsificationDesignSchema,
     strategies: z.array(EvidenceObligationStrategySchema).min(1),
   })).min(1),
 });
@@ -124,18 +161,15 @@ export const DelegationPrepareDocumentSchema = z.strictObject({
   protocol: z.literal(DELEGATION_PROTOCOL),
   schemaVersion: z.literal(DELEGATION_SCHEMA_VERSION),
   prepareRequestId: StableIdSchema,
-  developerEvent: HumanEventInputSchema,
+  developerEvents: z.array(DeveloperEventInputSchema).min(1),
   task: z.strictObject({
+    basis: CompactBasisSchema,
     desiredOutcome: NonEmptyStringSchema,
     constraints: z.array(NonEmptyStringSchema),
     nonGoals: z.array(NonEmptyStringSchema),
     focus: z.array(SafeRepositoryPathSchema),
-    unresolvedMaterialFork: z.strictObject({
-      question: NonEmptyStringSchema,
-      alternatives: z.array(NonEmptyStringSchema).min(2),
-      decisionImpact: NonEmptyStringSchema,
-    }).optional(),
   }),
+  materialDecisionForks: z.array(MaterialDecisionForkSchema),
   repositoryEvidence: z.array(EvidenceWindowSchema).optional(),
   conditions: z.array(AdoptionConditionSchema),
   hostPolicyRequirements: z.array(HostPolicyRequirementSchema),
@@ -151,7 +185,10 @@ export const EvidenceDispositionDocumentSchema = z.strictObject({
   proposedRoute: z.enum(EVIDENCE_ROUTES),
   routeRationale: NonEmptyStringSchema,
   entries: z.array(z.strictObject({
-    definitionId: Sha256Schema,
+    source: z.discriminatedUnion('kind', [
+      z.strictObject({ kind: z.literal('check'), definitionId: Sha256Schema }),
+      z.strictObject({ kind: z.literal('challenge'), challengeId: StableIdSchema }),
+    ]),
     cause: z.enum(EVIDENCE_CAUSES),
     diagnosis: NonEmptyStringSchema,
     falsificationAttempt: NonEmptyStringSchema,
@@ -184,9 +221,10 @@ const ChallengeEvidenceItemSchema = z.strictObject({
 
 export const ChallengeDocumentSchema = z.strictObject({
   obligationIds: z.array(StableIdSchema).min(1),
-  failureHypothesis: NonEmptyStringSchema,
+  falsification: FalsificationDesignSchema,
   evidence: ChallengeEvidenceSchema,
   falsificationAttempt: NonEmptyStringSchema,
+  observedResult: NonEmptyStringSchema,
   supportingEvidence: z.array(ChallengeEvidenceItemSchema),
   counterEvidence: z.array(ChallengeEvidenceItemSchema),
   outcome: z.enum(CONCLUSION_STATUSES),
@@ -199,7 +237,10 @@ export const CognitiveHandoffDocumentSchema = z.strictObject({
     obligationId: StableIdSchema,
     status: z.enum(CONCLUSION_STATUSES),
     evidence: z.array(HandoffEvidenceReferenceSchema),
-    falsificationAttempt: NonEmptyStringSchema,
+    falsification: z.strictObject({
+      attempt: NonEmptyStringSchema,
+      observedResult: NonEmptyStringSchema,
+    }),
     counterEvidence: z.array(HandoffEvidenceReferenceSchema),
     conclusion: NonEmptyStringSchema,
   })),

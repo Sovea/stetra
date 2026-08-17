@@ -2,7 +2,7 @@ import type { VerifierMutation } from '@sovea/stetra-core';
 
 export interface VerifierSurfaceSummary {
   path: string;
-  role: VerifierMutation['role'];
+  role: VerifierMutation['selector']['role'];
   definitionIds: string[];
 }
 
@@ -11,14 +11,14 @@ export function summarizeVerifierSurfaces(
 ): VerifierSurfaceSummary[] {
   const groups = new Map<string, {
     path: string;
-    role: VerifierMutation['role'];
+    role: VerifierMutation['selector']['role'];
     definitionIds: Set<string>;
   }>();
   for (const mutation of mutations) {
-    const key = `${mutation.path}\0${mutation.role}`;
+    const key = `${mutation.changedPath}\0${mutation.selector.role}`;
     const group = groups.get(key) ?? {
-      path: mutation.path,
-      role: mutation.role,
+      path: mutation.changedPath,
+      role: mutation.selector.role,
       definitionIds: new Set<string>(),
     };
     group.definitionIds.add(mutation.definitionId);

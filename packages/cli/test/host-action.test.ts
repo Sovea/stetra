@@ -4,7 +4,9 @@ import test from 'node:test';
 import type { FactBundle } from '@sovea/stetra-core';
 
 import type { AuthoringPacket } from '../src/workflow/authoring.ts';
+import type { DeveloperDecisionBrief } from '../src/workflow/decision-brief.ts';
 import {
+  adverseChallengeHostAction,
   collectedHostAction,
   compileProblemHostAction,
   diagnosisHostAction,
@@ -35,8 +37,26 @@ test('host actions route the initial lifecycle with executable task argv', () =>
     transport: 'stdin', source: 'authoringPacket.draft', serialization: 'json', execution: 'one-shot',
   });
   assert.equal(staleFactsHostAction('task-id').kind, 'recollect-stale-facts');
-  assert.equal(handoffHostAction('needs-attention', 'task-id', packet('decision')).kind, 'review-and-decide');
+  const handoff = handoffHostAction('needs-attention', 'task-id', brief(), packet('decision'));
+  assert.equal(handoff.kind, 'present-handoff-and-await-human-decision');
+  assert.equal(handoff.command, undefined);
+  assert.equal(handoff.authoringPacket, undefined);
+  assert.equal(handoff.decisionContinuation?.requiresNewHumanEvent, true);
+  assert.deepEqual(handoff.decisionContinuation?.command.argv.slice(0, 4), [
+    'stetra', 'change', 'decide', '.',
+  ]);
+  assert.deepEqual(handoff.presentationRequirements, {
+    leadWithDecisionState: true,
+    requiredConditionIds: ['condition:test'],
+    requiredDecisionIssueIds: ['decision-issue:test'],
+    requiredReviewQuestionIds: ['review:test'],
+    prohibitImpliedAdoption: true,
+  });
   assert.equal(resolutionHostAction('task-id', packet('resolution')).authoringPacket?.inputKind, 'resolution');
+  assert.equal(
+    adverseChallengeHostAction('task-id', packet('diagnosis')).kind,
+    'diagnose-collected-evidence',
+  );
 });
 
 test('collection routes timeout, diagnosis, required challenge, and ordinary handoff from explicit inputs', () => {
@@ -76,7 +96,17 @@ test('collection routes timeout, diagnosis, required challenge, and ordinary han
 });
 
 test('compile problems preserve Human choice, verification, and protocol distinctions', () => {
-  assert.equal(compileProblemHostAction('semantic-decision-required').kind, 'resolve-human-choice');
+  const clarification = compileProblemHostAction('semantic-decision-required', {
+    prepareRequestId: 'prepare:test',
+    developerEvents: [{ key: 'request', content: 'Choose the compatibility policy.' }],
+    taskInterpretation: {
+      basis: { developerEventKeys: ['request'], repositoryEvidenceKeys: [] },
+      desiredOutcome: 'Apply the chosen policy.', constraints: [], nonGoals: [], focus: [],
+    },
+    forks: [],
+  });
+  assert.equal(clarification.kind, 'resolve-human-choice');
+  assert.equal(clarification.clarificationContinuation?.requiresNewHumanEvent, true);
   assert.equal(compileProblemHostAction('verification-required').kind, 'configure-verification');
   assert.equal(compileProblemHostAction('authority-invalid').kind, 'correct-protocol-input');
 });
@@ -125,12 +155,12 @@ function packet(inputKind: AuthoringPacket['inputKind']): AuthoringPacket {
       attemptId: 'attempt:1',
     },
     semanticContext: {
-      exactDeveloperEvent: {
+      exactDeveloperEvents: {
         authority: 'human-event',
-        event: {
+        events: [{
           id: 'human:test', kind: 'task', content: 'Exact developer request.',
           contentFingerprint: digest('h'),
-        },
+        }],
       },
       agentInterpretation: {
         authority: 'agent-judgment', desiredOutcome: 'Interpreted outcome.',
@@ -143,6 +173,38 @@ function packet(inputKind: AuthoringPacket['inputKind']): AuthoringPacket {
       conditions: [], obligations: [], checks: [], changedFiles: [], challenges: [], attention: [],
     },
     outstandingObligations: [],
+  };
+}
+
+function brief(): DeveloperDecisionBrief {
+  return {
+    decisionState: {
+      delivery: 'implementation-complete', evidence: 'needs-attention',
+      recommendation: 'defer', adoption: 'pending',
+    },
+    changeMeaning: {
+      desiredOutcome: 'Requested outcome.', actualSystemMeaning: 'Actual change.',
+      importantSystemEffects: [],
+    },
+    conditions: [{
+      id: 'condition:test', statement: 'Condition.', criticality: 'material',
+      status: 'partial', summary: 'Partially supported.', obligations: [],
+    }],
+    decisionIssues: [{
+      id: 'decision-issue:test', attentionId: 'attention:test',
+      code: 'verification-nonpassing', group: 'verification', resolution: 'inspect',
+      references: {}, conditionIds: ['condition:test'], obligationIds: [],
+      residualUnknowns: [], reviewQuestions: [{
+        id: 'review:test', conditionIds: ['condition:test'], obligationIds: [],
+        question: 'Inspect?', adoptionImpact: 'Changes adoption.', evidence: [],
+      }],
+    }],
+    runtimeEvidence: { changedFiles: [], checks: [] },
+    requestedDecision: {
+      actions: ['accepted', 'correction-requested', 'rejected', 'deferred'],
+      acceptanceRequiresExceptionsFor: ['attention:test'],
+    },
+    detailSections: ['contract'],
   };
 }
 

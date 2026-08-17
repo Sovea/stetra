@@ -1,6 +1,6 @@
 import type { HumanEvent } from '../authority/types.ts';
 import type { IndependentChallenge } from '../challenge/types.ts';
-import type { TaskContract } from '../delegation/types.ts';
+import type { EvidenceObligation, TaskContract } from '../delegation/types.ts';
 import type { EvidenceDisposition, FactBundle } from '../facts/types.ts';
 import type { ProtocolEnvelope } from '../shared/protocol.ts';
 
@@ -26,7 +26,10 @@ export interface EvidenceObligationConclusion {
   obligationId: string;
   status: ConclusionStatus;
   evidence: HandoffEvidenceReference[];
-  falsificationAttempt: string;
+  falsification: {
+    attempt: string;
+    observedResult: string;
+  };
   counterEvidence: HandoffEvidenceReference[];
   conclusion: string;
 }
@@ -103,8 +106,6 @@ export type HandoffAttentionCode =
   | 'check-induced-change'
   | 'baseline-check-induced-change'
   | 'change-unrepresentable'
-  | 'obligation-not-supported'
-  | 'condition-not-supported'
   | 'challenge-missing'
   | 'challenge-adverse'
   | 'challenge-independence-unverified'
@@ -112,7 +113,6 @@ export type HandoffAttentionCode =
   | 'residual-unknown'
   | 'host-policy-unverified'
   | 'host-policy-unsupported'
-  | 'evidence-disposition-unresolved'
   | 'evidence-disposition-missing'
   | 'repair-route-exhausted';
 
@@ -206,7 +206,7 @@ export interface DecisionPacket extends ProtocolEnvelope {
       id: string;
       key: string;
       statement: string;
-      failureHypothesis: string;
+      falsification: EvidenceObligation['falsification'];
       conclusion: EvidenceObligationConclusion;
       challengeIds: string[];
     }>;
@@ -233,7 +233,8 @@ export interface DecisionPacket extends ProtocolEnvelope {
     dispositions: Array<Pick<EvidenceDisposition,
       'dispositionId' | 'attemptId' | 'semanticImpact' | 'proposedRoute' | 'routeRationale' | 'route' | 'entries'>>;
     challenges: Array<Pick<IndependentChallenge,
-      'id' | 'obligationIds' | 'conditionIds' | 'independence' | 'outcome' | 'conclusion'>>;
+      'id' | 'obligationIds' | 'conditionIds' | 'independence' | 'falsification'
+      | 'falsificationAttempt' | 'observedResult' | 'outcome' | 'conclusion'>>;
   };
   detailSections: Array<'contract' | 'attempts' | 'challenge' | 'handoff' | 'events'>;
 }

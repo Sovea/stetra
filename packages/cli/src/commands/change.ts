@@ -7,6 +7,7 @@ import {
   diagnoseCollectedEvidence,
   evaluateDelegationHandoff,
   explainDelegationTask,
+  guardFinalResponse,
   prepareDelegationTask,
   recordChallenge,
   recordHumanDecision,
@@ -29,6 +30,7 @@ interface TaskInputOptions extends TaskOptions, InputOptions {}
 interface CollectOptions extends TaskOptions {
   retryCheck: string[];
   timeoutMs?: number;
+  refresh?: boolean;
 }
 
 interface ExplainOptions extends TaskOptions {
@@ -75,6 +77,7 @@ export function registerChangeCommands(
       collectOption,
       [],
     )
+    .option('--refresh', 'rerun every frozen check even when current facts still match the worktree')
     .action(async (projectRoot: string, options: CollectOptions, command: Command) => {
       environment.emit('change collect', await collectDelegationFacts({
         projectRoot,
@@ -82,6 +85,7 @@ export function registerChangeCommands(
         productVersion,
         ...(options.timeoutMs === undefined ? {} : { timeoutMs: options.timeoutMs }),
         retryChecks: options.retryCheck.map(parseRetryCheck),
+        refresh: options.refresh ?? false,
         hostAttestations: environment.runtime.hostAttestations,
       }), command);
     });
@@ -92,6 +96,19 @@ export function registerChangeCommands(
   registerInputStage(change, environment, 'decide', 'Record the exact Human adoption decision', recordHumanDecision);
   registerInputStage(change, environment, 'resolve', 'Record an exact mid-task Human resolution and continue the lifecycle', resolveHumanChoice);
   registerInputStage(change, environment, 'revise-verification', 'Create an immutable Verification Plan revision and successor Attempt', reviseVerificationPlan);
+
+  change
+    .command('guard-final')
+    .description('Read the current task state before a Host sends its final response')
+    .argument('[project-root]', 'Git worktree root', '.')
+    .requiredOption('--task <id>', 'task ID returned by prepare')
+    .action(async (projectRoot: string, options: TaskOptions, command: Command) => {
+      environment.emit('change guard-final', await guardFinalResponse({
+        projectRoot,
+        taskId: options.task,
+        hostAttestations: environment.runtime.hostAttestations,
+      }), command);
+    });
 
   change
     .command('explain')

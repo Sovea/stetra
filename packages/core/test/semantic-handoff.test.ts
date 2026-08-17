@@ -33,7 +33,7 @@ test('prepare separates semantic, verification, and effective identities', () =>
   assert.equal(first.contract.semanticContractId, second.contract.semanticContractId);
   assert.equal(first.contract.verificationPlanId, second.contract.verificationPlanId);
   assert.equal(first.contract.effectiveContractId, second.contract.effectiveContractId);
-  assert.match(first.contract.authority.developerEvent.id, /^event:/);
+  assert.match(first.contract.authority.developerEvents[0].id, /^event:/);
   assert.deepEqual(first.contract.plan.lifecycle, [
     'implement', 'collect', 'judge-evidence', 'resolve', 'handoff', 'decide',
   ]);
@@ -59,6 +59,51 @@ test('routine work may omit conditions but still requires an explicit verificati
   assert.equal(missing.status, 'verification-required');
 });
 
+test('unresolved material decisions block compilation without weakening the task contract', () => {
+  const input = criticalInput();
+  input.materialDecisionForks = [materialDecisionFork()];
+  const result = compileDelegation(input);
+  assert.equal(result.status, 'semantic-decision-required');
+  if (result.status !== 'semantic-decision-required') return;
+  assert.equal(result.forks.length, 1);
+  assert.equal(result.forks[0].key, 'compatibility-policy');
+  assert.equal(result.forks[0].resolution, undefined);
+});
+
+test('resolved material decisions bind the exact later Human event to final task meaning', () => {
+  const input = criticalInput();
+  input.developerEvents.push({
+    key: 'compatibility-choice',
+    content: 'Preserve strict compatibility.',
+    provider: 'test',
+  });
+  input.task.basis.developerEventKeys.push('compatibility-choice');
+  input.materialDecisionForks = [{
+    ...materialDecisionFork(),
+    resolution: {
+      humanEventKey: 'compatibility-choice',
+      selectedAlternativeKey: 'strict',
+      decisionInterpretation: 'Strict compatibility is required.',
+    },
+  }];
+  const result = compileDelegation(input);
+  assert.equal(result.status, 'delegation-compiled');
+  if (result.status !== 'delegation-compiled') return;
+  assert.equal(result.contract.authority.developerEvents.length, 2);
+  assert.equal(result.contract.materialDecisions[0].resolution.selectedAlternativeKey, 'strict');
+  assert.equal(
+    result.contract.materialDecisions[0].resolution.humanEventId,
+    result.contract.authority.developerEvents[1].id,
+  );
+
+  input.task.basis.developerEventKeys = ['request'];
+  const unconsumed = compileDelegation(input);
+  assert.equal(unconsumed.status, 'authority-invalid');
+  if (unconsumed.status !== 'authority-invalid') return;
+  assert.ok(unconsumed.issues.some((item) =>
+    item.code === 'material-decision-resolution-unconsumed'));
+});
+
 test('every condition requires a falsifiable evidence obligation', () => {
   const input = criticalInput();
   input.conditions[0].evidenceObligations = [];
@@ -67,6 +112,16 @@ test('every condition requires a falsifiable evidence obligation', () => {
   if (result.status === 'authority-invalid') {
     assert.ok(result.issues.some((item) => item.code === 'evidence-obligations-required'));
   }
+});
+
+test('an evidence obligation freezes a complete discriminating falsification design', () => {
+  const input = criticalInput();
+  input.conditions[0].evidenceObligations[0].falsification.scenario = '';
+  const result = compileDelegation(input);
+  assert.equal(result.status, 'authority-invalid');
+  if (result.status !== 'authority-invalid') return;
+  assert.ok(result.issues.some((item) =>
+    item.path === 'conditions[0].evidenceObligations[0].falsification.scenario'));
 });
 
 test('adoption-critical semantics require challenge or direct Human review', () => {
@@ -79,6 +134,17 @@ test('adoption-critical semantics require challenge or direct Human review', () 
   if (result.status === 'authority-invalid') {
     assert.ok(result.issues.some((item) => item.code === 'critical-condition-review-required'));
   }
+
+  const factTriggeredOnly = criticalInput();
+  factTriggeredOnly.conditions[0].evidenceObligations[0].strategies = [
+    { kind: 'runtime-check', checkKeys: ['suite'] },
+    { kind: 'independent-challenge', policy: 'fact-triggered' },
+  ];
+  const factTriggeredResult = compileDelegation(factTriggeredOnly);
+  assert.equal(factTriggeredResult.status, 'authority-invalid');
+  if (factTriggeredResult.status !== 'authority-invalid') return;
+  assert.ok(factTriggeredResult.issues.some((item) =>
+    item.code === 'critical-condition-review-required'));
 });
 
 test('unsupported schema versions are rejected without a migration path', () => {
@@ -232,7 +298,12 @@ test('changed acceptance surface triggers every related fact-triggered obligatio
     evidenceObligations: [{
       key: 'shared-boundary',
       statement: 'The shared boundary remains stable.',
-      failureHypothesis: 'The changed verifier could accept an incompatible boundary.',
+      falsification: {
+        failureHypothesis: 'The changed verifier could accept an incompatible boundary.',
+        scenario: 'Exercise the incompatible boundary against the changed verifier.',
+        supportingObservation: 'The verifier rejects the incompatible boundary.',
+        contradictingObservation: 'The verifier accepts the incompatible boundary.',
+      },
       strategies: [
         { kind: 'runtime-check', checkKeys: ['suite'] },
         { kind: 'independent-challenge', policy: 'fact-triggered' },
@@ -262,6 +333,7 @@ test('changed acceptance surface triggers every related fact-triggered obligatio
     .flatMap((condition) => condition.evidenceObligations.map((item) => item.id)).sort();
   assert.deepEqual(evaluation.requiredChallengeObligationIds, obligationIds);
   assert.equal(evaluation.attention.filter((item) => item.codes.includes('challenge-missing')).length, 2);
+  assert.ok(evaluation.attention.every((item) => item.codes.length === 1));
 });
 
 test('challenge changed-file evidence uses the canonical Runtime fact identity', () => {
@@ -280,7 +352,7 @@ test('challenge changed-file evidence uses the canonical Runtime fact identity',
     implementerContextId: 'context:implementer',
     challengerContextId: 'context:changed-verifier',
     attestationId: 'attestation:changed-verifier',
-    failureHypothesis: obligation.failureHypothesis,
+    falsification: obligation.falsification,
     evidence: {
       changedFiles: [facts.changedFiles[0].id],
       checks: facts.checks.map((item) => item.definitionId),
@@ -289,6 +361,7 @@ test('challenge changed-file evidence uses the canonical Runtime fact identity',
       patch: false,
     },
     falsificationAttempt: 'Inspected the changed verifier and exercised the bounded behavior independently.',
+    observedResult: 'The incompatible boundary was rejected as required.',
     supportingEvidence: [{
       statement: 'The exact changed verifier and frozen check were inspected together.',
       references: [
@@ -327,6 +400,23 @@ test('challenge changed-file evidence uses the canonical Runtime fact identity',
   });
 });
 
+test('a challenge cannot rewrite the frozen falsification design', () => {
+  const contract = compiledContract();
+  const facts = factBundle(contract);
+  const challenges = supportedChallenges(contract, facts);
+  challenges[0].falsification = {
+    ...challenges[0].falsification,
+    scenario: 'A different scenario selected after implementation.',
+  };
+  const handoff = handoffFor(contract, facts, challenges);
+  assert.throws(() => evaluateHandoff({
+    ...envelope, contract, factBundle: facts,
+    currentWorktreeFingerprint: facts.current.fingerprint,
+    challenges, currentEvidenceDisposition: undefined, hostPolicyEvaluations: [],
+    deliveryExhausted: false, verificationRevised: false, handoff,
+  }), /falsification design/);
+});
+
 test('a condition cannot claim support beyond its obligation conclusions', () => {
   const contract = compiledContract();
   const facts = factBundle(contract);
@@ -340,6 +430,34 @@ test('a condition cannot claim support beyond its obligation conclusions', () =>
     challenges, currentEvidenceDisposition: undefined, hostPolicyEvaluations: [],
     deliveryExhausted: false, verificationRevised: false, handoff,
   }), /cannot be supported while any evidence obligation/);
+});
+
+test('Agent accept recommendation cannot exceed unresolved conclusions and unknowns', () => {
+  const contract = compiledContract('fact-triggered');
+  const facts = factBundle(contract);
+  const handoff = handoffFor(contract, facts, [], 'partial');
+  handoff.recommendation = {
+    action: 'accept',
+    rationale: 'The Agent attempts to accept unresolved evidence.',
+    caveats: [],
+  };
+  handoff.handoffFingerprint = fingerprint(withoutFingerprint(handoff));
+  assert.throws(() => evaluateHandoff({
+    ...envelope,
+    contract,
+    factBundle: facts,
+    currentWorktreeFingerprint: facts.current.fingerprint,
+    challenges: [],
+    currentEvidenceDisposition: undefined,
+    hostPolicyEvaluations: [],
+    deliveryExhausted: false,
+    verificationRevised: false,
+    handoff,
+  }), (error: unknown) => Boolean(error && typeof error === 'object'
+    && 'issues' in error
+    && Array.isArray(error.issues)
+    && error.issues.some((item: { code?: string }) =>
+      item.code === 'recommendation-evidence-conflict')));
 });
 
 test('an unverified required challenge cannot support its obligation', () => {
@@ -365,6 +483,21 @@ test('an unverified required challenge cannot support its obligation', () => {
   }), /lacks trusted Host independence/);
 });
 
+test('an unresolved required challenge needs an obligation-specific review question', () => {
+  const contract = compiledContract('fact-triggered');
+  const facts = factBundle(contract, { changedAcceptanceSurface: true });
+  const handoff = handoffFor(contract, facts, [], 'partial');
+  handoff.reviewQuestions[0].obligationIds = [];
+  handoff.handoffFingerprint = fingerprint(withoutFingerprint(handoff));
+
+  assert.throws(() => evaluateHandoff({
+    ...envelope, contract, factBundle: facts,
+    currentWorktreeFingerprint: facts.current.fingerprint,
+    challenges: [], currentEvidenceDisposition: undefined, hostPolicyEvaluations: [],
+    deliveryExhausted: false, verificationRevised: false, handoff,
+  }), /directly bound review question/);
+});
+
 test('thin Host policy claims remain visible and cannot impersonate enforcement', () => {
   const input = criticalInput();
   input.hostPolicyRequirements = [{
@@ -382,6 +515,14 @@ test('thin Host policy claims remain visible and cannot impersonate enforcement'
     requirementId: contract.hostPolicyRequirements[0].id,
     mode: 'instruction-only', provenance: 'thin-skill',
   }];
+  assert.throws(() => evaluateHandoff({
+    ...envelope, contract, factBundle: facts,
+    currentWorktreeFingerprint: facts.current.fingerprint,
+    challenges, currentEvidenceDisposition: undefined, hostPolicyEvaluations,
+    deliveryExhausted: false, verificationRevised: false, handoff,
+  }), /host-policy-required-unenforced/);
+  handoff.recommendation.action = 'defer';
+  handoff.handoffFingerprint = fingerprint(withoutFingerprint(handoff));
   const evaluation = evaluateHandoff({
     ...envelope, contract, factBundle: facts,
     currentWorktreeFingerprint: facts.current.fingerprint,
@@ -421,7 +562,7 @@ test('non-passing facts remain inspectable and explicit Human exceptions preserv
     proposedRoute: 'handoff' as const,
     routeRationale: 'Carry the environment limitation into Human adoption review.',
     entries: [{
-      definitionId: facts.checks[0].definitionId,
+      source: { kind: 'check' as const, definitionId: facts.checks[0].definitionId },
       cause: 'environment' as const,
       diagnosis: 'The runner dependency was unavailable.',
       falsificationAttempt: 'Checked whether implementation edits can restore the runner.',
@@ -454,6 +595,10 @@ test('non-passing facts remain inspectable and explicit Human exceptions preserv
   assert.equal(evaluation.status, 'needs-attention');
   assert.ok(evaluation.attention.some((item) => item.codes.includes('verification-nonpassing')));
   assert.ok(evaluation.attention.some((item) => item.codes.includes('repair-route-exhausted')));
+  assert.deepEqual(
+    evaluation.attention.filter((item) => item.group === 'delivery').map((item) => item.codes),
+    [['repair-route-exhausted']],
+  );
 
   const decision = decisionFor(contract, facts, handoff, evaluation.attention.map((item) => item.id));
   const accepted = evaluateHandoff({
@@ -468,22 +613,29 @@ test('non-passing facts remain inspectable and explicit Human exceptions preserv
 function criticalInput(policy: 'required' | 'fact-triggered' = 'required'): CompileDelegationInput {
   return {
     ...envelope,
-    developerEvent: { content: 'Keep compatibility intact.', provider: 'test' },
+    developerEvents: [{ key: 'request', content: 'Keep compatibility intact.', provider: 'test' }],
     task: {
+      basis: { developerEventKeys: ['request'], repositoryEvidenceKeys: [] },
       desiredOutcome: 'Change the behavior without losing the old path.',
       constraints: ['Preserve the public contract.'],
       nonGoals: [],
       focus: ['src/feature.ts'],
     },
+    materialDecisionForks: [],
     conditions: [{
       key: 'compatibility',
       statement: 'Existing callers retain their behavior.',
       rationale: 'A wrong change breaks adoption.',
-      criticality: 'adoption-critical',
+      criticality: policy === 'required' ? 'adoption-critical' : 'material',
       evidenceObligations: [{
         key: 'legacy-path',
         statement: 'The legacy call path retains its behavior.',
-        failureHypothesis: 'The new branch may bypass the legacy call path.',
+        falsification: {
+          failureHypothesis: 'The new branch may bypass the legacy call path.',
+          scenario: 'Exercise the legacy call path through the new branch.',
+          supportingObservation: 'The legacy path retains its prior behavior.',
+          contradictingObservation: 'The new branch bypasses or changes the legacy path.',
+        },
         strategies: [
           { kind: 'runtime-check', checkKeys: ['suite'] },
           { kind: 'independent-challenge', policy },
@@ -501,9 +653,35 @@ function criticalInput(policy: 'required' | 'fact-triggered' = 'required'): Comp
         rationale: 'The before/after result distinguishes a regression from a pre-existing failure.',
         obligationKeys: [{ conditionKey: 'compatibility', obligationKey: 'legacy-path' }],
       },
-      commandDefinitionPaths: ['package.json'],
-      acceptanceSurfacePaths: ['test/feature.test.ts'],
+      verifierSelectors: [
+        { kind: 'file', path: 'package.json', role: 'command-definition' },
+        { kind: 'file', path: 'test/feature.test.ts', role: 'acceptance-surface' },
+      ],
     }],
+  };
+}
+
+function materialDecisionFork(): CompileDelegationInput['materialDecisionForks'][number] {
+  return {
+    key: 'compatibility-policy',
+    basis: { developerEventKeys: ['request'], repositoryEvidenceKeys: [] },
+    question: 'Which compatibility policy should govern the public behavior?',
+    alternatives: [
+      {
+        key: 'strict',
+        statement: 'Preserve strict compatibility.',
+        impact: 'Existing callers retain the exact public behavior.',
+      },
+      {
+        key: 'intentional-break',
+        statement: 'Allow an intentional breaking change.',
+        impact: 'Existing callers must adapt to the new public behavior.',
+      },
+    ],
+    recommendation: {
+      alternativeKey: 'strict',
+      rationale: 'The original request explicitly requires compatibility.',
+    },
   };
 }
 
@@ -567,9 +745,14 @@ function factBundle(
       ? contract.verificationPlan.definitions.map((definition) => ({
           verifierId: definition.verifierId,
           definitionId: definition.definitionId,
-          path: 'test/feature.test.ts',
-          role: 'acceptance-surface' as const,
+          selector: {
+            kind: 'file' as const,
+            path: 'test/feature.test.ts',
+            role: 'acceptance-surface' as const,
+          },
           changedFileId: changedFile.id,
+          changedPath: changedFile.path,
+          matchedBy: 'current-path' as const,
         })) : [],
     environment: {
       platform: 'linux', architecture: 'x64', cwdFingerprint: digest('cwd'),
@@ -635,7 +818,10 @@ function handoffFor(
           ...facts.checks.map((check) => ({ kind: 'check' as const, id: check.definitionId })),
           ...(challenge ? [{ kind: 'challenge' as const, id: challenge.id }] : []),
         ],
-        falsificationAttempt: 'Exercised the legacy path and inspected the most plausible bypass.',
+        falsification: {
+          attempt: 'Exercised the legacy path and inspected the most plausible bypass.',
+          observedResult: 'The legacy path retained the expected behavior.',
+        },
         counterEvidence: [],
         conclusion: status === 'supported'
           ? 'The bounded obligation is supported.' : 'The bounded obligation remains unresolved.',
@@ -689,7 +875,7 @@ function supportedChallenges(contract: TaskContract, facts: FactBundle): Indepen
     implementerContextId: 'context:implementer',
     challengerContextId: `context:challenger-${index + 1}`,
     attestationId: `attestation:${index + 1}`,
-    failureHypothesis: obligation.failureHypothesis,
+    falsification: obligation.falsification,
     evidence: {
       changedFiles: [],
       checks: facts.checks.map((item) => item.definitionId),
@@ -698,6 +884,7 @@ function supportedChallenges(contract: TaskContract, facts: FactBundle): Indepen
       patch: false,
     },
     falsificationAttempt: 'Inspected and exercised the compatibility path independently.',
+    observedResult: 'The compatibility path retained the expected behavior.',
     supportingEvidence: [{
       statement: 'The frozen check exercises the compatibility path.',
       references: facts.checks.map((item) => ({ kind: 'check' as const, id: item.definitionId })),

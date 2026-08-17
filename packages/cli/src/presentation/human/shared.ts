@@ -84,6 +84,7 @@ export function statusValue(status: string, colors: Colors): string {
       'ok',
       'prepared',
       'facts-collected',
+      'facts-current',
       'handoff-ready',
       'valid',
     ].includes(status)

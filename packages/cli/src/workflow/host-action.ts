@@ -1,6 +1,13 @@
-import type { FactBundle, HandoffStatus } from '@sovea/stetra-core';
+import type {
+  DeveloperEventInput,
+  FactBundle,
+  HandoffStatus,
+  MaterialDecisionForkInput,
+  TaskMeaningInput,
+} from '@sovea/stetra-core';
 
 import type { AuthoringPacket } from './authoring.ts';
+import type { DeveloperDecisionBrief } from './decision-brief.ts';
 
 export type HostWorkflowReference =
   | 'change'
@@ -18,7 +25,7 @@ export interface HostAction {
     | 'recollect-stale-facts'
     | 'perform-independent-challenge'
     | 'author-handoff'
-    | 'review-and-decide'
+    | 'present-handoff-and-await-human-decision'
     | 'resolve-human-choice'
     | 'configure-verification'
     | 'correct-protocol-input'
@@ -32,13 +39,51 @@ export interface HostAction {
     execution: 'one-shot';
   };
   authoringPacket?: AuthoringPacket;
+  developerDecisionBrief?: DeveloperDecisionBrief;
+  presentationRequirements?: {
+    leadWithDecisionState: true;
+    requiredConditionIds: string[];
+    requiredDecisionIssueIds: string[];
+    requiredReviewQuestionIds: string[];
+    prohibitImpliedAdoption: true;
+  };
+  decisionContinuation?: {
+    requiresNewHumanEvent: true;
+    command: { argv: string[] };
+    inputBinding: NonNullable<HostAction['inputBinding']>;
+    authoringPacket: AuthoringPacket;
+  };
+  clarificationBrief?: ClarificationBrief;
+  clarificationContinuation?: {
+    kind: 'reprepare';
+    prepareRequestId: string;
+    requiresNewHumanEvent: true;
+  };
+}
+
+export interface ClarificationBrief {
+  prepareRequestId: string;
+  developerEvents: DeveloperEventInput[];
+  taskInterpretation: TaskMeaningInput;
+  forks: MaterialDecisionForkInput[];
 }
 
 export function compileProblemHostAction(
   status: 'semantic-decision-required' | 'verification-required' | 'authority-invalid',
+  clarificationBrief?: ClarificationBrief,
 ): HostAction {
   if (status === 'semantic-decision-required') {
-    return { kind: 'resolve-human-choice', reference: 'change' };
+    if (!clarificationBrief) throw new Error('Semantic decision action requires a clarification brief.');
+    return {
+      kind: 'resolve-human-choice',
+      reference: 'change',
+      clarificationBrief,
+      clarificationContinuation: {
+        kind: 'reprepare',
+        prepareRequestId: clarificationBrief.prepareRequestId,
+        requiresNewHumanEvent: true,
+      },
+    };
   }
   if (status === 'verification-required') {
     return { kind: 'configure-verification', reference: 'change' };
@@ -140,6 +185,19 @@ export function challengeHostAction(
     : inputAction('author-handoff', 'handoff', 'handoff', taskId, packet);
 }
 
+export function adverseChallengeHostAction(
+  taskId: string,
+  packet: AuthoringPacket,
+): HostAction {
+  return inputAction(
+    'diagnose-collected-evidence',
+    'recovery',
+    'diagnose',
+    taskId,
+    packet,
+  );
+}
+
 export function resolutionHostAction(taskId: string, packet: AuthoringPacket): HostAction {
   return inputAction('resolve-evidence-decision', 'recovery', 'resolve', taskId, packet);
 }
@@ -155,9 +213,31 @@ export function staleFactsHostAction(taskId: string): HostAction {
 export function handoffHostAction(
   _status: HandoffStatus,
   taskId: string,
+  brief: DeveloperDecisionBrief,
   packet: AuthoringPacket,
 ): HostAction {
-  return inputAction('review-and-decide', 'handoff', 'decide', taskId, packet);
+  const continuation = inputAction(
+    'present-handoff-and-await-human-decision', 'handoff', 'decide', taskId, packet,
+  );
+  return {
+    kind: 'present-handoff-and-await-human-decision',
+    reference: 'handoff',
+    developerDecisionBrief: brief,
+    presentationRequirements: {
+      leadWithDecisionState: true,
+      requiredConditionIds: brief.conditions.map((condition) => condition.id),
+      requiredDecisionIssueIds: brief.decisionIssues.map((issue) => issue.id),
+      requiredReviewQuestionIds: [...new Set(brief.decisionIssues.flatMap((issue) =>
+        issue.reviewQuestions.map((question) => question.id)))].sort(),
+      prohibitImpliedAdoption: true,
+    },
+    decisionContinuation: {
+      requiresNewHumanEvent: true,
+      command: continuation.command!,
+      inputBinding: continuation.inputBinding!,
+      authoringPacket: packet,
+    },
+  };
 }
 
 function taskCommand(stage: 'collect', taskId: string): { argv: string[] } {

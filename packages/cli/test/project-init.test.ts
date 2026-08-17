@@ -87,7 +87,7 @@ test('project init generates the Cognitive Adoption host projection and manifest
     assert.match(change, /change prepare/);
     assert.match(change, /developerEvent/);
     assert.match(change, /conditions/);
-    assert.match(change, /commandDefinitionPaths.*acceptanceSurfacePaths/s);
+    assert.match(change, /verifierSelectors/);
     assert.match(change, /\{"mode":"unknown"\}/);
     assert.match(change, /Do not\s+add rationale or obligationKeys to unknown/);
     assert.match(delivery, /baseline-to-current change/);
@@ -96,10 +96,12 @@ test('project init generates the Cognitive Adoption host projection and manifest
     assert.match(challenge, /fresh Host context/);
     assert.match(challenge, /Challenge output remains Agent judgment/);
     assert.match(challenge, /canonical identities, not paths/);
-    assert.match(handoff, /decisionPacket/);
+    assert.match(skill, /owns the final\s+cognitive handoff/);
+    assert.match(handoff, /hostAction\.developerDecisionBrief/);
+    assert.match(handoff, /Do not execute\s+\*\*hostAction\.decisionContinuation\*\*/);
     assert.match(handoff, /residual-unknown and\s+review-question item shapes/);
     assert.match(handoff, /accepted\/correction-requested\/rejected\/deferred/);
-    assert.match(skill, /Preserve paths, IDs, enum\s+values, commands, numeric facts/);
+    assert.match(skill, /Preserve paths, IDs, enums, commands, numeric facts/);
     assert.match(recovery, /retry-timed-out-check/);
     assert.match(recovery, /resolve-evidence-decision/);
     assert.match(recovery, /revise-verification/);

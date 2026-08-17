@@ -374,9 +374,12 @@ Contract states, for every material or adoption-critical criterion:
 
 The initial implementation represents this through Adoption Conditions and
 Falsifiable Evidence Obligations inside the Semantic Contract. Every Obligation
-states what must be supported, which failure hypothesis must be considered, and
-which evidence strategies must be attempted. Handoff concludes Obligations
-before Conditions.
+states what must be supported and freezes a discriminating design: a plausible
+failure, a concrete scenario, the observation supporting the bounded
+conclusion, and the observation contradicting it. It also names the evidence
+strategies to attempt. Challenge and Handoff separately record the action taken
+and the result actually observed. Handoff concludes Obligations before
+Conditions.
 
 Runtime may enforce:
 
@@ -423,7 +426,8 @@ believes it means. It includes:
 - immutable Verification Definitions and ordered Check Attempts;
 - timeout budgets, structured termination, bounded logs, and complete-stream
   digests;
-- declared command-definition and verifier-surface mutations;
+- declared command-definition and verifier-surface mutations, using explicit
+  exact-file or repository-tree selectors and concrete matched files;
 - mechanical baseline/current relations;
 - bounded, non-secret execution-environment observations;
 - fact currency against the current worktree and contract identity.
@@ -621,6 +625,13 @@ input returns the same task without rerunning baseline work. Reusing it with
 different input is rejected; a distinct request identity creates a distinct
 task. Semantic similarity is never used as a deduplication heuristic.
 
+Collect is also idempotent when the current Attempt already has facts and the
+worktree fingerprint remains exact. The Runtime returns those facts and the
+current action without rerunning checks or writing state. A changed worktree,
+explicit full refresh, or valid monotonic timeout retry is required for another
+observation. Time, command names, repository shape, and output text do not
+participate in this decision.
+
 ## Baseline, verification revision, and evidence judgment
 
 The Git worktree baseline is not a baseline test result. A task-start check runs
@@ -650,7 +661,7 @@ kernel. Each lifecycle state may return a structured `hostAction` containing an
 exact command, the smallest necessary generated reference, and a task-specific
 Authoring Packet.
 
-An Authoring Packet may include:
+An input-bearing Authoring Packet may include:
 
 - current task, Contract, Attempt, Fact Bundle, and revision bindings;
 - the exact Human Event beside separately labeled Agent interpretation;
@@ -663,6 +674,25 @@ Projection reduces reading, identity copying, and schema-error cost. It does not
 persist a mode, create lifecycle state, choose semantic values, hide an
 adoption-changing condition, or become authority. Canonical artifacts remain
 available through on-demand inspection.
+
+At the Handoff boundary, Dynamic Host Projection also derives an ephemeral
+Developer Decision Brief from the canonical Decision Packet. It is the Host's
+required delivery surface: separate delivery/evidence/recommendation/adoption
+states, intended versus actual system meaning, condition conclusions,
+direct-cause decision issues, consequence-directed review questions, and
+compact Runtime evidence. It adds no artifact or authority. The projected
+decision command is explicitly a continuation that requires a new exact Human
+Event; Handoff presentation and Human decision recording cannot collapse into
+one Host turn.
+
+The CLI also provides a read-only final-response guard. Given an exact task ID,
+it checks fact currency and projects whether the Host must continue the
+workflow, present the current Developer Decision Brief, or report an already
+recorded Human decision. This closes the final delivery boundary without a new
+lifecycle state or persisted mode. Generated Markdown adapters can instruct the
+guard but cannot claim enforcement. A native Host integration may bind the
+same deterministic guard to a real before-final-response hook; Stetra does not
+invent a general hook engine or infer the active task from repository state.
 
 ## Persistence model
 

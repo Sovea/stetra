@@ -1,4 +1,5 @@
 import type { HandoffEvidenceReference } from '../handoff/types.ts';
+import type { EvidenceObligationFalsification } from '../delegation/types.ts';
 import type { ProtocolEnvelope } from '../shared/protocol.ts';
 
 export type ChallengeOutcome = 'supported' | 'partial' | 'contradicted' | 'unknown';
@@ -28,9 +29,10 @@ export interface IndependentChallenge extends ProtocolEnvelope {
   implementerContextId?: string;
   challengerContextId?: string;
   attestationId?: string;
-  failureHypothesis: string;
+  falsification: EvidenceObligationFalsification;
   evidence: ChallengeEvidenceSelection;
   falsificationAttempt: string;
+  observedResult: string;
   supportingEvidence: ChallengeEvidenceItem[];
   counterEvidence: ChallengeEvidenceItem[];
   outcome: ChallengeOutcome;

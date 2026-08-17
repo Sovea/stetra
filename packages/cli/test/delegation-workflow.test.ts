@@ -23,6 +23,7 @@ import {
   diagnoseCollectedEvidence,
   evaluateDelegationHandoff,
   explainDelegationTask,
+  guardFinalResponse,
   prepareDelegationTask,
   readDelegationTask,
   recordChallenge,
@@ -47,6 +48,63 @@ test('prepare publishes no task until baseline observation and immutable artifac
     assert.equal(prepared.status, 'prepared');
     assert.deepEqual(readdirSync(tasksDirectory), [prepared.taskId]);
     assert.equal(readdirSync(join(root, '.stetra', 'staging')).length, 0);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('prepare consolidates material decisions and recompiles exact Human clarification without a duplicate task', async () => {
+  const root = createRepository();
+  try {
+    const document = prepareDocument({
+      prepareRequestId: 'prepare:material-decision',
+      baseline: 'unknown',
+      argv: [process.execPath, '-e', 'process.exit(0)'],
+    });
+    document.materialDecisionForks = [{
+      key: 'compatibility-policy',
+      basis: { developerEventKeys: ['request'], repositoryEvidenceKeys: [] },
+      question: 'Which compatibility policy should govern the public behavior?',
+      alternatives: [
+        {
+          key: 'strict', statement: 'Preserve strict compatibility.',
+          impact: 'Existing callers retain the exact public behavior.',
+        },
+        {
+          key: 'intentional-break', statement: 'Allow an intentional breaking change.',
+          impact: 'Existing callers must adapt.',
+        },
+      ],
+      recommendation: {
+        alternativeKey: 'strict',
+        rationale: 'The current request does not authorize a breaking change.',
+      },
+    }];
+
+    const blocked = await prepare(root, document);
+    assert.equal(blocked.status, 'semantic-decision-required');
+    assert.equal(blocked.taskCreated, false);
+    assert.equal(blocked.hostAction.kind, 'resolve-human-choice');
+    assert.equal(blocked.hostAction.clarificationBrief.forks.length, 1);
+    assert.equal(blocked.hostAction.clarificationContinuation.requiresNewHumanEvent, true);
+    const tasksDirectory = join(root, '.stetra', 'tasks');
+    assert.equal(existsSync(tasksDirectory) ? readdirSync(tasksDirectory).length : 0, 0);
+
+    document.developerEvents.push({
+      key: 'compatibility-choice',
+      content: 'Preserve strict compatibility.',
+    });
+    document.task.basis.developerEventKeys.push('compatibility-choice');
+    document.materialDecisionForks[0].resolution = {
+      humanEventKey: 'compatibility-choice',
+      selectedAlternativeKey: 'strict',
+      decisionInterpretation: 'Strict compatibility remains required.',
+    };
+    const prepared = await prepare(root, document);
+    assert.equal(prepared.status, 'prepared');
+    assert.deepEqual(readdirSync(tasksDirectory), [prepared.taskId]);
+    assert.equal(prepared.taskContract.authority.developerEventIds.length, 2);
+    assert.equal(prepared.taskContract.materialDecisions.length, 1);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -130,6 +188,110 @@ test('collect holds the worktree lease while external checks run but does not ho
     const collected = await collecting;
     assert.equal(collected.status, 'facts-collected');
     assert.equal(existsSync(join(root, '.stetra', 'worktree-operation.lock')), false);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('collect reuses current facts without rerunning checks and refresh is explicit', async () => {
+  const root = createRepository();
+  try {
+    const prepared = await prepare(root, prepareDocument({
+      baseline: 'unknown',
+      argv: [
+        process.execPath,
+        '-e',
+        "require('node:fs').appendFileSync('check-runs.txt', 'run\\n')",
+      ],
+    }));
+    const first = await collect(root, prepared.taskId);
+    const afterFirst = readDelegationTask(root, prepared.taskId);
+
+    const reused = await collect(root, prepared.taskId);
+    const afterReuse = readDelegationTask(root, prepared.taskId);
+
+    assert.equal(reused.status, 'facts-current');
+    assert.equal(reused.collectionMode, 'reused-current');
+    assert.equal(reused.factCollectionId, first.factCollectionId);
+    assert.equal(readFileSync(join(root, 'check-runs.txt'), 'utf8'), 'run\n');
+    assert.equal(afterReuse.projection.revision, afterFirst.projection.revision);
+    assert.equal(afterReuse.events.length, afterFirst.events.length);
+
+    const refreshed = await collectDelegationFacts({
+      projectRoot: root,
+      taskId: prepared.taskId,
+      productVersion: '0.0.1',
+      refresh: true,
+    });
+    assert.equal(refreshed.status, 'facts-collected');
+    assert.equal(refreshed.collectionMode, 'full-collection');
+    assert.notEqual(refreshed.factCollectionId, first.factCollectionId);
+    assert.equal(readFileSync(join(root, 'check-runs.txt'), 'utf8'), 'run\nrun\n');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('final-response guard exposes the current workflow action without writing state', async () => {
+  const root = createRepository();
+  try {
+    const document = prepareDocument({
+      baseline: 'unknown', argv: [process.execPath, '-e', 'process.exit(0)'],
+    });
+    document.conditions = [];
+    const prepared = await prepare(root, document);
+    const preparedGuard = await guardFinalResponse({
+      projectRoot: root, taskId: prepared.taskId,
+    });
+    assert.equal(preparedGuard.disposition, 'continue-workflow');
+    assert.equal(preparedGuard.hostAction?.kind, 'implement-and-collect');
+    assert.equal(preparedGuard.stateWritten, false);
+
+    writeFileSync(join(root, 'source.txt'), 'first implementation\n', 'utf8');
+    let collected = await collect(root, prepared.taskId);
+    const collectedGuard = await guardFinalResponse({
+      projectRoot: root, taskId: prepared.taskId,
+    });
+    assert.equal(collectedGuard.disposition, 'continue-workflow');
+    assert.equal(collectedGuard.factsCurrent, true);
+    assert.equal(collectedGuard.hostAction?.kind, 'author-handoff');
+
+    writeFileSync(join(root, 'source.txt'), 'current implementation\n', 'utf8');
+    const staleGuard = await guardFinalResponse({
+      projectRoot: root, taskId: prepared.taskId,
+    });
+    assert.equal(staleGuard.disposition, 'continue-workflow');
+    assert.equal(staleGuard.factsCurrent, false);
+    assert.equal(staleGuard.hostAction?.kind, 'recollect-stale-facts');
+    collected = await collect(root, prepared.taskId);
+
+    const handoffDraft = structuredClone(collected.hostAction.authoringPacket.draft);
+    handoffDraft.summary = 'The routine fixture now contains the requested current implementation.';
+    handoffDraft.importantSystemEffects = ['The fixture text changed.'];
+    handoffDraft.recommendation = {
+      action: 'accept', rationale: 'The exact current facts match the routine change.', caveats: [],
+    };
+    const handedOff = await handoff(root, prepared.taskId, handoffDraft);
+    const handoffGuard = await guardFinalResponse({
+      projectRoot: root, taskId: prepared.taskId,
+    });
+    assert.equal(handoffGuard.disposition, 'present-decision-brief');
+    assert.equal(handoffGuard.hostAction?.kind, 'present-handoff-and-await-human-decision');
+    assert.ok(handoffGuard.developerDecisionBrief);
+
+    const decisionDraft = structuredClone(
+      handedOff.hostAction.decisionContinuation.authoringPacket.draft,
+    );
+    decisionDraft.humanEvent.content = 'Accept the current implementation.';
+    decisionDraft.action = 'accepted';
+    decisionDraft.reason = 'The reviewed current facts support adoption.';
+    await decide(root, prepared.taskId, decisionDraft);
+    const decidedGuard = await guardFinalResponse({
+      projectRoot: root, taskId: prepared.taskId,
+    });
+    assert.equal(decidedGuard.disposition, 'human-decision-recorded');
+    assert.equal(decidedGuard.hostAction, null);
+    assert.equal(decidedGuard.factsCurrent, true);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -275,14 +437,13 @@ test('mixed implementation and environment failures may repair the bounded imple
       rationale: 'Keep an unrelated environment failure visible during repair.',
       argv: [process.execPath, '-e', 'process.exit(2)'],
       baseline: { mode: 'unknown' },
-      commandDefinitionPaths: [],
-      acceptanceSurfacePaths: [],
+      verifierSelectors: [],
     });
     const prepared = await prepare(root, document);
     const collected = await collect(root, prepared.taskId);
     const input = disposition(collected.checks[0].definitionId, 'implementation');
     input.entries.push({
-      definitionId: collected.checks[1].definitionId,
+      source: { kind: 'check', definitionId: collected.checks[1].definitionId },
       cause: 'environment',
       diagnosis: 'The second command is unavailable for an environment-specific reason.',
       falsificationAttempt: 'Inspected the independent second command and its exact Runtime exit.',
@@ -385,7 +546,7 @@ test('diagnosis-to-handoff preserves thin-Host direct review and places failed c
       baseline: 'unknown',
       argv: [process.execPath, '-e', 'process.exit(1)'],
       critical: true,
-      acceptanceSurfacePaths: ['source.txt'],
+      acceptanceSurfaceSelectors: [{ kind: 'file', path: 'source.txt' }],
     }));
     writeFileSync(join(root, 'source.txt'), 'changed verifier surface\n', 'utf8');
     const collected = await collect(root, prepared.taskId);
@@ -476,7 +637,10 @@ test('a Human correction creates a successor Attempt and preserves the prior dec
         obligationId: obligation.id,
         status: 'supported',
         evidence: [{ kind: 'check', id: collected.checks[0].definitionId }],
-        falsificationAttempt: 'Inspected whether the command bypasses the intended behavior.',
+        falsification: {
+          attempt: 'Inspected whether the command bypasses the intended behavior.',
+          observedResult: 'The current command exercised the intended path.',
+        },
         counterEvidence: [],
         conclusion: 'The bounded observation supports this obligation.',
       }],
@@ -487,11 +651,29 @@ test('a Human correction creates a successor Attempt and preserves the prior dec
       recommendation: { action: 'accept', rationale: 'The bounded evidence is current.', caveats: [] },
     });
     assert.equal(handedOff.status, 'handoff-ready');
-    assert.deepEqual(Object.keys(handedOff.hostAction.authoringPacket.referenceCatalog), ['attention']);
+    assert.equal(handedOff.hostAction.kind, 'present-handoff-and-await-human-decision');
+    assert.equal(handedOff.hostAction.command, undefined);
     assert.deepEqual(
-      fieldRequirement(handedOff.hostAction.authoringPacket, 'draft.action').allowedValues,
+      Object.keys(handedOff.hostAction.decisionContinuation.authoringPacket.referenceCatalog),
+      ['attention'],
+    );
+    assert.deepEqual(
+      fieldRequirement(
+        handedOff.hostAction.decisionContinuation.authoringPacket,
+        'draft.action',
+      ).allowedValues,
       ['accepted', 'correction-requested', 'rejected', 'deferred'],
     );
+    assert.deepEqual(handedOff.hostAction.developerDecisionBrief.decisionState, {
+      delivery: 'implementation-complete', evidence: 'handoff-ready',
+      recommendation: 'accept', adoption: 'pending',
+    });
+    assert.equal(
+      handedOff.hostAction.developerDecisionBrief.changeMeaning.actualSystemMeaning,
+      'The first implementation is ready for review.',
+    );
+    assert.equal(handedOff.hostAction.developerDecisionBrief.conditions[0].status, 'supported');
+    assert.deepEqual(handedOff.hostAction.developerDecisionBrief.decisionIssues, []);
     const decided = await decide(root, prepared.taskId, {
       humanEvent: { content: 'Correct the wording without changing the current semantic contract.' },
       action: 'correction-requested',
@@ -524,9 +706,11 @@ test('a thin Host routes a required verifier challenge to explicit direct review
   try {
     const document = prepareDocument({
       baseline: 'unknown', argv: [process.execPath, '-e', 'process.exit(0)'], critical: true,
-      acceptanceSurfacePaths: ['source.txt'],
+      acceptanceSurfaceSelectors: [{ kind: 'file', path: 'source.txt' }],
     });
     const prepared = await prepare(root, document);
+    const condition = prepared.taskContract.adoptionConditions[0];
+    const obligation = condition.evidenceObligations[0];
     writeFileSync(join(root, 'source.txt'), 'changed verifier surface\n', 'utf8');
     const collected = await collect(root, prepared.taskId);
     assert.equal(collected.hostAction.kind, 'author-handoff');
@@ -535,7 +719,14 @@ test('a thin Host routes a required verifier challenge to explicit direct review
         collected.hostAction.authoringPacket,
         'draft.obligationConclusions[0].status',
       ).allowedValues,
-      ['supported', 'partial', 'contradicted', 'unknown'],
+      ['partial', 'contradicted', 'unknown'],
+    );
+    assert.deepEqual(
+      fieldRequirement(
+        collected.hostAction.authoringPacket,
+        'draft.conditionConclusions[0].status',
+      ).allowedValues,
+      ['partial', 'contradicted', 'unknown'],
     );
     assert.ok(collected.hostAction.authoringPacket.outstandingObligations.some(
       (item: { code: string }) => item.code === 'direct-human-review-required',
@@ -545,7 +736,10 @@ test('a thin Host routes a required verifier challenge to explicit direct review
     draft.summary = 'The implementation passes its changed verifier, but independent evidence is unavailable.';
     for (const conclusion of draft.obligationConclusions) {
       conclusion.status = 'partial';
-      conclusion.falsificationAttempt = 'Inspected the changed acceptance surface in the current context.';
+      conclusion.falsification = {
+        attempt: 'Inspected the changed acceptance surface in the current context.',
+        observedResult: 'The check passed, but no independent context observed the boundary.',
+      };
       conclusion.conclusion = 'The check passes, while independent falsification remains unavailable.';
     }
     for (const conclusion of draft.conditionConclusions) {
@@ -557,6 +751,20 @@ test('a thin Host routes a required verifier challenge to explicit direct review
       question.evidence = [{ kind: 'patch' }];
     }
     draft.recommendation = {
+      action: 'accept',
+      rationale: 'The changed verifier passed.',
+      caveats: [],
+    };
+    await assert.rejects(
+      handoff(root, prepared.taskId, draft),
+      (error: unknown) => {
+        const issues = (error as { issues?: Array<{ code?: string; path: string }> }).issues;
+        return Boolean(issues?.some((issue) =>
+          issue.code === 'recommendation-evidence-conflict'
+          && issue.path === 'recommendation.action'));
+      },
+    );
+    draft.recommendation = {
       action: 'defer',
       rationale: 'Direct developer review must replace unavailable independent challenge.',
       caveats: ['The current Host cannot attest a separate context.'],
@@ -565,6 +773,52 @@ test('a thin Host routes a required verifier challenge to explicit direct review
     assert.equal(handedOff.status, 'needs-attention');
     assert.ok(handedOff.decisionPacket.attention.some((item: { codes: string[] }) =>
       item.codes.includes('challenge-missing')));
+    const issue = handedOff.hostAction.developerDecisionBrief.decisionIssues.find(
+      (item: { code: string }) => item.code === 'challenge-missing',
+    );
+    assert.deepEqual(issue.conditionIds, [condition.id]);
+    assert.deepEqual(issue.obligationIds, [obligation.id]);
+    assert.equal(issue.reviewQuestions.length, 1);
+    assert.ok(
+      handedOff.hostAction.developerDecisionBrief.requestedDecision
+        .acceptanceRequiresExceptionsFor.includes(issue.attentionId),
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('a tree verifier selector detects a changed descendant and triggers challenge', async () => {
+  const root = createRepository();
+  try {
+    mkdirSync(join(root, 'test'));
+    writeFileSync(join(root, 'test', 'surface.txt'), 'before\n', 'utf8');
+    git(root, ['add', 'test/surface.txt']);
+    git(root, ['commit', '-qm', 'add verifier surface']);
+    const prepared = await prepare(root, prepareDocument({
+      baseline: 'unknown',
+      argv: [process.execPath, '-e', 'process.exit(0)'],
+      challengePolicy: 'fact-triggered',
+      acceptanceSurfaceSelectors: [{ kind: 'tree', path: 'test' }],
+    }));
+
+    writeFileSync(join(root, 'test', 'surface.txt'), 'after\n', 'utf8');
+    const collected = await collect(root, prepared.taskId, trustedHost);
+
+    assert.equal(collected.hostAction.kind, 'perform-independent-challenge');
+    assert.deepEqual(collected.verifierSurfaces, [{
+      path: 'test/surface.txt',
+      role: 'acceptance-surface',
+      definitionIds: [collected.checks[0].definitionId],
+    }]);
+    const explained = explainDelegationTask({
+      projectRoot: root, taskId: prepared.taskId, section: 'attempts',
+    }) as unknown as { attempts: Array<{ facts: { verifierMutations: Array<Record<string, unknown>> } }> };
+    const stored = explained.attempts[0].facts;
+    assert.deepEqual(stored.verifierMutations[0].selector, {
+      kind: 'tree', path: 'test', role: 'acceptance-surface',
+    });
+    assert.equal(stored.verifierMutations[0].matchedBy, 'current-path');
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -575,9 +829,9 @@ test('a canonical Challenge Authoring Packet completes the persisted challenge-t
   try {
     const document = prepareDocument({
       baseline: 'unknown', argv: [process.execPath, '-e', 'process.exit(0)'], critical: true,
-      acceptanceSurfacePaths: ['source.txt'],
+      acceptanceSurfaceSelectors: [{ kind: 'file', path: 'source.txt' }],
     });
-    document.developerEvent.content = 'Keep the exact developer phrase "arguments" visible.';
+    document.developerEvents[0].content = 'Keep the exact developer phrase "arguments" visible.';
     document.task.desiredOutcome = 'Preserve the requested public wording.';
     const prepared = await prepare(root, document);
     writeFileSync(join(root, 'source.txt'), 'changed verifier surface\n', 'utf8');
@@ -588,14 +842,14 @@ test('a canonical Challenge Authoring Packet completes the persisted challenge-t
       ['conditions', 'obligations', 'checks', 'changedFiles', 'challenges', 'repositoryEvidence'],
     );
     assert.equal(
-      collected.hostAction.authoringPacket.semanticContext.exactDeveloperEvent.event.content,
+      collected.hostAction.authoringPacket.semanticContext.exactDeveloperEvents.events[0].content,
       'Keep the exact developer phrase "arguments" visible.',
     );
     assert.equal(
       collected.hostAction.authoringPacket.semanticContext.agentInterpretation.desiredOutcome,
       'Preserve the requested public wording.',
     );
-    assert.equal(collected.hostAction.authoringPacket.semanticContext.exactDeveloperEvent.authority, 'human-event');
+    assert.equal(collected.hostAction.authoringPacket.semanticContext.exactDeveloperEvents.authority, 'human-event');
     assert.equal(collected.hostAction.authoringPacket.semanticContext.agentInterpretation.authority, 'agent-judgment');
     assert.deepEqual(collected.hostAction.inputBinding, {
       transport: 'stdin', source: 'authoringPacket.draft', serialization: 'json', execution: 'one-shot',
@@ -606,6 +860,7 @@ test('a canonical Challenge Authoring Packet completes the persisted challenge-t
       .map((item: { id: string }) => item.id);
     assert.deepEqual(challengeDraft.evidence.changedFiles, changedFileIds);
     challengeDraft.falsificationAttempt = 'Inspected the changed verifier and exercised the bounded behavior independently.';
+    challengeDraft.observedResult = 'The independent exercise observed the expected bounded behavior.';
     challengeDraft.supportingEvidence = [{
       statement: 'The changed verifier and frozen check were inspected together.',
       references: [
@@ -644,7 +899,10 @@ test('a canonical Challenge Authoring Packet completes the persisted challenge-t
     handoffDraft.summary = 'The changed verifier and implementation are ready for bounded review.';
     for (const conclusion of handoffDraft.obligationConclusions) {
       conclusion.status = 'supported';
-      conclusion.falsificationAttempt = 'Inspected the changed verifier and exercised its failure hypothesis.';
+      conclusion.falsification = {
+        attempt: 'Inspected the changed verifier and exercised its failure hypothesis.',
+        observedResult: 'The independent challenge and current check observed the expected boundary.',
+      };
       conclusion.conclusion = 'The exact collected evidence supports this bounded obligation.';
     }
     for (const conclusion of handoffDraft.conditionConclusions) {
@@ -668,6 +926,70 @@ test('a canonical Challenge Authoring Packet completes the persisted challenge-t
     assert.ok(!handedOff.decisionPacket.attention.some((item: { codes: string[] }) =>
       item.codes.includes('challenge-independence-unverified')));
     assert.ok(readDelegationTask(root, prepared.taskId).projection.currentHandoffId);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('an adverse Challenge returns to bounded diagnosis and a successor Attempt requires fresh Challenge evidence', async () => {
+  const root = createRepository();
+  try {
+    const prepared = await prepare(root, prepareDocument({
+      baseline: 'unknown',
+      argv: [process.execPath, '-e', 'process.exit(0)'],
+      critical: true,
+    }));
+    writeFileSync(join(root, 'source.txt'), 'first implementation\n', 'utf8');
+    const collected = await collect(root, prepared.taskId, trustedHost);
+    assert.equal(collected.hostAction.kind, 'perform-independent-challenge');
+
+    const challengeDraft = structuredClone(collected.hostAction.authoringPacket.draft);
+    const checkId = challengeDraft.evidence.checks[0];
+    challengeDraft.falsificationAttempt = 'Exercised the declared counterexample in a fresh context.';
+    challengeDraft.observedResult = 'The counterexample contradicted the bounded obligation.';
+    challengeDraft.counterEvidence = [{
+      statement: 'The frozen observation remains green while the counterexample fails.',
+      references: [{ kind: 'check', id: checkId }],
+    }];
+    challengeDraft.outcome = 'contradicted';
+    challengeDraft.conclusion = 'The current implementation does not satisfy the bounded obligation.';
+    const challenged = await challenge(root, prepared.taskId, challengeDraft, trustedHost);
+    assert.equal(challenged.hostAction.kind, 'diagnose-collected-evidence');
+    assert.deepEqual(challenged.hostAction.authoringPacket.draft.entries[0].source, {
+      kind: 'challenge', challengeId: challenged.challenge.id,
+    });
+
+    const diagnosis = structuredClone(challenged.hostAction.authoringPacket.draft);
+    diagnosis.semanticImpact = 'none';
+    diagnosis.proposedRoute = 'repair-implementation';
+    diagnosis.routeRationale = 'The counterexample identifies a bounded implementation defect inside the current contract.';
+    diagnosis.entries[0] = {
+      ...diagnosis.entries[0],
+      cause: 'implementation',
+      diagnosis: 'The implementation omits the counterexample path.',
+      falsificationAttempt: 'Inspected whether verification or environment state explains the adverse observation.',
+      codeChangeCanAlterObservation: true,
+      expectedDifferentObservation: 'The same fresh counterexample is supported after repair.',
+      intendedChanges: ['Repair the bounded source path without changing task meaning.'],
+    };
+    const diagnosed = await diagnose(root, prepared.taskId, diagnosis);
+    assert.equal(diagnosed.status, 'repair-prepared');
+    assert.equal(diagnosed.hostAction.kind, 'implement-and-collect');
+
+    const history = explainDelegationTask({
+      projectRoot: root, taskId: prepared.taskId, section: 'challenge',
+    }) as any;
+    assert.equal(history.challenges.length, 1);
+    assert.equal(history.challenges[0].id, challenged.challenge.id);
+
+    writeFileSync(join(root, 'source.txt'), 'repaired implementation\n', 'utf8');
+    const recollected = await collect(root, prepared.taskId, trustedHost);
+    assert.equal(recollected.attemptId, 'attempt:2');
+    assert.equal(recollected.hostAction.kind, 'perform-independent-challenge');
+    assert.notEqual(
+      recollected.hostAction.authoringPacket.bindsTo.factCollectionId,
+      challenged.challenge.factCollectionId,
+    );
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -724,7 +1046,10 @@ test('verification revision preserves history and completes handoff against curr
     handoffDraft.summary = 'The rebound verification passed against the current implementation.';
     for (const conclusion of handoffDraft.obligationConclusions) {
       conclusion.status = 'supported';
-      conclusion.falsificationAttempt = 'Ran the current immutable definition and inspected its bounded result.';
+      conclusion.falsification = {
+        attempt: 'Ran the current immutable definition and inspected its bounded result.',
+        observedResult: 'The current definition passed and exercised the bounded behavior.',
+      };
       conclusion.conclusion = 'The current passing observation supports this bounded obligation.';
     }
     for (const conclusion of handoffDraft.conditionConclusions) {
@@ -778,13 +1103,18 @@ function prepareDocument(options: {
   prepareRequestId?: string;
   maxRepairAttempts?: number;
   critical?: boolean;
-  acceptanceSurfacePaths?: string[];
+  challengePolicy?: 'required' | 'fact-triggered';
+  acceptanceSurfaceSelectors?: Array<{ kind: 'file' | 'tree'; path: string }>;
 }): DelegationPrepareDocument {
   return {
     protocol: 'cognitive-adoption', schemaVersion: '1',
     prepareRequestId: options.prepareRequestId ?? `prepare:${randomUUID()}`,
-    developerEvent: { content: 'Change the workflow fixture.' },
-    task: { desiredOutcome: 'Change the workflow fixture.', constraints: [], nonGoals: [], focus: ['source.txt'] },
+    developerEvents: [{ key: 'request', content: 'Change the workflow fixture.' }],
+    task: {
+      basis: { developerEventKeys: ['request'], repositoryEvidenceKeys: [] },
+      desiredOutcome: 'Change the workflow fixture.', constraints: [], nonGoals: [], focus: ['source.txt'],
+    },
+    materialDecisionForks: [],
     repositoryEvidence: [],
     conditions: [{
       key: 'behavior', statement: 'The selected observation supports adoption.',
@@ -793,11 +1123,19 @@ function prepareDocument(options: {
       evidenceObligations: [{
         key: 'observation',
         statement: 'The selected observation distinguishes the expected behavior.',
-        failureHypothesis: 'The command may pass or fail without exercising the intended behavior.',
+        falsification: {
+          failureHypothesis: 'The command may pass or fail without exercising the intended behavior.',
+          scenario: 'Run the frozen command against the changed fixture boundary.',
+          supportingObservation: 'The command exercises the changed behavior and reports the expected result.',
+          contradictingObservation: 'The command result does not depend on the changed behavior.',
+        },
         strategies: [
           { kind: 'runtime-check', checkKeys: ['test'] },
-          ...(options.critical
-            ? [{ kind: 'independent-challenge' as const, policy: 'fact-triggered' as const }]
+          ...(options.critical || options.challengePolicy
+            ? [{
+                kind: 'independent-challenge' as const,
+                policy: options.challengePolicy ?? 'required',
+              }]
             : []),
         ],
       }],
@@ -811,8 +1149,10 @@ function prepareDocument(options: {
         rationale: 'The before/after observation distinguishes a regression.',
         obligationKeys: [{ conditionKey: 'behavior', obligationKey: 'observation' }],
       } : { mode: 'unknown' },
-      commandDefinitionPaths: [],
-      acceptanceSurfacePaths: options.acceptanceSurfacePaths ?? [],
+      verifierSelectors: (options.acceptanceSurfaceSelectors ?? []).map((selector) => ({
+        ...selector,
+        role: 'acceptance-surface' as const,
+      })),
     }],
   };
 }
@@ -829,7 +1169,7 @@ function disposition(definitionId: string, cause: 'implementation' | 'environmen
       | 'repair-implementation' | 'revise-verification' | 'challenge' | 'handoff' | 'ask-human',
     routeRationale: `The declared ${cause} cause requires the selected explicit next step.`,
     entries: [{
-      definitionId, cause,
+      source: { kind: 'check' as const, definitionId }, cause,
       diagnosis: `The observed cause is ${cause}.`,
       falsificationAttempt: 'Inspected the command, environment, and changed implementation.',
       codeChangeCanAlterObservation: cause === 'implementation',

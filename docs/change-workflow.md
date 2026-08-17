@@ -15,6 +15,7 @@ stetra change challenge . --task <task-id> --input - --json
 stetra change handoff . --task <task-id> --input - --json
 stetra change decide . --task <task-id> --input - --json
 stetra change resolve . --task <task-id> --input - --json
+stetra change guard-final . --task <task-id> --json
 stetra change explain . --task <task-id> --section action --json
 stetra change explain . --task <task-id> --section all --json
 ```
@@ -28,7 +29,7 @@ Use the packet's binding metadata, exact reference catalog, outstanding
 obligations, prefilled draft, and `fieldRequirements`. Each field requirement
 names an exact draft path, its Agent/Human authority, and either accepted enum
 values or object variants. It supplies structure without selecting a judgment.
-The packet's `semanticContext` presents the exact developer event as Human
+The packet's `semanticContext` presents the exact developer events as Human
 authority and the Host-authored task meaning as a separate Agent interpretation.
 Do not silently substitute one for the other.
 
@@ -54,6 +55,33 @@ stage-specific rather than a universal copy of all task facts. Use
 `--section action` to regenerate the current action and exact draft without
 changing task state.
 
+After a current Handoff is evaluated, `hostAction` changes role. It returns a
+transient `developerDecisionBrief` containing the four separate delivery,
+evidence, Agent-recommendation, and Human-adoption states; desired outcome and
+actual system meaning; every condition conclusion; direct-cause decision
+issues; linked review questions; and compact Runtime evidence. The accompanying
+`presentationRequirements` names every condition, issue, and question that the
+Host must preserve in its final cognitive handoff.
+
+The Human decision command is not the current action at that point. It appears
+under `decisionContinuation` with `requiresNewHumanEvent: true`. The Host
+presents the brief, states that adoption remains pending, asks the developer
+for a decision, and stops. Only a later developer message authorizes filling
+the nested Human Authoring Packet and executing `change decide`.
+
+Before any Host final response, `change guard-final` re-reads the exact task and
+current worktree without writing state. It returns one disposition:
+
+- `continue-workflow`: follow the returned current `hostAction`;
+- `present-decision-brief`: present the returned current brief and stop for the
+  developer's decision;
+- `human-decision-recorded`: report the recorded terminal decision.
+
+The guard also returns fact currency, task revision, and a fingerprint of the
+projected action. Generated skills instruct this call but do not claim that a
+Markdown file enforces a Host hook. A native Host integration may enforce the
+same command at its final-response boundary.
+
 ## Prepare
 
 ```json
@@ -61,19 +89,25 @@ changing task state.
   "protocol": "cognitive-adoption",
   "schemaVersion": "1",
   "prepareRequestId": "prepare:host-generated-once",
-  "developerEvent": {
+  "developerEvents": [{
+    "key": "request",
     "content": "exact developer message",
     "provider": "host"
-  },
+  }],
   "repositoryEvidence": [
     { "key": "ownership", "path": "src/file.ts", "startLine": 1, "endLine": 20 }
   ],
   "task": {
+    "basis": {
+      "developerEventKeys": ["request"],
+      "repositoryEvidenceKeys": []
+    },
     "desiredOutcome": "Agent interpretation of the requested outcome",
     "constraints": [],
     "nonGoals": [],
     "focus": ["src/file.ts"]
   },
+  "materialDecisionForks": [],
   "conditions": [
     {
       "key": "compatibility",
@@ -81,20 +115,25 @@ changing task state.
       "rationale": "A mismatch changes adoption.",
       "criticality": "adoption-critical",
       "basis": {
-        "developerEvent": true,
+        "developerEventKeys": ["request"],
         "repositoryEvidenceKeys": ["ownership"]
       },
       "evidenceObligations": [
         {
           "key": "legacy-path",
           "statement": "The legacy call path preserves its observable behavior.",
-          "failureHypothesis": "The new branch may bypass the legacy path.",
+          "falsification": {
+            "failureHypothesis": "The new branch may bypass the legacy path.",
+            "scenario": "Exercise the legacy call through the new branch.",
+            "supportingObservation": "The legacy call retains its observable behavior.",
+            "contradictingObservation": "The new branch bypasses or changes the legacy call."
+          },
           "strategies": [
             {
               "kind": "runtime-check",
               "checkKeys": ["compatibility-test"]
             },
-            { "kind": "independent-challenge", "policy": "fact-triggered" }
+            { "kind": "independent-challenge", "policy": "required" }
           ]
         }
       ]
@@ -122,16 +161,30 @@ changing task state.
           { "conditionKey": "compatibility", "obligationKey": "legacy-path" }
         ]
       },
-      "commandDefinitionPaths": ["package.json"],
-      "acceptanceSurfacePaths": ["test/compatibility.test.ts"]
+      "verifierSelectors": [
+        { "kind": "file", "path": "package.json", "role": "command-definition" },
+        { "kind": "tree", "path": "test", "role": "acceptance-surface" }
+      ]
     }
   ]
 }
 ```
 
 Routine work may use no Conditions. Every declared Condition requires at least
-one falsifiable Evidence Obligation. Adoption-critical Conditions require an
-independent Challenge or direct Human review strategy.
+one falsifiable Evidence Obligation. Adoption-critical Conditions require a
+`required` independent Challenge or direct Human review strategy;
+`fact-triggered` alone is insufficient.
+
+Every Obligation freezes one discriminating design: the plausible failure, a
+specific scenario, the observation that supports the bounded conclusion, and
+the observation that contradicts it. Runtime validates completeness and later
+binding; it does not decide whether those natural-language statements are
+semantically adequate.
+
+Verifier selectors are explicit `file` or `tree` boundaries with one role.
+`file` matches only the exact current or previous path. `tree` matches its root
+and descendants by repository path boundary. There are no globs, regular
+expressions, filesystem-type guesses, or framework filename rules.
 
 `task-start` baseline requires a decision-relevant rationale and exact
 Obligation keys. Use `{ "mode": "unknown" }` when before/after comparison does
@@ -142,8 +195,21 @@ Core generates canonical Human Event, Condition, Obligation, logical Verifier,
 exact Definition, Contract, Verification Plan, and effective identities. Focus
 paths guide work; they are not permissions.
 
-The Host generates `prepareRequestId` once for one concrete submission and
-reuses the exact ID and document after transport interruption. The first
+`materialDecisionForks` records only choices that change task meaning, an
+explicit constraint, public behavior, compatibility, ownership, a long-lived
+tradeoff, an external effect, verification relaxation, or an exception. The
+Agent or another planning framework discovers and explains those choices.
+Runtime validates their exact basis and resolution binding; it does not infer
+semantic ambiguity. An unresolved fork returns `semantic-decision-required`,
+one consolidated `clarificationBrief`, and no task. The Host presents that
+brief once and stops. After a new developer message, it appends the exact event,
+binds the fork resolution to that event, updates the final task basis, and
+re-runs Prepare. A Trellis-style Host that already completed clarification
+submits the resolved fork once and remains the sole owner of developer dialogue.
+
+The Host generates `prepareRequestId` once for one concrete submission. It may
+reuse that ID while resolving a pre-task material fork because no task exists
+yet, and reuses the exact ID and document after transport interruption. The first
 successful Prepare binds the ID to the exact input fingerprint. An identical
 retry returns `prepare-replayed` with the existing task and does not rerun a
 task-start baseline. Different input under the same ID is rejected; a genuinely
@@ -167,6 +233,7 @@ Full collection and timeout recovery:
 ```sh
 stetra change collect . --task <task-id> --json
 stetra change collect . --task <task-id> --timeout-ms 600000 --json
+stetra change collect . --task <task-id> --refresh --json
 stetra change collect . --task <task-id> \
   --retry-check '<definition-id>=900000' --json
 ```
@@ -180,13 +247,20 @@ digests; it is not a combined output digest. Timeout retry is allowed only after
 the latest Attempt terminated as a timeout, with an unchanged worktree and
 larger budget.
 
+If the current Attempt already has a Fact Bundle and the current worktree
+fingerprint still matches it, an ordinary Collect returns `facts-current` with
+`collectionMode: reused-current`. It does not execute checks, append an event,
+change revision, or discard a current Handoff. A changed worktree performs a
+new full collection. `--refresh` explicitly reruns all frozen Definitions;
+`--retry-check` remains the only append-only timeout-recovery path.
+
 Collection returns the actual changed-file set, patch, baseline relation,
 Verifier mutations, environment facts, and the next task-specific packet.
 
 ## Diagnose evidence
 
 Use the returned diagnosis draft; it already contains every current non-passing
-`definitionId` exactly once:
+Check and current adverse Challenge exactly once:
 
 ```json
 {
@@ -195,7 +269,10 @@ Use the returned diagnosis draft; it already contains every current non-passing
   "routeRationale": "Why this route addresses every declared cause.",
   "entries": [
     {
-      "definitionId": "sha256:exact-definition",
+      "source": {
+        "kind": "check",
+        "definitionId": "sha256:exact-definition"
+      },
       "cause": "implementation",
       "diagnosis": "Concrete fact-bound cause judgment.",
       "falsificationAttempt": "What was inspected or attempted.",
@@ -207,6 +284,7 @@ Use the returned diagnosis draft; it already contains every current non-passing
 }
 ```
 
+`source` is exactly a frozen Check definition or a current adverse Challenge.
 Cause is exactly `implementation`, `environment`, `verification`, or `unknown`.
 Only implementation cause may propose code edits. Runtime validates identity and
 coverage and checks that every cause is compatible with the proposed route; it
@@ -242,8 +320,10 @@ A noncritical verification diagnosis returns an exact revision draft:
           { "conditionKey": "compatibility", "obligationKey": "legacy-path" }
         ]
       },
-      "commandDefinitionPaths": ["package.json"],
-      "acceptanceSurfacePaths": ["test/compatibility.test.ts"]
+      "verifierSelectors": [
+        { "kind": "file", "path": "package.json", "role": "command-definition" },
+        { "kind": "tree", "path": "test", "role": "acceptance-surface" }
+      ]
     }
   ]
 }
@@ -275,7 +355,12 @@ Use the Challenge packet. Agent input contains no ID or independence claim:
 ```json
 {
   "obligationIds": ["obligation:exact"],
-  "failureHypothesis": "Concrete way the bounded conclusion could be wrong.",
+  "falsification": {
+    "failureHypothesis": "Concrete way the bounded conclusion could be wrong.",
+    "scenario": "Specific boundary or counterexample to exercise.",
+    "supportingObservation": "Observation supporting the bounded conclusion.",
+    "contradictingObservation": "Observation contradicting the bounded conclusion."
+  },
   "evidence": {
     "changedFiles": ["file:exact"],
     "checks": ["sha256:exact-definition"],
@@ -284,6 +369,7 @@ Use the Challenge packet. Agent input contains no ID or independence claim:
     "patch": true
   },
   "falsificationAttempt": "Independent inspection or execution.",
+  "observedResult": "What the independent attempt actually observed.",
   "supportingEvidence": [
     {
       "statement": "Bounded supporting observation.",
@@ -297,10 +383,22 @@ Use the Challenge packet. Agent input contains no ID or independence claim:
 ```
 
 CLI generates Challenge ID and derives Condition IDs. A trusted Host provider
-may inject fresh-context attestation. Thin skills remain `unverified`. Once an
-Obligation has a recorded Challenge, the next route is Handoff; adverse or
-unverified results remain exact Attention and cap conclusions instead of
-causing an endless Challenge loop.
+may inject fresh-context attestation. Thin skills remain `unverified`. A
+supported Challenge advances to the next required Challenge or Handoff. A
+partial, contradicted, or unknown Challenge returns to the Implementer through
+the existing evidence-diagnosis action. The diagnosis may choose bounded
+repair, verification revision, Human resolution, or Handoff, but may not send
+the same adverse Challenge to another Challenger.
+
+Repair and recollection never erase Challenge history. Only Challenges bound
+to the current effective Contract, Attempt, and Fact Collection can satisfy a
+current obligation; `change explain --section challenge` retains prior adverse
+findings and their lineage.
+
+Challenge input must preserve the exact frozen falsification design for every
+selected Obligation. Obligations with different designs are challenged
+separately. The Agent records both the action and observed result before
+choosing a bounded outcome.
 
 Generated Markdown skills do not control a fresh Host context, so Dynamic Host
 Projection does not ask them to manufacture an independent Challenge. It routes
@@ -327,7 +425,10 @@ bound to the Obligation without being mislabeled or duplicated as support.
       "obligationId": "obligation:exact",
       "status": "supported",
       "evidence": [{ "kind": "check", "id": "sha256:exact-definition" }],
-      "falsificationAttempt": "What tried to expose the stated failure.",
+      "falsification": {
+        "attempt": "What tried to execute or inspect the frozen scenario.",
+        "observedResult": "What that attempt actually observed."
+      },
       "counterEvidence": [],
       "conclusion": "Bounded evidence conclusion."
     }
@@ -362,6 +463,17 @@ CLI generates Handoff and Review Question IDs. Every Obligation and Condition is
 concluded exactly once. Runtime rejects a supported Condition when any
 Obligation is partial, contradicted, unknown, or missing. It validates exact
 evidence coverage but does not claim the natural-language statement is true.
+Every missing, adverse, or unverified required Challenge also requires a Review
+Question bound to the exact affected Obligation; a broad Condition-only
+question cannot discharge it.
+
+Agent recommendation cannot exceed the current evidence. `accept` is rejected
+when any Condition or Obligation is not supported, a residual unknown remains,
+a current check is non-passing, required Challenge provenance or outcome is
+unresolved, a required Host policy is unenforced, repair is exhausted, or the
+change is unrepresentable. The Agent must use `request-correction`, `defer`, or
+`reject`; only a later exact Human decision may accept current Attention with
+explicit exceptions.
 
 Worktree edits after collection return `facts-stale` before handoff parsing.
 

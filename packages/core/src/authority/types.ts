@@ -13,7 +13,8 @@ export type InterpretationField =
   | 'desired-outcome'
   | 'constraint'
   | 'non-goal'
-  | 'focus-path';
+  | 'focus-path'
+  | 'material-decision';
 
 export interface InterpretationBasis {
   humanEventIds: string[];

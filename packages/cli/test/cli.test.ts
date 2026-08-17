@@ -90,7 +90,11 @@ test('CLI JSON mode executes compact prepare, baseline-aware collect, layered ha
       assert.equal(removedDuplicate in handedOff.decisionPacket, false);
     }
     assert.equal('attention' in handedOff, false);
-    assert.match(formatCliOutput({ ...handoffExecution, json: false, color: false }), /Decision summary/);
+    const humanHandoff = formatCliOutput({ ...handoffExecution, json: false, color: false });
+    assert.match(humanHandoff, /Decision state/);
+    assert.match(humanHandoff, /Actual system meaning:/);
+    assert.match(humanHandoff, /Human adoption: pending/);
+    assert.match(humanHandoff, /Developer decision required:/);
 
     const decisionExecution = await runCli([
       'change', 'decide', root, '--task', prepared.taskId, '--input', '-', '--json',
@@ -147,19 +151,26 @@ function prepareDocument() {
   return {
     protocol: 'cognitive-adoption', schemaVersion: '1',
     prepareRequestId: 'prepare:cli-test',
-    developerEvent: { content: 'Change the CLI fixture.' },
+    developerEvents: [{ key: 'request', content: 'Change the CLI fixture.' }],
     repositoryEvidence: [],
     task: {
+      basis: { developerEventKeys: ['request'], repositoryEvidenceKeys: [] },
       desiredOutcome: 'Change the CLI fixture.',
       constraints: ['Keep Human adoption explicit.'], nonGoals: [], focus: ['source.txt'],
     },
+    materialDecisionForks: [],
     conditions: [{
       key: 'test', statement: 'The fixture check passes.',
       rationale: 'Failure changes adoption.', criticality: 'material',
       evidenceObligations: [{
         key: 'check-result',
         statement: 'The fixture behavior is exercised by the frozen check.',
-        failureHypothesis: 'The frozen check could miss the changed fixture behavior.',
+        falsification: {
+          failureHypothesis: 'The frozen check could miss the changed fixture behavior.',
+          scenario: 'Change the fixture and run the frozen command.',
+          supportingObservation: 'The command observes the changed fixture behavior.',
+          contradictingObservation: 'The command passes without observing the changed fixture behavior.',
+        },
         strategies: [{
           kind: 'runtime-check', checkKeys: ['test'],
         }],
@@ -170,7 +181,7 @@ function prepareDocument() {
     checks: [{
       key: 'test', rationale: 'Exercise the fixture.',
       argv: [process.execPath, '-e', 'process.exit(0)'], baseline: { mode: 'unknown' },
-      commandDefinitionPaths: [], acceptanceSurfacePaths: [],
+      verifierSelectors: [],
     }],
   };
 }
@@ -181,7 +192,10 @@ function handoffDocument(conditionId: string, obligationId: string, definitionId
     obligationConclusions: [{
       obligationId, status: 'supported',
       evidence: [{ kind: 'check', id: definitionId }],
-      falsificationAttempt: 'Checked whether the frozen command misses the changed fixture path.',
+      falsification: {
+        attempt: 'Checked whether the frozen command misses the changed fixture path.',
+        observedResult: 'The frozen command completed against the current fixture.',
+      },
       counterEvidence: [], conclusion: 'The bounded observation supports the obligation.',
     }],
     conditionConclusions: [{

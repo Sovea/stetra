@@ -27,6 +27,7 @@ import {
   type IndependentChallenge,
   type TaskContract,
   type VerificationDefinition,
+  type VerifierRef,
   type VerifierMutation,
 } from '@sovea/stetra-core';
 
@@ -74,6 +75,7 @@ import {
 import type { HostAttestationProvider } from '../runtime-context.ts';
 import { parseArtifact } from '../validation.ts';
 import {
+  adverseChallengeHostAction,
   challengeHostAction,
   collectedHostAction,
   compileProblemHostAction,
@@ -92,6 +94,7 @@ import {
   resolutionAuthoringPacket,
   verificationRevisionAuthoringPacket,
 } from './authoring.ts';
+import { buildDeveloperDecisionBrief } from './decision-brief.ts';
 import {
   canonicalProjectRoot,
   commitStagedTaskTransition,
@@ -155,8 +158,9 @@ export async function prepareDelegationTask(options: {
   const compileInput: CompileDelegationInput = {
     protocol: DELEGATION_PROTOCOL,
     schemaVersion: DELEGATION_SCHEMA_VERSION,
-    developerEvent: source.developerEvent,
+    developerEvents: source.developerEvents,
     task: source.task,
+    materialDecisionForks: source.materialDecisionForks,
     ...(repositoryEvidence.length ? { repositoryEvidence } : {}),
     conditions: source.conditions,
     hostPolicyRequirements: source.hostPolicyRequirements,
@@ -169,7 +173,14 @@ export async function prepareDelegationTask(options: {
     return {
       ...compiled,
       taskCreated: false,
-      hostAction: compileProblemHostAction(compiled.status),
+      hostAction: compileProblemHostAction(compiled.status, compiled.status === 'semantic-decision-required'
+        ? {
+            prepareRequestId: source.prepareRequestId,
+            developerEvents: source.developerEvents,
+            taskInterpretation: source.task,
+            forks: compiled.forks,
+          }
+        : undefined),
     };
   }
   const unavailableExecutables = compiled.contract.verificationPlan.mode === 'checks'
@@ -352,10 +363,13 @@ export async function collectDelegationFacts(options: {
   productVersion: string;
   timeoutMs?: number;
   retryChecks?: CheckTimeoutRetry[];
+  refresh?: boolean;
   hostAttestations?: HostAttestationProvider;
 }) {
   let collectedFacts: FactBundle | undefined;
-  let collectionMode: 'full-collection' | 'timeout-retry' = 'full-collection';
+  const collectionState: {
+    mode: 'full-collection' | 'timeout-retry' | 'reused-current';
+  } = { mode: 'full-collection' };
   let repeatedObservation = false;
   const retries = options.retryChecks ?? [];
   const transitioned = await withWorktreeLease({
@@ -369,7 +383,7 @@ export async function collectDelegationFacts(options: {
     const definitions = contract.verificationPlan.mode === 'checks'
       ? contract.verificationPlan.definitions
       : [];
-    validateCollectionOptions(definitions, retries, options.timeoutMs);
+    validateCollectionOptions(definitions, retries, options.timeoutMs, options.refresh ?? false);
     const stagingDirectory = createCollectionStagingDirectory({
       projectRoot: task.projectRoot,
       taskId: task.taskId,
@@ -388,6 +402,28 @@ export async function collectDelegationFacts(options: {
       const priorFacts = currentAttempt.factCollectionId
         ? readFacts(task, currentAttempt.attemptId, currentAttempt.factCollectionId)
         : undefined;
+      if (!retries.length && !options.refresh && priorFacts) {
+        assertFactBundleIdentity(
+          priorFacts,
+          currentContract.effectiveContractId,
+          currentAttempt.attemptId,
+        );
+        const current = await captureGitWorktree(task.projectRoot, {
+          objectDirectory,
+          alternateObjectDirectories: [durableObjectDirectory],
+        });
+        if (current.fingerprint === priorFacts.current.fingerprint) {
+          collectionState.mode = 'reused-current';
+          collectedFacts = priorFacts;
+          const parentFacts = currentAttempt.parentAttemptId
+            ? readAttemptFactsIfPresent(task, currentAttempt.parentAttemptId)
+            : undefined;
+          repeatedObservation = ['repair', 'correction'].includes(currentAttempt.trigger)
+            && Boolean(parentFacts)
+            && attemptOutcomeFingerprint(parentFacts!) === attemptOutcomeFingerprint(priorFacts);
+          return task;
+        }
+      }
       const checksRelative =
         `${attemptDirectory(currentAttempt.attemptId)}/checks/collection-${task.projection.revision + 1}`;
       const checksDirectory = taskArtifactPath(
@@ -402,7 +438,7 @@ export async function collectDelegationFacts(options: {
       let newArtifactRefs: string[] = [];
 
       if (retries.length) {
-        collectionMode = 'timeout-retry';
+        collectionState.mode = 'timeout-retry';
         if (!priorFacts) {
           throw usageError('Timeout retry requires facts from the current Attempt.');
         }
@@ -545,7 +581,6 @@ export async function collectDelegationFacts(options: {
           evidenceStatus: checksNeedJudgment ? 'awaiting-evidence-judgment' : 'incomplete',
           decisionStatus: 'pending',
           attempts,
-          challengeIds: [],
         },
         artifactRefs: unique(newArtifactRefs),
         stagedArtifactsDirectory,
@@ -556,15 +591,17 @@ export async function collectDelegationFacts(options: {
   });
   if (!collectedFacts) throw new Error('Fact collection completed without a Fact Bundle.');
   const currentContract = readContract(transitioned);
-  const collectedChallenges = readChallenges(transitioned);
+  const collectedChallenges = readCurrentChallenges(transitioned);
   const requiredChallenges = requiredChallengeObligationIds(currentContract, collectedFacts);
   const pendingChallenges = pendingChallengeObligationIds(requiredChallenges, collectedChallenges);
   const challengeAttestationAvailable = Boolean(options.hostAttestations?.attestChallenge);
   return {
     protocol: DELEGATION_PROTOCOL,
     schemaVersion: DELEGATION_SCHEMA_VERSION,
-    status: 'facts-collected' as const,
-    collectionMode,
+    status: collectionState.mode === 'reused-current'
+      ? 'facts-current' as const
+      : 'facts-collected' as const,
+    collectionMode: collectionState.mode,
     taskId: transitioned.taskId,
     attemptId: collectedFacts.attemptId,
     factCollectionId: collectedFacts.factCollectionId,
@@ -589,7 +626,9 @@ export async function collectDelegationFacts(options: {
       taskPath: transitioned.taskPath,
       explain: { taskId: transitioned.taskId, section: 'attempts' as const },
     },
-    hostAction: collectedHostAction({
+    hostAction: collectionState.mode === 'reused-current'
+      ? currentTaskHostAction(transitioned, challengeAttestationAvailable)
+      : collectedHostAction({
       facts: collectedFacts,
       taskId: transitioned.taskId,
       diagnosisPacket: diagnosisAuthoringPacket({
@@ -612,7 +651,7 @@ export async function collectDelegationFacts(options: {
       }),
       pendingChallengeObligationIds: pendingChallenges,
       challengeAttestationAvailable,
-    }),
+      }),
   };
 }
 
@@ -650,7 +689,7 @@ export async function diagnoseCollectedEvidence(options: {
         throw usageError('A decided task cannot record evidence diagnosis.');
       }
       const facts = readFacts(task, current.attemptId, current.factCollectionId);
-      validateEvidenceDispositionInput(source, contract, facts);
+      validateEvidenceDispositionInput(source, contract, facts, readCurrentChallenges(task));
       route = source.proposedRoute;
       const budgetExhausted = route === 'repair-implementation'
         && task.projection.repairCount >= contract.plan.maxRepairAttempts;
@@ -726,7 +765,6 @@ export async function diagnoseCollectedEvidence(options: {
               attempt.attemptId === current.attemptId ? currentWithDisposition : attempt),
             successor,
           ],
-          challengeIds: [],
         },
         artifactRefs: [
           projectRelativePath(task.projectRoot, dispositionPath),
@@ -737,7 +775,7 @@ export async function diagnoseCollectedEvidence(options: {
   });
   const currentContract = readContract(transitioned);
   const currentFacts = route === 'repair-implementation' ? undefined : readCurrentFacts(transitioned);
-  const challenges = route === 'repair-implementation' ? [] : readChallenges(transitioned);
+  const challenges = route === 'repair-implementation' ? [] : readCurrentChallenges(transitioned);
   const required = currentFacts
     ? requiredChallengeObligationIds(currentContract, currentFacts) : [];
   const challengeAttestationAvailable = Boolean(options.hostAttestations?.attestChallenge);
@@ -774,7 +812,7 @@ export async function diagnoseCollectedEvidence(options: {
   if (route === 'challenge' && !challengeAttestationAvailable && packet) {
     packet.outstandingObligations.push(...source.entries.map((entry) => ({
       code: 'direct-human-review-required',
-      targetId: entry.definitionId,
+      targetId: evidenceConcernTargetId(entry.source),
       requiredAction: 'The current Host cannot attest a fresh challenger context. Preserve this unresolved diagnosis in the handoff and ask the developer to inspect the stated failure hypothesis directly.',
     })));
   }
@@ -858,12 +896,20 @@ export async function recordChallenge(options: {
   });
   const transitionedContract = readContract(transitioned);
   const transitionedFacts = readCurrentFacts(transitioned);
-  const challenges = readChallenges(transitioned);
+  const challenges = readCurrentChallenges(transitioned);
   const required = requiredChallengeObligationIds(transitionedContract, transitionedFacts);
   const pending = pendingChallengeObligationIds(required, challenges);
   const challengeAttestationAvailable = Boolean(options.hostAttestations?.attestChallenge);
-  const performAnotherChallenge = pending.length > 0 && challengeAttestationAvailable;
-  const packet = performAnotherChallenge
+  const adverse = challenge!.outcome !== 'supported';
+  const performAnotherChallenge = !adverse && pending.length > 0 && challengeAttestationAvailable;
+  const packet = adverse
+    ? diagnosisAuthoringPacket({
+        task: transitioned.projection,
+        contract: transitionedContract,
+        facts: transitionedFacts,
+        challenges,
+      })
+    : performAnotherChallenge
     ? challengeAuthoringPacket({
         task: transitioned.projection,
         contract: transitionedContract,
@@ -887,7 +933,9 @@ export async function recordChallenge(options: {
     attemptId: challenge!.attemptId,
     factCollectionId: challenge!.factCollectionId,
     challenge: challenge!,
-    hostAction: challengeHostAction(transitioned.taskId, performAnotherChallenge, packet),
+    hostAction: adverse
+      ? adverseChallengeHostAction(transitioned.taskId, packet)
+      : challengeHostAction(transitioned.taskId, performAnotherChallenge, packet),
   };
 }
 
@@ -927,7 +975,7 @@ export async function evaluateDelegationHandoff(options: {
       if (await currentFactsAreStale(task, currentFacts)) {
         throw usageError('Facts changed while handoff was being authored; collect again.');
       }
-      const challenges = readChallenges(task);
+      const challenges = readCurrentChallenges(task);
       handoff = materializeHandoff(source, contract, currentFacts);
       try {
         evaluation = evaluateHandoff({
@@ -987,11 +1035,17 @@ export async function evaluateDelegationHandoff(options: {
     hostAction: handoffHostAction(
       evaluation!.status,
       transitioned.taskId,
+      buildDeveloperDecisionBrief({
+        task: transitioned.projection,
+        contract: readContract(transitioned),
+        packet: packet!,
+        evaluation: evaluation!,
+      }),
       decisionAuthoringPacket({
         task: transitioned.projection,
         contract: readContract(transitioned),
         facts: readCurrentFacts(transitioned),
-        challenges: readChallenges(transitioned),
+        challenges: readCurrentChallenges(transitioned),
         handoff: handoff!,
         evaluation: evaluation!,
       }),
@@ -1039,7 +1093,7 @@ export async function recordHumanDecision(options: {
         throw usageError('Facts changed while the decision was being recorded; collect and review again.');
       }
       const handoff = readCurrentHandoff(task);
-      const challenges = readChallenges(task);
+      const challenges = readCurrentChallenges(task);
       decision = materializeDecision(source, contract, currentFacts, handoff);
       try {
         evaluation = evaluateHandoff({
@@ -1195,7 +1249,6 @@ export async function resolveHumanChoice(options: {
             evidenceStatus: 'not-collected' as const,
             decisionStatus: 'pending' as const,
             attempts: [...task.projection.attempts, successor],
-            challengeIds: [],
           },
           artifactRefs,
         };
@@ -1249,7 +1302,7 @@ export async function resolveHumanChoice(options: {
     } else {
       const contract = readContract(transitioned);
       const facts = readCurrentFacts(transitioned);
-      const challenges = readChallenges(transitioned);
+      const challenges = readCurrentChallenges(transitioned);
       const required = requiredChallengeObligationIds(contract, facts);
       const pending = pendingChallengeObligationIds(required, challenges);
       const needsChallenge = pending.length > 0;
@@ -1400,7 +1453,6 @@ export async function reviseVerificationPlan(options: {
           evidenceStatus: 'not-collected',
           decisionStatus: 'pending',
           attempts: [...task.projection.attempts, successor],
-          challengeIds: [],
           verificationRevised: true,
           verificationRevisionIds: [
             ...task.projection.verificationRevisionIds,
@@ -1517,6 +1569,54 @@ export function explainDelegationTask(options: {
   };
 }
 
+export async function guardFinalResponse(options: {
+  projectRoot: string;
+  taskId: string;
+  hostAttestations?: HostAttestationProvider;
+}) {
+  const task = loadTask(options.projectRoot, options.taskId);
+  const currentAttempt = task.projection.attempts.find((attempt) =>
+    attempt.attemptId === task.projection.currentAttemptId)!;
+  const facts = currentAttempt.factCollectionId
+    ? readFacts(task, currentAttempt.attemptId, currentAttempt.factCollectionId)
+    : undefined;
+  const factsCurrent = facts ? !(await currentFactsAreStale(task, facts)) : false;
+  const challengeAttestationAvailable = Boolean(options.hostAttestations?.attestChallenge);
+  let disposition:
+    | 'continue-workflow'
+    | 'present-decision-brief'
+    | 'human-decision-recorded';
+  let hostAction = facts && !factsCurrent
+    ? staleFactsHostAction(task.taskId)
+    : currentTaskHostAction(task, challengeAttestationAvailable);
+
+  if (task.projection.pendingResolution || !facts || !factsCurrent) {
+    disposition = 'continue-workflow';
+  } else if (task.projection.decisionStatus !== 'pending') {
+    disposition = 'human-decision-recorded';
+    hostAction = null;
+  } else if (task.projection.currentHandoffId) {
+    disposition = 'present-decision-brief';
+  } else {
+    disposition = 'continue-workflow';
+  }
+
+  const developerDecisionBrief = hostAction?.developerDecisionBrief;
+  return {
+    protocol: DELEGATION_PROTOCOL,
+    schemaVersion: DELEGATION_SCHEMA_VERSION,
+    status: 'final-response-guarded' as const,
+    taskId: task.taskId,
+    revision: task.projection.revision,
+    disposition,
+    factsCurrent,
+    actionFingerprint: stableFingerprint(hostAction),
+    hostAction,
+    ...(developerDecisionBrief ? { developerDecisionBrief } : {}),
+    stateWritten: false,
+  };
+}
+
 function currentTaskHostAction(task: LoadedTask, challengeAttestationAvailable = false) {
   const contract = readContract(task);
   if (task.projection.pendingResolution) {
@@ -1536,16 +1636,25 @@ function currentTaskHostAction(task: LoadedTask, challengeAttestationAvailable =
     attempt.attemptId === task.projection.currentAttemptId)!;
   if (!currentAttempt.factCollectionId) return preparedHostAction(task.taskId);
   const facts = readFacts(task, currentAttempt.attemptId, currentAttempt.factCollectionId);
-  const challenges = readChallenges(task);
+  const challenges = readCurrentChallenges(task);
   if (task.projection.currentHandoffId) {
     const handoff = readCurrentHandoff(task);
     const evaluation = readJsonArtifact<HandoffEvaluation>(
       taskArtifactPath(task.taskDirectory, handoffEvaluationPath(handoff.handoffId)),
       'handoff evaluation',
     );
+    const packet = buildDecisionPacket(
+      contract,
+      facts,
+      readEvidenceDispositions(task),
+      challenges,
+      handoff,
+      evaluation,
+    );
     return handoffHostAction(
       evaluation.status,
       task.taskId,
+      buildDeveloperDecisionBrief({ task: task.projection, contract, packet, evaluation }),
       decisionAuthoringPacket({
         task: task.projection,
         contract,
@@ -1588,7 +1697,7 @@ function currentTaskHostAction(task: LoadedTask, challengeAttestationAvailable =
     if (disposition.route === 'challenge' && !challengeAttestationAvailable && packet) {
       packet.outstandingObligations.push(...disposition.entries.map((entry) => ({
         code: 'direct-human-review-required',
-        targetId: entry.definitionId,
+        targetId: evidenceConcernTargetId(entry.source),
         requiredAction: 'The current Host cannot attest a fresh challenger context. Preserve this unresolved diagnosis in the handoff and ask the developer to inspect the stated failure hypothesis directly.',
       })));
     }
@@ -1598,6 +1707,14 @@ function currentTaskHostAction(task: LoadedTask, challengeAttestationAvailable =
       packet,
       challengeAttestationAvailable,
     );
+  }
+  if (challenges.some((challenge) => challenge.outcome !== 'supported')) {
+    return adverseChallengeHostAction(task.taskId, diagnosisAuthoringPacket({
+      task: task.projection,
+      contract,
+      facts,
+      challenges,
+    }));
   }
   return collectedHostAction({
     facts,
@@ -1780,6 +1897,16 @@ function readCurrentEvidenceDisposition(task: LoadedTask): EvidenceDisposition |
   );
 }
 
+function readCurrentChallenges(task: LoadedTask): IndependentChallenge[] {
+  const attempt = task.projection.attempts.find((item) =>
+    item.attemptId === task.projection.currentAttemptId);
+  if (!attempt?.factCollectionId) return [];
+  return readChallenges(task).filter((challenge) =>
+    challenge.effectiveContractId === task.projection.effectiveContractId
+    && challenge.attemptId === attempt.attemptId
+    && challenge.factCollectionId === attempt.factCollectionId);
+}
+
 function readCurrentHandoff(task: LoadedTask): CognitiveHandoff {
   if (!task.projection.currentHandoffId) throw usageError('Task has no evaluated Cognitive Handoff.');
   const handoff = readJsonArtifact<CognitiveHandoff>(
@@ -1883,7 +2010,7 @@ function buildDecisionPacket(
         id: obligation.id,
         key: obligation.key,
         statement: obligation.statement,
-        failureHypothesis: obligation.failureHypothesis,
+        falsification: obligation.falsification,
         conclusion: handoff.obligationConclusions.find((item) =>
           item.obligationId === obligation.id)!,
         challengeIds: challenges
@@ -1932,6 +2059,9 @@ function buildDecisionPacket(
         obligationIds: challenge.obligationIds,
         conditionIds: challenge.conditionIds,
         independence: challenge.independence,
+        falsification: challenge.falsification,
+        falsificationAttempt: challenge.falsificationAttempt,
+        observedResult: challenge.observedResult,
         outcome: challenge.outcome,
         conclusion: challenge.conclusion,
       })),
@@ -1978,12 +2108,23 @@ function validateChallengeReferences(
   contract: TaskContract,
   facts: FactBundle,
 ): void {
-  assertReferences(source.obligationIds, contract.adoptionConditions.flatMap((condition) =>
-    condition.evidenceObligations.map((obligation) => obligation.id)), 'evidence obligation');
+  const obligations = contract.adoptionConditions.flatMap((condition) =>
+    condition.evidenceObligations);
+  assertReferences(source.obligationIds, obligations.map((obligation) => obligation.id), 'evidence obligation');
+  const selected = source.obligationIds.map((id) =>
+    obligations.find((obligation) => obligation.id === id)!);
+  if (selected.some((obligation) =>
+    stableFingerprint(obligation.falsification) !== stableFingerprint(source.falsification))) {
+    throw inputError('Challenge must preserve the exact frozen falsification design for every selected obligation; challenge obligations with different designs separately.');
+  }
   assertReferences(source.evidence.changedFiles, facts.changedFiles.map((file) => file.id), 'changed file');
   assertReferences(source.evidence.checks, facts.checks.map((check) => check.definitionId), 'check');
   assertReferences(source.evidence.repositoryEvidence, contract.repositoryEvidence.map((item) => item.id), 'repository evidence');
-  assertReferences(source.evidence.humanEvents, [contract.authority.developerEvent.id], 'Human Event');
+  assertReferences(
+    source.evidence.humanEvents,
+    contract.authority.developerEvents.map((item) => item.id),
+    'Human Event',
+  );
   if (source.evidence.patch && !facts.patch) throw inputError('Challenge selected a patch that does not exist.');
 }
 
@@ -2008,7 +2149,11 @@ function validateCollectionOptions(
   definitions: VerificationDefinition[],
   retries: CheckTimeoutRetry[],
   timeoutMs: number | undefined,
+  refresh: boolean,
 ): void {
+  if (refresh && retries.length) {
+    throw usageError('Use --refresh for a full collection or --retry-check for timeout recovery, not both.');
+  }
   if (retries.length && timeoutMs !== undefined) {
     throw usageError('Use --timeout-ms for full collection or --retry-check for timeout recovery, not both.');
   }
@@ -2091,22 +2236,47 @@ function collectVerifierMutations(
   files: FactBundle['changedFiles'],
 ): VerifierMutation[] {
   if (contract.verificationPlan.mode !== 'checks') return [];
-  const changedByPath = new Map<string, FactBundle['changedFiles'][number]>();
-  for (const file of files) {
-    changedByPath.set(file.path, file);
-    if (file.previousPath) changedByPath.set(file.previousPath, file);
-  }
   return contract.verificationPlan.definitions.flatMap((check) =>
     check.verifierRefs.flatMap((reference) => {
-      const changed = changedByPath.get(reference.path);
-      return changed ? [{
-        verifierId: check.verifierId,
-        definitionId: check.definitionId,
-        path: reference.path,
-        role: reference.role,
-        changedFileId: changed.id,
-      }] : [];
-    }));
+      return files.flatMap((file) => {
+        const matchedBy = selectorMatch(reference, file);
+        return matchedBy ? [{
+          verifierId: check.verifierId,
+          definitionId: check.definitionId,
+          selector: reference,
+          changedFileId: file.id,
+          changedPath: file.path,
+          matchedBy,
+        }] : [];
+      });
+    })).sort(verifierMutationOrder);
+}
+
+function selectorMatch(
+  selector: VerifierRef,
+  file: FactBundle['changedFiles'][number],
+): VerifierMutation['matchedBy'] | undefined {
+  if (pathMatchesSelector(file.path, selector)) return 'current-path';
+  if (file.previousPath && pathMatchesSelector(file.previousPath, selector)) return 'previous-path';
+  return undefined;
+}
+
+function pathMatchesSelector(
+  path: string,
+  selector: { kind: 'file' | 'tree'; path: string },
+): boolean {
+  return selector.kind === 'file'
+    ? path === selector.path
+    : path === selector.path || path.startsWith(`${selector.path}/`);
+}
+
+function verifierMutationOrder(left: VerifierMutation, right: VerifierMutation): number {
+  return left.definitionId.localeCompare(right.definitionId)
+    || left.selector.role.localeCompare(right.selector.role)
+    || left.selector.kind.localeCompare(right.selector.kind)
+    || left.selector.path.localeCompare(right.selector.path)
+    || left.changedPath.localeCompare(right.changedPath)
+    || left.changedFileId.localeCompare(right.changedFileId);
 }
 
 function compareChecksToBaseline(
@@ -2138,24 +2308,35 @@ function validateEvidenceDispositionInput(
   source: EvidenceDispositionDocument,
   contract: TaskContract,
   facts: FactBundle,
+  challenges: IndependentChallenge[],
 ): void {
-  const nonpassing = facts.checks
+  const expected = [
+    ...facts.checks
     .filter((check) => latestCheckAttempt(check).status !== 'passed')
-    .map((check) => check.definitionId)
-    .sort();
-  const selected = source.entries.map((entry) => entry.definitionId).sort();
+    .map((check) => `check:${check.definitionId}`),
+    ...challenges
+      .filter((challenge) => challenge.outcome !== 'supported')
+      .map((challenge) => `challenge:${challenge.id}`),
+  ].sort();
+  const selected = source.entries.map((entry) => evidenceConcernIdentity(entry.source)).sort();
   if (new Set(selected).size !== selected.length
-    || selected.length !== nonpassing.length
-    || selected.some((id, index) => id !== nonpassing[index])) {
-    throw inputError('Evidence disposition must diagnose every current non-passing check exactly once.');
+    || selected.length !== expected.length
+    || selected.some((id, index) => id !== expected[index])) {
+    throw inputError('Evidence disposition must diagnose every current non-passing check and adverse Challenge exactly once.');
   }
-  const available = new Set(
+  const availableChecks = new Set(
     contract.verificationPlan.mode === 'checks'
       ? contract.verificationPlan.definitions.map((check) => check.definitionId) : [],
   );
+  const availableChallenges = new Set(challenges
+    .filter((challenge) => challenge.outcome !== 'supported')
+    .map((challenge) => challenge.id));
   for (const [index, entry] of source.entries.entries()) {
-    if (!available.has(entry.definitionId)) {
-      throw inputError(`Unknown frozen check ${JSON.stringify(entry.definitionId)} in evidence disposition.`);
+    if (entry.source.kind === 'check' && !availableChecks.has(entry.source.definitionId)) {
+      throw inputError(`Unknown frozen check ${JSON.stringify(entry.source.definitionId)} in evidence disposition.`);
+    }
+    if (entry.source.kind === 'challenge' && !availableChallenges.has(entry.source.challengeId)) {
+      throw inputError(`Unknown or non-adverse Challenge ${JSON.stringify(entry.source.challengeId)} in evidence disposition.`);
     }
     if (entry.cause === 'implementation'
       && (!entry.codeChangeCanAlterObservation || !entry.intendedChanges.length)) {
@@ -2179,6 +2360,7 @@ function validateEvidenceDispositionInput(
   } satisfies Record<EvidenceDispositionDocument['entries'][number]['cause'], Set<string>>;
   const hasImplementationCause = source.entries.some((entry) => entry.cause === 'implementation');
   const incompatible = source.entries.filter((entry) => {
+    if (entry.source.kind === 'challenge' && source.proposedRoute === 'challenge') return true;
     if (source.proposedRoute === 'repair-implementation'
       && hasImplementationCause
       && ['environment', 'verification'].includes(entry.cause)) {
@@ -2194,9 +2376,19 @@ function validateEvidenceDispositionInput(
   }
 }
 
+function evidenceConcernIdentity(source: EvidenceDispositionDocument['entries'][number]['source']): string {
+  return source.kind === 'check'
+    ? `check:${source.definitionId}`
+    : `challenge:${source.challengeId}`;
+}
+
+function evidenceConcernTargetId(source: EvidenceDispositionDocument['entries'][number]['source']): string {
+  return source.kind === 'check' ? source.definitionId : source.challengeId;
+}
+
 function requiredChallengeObligationIds(contract: TaskContract, facts: FactBundle): string[] {
   const changedAcceptanceVerifiers = new Set(facts.verifierMutations
-    .filter((item) => item.role === 'acceptance-surface')
+    .filter((item) => item.selector.role === 'acceptance-surface')
     .map((item) => item.verifierId));
   return unique(contract.adoptionConditions.flatMap((condition) =>
     condition.evidenceObligations.flatMap((obligation) => {
@@ -2280,7 +2472,7 @@ function contractWorkPacket(contract: TaskContract) {
     verificationPlanId: contract.verificationPlanId,
     effectiveContractId: contract.effectiveContractId,
     authority: {
-      developerEventId: contract.authority.developerEvent.id,
+      developerEventIds: contract.authority.developerEvents.map((item) => item.id),
       repositoryEvidenceIds: contract.repositoryEvidence.map((evidence) => evidence.id),
     },
     understanding: {
@@ -2289,6 +2481,7 @@ function contractWorkPacket(contract: TaskContract) {
       nonGoals: contract.understanding.nonGoals.map(compactMeaning),
       focus: contract.understanding.focus.map(compactMeaning),
     },
+    materialDecisions: contract.materialDecisions,
     adoptionConditions: contract.adoptionConditions,
     hostPolicyRequirements: contract.hostPolicyRequirements,
     plan: contract.plan,
@@ -2447,6 +2640,7 @@ function assertStoredContractFingerprints(contract: TaskContract): void {
     authority: contract.authority,
     understanding: contract.understanding,
     repositoryEvidence: contract.repositoryEvidence,
+    materialDecisions: contract.materialDecisions,
     adoptionConditions: contract.adoptionConditions,
     hostPolicyRequirements: contract.hostPolicyRequirements,
     authorization: contract.authorization,

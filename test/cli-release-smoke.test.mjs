@@ -62,7 +62,7 @@ try {
     assert.equal(existsSync(join(references, `${name}.md`)), true);
   }
   assert.equal(existsSync(join(references, 'routine.md')), false);
-  assert.match(readFileSync(join(references, 'handoff.md'), 'utf8'), /decisionPacket/);
+  assert.match(readFileSync(join(references, 'handoff.md'), 'utf8'), /developerDecisionBrief/);
 
   git(project, ['init', '-q']);
   git(project, ['config', 'user.email', 'release@example.invalid']);
@@ -74,23 +74,31 @@ try {
   writeFileSync(preparePath, `${JSON.stringify({
     protocol: 'cognitive-adoption', schemaVersion: '1',
     prepareRequestId: 'prepare:cli-release-smoke',
-    developerEvent: { content: task },
+    developerEvents: [{ key: 'request', content: task }],
     repositoryEvidence: [],
     task: {
+      basis: { developerEventKeys: ['request'], repositoryEvidenceKeys: [] },
       desiredOutcome: 'Change the exported fixture value with current facts.',
       constraints: ['Human adoption remains explicit.'],
       nonGoals: [], focus: ['src/example.ts'],
     },
+    materialDecisionForks: [],
     conditions: [{
       key: 'export', statement: 'The packed fixture exports value 2 and its check passes.',
       rationale: 'Consumers observe this exported value.', criticality: 'adoption-critical',
+      basis: { developerEventKeys: ['request'], repositoryEvidenceKeys: [] },
       evidenceObligations: [{
         key: 'fixture-value',
         statement: 'The packed fixture check observes the intended exported value.',
-        failureHypothesis: 'The command may pass without exercising the changed export.',
+        falsification: {
+          failureHypothesis: 'The command may pass without exercising the changed export.',
+          scenario: 'Run the packed check against the changed export boundary.',
+          supportingObservation: 'The command result depends on the exported value being 2.',
+          contradictingObservation: 'The command passes without observing the exported value.',
+        },
         strategies: [
           { kind: 'runtime-check', checkKeys: ['fixture-check'] },
-          { kind: 'independent-challenge', policy: 'fact-triggered' },
+          { kind: 'independent-challenge', policy: 'required' },
         ],
       }],
     }],
@@ -101,10 +109,13 @@ try {
       argv: [
         process.execPath,
         '-e',
-        "process.exit(require('node:fs').readFileSync('src/example.ts','utf8').includes('value = 2') ? 0 : 1)",
+        "const ok=require('node:fs').readFileSync('src/example.ts','utf8').includes('value = 2');process.stdout.write('fixture-check-stdout\\n');process.stderr.write('fixture-check-stderr\\n');process.exit(ok ? 0 : 1)",
       ],
       baseline: { mode: 'unknown' },
-      commandDefinitionPaths: ['package.json'], acceptanceSurfacePaths: ['src/example.ts'],
+      verifierSelectors: [
+        { kind: 'file', path: 'package.json', role: 'command-definition' },
+        { kind: 'file', path: 'src/example.ts', role: 'acceptance-surface' },
+      ],
     }],
   }, null, 2)}\n`, 'utf8');
   const prepared = runInstalledCli(['change', 'prepare', project, '--input', preparePath, '--json']);
@@ -119,6 +130,10 @@ try {
   assert.equal(collected.status, 'facts-collected');
   assert.deepEqual(collected.changedFiles.map((file) => [file.path, file.operation]), [['src/example.ts', 'modified']]);
   assert.equal(collected.checks[0].status, 'passed');
+  assert.equal(collected.checks[0].stdout.byteLength, 21);
+  assert.equal(collected.checks[0].stderr.byteLength, 21);
+  assert.match(readFileSync(join(project, collected.checks[0].stdout.logPath), 'utf8'), /fixture-check-stdout/);
+  assert.match(readFileSync(join(project, collected.checks[0].stderr.logPath), 'utf8'), /fixture-check-stderr/);
   assert.equal(existsSync(join(project, collected.patch.path)), true);
   assert.equal(collected.hostAction.kind, 'author-handoff');
   assert.ok(collected.hostAction.authoringPacket.outstandingObligations.some(
@@ -134,7 +149,10 @@ try {
   handoffDraft.summary = 'The packed fixture now exports value 2 instead of value 1.';
   for (const conclusion of handoffDraft.obligationConclusions) {
     conclusion.status = 'partial';
-    conclusion.falsificationAttempt = 'Inspected whether the passing command observes the changed export boundary.';
+    conclusion.falsification = {
+      attempt: 'Inspected whether the passing command observes the changed export boundary.',
+      observedResult: 'The command result depended on the exported value being 2.',
+    };
     conclusion.conclusion = 'The current check passes, while independent falsification is unavailable in the thin Host.';
   }
   for (const conclusion of handoffDraft.conditionConclusions) {
@@ -160,6 +178,11 @@ try {
   assert.equal(handedOff.decisionPacket.runtimeFacts.checks[0].latestAttempt.status, 'passed');
   assert.equal(handedOff.decisionPacket.systemMeaning.summary, 'The packed fixture now exports value 2 instead of value 1.');
   assert.deepEqual(handedOff.decisionPacket.decision.adoption, { authority: 'human', status: 'pending' });
+  assert.equal(handedOff.hostAction.kind, 'present-handoff-and-await-human-decision');
+  assert.equal(handedOff.hostAction.command, undefined);
+  assert.equal(handedOff.hostAction.developerDecisionBrief.decisionState.adoption, 'pending');
+  assert.equal(handedOff.hostAction.developerDecisionBrief.decisionIssues.length > 0, true);
+  assert.equal(handedOff.hostAction.decisionContinuation.requiresNewHumanEvent, true);
 
   const decisionPath = join(temporary, 'decision.json');
   writeFileSync(decisionPath, `${JSON.stringify({

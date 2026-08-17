@@ -1,4 +1,4 @@
-import type { AgentInterpretation, InterpretationBasis } from '../authority/types.ts';
+import type { AgentInterpretation, HumanEvent, InterpretationBasis } from '../authority/types.ts';
 import {
   assertProtocol,
   hasExactKeys,
@@ -25,7 +25,8 @@ import type {
   HostPolicyRequirement,
   HostPolicyRequirementInput,
   LogicalVerifier,
-  MaterialSemanticFork,
+  MaterialDecisionFork,
+  MaterialDecisionForkInput,
   RepositoryEvidenceInput,
   TaskContract,
   VerificationDefinition,
@@ -48,6 +49,17 @@ interface CheckDraft extends Omit<VerificationDefinition, 'definitionId' | 'base
       };
 }
 
+interface KeyedDeveloperEvent {
+  key: string;
+  index: number;
+  event: HumanEvent;
+}
+
+interface MaterialDecisionValidation {
+  resolved: MaterialDecisionFork[];
+  unresolved: MaterialDecisionForkInput[];
+}
+
 export function compileDelegation(
   input: CompileDelegationInput | VerificationRevisionInput,
 ): DelegationCompileResult {
@@ -56,18 +68,31 @@ export function compileDelegation(
   const source = input as unknown as Record<string, unknown>;
   const issues: ValidationIssue[] = [];
   rejectExtraKeys(source, [
-    'protocol', 'schemaVersion', 'developerEvent', 'task', 'repositoryEvidence',
+    'protocol', 'schemaVersion', 'developerEvents', 'task', 'materialDecisionForks', 'repositoryEvidence',
     'conditions', 'hostPolicyRequirements', 'delivery', 'checks', 'noCommandRationale',
   ], '', issues);
 
-  const developerEvent = validateDeveloperEvent(source.developerEvent, issues);
+  const developerEvents = validateDeveloperEvents(source.developerEvents, issues);
+  const eventsByKey = new Map(developerEvents.map((item) => [item.key, item]));
   const evidence = validateRepositoryEvidence(source.repositoryEvidence ?? [], issues);
   const evidenceByKey = new Map(evidence.map((item) => [item.key, item]));
-  const task = validateTaskMeaning(source.task, developerEvent?.id, issues);
+  const task = validateTaskMeaning(source.task, eventsByKey, evidenceByKey, issues);
+  const materialDecisions = validateMaterialDecisionForks(
+    source.materialDecisionForks,
+    eventsByKey,
+    evidenceByKey,
+    task?.understanding.desiredOutcome.basis,
+    issues,
+  );
   const checkDrafts = validateCheckDrafts(source.checks ?? [], issues);
   const checksByKey = new Map(checkDrafts.map((item) => [item.key, item]));
   const conditions = validateConditions(
-    source.conditions, developerEvent?.id, evidenceByKey, checksByKey, issues,
+    source.conditions,
+    eventsByKey,
+    evidenceByKey,
+    checksByKey,
+    task?.understanding.desiredOutcome.basis,
+    issues,
   );
   const obligationsByKey = new Map(conditions.flatMap((condition) =>
     condition.evidenceObligations.map((obligation) => [
@@ -75,7 +100,11 @@ export function compileDelegation(
     ] as const)));
   const definitions = materializeDefinitions(checkDrafts, obligationsByKey, issues);
   const hostPolicyRequirements = validateHostPolicyRequirements(
-    source.hostPolicyRequirements, developerEvent?.id, evidenceByKey, issues,
+    source.hostPolicyRequirements,
+    eventsByKey,
+    evidenceByKey,
+    task?.understanding.desiredOutcome.basis,
+    issues,
   );
   const plan = validateDelivery(source.delivery, issues);
   const noCommandRationale = source.noCommandRationale;
@@ -92,15 +121,15 @@ export function compileDelegation(
     ));
   }
 
-  if (issues.length || !developerEvent || !task || !plan) {
+  if (issues.length || !developerEvents.length || !task || !materialDecisions || !plan) {
     return { ...ENVELOPE, status: 'authority-invalid', issues };
   }
-  if (task.fork) {
+  if (materialDecisions.unresolved.length) {
     return {
       ...ENVELOPE,
       status: 'semantic-decision-required',
-      fork: task.fork,
-      message: 'A material Human-owned choice remains unresolved; no task was created.',
+      forks: materialDecisions.unresolved,
+      message: 'One or more material Human-owned choices remain unresolved; no task was created.',
     };
   }
   if (!definitions.length && !isNonEmptyString(noCommandRationale)) {
@@ -124,11 +153,12 @@ export function compileDelegation(
   const semanticProjection = {
     ...ENVELOPE,
     authority: {
-      developerEvent,
+      developerEvents: developerEvents.map((item) => item.event),
       providerTrustBoundary: 'host-supplied-event-not-runtime-authenticated' as const,
     },
     understanding: task.understanding,
     repositoryEvidence: evidence.map(({ key: _key, ...item }) => item),
+    materialDecisions: materialDecisions.resolved,
     adoptionConditions: conditions,
     hostPolicyRequirements,
     authorization,
@@ -280,6 +310,7 @@ export function validateCompiledContract(contract: TaskContract): void {
     authority: contract.authority,
     understanding: contract.understanding,
     repositoryEvidence: contract.repositoryEvidence,
+    materialDecisions: contract.materialDecisions,
     adoptionConditions: contract.adoptionConditions,
     hostPolicyRequirements: contract.hostPolicyRequirements,
     authorization: contract.authorization,
@@ -300,33 +331,47 @@ export function validateCompiledContract(contract: TaskContract): void {
   }
 }
 
-function validateDeveloperEvent(value: unknown, issues: ValidationIssue[]) {
-  const path = 'developerEvent';
-  const before = issues.length;
-  if (!isRecord(value)) {
-    issues.push(issue('developer-event-required', path, 'One exact developer event is required.'));
-    return undefined;
+function validateDeveloperEvents(value: unknown, issues: ValidationIssue[]): KeyedDeveloperEvent[] {
+  if (!Array.isArray(value) || !value.length) {
+    issues.push(issue('developer-events-required', 'developerEvents', 'At least one exact developer event is required.'));
+    return [];
   }
-  rejectExtraKeys(value, ['content', 'provider', 'nativeId'], path, issues);
-  const content = normalized(value.content, `${path}.content`, issues);
-  if (value.provider !== undefined && !isNonEmptyString(value.provider)) {
-    issues.push(issue('developer-event-provider-invalid', `${path}.provider`, 'Provider must be non-empty.'));
+  const keys = new Set<string>();
+  const output: KeyedDeveloperEvent[] = [];
+  for (const [index, candidate] of value.entries()) {
+    const path = `developerEvents[${index}]`;
+    const before = issues.length;
+    if (!isRecord(candidate)) {
+      issues.push(issue('developer-event-invalid', path, 'Developer event must be an object.'));
+      continue;
+    }
+    rejectExtraKeys(candidate, ['key', 'content', 'provider', 'nativeId'], path, issues);
+    const key = uniqueKey(candidate.key, keys, `${path}.key`, issues);
+    const content = normalized(candidate.content, `${path}.content`, issues);
+    if (candidate.provider !== undefined && !isNonEmptyString(candidate.provider)) {
+      issues.push(issue('developer-event-provider-invalid', `${path}.provider`, 'Provider must be non-empty.'));
+    }
+    if (candidate.nativeId !== undefined && !isNonEmptyString(candidate.nativeId)) {
+      issues.push(issue('developer-event-native-id-invalid', `${path}.nativeId`, 'Native id must be non-empty.'));
+    }
+    if (issues.length !== before || !key || !content) continue;
+    const identity = {
+      kind: 'task' as const,
+      content,
+      ...(candidate.provider ? { provider: String(candidate.provider).trim() } : {}),
+      ...(candidate.nativeId ? { nativeId: String(candidate.nativeId).trim() } : {}),
+    };
+    output.push({
+      key,
+      index,
+      event: {
+        id: generatedId('event', { key, ...identity }),
+        ...identity,
+        contentFingerprint: sha256(content),
+      },
+    });
   }
-  if (value.nativeId !== undefined && !isNonEmptyString(value.nativeId)) {
-    issues.push(issue('developer-event-native-id-invalid', `${path}.nativeId`, 'Native id must be non-empty.'));
-  }
-  if (issues.length !== before || !content) return undefined;
-  const identity = {
-    kind: 'task' as const,
-    content,
-    ...(value.provider ? { provider: String(value.provider).trim() } : {}),
-    ...(value.nativeId ? { nativeId: String(value.nativeId).trim() } : {}),
-  };
-  return {
-    id: generatedId('event', identity),
-    ...identity,
-    contentFingerprint: sha256(content),
-  };
+  return output;
 }
 
 function validateRepositoryEvidence(value: unknown, issues: ValidationIssue[]) {
@@ -372,16 +417,18 @@ function validateRepositoryEvidence(value: unknown, issues: ValidationIssue[]) {
 
 function validateTaskMeaning(
   value: unknown,
-  eventId: string | undefined,
+  eventsByKey: Map<string, KeyedDeveloperEvent>,
+  evidenceByKey: Map<string, RepositoryEvidenceInput & { id: string }>,
   issues: ValidationIssue[],
-): { understanding: TaskContract['understanding']; fork?: MaterialSemanticFork } | undefined {
+): { understanding: TaskContract['understanding'] } | undefined {
   const path = 'task';
   const before = issues.length;
   if (!isRecord(value)) {
     issues.push(issue('task-meaning-invalid', path, 'Task meaning must be an object.'));
     return undefined;
   }
-  rejectExtraKeys(value, ['desiredOutcome', 'constraints', 'nonGoals', 'focus', 'unresolvedMaterialFork'], path, issues);
+  rejectExtraKeys(value, ['basis', 'desiredOutcome', 'constraints', 'nonGoals', 'focus'], path, issues);
+  const basis = validateBasis(value.basis, eventsByKey, evidenceByKey, `${path}.basis`, issues);
   const desired = normalized(value.desiredOutcome, `${path}.desiredOutcome`, issues);
   const constraints = stringArray(value.constraints, `${path}.constraints`, issues);
   const nonGoals = stringArray(value.nonGoals, `${path}.nonGoals`, issues);
@@ -391,10 +438,7 @@ function validateTaskMeaning(
       issues.push(issue('focus-path-unsafe', `${path}.focus[${index}]`, 'Focus must be a repository-relative path.'));
     }
   }
-  const fork = value.unresolvedMaterialFork === undefined
-    ? undefined : validateFork(value.unresolvedMaterialFork, `${path}.unresolvedMaterialFork`, issues);
-  if (issues.length !== before || !desired || !eventId) return undefined;
-  const basis: InterpretationBasis = { humanEventIds: [eventId], repositoryEvidenceIds: [] };
+  if (issues.length !== before || !desired || !basis) return undefined;
   return {
     understanding: {
       desiredOutcome: interpretation('desired-outcome', 0, desired, basis),
@@ -402,7 +446,6 @@ function validateTaskMeaning(
       nonGoals: nonGoals.map((item, index) => interpretation('non-goal', index, item, basis)),
       focus: focus.map((item, index) => interpretation('focus-path', index, item, basis)),
     },
-    ...(fork ? { fork } : {}),
   };
 }
 
@@ -420,7 +463,7 @@ function validateCheckDrafts(value: unknown, issues: ValidationIssue[]): CheckDr
       issues.push(issue('verification-check-invalid', path, 'Check must be an object.'));
       continue;
     }
-    rejectExtraKeys(candidate, ['key', 'rationale', 'argv', 'baseline', 'commandDefinitionPaths', 'acceptanceSurfacePaths'], path, issues);
+    rejectExtraKeys(candidate, ['key', 'rationale', 'argv', 'baseline', 'verifierSelectors'], path, issues);
     const key = uniqueKey(candidate.key, keys, `${path}.key`, issues);
     const rationale = normalized(candidate.rationale, `${path}.rationale`, issues);
     if (!Array.isArray(candidate.argv) || !candidate.argv.length
@@ -428,9 +471,8 @@ function validateCheckDrafts(value: unknown, issues: ValidationIssue[]): CheckDr
       issues.push(issue('verification-check-argv-invalid', `${path}.argv`, 'Check argv must contain non-empty arguments.'));
     }
     const baselineSource = validateBaseline(candidate.baseline, `${path}.baseline`, issues);
-    const commandPaths = repositoryPaths(candidate.commandDefinitionPaths, `${path}.commandDefinitionPaths`, issues);
-    const acceptancePaths = repositoryPaths(candidate.acceptanceSurfacePaths, `${path}.acceptanceSurfacePaths`, issues);
-    if (issues.length !== before || !key || !rationale || !baselineSource || !commandPaths || !acceptancePaths) continue;
+    const verifierRefs = repositorySelectors(candidate.verifierSelectors, `${path}.verifierSelectors`, issues);
+    if (issues.length !== before || !key || !rationale || !baselineSource || !verifierRefs) continue;
     output.push({
       verifierId: generatedId('verifier', { key }),
       revision: 1,
@@ -438,10 +480,7 @@ function validateCheckDrafts(value: unknown, issues: ValidationIssue[]): CheckDr
       rationale,
       argv: [...candidate.argv as string[]],
       baselineSource,
-      verifierRefs: [
-        ...commandPaths.map((item) => ({ path: item, role: 'command-definition' as const })),
-        ...acceptancePaths.map((item) => ({ path: item, role: 'acceptance-surface' as const })),
-      ],
+      verifierRefs,
     });
   }
   return output.sort((left, right) => left.verifierId.localeCompare(right.verifierId));
@@ -490,9 +529,10 @@ function validateBaseline(value: unknown, path: string, issues: ValidationIssue[
 
 function validateConditions(
   value: unknown,
-  eventId: string | undefined,
+  eventsByKey: Map<string, KeyedDeveloperEvent>,
   evidenceByKey: Map<string, RepositoryEvidenceInput & { id: string }>,
   checksByKey: Map<string, CheckDraft>,
+  defaultBasis: InterpretationBasis | undefined,
   issues: ValidationIssue[],
 ): AdoptionCondition[] {
   if (!Array.isArray(value)) {
@@ -515,15 +555,23 @@ function validateConditions(
     const criticality = ['material', 'adoption-critical'].includes(String(candidate.criticality))
       ? candidate.criticality as AdoptionConditionInput['criticality'] : undefined;
     if (!criticality) issues.push(issue('adoption-condition-criticality-invalid', `${path}.criticality`, 'Criticality must be material or adoption-critical.'));
-    const basis = validateBasis(candidate.basis, eventId, evidenceByKey, `${path}.basis`, issues);
+    const basis = validateBasis(
+      candidate.basis,
+      eventsByKey,
+      evidenceByKey,
+      `${path}.basis`,
+      issues,
+      defaultBasis,
+    );
     const conditionId = key ? generatedId('condition', { key }) : undefined;
     const obligations = conditionId && key
       ? validateObligations(candidate.evidenceObligations, key, conditionId, evidenceByKey, checksByKey, `${path}.evidenceObligations`, issues)
       : [];
     if (criticality === 'adoption-critical' && obligations.length
       && !obligations.some((obligation) => obligation.strategies.some((strategy) =>
-        strategy.kind === 'independent-challenge' || strategy.kind === 'human-review'))) {
-      issues.push(issue('critical-condition-review-required', `${path}.evidenceObligations`, 'Adoption-critical conditions require an independent challenge or direct Human review strategy.'));
+        (strategy.kind === 'independent-challenge' && strategy.policy === 'required')
+        || strategy.kind === 'human-review'))) {
+      issues.push(issue('critical-condition-review-required', `${path}.evidenceObligations`, 'Adoption-critical conditions require a required independent challenge or direct Human review strategy.'));
     }
     if (issues.length !== before || !key || !conditionId || !statement || !rationale || !criticality || !basis || !obligations.length) continue;
     output.push({
@@ -561,27 +609,58 @@ function validateObligations(
       issues.push(issue('evidence-obligation-invalid', itemPath, 'Evidence obligation must be an object.'));
       continue;
     }
-    rejectExtraKeys(candidate, ['key', 'statement', 'failureHypothesis', 'strategies'], itemPath, issues);
+    rejectExtraKeys(candidate, ['key', 'statement', 'falsification', 'strategies'], itemPath, issues);
     const key = uniqueKey(candidate.key, keys, `${itemPath}.key`, issues);
     const statement = normalized(candidate.statement, `${itemPath}.statement`, issues);
-    const failureHypothesis = normalized(candidate.failureHypothesis, `${itemPath}.failureHypothesis`, issues);
+    const falsification = validateFalsificationDesign(
+      candidate.falsification,
+      `${itemPath}.falsification`,
+      issues,
+    );
     const strategies = validateObligationStrategies(candidate.strategies, evidenceByKey, checksByKey, `${itemPath}.strategies`, issues);
     const hasFactTriggered = strategies.some((strategy) =>
       strategy.kind === 'independent-challenge' && strategy.policy === 'fact-triggered');
     if (hasFactTriggered && !strategies.some((strategy) => strategy.kind === 'runtime-check')) {
       issues.push(issue('fact-triggered-challenge-check-required', `${itemPath}.strategies`, 'A fact-triggered challenge requires a runtime-check strategy whose acceptance surface can change.'));
     }
-    if (issues.length !== before || !key || !statement || !failureHypothesis || !strategies.length) continue;
+    if (issues.length !== before || !key || !statement || !falsification || !strategies.length) continue;
     output.push({
       id: generatedId('obligation', { conditionKey, key }),
       key,
       conditionId,
       statement,
-      failureHypothesis,
+      falsification,
       strategies,
     });
   }
   return output.sort((left, right) => left.id.localeCompare(right.id));
+}
+
+function validateFalsificationDesign(
+  value: unknown,
+  path: string,
+  issues: ValidationIssue[],
+): EvidenceObligation['falsification'] | undefined {
+  const before = issues.length;
+  if (!isRecord(value)) {
+    issues.push(issue('falsification-design-invalid', path, 'Falsification design must be an object.'));
+    return undefined;
+  }
+  rejectExtraKeys(value, [
+    'failureHypothesis', 'scenario', 'supportingObservation', 'contradictingObservation',
+  ], path, issues);
+  const failureHypothesis = normalized(value.failureHypothesis, `${path}.failureHypothesis`, issues);
+  const scenario = normalized(value.scenario, `${path}.scenario`, issues);
+  const supportingObservation = normalized(
+    value.supportingObservation, `${path}.supportingObservation`, issues,
+  );
+  const contradictingObservation = normalized(
+    value.contradictingObservation, `${path}.contradictingObservation`, issues,
+  );
+  return issues.length === before
+    && failureHypothesis && scenario && supportingObservation && contradictingObservation
+    ? { failureHypothesis, scenario, supportingObservation, contradictingObservation }
+    : undefined;
 }
 
 function validateObligationStrategies(
@@ -758,7 +837,9 @@ function verificationRelaxed(
     }
     return before.verifierRefs.some((reference) =>
       !after.verifierRefs.some((candidate) =>
-        candidate.path === reference.path && candidate.role === reference.role));
+        candidate.kind === reference.kind
+        && candidate.path === reference.path
+        && candidate.role === reference.role));
   });
 }
 
@@ -783,8 +864,9 @@ function validateRevisionHumanAuthorization(
 
 function validateHostPolicyRequirements(
   value: unknown,
-  eventId: string | undefined,
+  eventsByKey: Map<string, KeyedDeveloperEvent>,
   evidenceByKey: Map<string, RepositoryEvidenceInput & { id: string }>,
+  defaultBasis: InterpretationBasis | undefined,
   issues: ValidationIssue[],
 ): HostPolicyRequirement[] {
   if (!Array.isArray(value)) {
@@ -812,7 +894,14 @@ function validateHostPolicyRequirements(
       ? candidate.enforcementRequirement as HostPolicyRequirementInput['enforcementRequirement'] : undefined;
     if (!enforcementRequirement) issues.push(issue('host-policy-enforcement-invalid', `${path}.enforcementRequirement`, 'Host policy enforcement requirement is invalid.'));
     const rationale = normalized(candidate.rationale, `${path}.rationale`, issues);
-    const basis = validateBasis(candidate.basis, eventId, evidenceByKey, `${path}.basis`, issues);
+    const basis = validateBasis(
+      candidate.basis,
+      eventsByKey,
+      evidenceByKey,
+      `${path}.basis`,
+      issues,
+      defaultBasis,
+    );
     if (issues.length !== before || !key || !capability || !requiredState || !enforcementRequirement || !rationale || !basis) continue;
     output.push({
       id: generatedId('host-policy', { key }), key, capability, requiredState,
@@ -824,25 +913,32 @@ function validateHostPolicyRequirements(
 
 function validateBasis(
   value: unknown,
-  eventId: string | undefined,
+  eventsByKey: Map<string, KeyedDeveloperEvent>,
   evidenceByKey: Map<string, RepositoryEvidenceInput & { id: string }>,
   path: string,
   issues: ValidationIssue[],
+  defaultBasis?: InterpretationBasis,
 ): InterpretationBasis | undefined {
   if (value === undefined) {
-    return eventId ? { humanEventIds: [eventId], repositoryEvidenceIds: [] } : undefined;
+    return defaultBasis;
   }
   const before = issues.length;
   if (!isRecord(value)) {
     issues.push(issue('interpretation-basis-invalid', path, 'Interpretation basis must be an object.'));
     return undefined;
   }
-  rejectExtraKeys(value, ['developerEvent', 'repositoryEvidenceKeys'], path, issues);
-  if (typeof value.developerEvent !== 'boolean') {
-    issues.push(issue('interpretation-basis-event-invalid', `${path}.developerEvent`, 'Developer-event selection must be boolean.'));
-  }
-  const keys = stableIdArray(value.repositoryEvidenceKeys, `${path}.repositoryEvidenceKeys`, issues);
-  const evidenceIds = keys.flatMap((key) => {
+  rejectExtraKeys(value, ['developerEventKeys', 'repositoryEvidenceKeys'], path, issues);
+  const eventKeys = stableIdArray(value.developerEventKeys, `${path}.developerEventKeys`, issues);
+  const evidenceKeys = stableIdArray(value.repositoryEvidenceKeys, `${path}.repositoryEvidenceKeys`, issues);
+  const humanEventIds = eventKeys.flatMap((key) => {
+    const event = eventsByKey.get(key);
+    if (!event) {
+      issues.push(issue('interpretation-basis-event-missing', `${path}.developerEventKeys`, `Developer event key ${JSON.stringify(key)} does not exist.`));
+      return [];
+    }
+    return [event.event.id];
+  });
+  const evidenceIds = evidenceKeys.flatMap((key) => {
     const evidence = evidenceByKey.get(key);
     if (!evidence) {
       issues.push(issue('interpretation-basis-evidence-missing', `${path}.repositoryEvidenceKeys`, `Repository evidence key ${JSON.stringify(key)} does not exist.`));
@@ -850,11 +946,13 @@ function validateBasis(
     }
     return [evidence.id];
   });
-  const humanEventIds = value.developerEvent === true && eventId ? [eventId] : [];
   if (!humanEventIds.length && !evidenceIds.length) {
-    issues.push(issue('interpretation-basis-empty', path, 'Interpretation basis must select the developer event or repository evidence.'));
+    issues.push(issue('interpretation-basis-empty', path, 'Interpretation basis must select a developer event or repository evidence.'));
   }
-  return issues.length === before ? { humanEventIds, repositoryEvidenceIds: sortedUnique(evidenceIds) } : undefined;
+  return issues.length === before ? {
+    humanEventIds: sortedUnique(humanEventIds),
+    repositoryEvidenceIds: sortedUnique(evidenceIds),
+  } : undefined;
 }
 
 function validateDelivery(value: unknown, issues: ValidationIssue[]): DeliveryPlan | undefined {
@@ -902,34 +1000,246 @@ function interpretation(
   };
 }
 
-function validateFork(value: unknown, path: string, issues: ValidationIssue[]): MaterialSemanticFork | undefined {
+function validateMaterialDecisionForks(
+  value: unknown,
+  eventsByKey: Map<string, KeyedDeveloperEvent>,
+  evidenceByKey: Map<string, RepositoryEvidenceInput & { id: string }>,
+  taskBasis: InterpretationBasis | undefined,
+  issues: ValidationIssue[],
+): MaterialDecisionValidation | undefined {
+  if (!Array.isArray(value)) {
+    issues.push(issue('material-decision-forks-invalid', 'materialDecisionForks', 'Material decision forks must be an array.'));
+    return undefined;
+  }
+  const keys = new Set<string>();
+  const resolved: MaterialDecisionFork[] = [];
+  const unresolved: MaterialDecisionForkInput[] = [];
+  for (const [index, candidate] of value.entries()) {
+    const path = `materialDecisionForks[${index}]`;
+    const before = issues.length;
+    if (!isRecord(candidate)) {
+      issues.push(issue('material-decision-fork-invalid', path, 'Material decision fork must be an object.'));
+      continue;
+    }
+    rejectExtraKeys(candidate, [
+      'key', 'basis', 'question', 'alternatives', 'recommendation', 'resolution',
+    ], path, issues);
+    const key = uniqueKey(candidate.key, keys, `${path}.key`, issues);
+    const basis = validateBasis(candidate.basis, eventsByKey, evidenceByKey, `${path}.basis`, issues);
+    const question = normalized(candidate.question, `${path}.question`, issues);
+    const alternatives = validateMaterialDecisionAlternatives(
+      candidate.alternatives,
+      `${path}.alternatives`,
+      issues,
+    );
+    const alternativeKeys = new Set(alternatives.map((item) => item.key));
+    const recommendation = validateMaterialDecisionRecommendation(
+      candidate.recommendation,
+      alternativeKeys,
+      `${path}.recommendation`,
+      issues,
+    );
+    const normalizedBasis: MaterialDecisionForkInput['basis'] | undefined = isRecord(candidate.basis)
+      ? {
+          developerEventKeys: stableIdArray(
+            candidate.basis.developerEventKeys,
+            `${path}.basis.developerEventKeys`,
+            [],
+          ),
+          repositoryEvidenceKeys: stableIdArray(
+            candidate.basis.repositoryEvidenceKeys,
+            `${path}.basis.repositoryEvidenceKeys`,
+            [],
+          ),
+        }
+      : undefined;
+    if (issues.length !== before || !key || !basis || !question || alternatives.length < 2
+      || !normalizedBasis) continue;
+    const common = {
+      key,
+      basis: normalizedBasis,
+      question,
+      alternatives,
+      ...(recommendation ? { recommendation } : {}),
+    };
+    if (candidate.resolution === undefined) {
+      unresolved.push(common);
+      continue;
+    }
+    const resolution = validateMaterialDecisionResolution(
+      candidate.resolution,
+      common,
+      eventsByKey,
+      taskBasis,
+      index,
+      `${path}.resolution`,
+      issues,
+    );
+    if (!resolution) continue;
+    resolved.push({
+      id: generatedId('material-decision', { key }),
+      key,
+      basis,
+      question,
+      alternatives,
+      ...(recommendation ? { recommendation } : {}),
+      resolution,
+    });
+  }
+  return { resolved, unresolved };
+}
+
+function validateMaterialDecisionAlternatives(
+  value: unknown,
+  path: string,
+  issues: ValidationIssue[],
+): MaterialDecisionForkInput['alternatives'] {
+  if (!Array.isArray(value) || value.length < 2) {
+    issues.push(issue('material-decision-alternatives-invalid', path, 'Material decision fork requires at least two alternatives.'));
+    return [];
+  }
+  const keys = new Set<string>();
+  return value.flatMap((candidate, index) => {
+    const itemPath = `${path}[${index}]`;
+    const before = issues.length;
+    if (!isRecord(candidate)) {
+      issues.push(issue('material-decision-alternative-invalid', itemPath, 'Material decision alternative must be an object.'));
+      return [];
+    }
+    rejectExtraKeys(candidate, ['key', 'statement', 'impact'], itemPath, issues);
+    const key = uniqueKey(candidate.key, keys, `${itemPath}.key`, issues);
+    const statement = normalized(candidate.statement, `${itemPath}.statement`, issues);
+    const impact = normalized(candidate.impact, `${itemPath}.impact`, issues);
+    return issues.length === before && key && statement && impact
+      ? [{ key, statement, impact }]
+      : [];
+  });
+}
+
+function validateMaterialDecisionRecommendation(
+  value: unknown,
+  alternativeKeys: Set<string>,
+  path: string,
+  issues: ValidationIssue[],
+): MaterialDecisionForkInput['recommendation'] | undefined {
+  if (value === undefined) return undefined;
+  const before = issues.length;
   if (!isRecord(value)) {
-    issues.push(issue('semantic-fork-invalid', path, 'Material choice must be an object.'));
+    issues.push(issue('material-decision-recommendation-invalid', path, 'Material decision recommendation must be an object.'));
     return undefined;
   }
-  rejectExtraKeys(value, ['question', 'alternatives', 'decisionImpact'], path, issues);
-  if (!isNonEmptyString(value.question) || !Array.isArray(value.alternatives)
-    || value.alternatives.length < 2 || value.alternatives.some((item) => !isNonEmptyString(item))
-    || !isNonEmptyString(value.decisionImpact)) {
-    issues.push(issue('semantic-fork-invalid', path, 'Material choice requires a question, alternatives, and decision impact.'));
+  rejectExtraKeys(value, ['alternativeKey', 'rationale'], path, issues);
+  const alternativeKey = isStableId(value.alternativeKey) ? String(value.alternativeKey) : undefined;
+  if (!alternativeKey || !alternativeKeys.has(alternativeKey)) {
+    issues.push(issue('material-decision-recommendation-alternative-invalid', `${path}.alternativeKey`, 'Recommendation must reference a declared alternative.'));
+  }
+  const rationale = normalized(value.rationale, `${path}.rationale`, issues);
+  return issues.length === before && alternativeKey && rationale
+    ? { alternativeKey, rationale }
+    : undefined;
+}
+
+function validateMaterialDecisionResolution(
+  value: unknown,
+  fork: Pick<MaterialDecisionForkInput, 'key' | 'basis' | 'alternatives'>,
+  eventsByKey: Map<string, KeyedDeveloperEvent>,
+  taskBasis: InterpretationBasis | undefined,
+  index: number,
+  path: string,
+  issues: ValidationIssue[],
+): MaterialDecisionFork['resolution'] | undefined {
+  const before = issues.length;
+  if (!isRecord(value)) {
+    issues.push(issue('material-decision-resolution-invalid', path, 'Material decision resolution must be an object.'));
     return undefined;
   }
+  rejectExtraKeys(value, ['humanEventKey', 'selectedAlternativeKey', 'decisionInterpretation'], path, issues);
+  const humanEventKey = isStableId(value.humanEventKey) ? String(value.humanEventKey) : undefined;
+  const selected = humanEventKey ? eventsByKey.get(humanEventKey) : undefined;
+  if (!selected) {
+    issues.push(issue('material-decision-resolution-event-missing', `${path}.humanEventKey`, 'Resolution must reference an existing developer event.'));
+  }
+  const basisIndexes = fork.basis.developerEventKeys.flatMap((key) => {
+    const item = eventsByKey.get(key);
+    return item ? [item.index] : [];
+  });
+  if (selected && basisIndexes.some((basisIndex) => selected.index <= basisIndex)) {
+    issues.push(issue('material-decision-resolution-event-order-invalid', `${path}.humanEventKey`, 'Resolution event must follow every developer event used to frame the decision.'));
+  }
+  const selectedAlternativeKey = value.selectedAlternativeKey === undefined
+    ? undefined
+    : isStableId(value.selectedAlternativeKey) ? String(value.selectedAlternativeKey) : undefined;
+  if (value.selectedAlternativeKey !== undefined
+    && (!selectedAlternativeKey || !fork.alternatives.some((item) => item.key === selectedAlternativeKey))) {
+    issues.push(issue('material-decision-resolution-alternative-invalid', `${path}.selectedAlternativeKey`, 'Resolution alternative must reference a declared alternative.'));
+  }
+  const decisionInterpretation = normalized(
+    value.decisionInterpretation,
+    `${path}.decisionInterpretation`,
+    issues,
+  );
+  if (selected && !taskBasis?.humanEventIds.includes(selected.event.id)) {
+    issues.push(issue('material-decision-resolution-unconsumed', path, 'The final task interpretation must cite the developer event that resolves this material decision.'));
+  }
+  if (issues.length !== before || !selected || !decisionInterpretation) return undefined;
+  const resolutionBasis: InterpretationBasis = {
+    humanEventIds: [selected.event.id],
+    repositoryEvidenceIds: [],
+  };
   return {
-    question: value.question.trim(),
-    alternatives: value.alternatives.map((item) => String(item).trim()),
-    decisionImpact: value.decisionImpact.trim(),
+    humanEventId: selected.event.id,
+    ...(selectedAlternativeKey ? { selectedAlternativeKey } : {}),
+    decisionInterpretation: interpretation(
+      'material-decision',
+      index,
+      decisionInterpretation,
+      resolutionBasis,
+    ),
   };
 }
 
-function repositoryPaths(value: unknown, path: string, issues: ValidationIssue[]): string[] | undefined {
-  if (!Array.isArray(value) || value.some((item) => !isSafeRepositoryPath(item))) {
-    issues.push(issue('repository-paths-invalid', path, 'Paths must be repository-relative.'));
+function repositorySelectors(
+  value: unknown,
+  path: string,
+  issues: ValidationIssue[],
+): CheckDraft['verifierRefs'] | undefined {
+  if (!Array.isArray(value)) {
+    issues.push(issue('repository-selectors-invalid', path, 'Verifier selectors must be an array.'));
     return undefined;
   }
-  if (new Set(value).size !== value.length) {
-    issues.push(issue('repository-paths-duplicate', path, 'Paths must not contain duplicates.'));
+  const output = value.flatMap((item, index) => {
+    const itemPath = `${path}[${index}]`;
+    if (!isRecord(item)) {
+      issues.push(issue('repository-selector-invalid', itemPath, 'Verifier selector must be an object.'));
+      return [];
+    }
+    rejectExtraKeys(item, ['kind', 'path', 'role'], itemPath, issues);
+    if (!['file', 'tree'].includes(String(item.kind))) {
+      issues.push(issue('repository-selector-kind-invalid', `${itemPath}.kind`, 'Selector kind must be file or tree.'));
+    }
+    if (!isSafeRepositoryPath(item.path)) {
+      issues.push(issue('repository-selector-path-invalid', `${itemPath}.path`, 'Selector path must be repository-relative.'));
+    }
+    if (!['command-definition', 'acceptance-surface'].includes(String(item.role))) {
+      issues.push(issue('repository-selector-role-invalid', `${itemPath}.role`, 'Selector role must be command-definition or acceptance-surface.'));
+    }
+    return ['file', 'tree'].includes(String(item.kind))
+      && isSafeRepositoryPath(item.path)
+      && ['command-definition', 'acceptance-surface'].includes(String(item.role))
+      ? [{
+          kind: item.kind as 'file' | 'tree',
+          path: item.path as string,
+          role: item.role as 'command-definition' | 'acceptance-surface',
+        }]
+      : [];
+  });
+  const identities = output.map((item) => stableFingerprint(item));
+  if (new Set(identities).size !== identities.length) {
+    issues.push(issue('repository-selectors-duplicate', path, 'Verifier selectors must not contain duplicates.'));
   }
-  return sortedUnique(value as string[]);
+  return output.sort((left, right) => left.role.localeCompare(right.role)
+    || left.kind.localeCompare(right.kind)
+    || left.path.localeCompare(right.path));
 }
 
 function stringArray(value: unknown, path: string, issues: ValidationIssue[]): string[] {

@@ -338,26 +338,27 @@ function validateVerifierMutations(
   for (const mutation of mutations) {
     const check = checksById.get(mutation.definitionId);
     const file = filesById.get(mutation.changedFileId);
-    if (!check || mutation.verifierId !== check.verifierId || !file || file.path !== mutation.path
-      || !check.verifierRefs.some((ref) => ref.path === mutation.path && ref.role === mutation.role)) {
+    const matchingRef = check?.verifierRefs.find((ref) =>
+      stableFingerprint(ref) === stableFingerprint(mutation.selector));
+    if (!check || mutation.verifierId !== check.verifierId || !file
+      || mutation.changedPath !== file.path || !matchingRef
+      || selectorMatch(matchingRef, file) !== mutation.matchedBy) {
       throw new Error('evaluateHandoff verifier mutation is not bound to a changed verifier surface.');
     }
   }
-  const changedByPath = new Map<string, ChangedFileFact>();
-  for (const file of changedFiles) {
-    changedByPath.set(file.path, file);
-    if (file.previousPath) changedByPath.set(file.previousPath, file);
-  }
   const expected = [...checksById.values()].flatMap((check) =>
     check.verifierRefs.flatMap((reference) => {
-      const file = changedByPath.get(reference.path);
-      return file ? [{
-        verifierId: check.verifierId,
-        definitionId: check.definitionId,
-        path: reference.path,
-        role: reference.role,
-        changedFileId: file.id,
-      }] : [];
+      return changedFiles.flatMap((file) => {
+        const matchedBy = selectorMatch(reference, file);
+        return matchedBy ? [{
+          verifierId: check.verifierId,
+          definitionId: check.definitionId,
+          selector: reference,
+          changedFileId: file.id,
+          changedPath: file.path,
+          matchedBy,
+        }] : [];
+      });
     })).sort(mutationOrder);
   const actual = [...mutations].sort(mutationOrder);
   if (stableFingerprint(actual) !== stableFingerprint(expected)) {
@@ -367,9 +368,29 @@ function validateVerifierMutations(
 
 function mutationOrder(left: VerifierMutation, right: VerifierMutation): number {
   return left.definitionId.localeCompare(right.definitionId)
-    || left.path.localeCompare(right.path)
-    || left.role.localeCompare(right.role)
+    || left.selector.role.localeCompare(right.selector.role)
+    || left.selector.kind.localeCompare(right.selector.kind)
+    || left.selector.path.localeCompare(right.selector.path)
+    || left.changedPath.localeCompare(right.changedPath)
     || left.changedFileId.localeCompare(right.changedFileId);
+}
+
+function selectorMatch(
+  selector: VerificationDefinition['verifierRefs'][number],
+  file: ChangedFileFact,
+): VerifierMutation['matchedBy'] | undefined {
+  if (pathMatchesSelector(file.path, selector)) return 'current-path';
+  if (file.previousPath && pathMatchesSelector(file.previousPath, selector)) return 'previous-path';
+  return undefined;
+}
+
+function pathMatchesSelector(
+  path: string,
+  selector: { kind: 'file' | 'tree'; path: string },
+): boolean {
+  return selector.kind === 'file'
+    ? path === selector.path
+    : path === selector.path || path.startsWith(`${selector.path}/`);
 }
 
 function validateEnvironment(environment: ExecutionEnvironment): void {

@@ -7,6 +7,7 @@ import type {
 import type { ProtocolEnvelope, ValidationIssue } from '../shared/protocol.ts';
 
 export type VerifierRefRole = 'command-definition' | 'acceptance-surface';
+export type RepositorySelectorKind = 'file' | 'tree';
 export type AdoptionCriticality = 'material' | 'adoption-critical';
 export type ChallengePolicy = 'required' | 'fact-triggered';
 export type VerificationBaselineMode = 'task-start' | 'unknown';
@@ -16,10 +17,14 @@ export type HostPolicyCapability =
   | 'external-mutation'
   | 'fresh-context';
 
-export interface DeveloperEventInput {
+export interface ExactHumanEventInput {
   content: string;
   provider?: string;
   nativeId?: string;
+}
+
+export interface DeveloperEventInput extends ExactHumanEventInput {
+  key: string;
 }
 
 export interface RepositoryEvidenceInput {
@@ -32,22 +37,38 @@ export interface RepositoryEvidenceInput {
 }
 
 export interface CompactInterpretationBasis {
-  developerEvent: boolean;
+  developerEventKeys: string[];
   repositoryEvidenceKeys: string[];
 }
 
-export interface MaterialSemanticFork {
+export interface MaterialDecisionAlternative {
+  key: string;
+  statement: string;
+  impact: string;
+}
+
+export interface MaterialDecisionForkInput {
+  key: string;
+  basis: CompactInterpretationBasis;
   question: string;
-  alternatives: string[];
-  decisionImpact: string;
+  alternatives: MaterialDecisionAlternative[];
+  recommendation?: {
+    alternativeKey: string;
+    rationale: string;
+  };
+  resolution?: {
+    humanEventKey: string;
+    selectedAlternativeKey?: string;
+    decisionInterpretation: string;
+  };
 }
 
 export interface TaskMeaningInput {
+  basis: CompactInterpretationBasis;
   desiredOutcome: string;
   constraints: string[];
   nonGoals: string[];
   focus: string[];
-  unresolvedMaterialFork?: MaterialSemanticFork;
 }
 
 export type EvidenceObligationStrategyInput =
@@ -70,8 +91,15 @@ export type EvidenceObligationStrategyInput =
 export interface EvidenceObligationInput {
   key: string;
   statement: string;
-  failureHypothesis: string;
+  falsification: EvidenceObligationFalsification;
   strategies: EvidenceObligationStrategyInput[];
+}
+
+export interface EvidenceObligationFalsification {
+  failureHypothesis: string;
+  scenario: string;
+  supportingObservation: string;
+  contradictingObservation: string;
 }
 
 export interface AdoptionConditionInput {
@@ -103,8 +131,11 @@ export interface VerificationDefinitionInput {
   rationale: string;
   argv: string[];
   baseline: VerificationBaselineInput;
-  commandDefinitionPaths: string[];
-  acceptanceSurfacePaths: string[];
+  verifierSelectors: Array<{
+    kind: RepositorySelectorKind;
+    path: string;
+    role: VerifierRefRole;
+  }>;
 }
 
 export interface HostPolicyRequirementInput {
@@ -117,8 +148,9 @@ export interface HostPolicyRequirementInput {
 }
 
 export interface CompileDelegationInput extends ProtocolEnvelope {
-  developerEvent: DeveloperEventInput;
+  developerEvents: DeveloperEventInput[];
   task: TaskMeaningInput;
+  materialDecisionForks: MaterialDecisionForkInput[];
   repositoryEvidence?: RepositoryEvidenceInput[];
   conditions: AdoptionConditionInput[];
   hostPolicyRequirements: HostPolicyRequirementInput[];
@@ -138,11 +170,12 @@ export interface VerificationRevisionInput extends ProtocolEnvelope {
     equivalenceClaim: string;
     checks?: VerificationDefinitionInput[];
     noCommandRationale?: string;
-    humanAuthorization?: DeveloperEventInput;
+    humanAuthorization?: ExactHumanEventInput;
   };
 }
 
 export interface VerifierRef {
+  kind: RepositorySelectorKind;
   path: string;
   role: VerifierRefRole;
 }
@@ -192,11 +225,28 @@ export interface EvidenceObligation {
   key: string;
   conditionId: string;
   statement: string;
-  failureHypothesis: string;
+  falsification: EvidenceObligationFalsification;
   strategies: EvidenceObligationStrategy[];
 }
 
 export interface MaterializedInterpretation extends AgentInterpretation {}
+
+export interface MaterialDecisionFork {
+  id: string;
+  key: string;
+  basis: InterpretationBasis;
+  question: string;
+  alternatives: MaterialDecisionAlternative[];
+  recommendation?: {
+    alternativeKey: string;
+    rationale: string;
+  };
+  resolution: {
+    humanEventId: string;
+    selectedAlternativeKey?: string;
+    decisionInterpretation: MaterializedInterpretation;
+  };
+}
 
 export interface AdoptionCondition {
   id: string;
@@ -242,7 +292,7 @@ export interface TaskContract extends ProtocolEnvelope {
   verificationPlanId: string;
   effectiveContractId: string;
   authority: {
-    developerEvent: HumanEvent;
+    developerEvents: HumanEvent[];
     providerTrustBoundary: 'host-supplied-event-not-runtime-authenticated';
   };
   understanding: {
@@ -252,6 +302,7 @@ export interface TaskContract extends ProtocolEnvelope {
     focus: MaterializedInterpretation[];
   };
   repositoryEvidence: RepositoryEvidence[];
+  materialDecisions: MaterialDecisionFork[];
   adoptionConditions: AdoptionCondition[];
   hostPolicyRequirements: HostPolicyRequirement[];
   plan: DeliveryPlan;
@@ -267,7 +318,7 @@ export type DelegationCompileResult =
   | (ProtocolEnvelope & { status: 'delegation-compiled'; contract: TaskContract })
   | (ProtocolEnvelope & {
       status: 'semantic-decision-required';
-      fork: MaterialSemanticFork;
+      forks: MaterialDecisionForkInput[];
       message: string;
     })
   | (ProtocolEnvelope & { status: 'verification-required'; message: string })

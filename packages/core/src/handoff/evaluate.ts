@@ -67,6 +67,7 @@ export function evaluateHandoff(input: EvaluateHandoffInput): HandoffEvaluation 
     requiredChallengeObligationIds,
   );
   const attention = deriveAttention(input, handoff, requiredChallengeObligationIds);
+  validateRecommendationConsistency(input, handoff, requiredChallengeObligationIds);
   const decision = input.decision
     ? validateDecision(input.decision, handoff, input.contract, input.factBundle, attention)
     : undefined;
@@ -87,7 +88,7 @@ export function evaluateHandoff(input: EvaluateHandoffInput): HandoffEvaluation 
 export function requiredChallenges(contract: TaskContract, facts: FactBundle): string[] {
   const changedVerifierIds = new Set(
     facts.verifierMutations
-      .filter((mutation) => mutation.role === 'acceptance-surface')
+      .filter((mutation) => mutation.selector.role === 'acceptance-surface')
       .map((mutation) => mutation.verifierId),
   );
   return sortedUnique(allObligations(contract).flatMap((obligation) => {
@@ -110,6 +111,7 @@ function validateCurrentEvidenceDisposition(input: EvaluateHandoffInput): void {
   if (!disposition) return;
   const definitionIds = new Set(input.contract.verificationPlan.mode === 'checks'
     ? input.contract.verificationPlan.definitions.map((item) => item.definitionId) : []);
+  const challengeIds = new Set(input.challenges.map((item) => item.id));
   if (disposition.protocol !== input.protocol
     || disposition.schemaVersion !== input.schemaVersion
     || !isSha256(disposition.dispositionId)
@@ -125,7 +127,13 @@ function validateCurrentEvidenceDisposition(input: EvaluateHandoffInput): void {
   }
   const selected = new Set<string>();
   for (const entry of disposition.entries) {
-    if (!definitionIds.has(entry.definitionId) || selected.has(entry.definitionId)
+    const sourceValid = entry.source.kind === 'check'
+      ? definitionIds.has(entry.source.definitionId)
+      : challengeIds.has(entry.source.challengeId);
+    const sourceIdentity = entry.source.kind === 'check'
+      ? `check:${entry.source.definitionId}`
+      : `challenge:${entry.source.challengeId}`;
+    if (!sourceValid || selected.has(sourceIdentity)
       || !['implementation', 'environment', 'verification', 'unknown'].includes(entry.cause)
       || !isNonEmptyString(entry.diagnosis)
       || !isNonEmptyString(entry.falsificationAttempt)
@@ -135,7 +143,7 @@ function validateCurrentEvidenceDisposition(input: EvaluateHandoffInput): void {
       || entry.intendedChanges.some((item) => !isNonEmptyString(item))) {
       throw new Error('evaluateHandoff current evidence disposition entry is invalid.');
     }
-    selected.add(entry.definitionId);
+    selected.add(sourceIdentity);
   }
   const compatibleRoutes: Record<string, string[]> = {
     implementation: ['repair-implementation', 'handoff'],
@@ -148,10 +156,11 @@ function validateCurrentEvidenceDisposition(input: EvaluateHandoffInput): void {
   const proposedRouteValid = disposition.semanticImpact === 'material'
     ? disposition.proposedRoute === 'ask-human'
     : disposition.entries.every((entry) =>
-        compatibleRoutes[entry.cause]?.includes(disposition.proposedRoute)
+        (entry.source.kind !== 'challenge' || disposition.proposedRoute !== 'challenge')
+        && (compatibleRoutes[entry.cause]?.includes(disposition.proposedRoute)
         || (disposition.proposedRoute === 'repair-implementation'
           && hasImplementationCause
-          && ['environment', 'verification'].includes(entry.cause)));
+          && ['environment', 'verification'].includes(entry.cause))));
   const effectiveRouteValid = disposition.route === disposition.proposedRoute
     || (input.deliveryExhausted
       && disposition.proposedRoute === 'repair-implementation'
@@ -170,7 +179,7 @@ function validateChallenges(input: EvaluateHandoffInput): void {
   const changedFileIds = new Set(input.factBundle.changedFiles.map((item) => item.id));
   const definitionIds = new Set(input.factBundle.checks.map((item) => item.definitionId));
   const evidenceIds = new Set(input.contract.repositoryEvidence.map((item) => item.id));
-  const eventIds = new Set([input.contract.authority.developerEvent.id]);
+  const eventIds = new Set(input.contract.authority.developerEvents.map((item) => item.id));
   const challengeIds = new Set<string>();
   const issues: HandoffValidationIssue[] = [];
   for (const [index, challenge] of input.challenges.entries()) {
@@ -207,11 +216,12 @@ function validateChallenges(input: EvaluateHandoffInput): void {
       || !validIndependence(challenge)) {
       issues.push(issue('challenge-independence-invalid', `${path}.independence`, 'Challenge independence and its attestation fields are inconsistent.', 'Use the Host-provided independence values without modification.'));
     }
-    if (!isNonEmptyString(challenge.failureHypothesis)) {
-      issues.push(issue('challenge-failure-hypothesis-required', `${path}.failureHypothesis`, 'A concrete failure hypothesis is required.', 'State the error this challenge attempted to expose.'));
-    }
+    validateChallengeFalsification(challenge.falsification, selected, `${path}.falsification`, issues);
     if (!isNonEmptyString(challenge.falsificationAttempt)) {
       issues.push(issue('challenge-falsification-required', `${path}.falsificationAttempt`, 'A concrete falsification attempt is required.', 'Describe the independent attempt to expose the failure.'));
+    }
+    if (!isNonEmptyString(challenge.observedResult)) {
+      issues.push(issue('challenge-observed-result-required', `${path}.observedResult`, 'The challenge observation is required.', 'State what the falsification attempt actually observed.'));
     }
     if (!['supported', 'partial', 'contradicted', 'unknown'].includes(challenge.outcome)) {
       issues.push(issue('challenge-outcome-invalid', `${path}.outcome`, 'Challenge outcome is invalid.', 'Use supported, partial, contradicted, or unknown.'));
@@ -236,6 +246,31 @@ function validateChallenges(input: EvaluateHandoffInput): void {
   for (const challenge of input.challenges) {
     validateChallengeEvidenceItems(challenge.supportingEvidence, 'supportingEvidence', input, challengeIds);
     validateChallengeEvidenceItems(challenge.counterEvidence, 'counterEvidence', input, challengeIds);
+  }
+}
+
+function validateChallengeFalsification(
+  value: unknown,
+  obligations: Array<EvidenceObligation | undefined>,
+  path: string,
+  issues: HandoffValidationIssue[],
+): void {
+  if (!isRecord(value)) {
+    issues.push(issue('challenge-falsification-design-invalid', path, 'Challenge falsification design must be an object.', 'Use the frozen design from the current Challenge Authoring Packet.'));
+    return;
+  }
+  exact(value, [
+    'failureHypothesis', 'scenario', 'supportingObservation', 'contradictingObservation',
+  ], path, issues);
+  for (const field of [
+    'failureHypothesis', 'scenario', 'supportingObservation', 'contradictingObservation',
+  ] as const) {
+    text(value[field], `${path}.${field}`, issues);
+  }
+  const selected = obligations.filter((item): item is EvidenceObligation => Boolean(item));
+  if (selected.some((obligation) =>
+    stableFingerprint(obligation.falsification) !== stableFingerprint(value))) {
+    issues.push(issue('challenge-falsification-design-mismatch', path, 'Challenge must preserve the exact frozen falsification design for every selected obligation.', 'Challenge obligations with different designs separately.'));
   }
 }
 
@@ -406,7 +441,7 @@ function validateObligationConclusions(
       issues.push(issue('obligation-conclusion-invalid', path, 'Obligation conclusion must be an object.', 'Replace it with a conclusion.'));
       continue;
     }
-    exact(raw, ['obligationId', 'status', 'evidence', 'falsificationAttempt', 'counterEvidence', 'conclusion'], path, issues);
+    exact(raw, ['obligationId', 'status', 'evidence', 'falsification', 'counterEvidence', 'conclusion'], path, issues);
     const obligationId = typeof raw.obligationId === 'string' ? raw.obligationId : '';
     const obligation = obligations.get(obligationId);
     if (!obligation || seen.has(obligationId)) {
@@ -426,7 +461,11 @@ function validateObligationConclusions(
         'Keep each exact reference in the array that matches its observed direction.',
       ));
     }
-    text(raw.falsificationAttempt, `${path}.falsificationAttempt`, issues);
+    const falsification = validateConclusionFalsification(
+      raw.falsification,
+      `${path}.falsification`,
+      issues,
+    );
     text(raw.conclusion, `${path}.conclusion`, issues);
     if (obligation) {
       requireStrategyEvidence(
@@ -455,12 +494,12 @@ function validateObligationConclusions(
         issues.push(issue('challenge-evidence-missing', `${path}.evidence`, 'A completed required challenge must be cited by the obligation conclusion.', 'Reference the exact challenge.'));
       }
     }
-    if (issues.length === before && obligation && status) {
+    if (issues.length === before && obligation && status && falsification) {
       output.push({
         obligationId,
         status,
         evidence,
-        falsificationAttempt: String(raw.falsificationAttempt).trim(),
+        falsification,
         counterEvidence,
         conclusion: String(raw.conclusion).trim(),
       });
@@ -472,6 +511,27 @@ function validateObligationConclusions(
     }
   }
   return output;
+}
+
+function validateConclusionFalsification(
+  value: unknown,
+  path: string,
+  issues: HandoffValidationIssue[],
+): EvidenceObligationConclusion['falsification'] | undefined {
+  const before = issues.length;
+  if (!isRecord(value)) {
+    issues.push(issue('obligation-falsification-invalid', path, 'Obligation falsification result must be an object.', 'State the attempt and its observed result.'));
+    return undefined;
+  }
+  exact(value, ['attempt', 'observedResult'], path, issues);
+  text(value.attempt, `${path}.attempt`, issues);
+  text(value.observedResult, `${path}.observedResult`, issues);
+  return issues.length === before
+    ? {
+        attempt: String(value.attempt).trim(),
+        observedResult: String(value.observedResult).trim(),
+      }
+    : undefined;
 }
 
 function requireStrategyEvidence(
@@ -665,13 +725,19 @@ function validateReviewCoverage(
     for (const obligation of condition.evidenceObligations) {
       const obligationConclusion = obligationConclusions.find((item) => item.obligationId === obligation.id);
       const obligationChallenges = challenges.filter((item) => item.obligationIds.includes(obligation.id));
+      const unresolvedChallenge = requiredChallengeObligationIds.includes(obligation.id)
+        && (!obligationChallenges.length
+          || obligationChallenges.some((item) => item.outcome !== 'supported')
+          || obligationChallenges.some((item) => item.independence !== 'host-attested'));
       const requires = obligation.strategies.some((strategy) => strategy.kind === 'human-review')
         || obligationConclusion?.status !== 'supported'
         || unknownObligations.has(obligation.id)
-        || (requiredChallengeObligationIds.includes(obligation.id) && !obligationChallenges.length)
+        || unresolvedChallenge
         || obligationChallenges.some((item) => item.outcome !== 'supported')
         || obligationChallenges.some((item) => item.independence !== 'host-attested');
-      if (requires && !coveredObligations.has(obligation.id)
+      if (unresolvedChallenge && !coveredObligations.has(obligation.id)) {
+        issues.push(issue('challenge-review-coverage-missing', 'reviewQuestions', `Unresolved challenge for obligation ${obligation.id} requires a directly bound review question.`, 'Add a consequence-directed question that names this exact obligation.'));
+      } else if (requires && !coveredObligations.has(obligation.id)
         && !coveredConditions.has(condition.id)) {
         issues.push(issue('review-coverage-missing', 'reviewQuestions', `Obligation ${obligation.id} requires direct review coverage.`, 'Add a consequence-directed question.'));
       }
@@ -712,7 +778,7 @@ function validateEvidence(
     'changed-file': new Set(facts.changedFiles.map((item) => item.id)),
     check: new Set(facts.checks.map((item) => item.definitionId)),
     'repository-evidence': new Set(contract.repositoryEvidence.map((item) => item.id)),
-    'human-event': new Set([contract.authority.developerEvent.id]),
+    'human-event': new Set(contract.authority.developerEvents.map((item) => item.id)),
     challenge: challengeIds,
   };
   const output: HandoffEvidenceReference[] = [];
@@ -763,27 +829,40 @@ function deriveAttention(
   const unknownAfterRevision = input.factBundle.checkComparisons.filter((item) =>
     item.relation === 'baseline-unknown-after-revision');
   const verifierDefinitions = sortedUnique(input.factBundle.verifierMutations.map((item) => item.definitionId));
-  const verificationCodes: HandoffAttentionCode[] = [];
-  if (nonpassing.length) verificationCodes.push('verification-nonpassing');
-  if (changedRelations.length) verificationCodes.push('baseline-observation-different');
-  if (unknownAfterRevision.length) verificationCodes.push('baseline-unknown-after-revision');
-  if (input.factBundle.verifierMutations.length) verificationCodes.push('verifier-surface-changed');
-  if (input.verificationRevised) verificationCodes.push('verification-revised');
-  if (input.factBundle.checkInducedChanges.length) verificationCodes.push('check-induced-change');
-  if (input.factBundle.baselineVerification.checkInducedChanges.length) verificationCodes.push('baseline-check-induced-change');
-  if (verificationCodes.length) {
-    items.push(attention('verification', verificationCodes, {
-      checks: sortedUnique([
-        ...nonpassing.map((item) => item.definitionId),
-        ...changedRelations.map((item) => item.definitionId),
-        ...unknownAfterRevision.map((item) => item.definitionId),
-        ...verifierDefinitions,
-      ]),
-      changedFiles: sortedUnique([
-        ...input.factBundle.verifierMutations.map((item) => item.path),
-        ...input.factBundle.checkInducedChanges.map((item) => item.path),
-        ...input.factBundle.baselineVerification.checkInducedChanges.map((item) => item.path),
-      ]),
+  if (nonpassing.length) {
+    items.push(attention('verification', ['verification-nonpassing'], {
+      checks: sortedUnique(nonpassing.map((item) => item.definitionId)),
+    }, 'inspect'));
+  }
+  if (changedRelations.length) {
+    items.push(attention('verification', ['baseline-observation-different'], {
+      checks: sortedUnique(changedRelations.map((item) => item.definitionId)),
+    }, 'inspect'));
+  }
+  if (unknownAfterRevision.length) {
+    items.push(attention('verification', ['baseline-unknown-after-revision'], {
+      checks: sortedUnique(unknownAfterRevision.map((item) => item.definitionId)),
+    }, 'inspect'));
+  }
+  if (input.factBundle.verifierMutations.length) {
+    items.push(attention('verification', ['verifier-surface-changed'], {
+      checks: verifierDefinitions,
+      changedFiles: sortedUnique(input.factBundle.verifierMutations.map((item) => item.changedPath)),
+    }, 'inspect'));
+  }
+  if (input.verificationRevised) {
+    items.push(attention('verification', ['verification-revised'], {
+      checks: sortedUnique(input.factBundle.checks.map((item) => item.definitionId)),
+    }, 'inspect'));
+  }
+  if (input.factBundle.checkInducedChanges.length) {
+    items.push(attention('verification', ['check-induced-change'], {
+      changedFiles: sortedUnique(input.factBundle.checkInducedChanges.map((item) => item.path)),
+    }, 'inspect'));
+  }
+  if (input.factBundle.baselineVerification.checkInducedChanges.length) {
+    items.push(attention('verification', ['baseline-check-induced-change'], {
+      changedFiles: sortedUnique(input.factBundle.baselineVerification.checkInducedChanges.map((item) => item.path)),
     }, 'inspect'));
   }
   const unrepresentable = input.factBundle.changedFiles.filter((item) => item.representation === 'unrepresentable');
@@ -793,32 +872,41 @@ function deriveAttention(
     }, 'inspect'));
   }
   for (const obligation of allObligations(input.contract)) {
-    const conclusion = handoff.obligationConclusions.find((item) => item.obligationId === obligation.id)!;
     const challenges = input.challenges.filter((item) => item.obligationIds.includes(obligation.id));
-    const codes: HandoffAttentionCode[] = [];
-    if (conclusion.status !== 'supported') codes.push('obligation-not-supported');
-    if (requiredChallengeObligationIds.includes(obligation.id) && !challenges.length) codes.push('challenge-missing');
-    if (challenges.some((item) => item.outcome !== 'supported')) codes.push('challenge-adverse');
-    if (challenges.some((item) => item.independence !== 'host-attested')) codes.push('challenge-independence-unverified');
-    if (obligation.strategies.some((strategy) => strategy.kind === 'human-review')) codes.push('direct-review-required');
-    if (handoff.residualUnknowns.some((item) => item.obligationIds.includes(obligation.id))) codes.push('residual-unknown');
-    if (codes.length) {
-      items.push(attention('obligation', codes, {
+    const references = {
         conditions: [obligation.conditionId],
         obligations: [obligation.id],
         challenges: challenges.map((item) => item.id),
         checks: currentDefinitionIds(obligation, input.contract),
-      }, codes.includes('challenge-missing') ? 'challenge' : 'inspect'));
+    };
+    if (requiredChallengeObligationIds.includes(obligation.id) && !challenges.length) {
+      items.push(attention('obligation', ['challenge-missing'], references, 'challenge'));
+    }
+    if (challenges.some((item) => item.outcome !== 'supported')) {
+      items.push(attention('obligation', ['challenge-adverse'], references, 'inspect'));
+    }
+    if (challenges.some((item) => item.independence !== 'host-attested')) {
+      items.push(attention('obligation', ['challenge-independence-unverified'], references, 'inspect'));
+    }
+    const unresolvedChallenge = requiredChallengeObligationIds.includes(obligation.id)
+      && (!challenges.length
+        || challenges.some((item) => item.outcome !== 'supported')
+        || challenges.some((item) => item.independence !== 'host-attested'));
+    if (unresolvedChallenge
+      || obligation.strategies.some((strategy) => strategy.kind === 'human-review')) {
+      items.push(attention('obligation', ['direct-review-required'], references, 'inspect'));
     }
   }
-  for (const condition of input.contract.adoptionConditions) {
-    const conclusion = handoff.conditionConclusions.find((item) => item.conditionId === condition.id)!;
-    const codes: HandoffAttentionCode[] = [];
-    if (conclusion.status !== 'supported') codes.push('condition-not-supported');
-    if (handoff.residualUnknowns.some((item) => item.conditionIds.includes(condition.id))) codes.push('residual-unknown');
-    if (codes.length) {
-      items.push(attention('condition', codes, { conditions: [condition.id] }, 'inspect'));
-    }
+  const residualTargets = new Map<string, HandoffAttentionItem['references']>();
+  for (const unknown of handoff.residualUnknowns) {
+    const references = {
+      conditions: sortedUnique(unknown.conditionIds),
+      obligations: sortedUnique(unknown.obligationIds),
+    };
+    residualTargets.set(stableFingerprint(references), references);
+  }
+  for (const references of residualTargets.values()) {
+    items.push(attention('condition', ['residual-unknown'], references, 'inspect'));
   }
   const policyById = new Map(input.hostPolicyEvaluations.map((item) => [item.requirementId, item]));
   for (const requirement of input.contract.hostPolicyRequirements) {
@@ -829,23 +917,69 @@ function deriveAttention(
       ], { hostPolicies: [requirement.id] }, requirement.enforcementRequirement === 'required' ? 'resolve' : 'inspect'));
     }
   }
-  const unresolvedDispositions = input.currentEvidenceDisposition?.entries
-    .filter((entry) => entry.cause !== 'implementation') ?? [];
   const currentNonpassing = input.factBundle.checks
     .filter((check) => check.attempts.at(-1)?.status !== 'passed')
     .map((check) => check.definitionId);
   const missingDisposition = currentNonpassing.length > 0 && !input.currentEvidenceDisposition;
-  if (unresolvedDispositions.length || input.deliveryExhausted || missingDisposition) {
-    items.push(attention('delivery', [
-      ...(unresolvedDispositions.length ? ['evidence-disposition-unresolved' as const] : []),
-      ...(input.deliveryExhausted ? ['repair-route-exhausted' as const] : []),
-      ...(missingDisposition ? ['evidence-disposition-missing' as const] : []),
-    ], { checks: sortedUnique([
-      ...unresolvedDispositions.map((item) => item.definitionId),
-      ...(missingDisposition ? currentNonpassing : []),
-    ]) }, 'decide-exception'));
+  if (missingDisposition) {
+    items.push(attention('delivery', ['evidence-disposition-missing'], {
+      checks: sortedUnique(currentNonpassing),
+    }, 'resolve'));
+  }
+  if (input.deliveryExhausted) {
+    items.push(attention('delivery', ['repair-route-exhausted'], {
+      checks: sortedUnique(currentNonpassing),
+    }, 'decide-exception'));
   }
   return items.sort((left, right) => left.id.localeCompare(right.id));
+}
+
+function validateRecommendationConsistency(
+  input: EvaluateHandoffInput,
+  handoff: CognitiveHandoff,
+  requiredChallengeObligationIds: string[],
+): void {
+  if (handoff.recommendation.action !== 'accept') return;
+  const blockers = new Set<string>();
+  if (handoff.conditionConclusions.some((item) => item.status !== 'supported')) {
+    blockers.add('condition-not-supported');
+  }
+  if (handoff.obligationConclusions.some((item) => item.status !== 'supported')) {
+    blockers.add('obligation-not-supported');
+  }
+  if (handoff.residualUnknowns.length) blockers.add('residual-unknown');
+  if (input.factBundle.checks.some((check) => check.attempts.at(-1)?.status !== 'passed')) {
+    blockers.add('verification-nonpassing');
+  }
+  if (input.factBundle.changedFiles.some((item) => item.representation === 'unrepresentable')) {
+    blockers.add('change-unrepresentable');
+  }
+  if (input.deliveryExhausted) blockers.add('repair-route-exhausted');
+  if (input.challenges.some((item) => item.outcome !== 'supported')) {
+    blockers.add('challenge-adverse');
+  }
+  for (const obligationId of requiredChallengeObligationIds) {
+    const challenges = input.challenges.filter((item) =>
+      item.obligationIds.includes(obligationId));
+    if (!challenges.length) blockers.add('challenge-missing');
+    if (challenges.some((item) => item.independence !== 'host-attested')) {
+      blockers.add('challenge-independence-unverified');
+    }
+  }
+  const policyById = new Map(input.hostPolicyEvaluations.map((item) =>
+    [item.requirementId, item]));
+  if (input.contract.hostPolicyRequirements.some((requirement) =>
+    requirement.enforcementRequirement === 'required'
+    && policyById.get(requirement.id)?.mode !== 'enforced')) {
+    blockers.add('host-policy-required-unenforced');
+  }
+  if (!blockers.size) return;
+  throw new HandoffValidationError([issue(
+    'recommendation-evidence-conflict',
+    'recommendation.action',
+    `Agent recommendation cannot be accept while current evidence has: ${[...blockers].sort().join(', ')}.`,
+    'Use request-correction, defer, or reject; only an exact later Human decision may accept current exceptions.',
+  )]);
 }
 
 function validateDecision(

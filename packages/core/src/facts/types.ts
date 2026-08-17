@@ -98,8 +98,12 @@ export interface CheckComparisonFact {
 
 export type EvidenceCause = 'implementation' | 'environment' | 'verification' | 'unknown';
 
+export type EvidenceConcernSource =
+  | { kind: 'check'; definitionId: string }
+  | { kind: 'challenge'; challengeId: string };
+
 export interface EvidenceDispositionEntry {
-  definitionId: string;
+  source: EvidenceConcernSource;
   cause: EvidenceCause;
   diagnosis: string;
   falsificationAttempt: string;
@@ -133,9 +137,14 @@ export interface EvidenceDisposition extends ProtocolEnvelope {
 export interface VerifierMutation {
   verifierId: string;
   definitionId: string;
-  path: string;
-  role: 'command-definition' | 'acceptance-surface';
+  selector: {
+    kind: 'file' | 'tree';
+    path: string;
+    role: 'command-definition' | 'acceptance-surface';
+  };
   changedFileId: string;
+  changedPath: string;
+  matchedBy: 'current-path' | 'previous-path';
 }
 
 export interface PatchFact {

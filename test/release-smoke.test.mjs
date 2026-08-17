@@ -40,11 +40,15 @@ try {
   const compiled = core.compileDelegation({
     protocol: 'cognitive-adoption',
     schemaVersion: '1',
-    developerEvent: { content: 'Deliver an inspectable Cognitive Adoption task.' },
+    developerEvents: [{
+      key: 'request', content: 'Deliver an inspectable Cognitive Adoption task.',
+    }],
     task: {
+      basis: { developerEventKeys: ['request'], repositoryEvidenceKeys: [] },
       desiredOutcome: 'Expose the Cognitive Adoption workflow.',
       constraints: [], nonGoals: [], focus: [],
     },
+    materialDecisionForks: [],
     conditions: [],
     hostPolicyRequirements: [],
     delivery: { maxRepairAttempts: 1 },
