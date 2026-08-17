@@ -38,6 +38,19 @@ export async function verifyReleaseInstallation(installationRoot, expectedVersio
   });
   assert.equal(result.status, 0, result.stderr);
   assert.equal(result.stdout.trim(), expectedVersion);
+  assert.deepEqual(cliManifest.exports?.['./host'], {
+    types: './dist/host.d.mts',
+    import: './dist/host.mjs',
+  });
+  const host = await import(pathToFileURL(resolve(cliRoot, 'dist/host.mjs')).href);
+  assert.deepEqual(Object.keys(host).sort(), [
+    'CliError',
+    'formatCliError',
+    'formatCliOutput',
+    'guardFinalResponse',
+    'normalizeCliError',
+    'runCli',
+  ]);
 
   return {
     core: `${coreManifest.name}@${coreManifest.version}`,

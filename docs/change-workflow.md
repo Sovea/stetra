@@ -80,7 +80,12 @@ current worktree without writing state. It returns one disposition:
 The guard also returns fact currency, task revision, and a fingerprint of the
 projected action. Generated skills instruct this call but do not claim that a
 Markdown file enforces a Host hook. A native Host integration may enforce the
-same command at its final-response boundary.
+same command at its final-response boundary. The published
+`@sovea/stetra/host` subpath exposes `runCli`, `guardFinalResponse`, exact Host
+projection types, and the `HostAttestationProvider` boundary for that purpose.
+Importing it grants no authority by itself: only an embedding process that
+actually controls tools, contexts, and the response boundary may report
+enforcement or independent-context provenance.
 
 ## Prepare
 

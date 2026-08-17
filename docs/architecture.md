@@ -723,7 +723,8 @@ Generated Host Adapter -> CLI -> Core
   handoff evaluation, Attention, and Human-decision binding.
 - `@sovea/stetra` owns commands, IO validation, task sequencing, Git and check
   collection, storage, Host-attestation injection, transient projection,
-  project initialization, presentation, and generated workflows.
+  project initialization, presentation, generated workflows, and the narrow
+  `@sovea/stetra/host` programmatic integration boundary.
 - Host Agents own semantic reasoning and repository engineering. Core and CLI
   never call an LLM.
 
@@ -746,6 +747,8 @@ prepare -> Agent implementation -> collect
 It includes:
 
 - exact Human Events separated from Agent interpretation;
+- material decision forks consolidated before a Task exists and resolved only
+  by later exact Human Events;
 - Semantic Contracts, Conditions, and Falsifiable Evidence Obligations;
 - explicit Host policy requirements and honest instruction/enforcement
   provenance;
@@ -755,10 +758,15 @@ It includes:
 - fact-bound diagnosis before repair;
 - bounded repair, timeout retry, Verification Revision, and correction lineage;
 - fact-triggered Challenge where a trusted Host can attest independence, and
-  direct Human review where it cannot;
+  direct Human review where it cannot; adverse Challenge evidence returns to
+  bounded diagnosis while immutable prior Challenge history remains visible;
 - task-specific Authoring Packets and executable Host actions;
 - evidence-bounded Cognitive Handoff, Attention, Review Questions, and exact
-  current-task Human decisions;
+  current-task Human decisions, including rejection of Agent acceptance advice
+  that exceeds current evidence;
+- a published programmatic Host facade for attestation injection and the
+  read-only final-response guard; native vendor hooks remain Host integrations,
+  not a Runtime claim;
 - append-only task events, rebuildable projection, staged publication,
   revision checks, and process-identity-based lease recovery.
 

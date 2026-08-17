@@ -22,6 +22,11 @@ assert.equal(cli.publishConfig?.provenance, undefined);
 assert.equal(cli.dependencies?.[core.name], 'workspace:*');
 assert.deepEqual(cli.bin, { 'stetra': './dist/index.mjs' });
 assert.deepEqual(Object.keys(core.exports).sort(), ['.', './package.json']);
+assert.deepEqual(Object.keys(cli.exports).sort(), ['./host', './package.json']);
+assert.deepEqual(cli.exports['./host'], {
+  types: './dist/host.d.mts',
+  import: './dist/host.mjs',
+});
 assert.deepEqual(core.files, ['dist', 'LICENSE', 'README.md']);
 
 const versionSource = readFileSync(resolve(root, 'packages/cli/src/version.ts'), 'utf8');
@@ -35,6 +40,8 @@ for (const file of [
   'packages/core/dist/index.mjs',
   'packages/core/dist/index.d.mts',
   'packages/cli/dist/index.mjs',
+  'packages/cli/dist/host.mjs',
+  'packages/cli/dist/host.d.mts',
 ]) {
   assert.ok(existsSync(resolve(root, file)), `Missing release file ${file}.`);
 }
@@ -55,6 +62,12 @@ assert.deepEqual(
   Object.keys(coreModule).sort(),
   ['compileDelegation', 'evaluateHandoff'],
   'Core root must expose exactly the two Cognitive Adoption operations.',
+);
+const hostModule = await import(pathToFileURL(resolve(root, 'packages/cli/dist/host.mjs')).href);
+assert.deepEqual(
+  Object.keys(hostModule).sort(),
+  ['CliError', 'formatCliError', 'formatCliOutput', 'guardFinalResponse', 'normalizeCliError', 'runCli'],
+  'The Host subpath must stay narrow and explicit.',
 );
 
 for (const path of ['.claude-plugin', '.codex-plugin', '.codex', 'skills']) {

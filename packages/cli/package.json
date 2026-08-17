@@ -12,6 +12,13 @@
   "bin": {
     "stetra": "./dist/index.mjs"
   },
+  "exports": {
+    "./host": {
+      "types": "./dist/host.d.mts",
+      "import": "./dist/host.mjs"
+    },
+    "./package.json": "./package.json"
+  },
   "files": [
     "dist",
     "LICENSE",

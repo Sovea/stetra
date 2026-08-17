@@ -68,6 +68,23 @@ export interface ClarificationBrief {
   forks: MaterialDecisionForkInput[];
 }
 
+export interface FinalResponseGuard {
+  protocol: 'cognitive-adoption';
+  schemaVersion: '1';
+  status: 'final-response-guarded';
+  taskId: string;
+  revision: number;
+  disposition:
+    | 'continue-workflow'
+    | 'present-decision-brief'
+    | 'human-decision-recorded';
+  factsCurrent: boolean;
+  actionFingerprint: string;
+  hostAction: HostAction | null;
+  developerDecisionBrief?: DeveloperDecisionBrief;
+  stateWritten: false;
+}
+
 export function compileProblemHostAction(
   status: 'semantic-decision-required' | 'verification-required' | 'authority-invalid',
   clarificationBrief?: ClarificationBrief,

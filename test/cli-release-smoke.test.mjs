@@ -42,6 +42,22 @@ try {
   }, null, 2)}\n`, 'utf8');
   run(npmCommand(), ['install', '--ignore-scripts', '--no-audit', '--no-fund'], consumer);
   await verifyReleaseInstallation(consumer, expectedVersion);
+  const hostSurfacePath = join(consumer, 'host-surface.mjs');
+  writeFileSync(hostSurfacePath, [
+    "import { guardFinalResponse, runCli } from '@sovea/stetra/host';",
+    "const execution = await runCli(['--version'], { interactive: false, color: false });",
+    'process.stdout.write(JSON.stringify({',
+    '  guardType: typeof guardFinalResponse,',
+    '  runType: typeof runCli,',
+    '  version: execution.output,',
+    '}));',
+    '',
+  ].join('\n'), 'utf8');
+  assert.deepEqual(runJson(process.execPath, [hostSurfacePath], consumer, { shell: false }), {
+    guardType: 'function',
+    runType: 'function',
+    version: expectedVersion,
+  });
 
   const installedCli = join(consumer, 'node_modules/@sovea/stetra');
   const cliManifest = JSON.parse(readFileSync(join(installedCli, 'package.json'), 'utf8'));
@@ -124,6 +140,22 @@ try {
   const taskProjection = JSON.parse(readFileSync(prepared.details.taskPath, 'utf8'));
   assert.equal(taskProjection.workflow, 'cognitive-adoption');
   assert.equal(taskProjection.packageIdentity.core.version, expectedVersion);
+  const guardPath = join(consumer, 'host-guard.mjs');
+  writeFileSync(guardPath, [
+    "import { guardFinalResponse } from '@sovea/stetra/host';",
+    'const result = await guardFinalResponse({ projectRoot: process.argv[2], taskId: process.argv[3] });',
+    'process.stdout.write(JSON.stringify(result));',
+    '',
+  ].join('\n'), 'utf8');
+  const preparedGuard = runJson(
+    process.execPath,
+    [guardPath, project, prepared.taskId],
+    consumer,
+    { shell: false },
+  );
+  assert.equal(preparedGuard.disposition, 'continue-workflow');
+  assert.equal(preparedGuard.hostAction.kind, 'implement-and-collect');
+  assert.equal(preparedGuard.stateWritten, false);
 
   writeFileSync(join(project, 'src/example.ts'), 'export const value = 2;\n', 'utf8');
   const collected = runInstalledCli(['change', 'collect', project, '--task', prepared.taskId, '--json']);

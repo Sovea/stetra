@@ -85,6 +85,7 @@ import {
   resolutionHostAction,
   staleFactsHostAction,
   unavailableVerificationHostAction,
+  type FinalResponseGuard,
 } from './host-action.ts';
 import {
   challengeAuthoringPacket,
@@ -1573,7 +1574,7 @@ export async function guardFinalResponse(options: {
   projectRoot: string;
   taskId: string;
   hostAttestations?: HostAttestationProvider;
-}) {
+}): Promise<FinalResponseGuard> {
   const task = loadTask(options.projectRoot, options.taskId);
   const currentAttempt = task.projection.attempts.find((attempt) =>
     attempt.attemptId === task.projection.currentAttemptId)!;

@@ -71,3 +71,43 @@ stetra change explain . --task <task-id> --section events --json
 The Host cannot submit changed-file or check facts. Runtime facts cannot decide
 product meaning. Agent recommendation cannot become Human adoption through a
 label. Neither package calls an LLM.
+
+## Programmatic Host integration
+
+A Host that actually controls Agent contexts, tool policy, and the
+before-final-response boundary can embed the same CLI and read-only guard:
+
+```ts
+import {
+  guardFinalResponse,
+  runCli,
+  type HostAttestationProvider,
+} from '@sovea/stetra/host';
+
+const attestations: HostAttestationProvider = {
+  provenance: 'native-adapter',
+  async evaluatePolicies({ requirements }) {
+    return requirements.map((requirement) => ({
+      requirementId: requirement.id,
+      mode: 'unsupported',
+      provenance: 'native-adapter',
+    }));
+  },
+};
+
+await runCli(['change', 'collect', '.', '--task', taskId, '--json'], {
+  hostAttestations: attestations,
+  interactive: false,
+});
+
+const guard = await guardFinalResponse({
+  projectRoot: '.',
+  taskId,
+  hostAttestations: attestations,
+});
+```
+
+The provider must report only controls the embedding Host actually enforces.
+Importing this subpath does not itself create a hook or make a thin Markdown
+adapter trustworthy. The Host must invoke the guard at its real final-response
+boundary and follow the returned exact disposition and `hostAction`.

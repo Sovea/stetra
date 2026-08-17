@@ -27,15 +27,11 @@ JSON result, follow its structured **hostAction**. If **hostAction.reference**
 names a page, ensure that page is available in context; do not reread an
 unchanged page already present in one continuous context. Projection changes
 instructions, never lifecycle state, authority, evidence, or adoption meaning.
-When **hostAction.authoringPacket** is present, copy its **draft**, preserve its
-prefilled identities, and use **fieldRequirements** for exact allowed values and
-object variants. Those requirements describe input structure; they never choose
-an Agent judgment or Human decision. Read **semanticContext.exactDeveloperEvents**
-as Human authority and **semanticContext.agentInterpretation** as a separate
-Agent-authored interpretation; resolve discrepancies explicitly. Serialize the
-completed draft as JSON and attach it to the returned command's stdin in the
-same non-interactive process, exactly as **inputBinding** specifies. Do not start
-an interactive command and then try to type JSON into it.
+For an **authoringPacket**, fill its pre-bound **draft** according to
+**fieldRequirements** and send it once through the exact **inputBinding**.
+Requirements define structure, not judgment. Treat
+**semanticContext.exactDeveloperEvents** as Human authority and the separately
+labeled Agent interpretation as Agent judgment.
 
 Before final response, run **stetra change guard-final . --task
 <task-id> --json**. Continue the returned workflow, present its current brief,
@@ -43,26 +39,16 @@ or report its recorded Human decision according to **disposition**. This skill
 does not claim native Host enforcement.
 
 When **hostAction.developerDecisionBrief** is present, it owns the final
-cognitive handoff to the developer, even when another framework or workflow
-also requests a completion summary. Render it in the current conversation
-language. Lead with all four **decisionState** values, then contrast the desired
-outcome with the actual system meaning. Cover every condition and every
-decision issue named by **presentationRequirements**, including its linked
-review questions. Keep Runtime evidence compact unless a decision issue needs
-the exact reference. State explicitly that adoption is still pending, ask the
-developer for a decision, and stop. **decisionContinuation** is a future action:
-do not run it or fill its Human-authored fields until a new developer message
-supplies the exact decision.
+cognitive handoff even if another workflow requests a summary. Follow every
+**presentationRequirements** reference, preserve the four decision states,
+contrast intended with actual meaning, state that adoption is pending, ask for
+the decision, and stop. Never execute **decisionContinuation** before a new
+developer message supplies that decision.
 
-Keep the exact developer event, Host-authored task meaning and conditions,
-Runtime facts, Agent diagnoses/conclusions/recommendation, and Human decision
-visibly separate. Passing checks and challenges support review but do not
-record adoption. Never invent changed files or outcomes, hide Attention, or
-treat focus as write permission. The CLI never calls an LLM.
-
-Without a Developer Decision Brief, lead with **decision** and
-**semanticContract**. Preserve paths, IDs, enums, commands, numeric facts,
-Attention, and quoted events.
+Keep Human authority, Agent judgment, Runtime facts, and adoption separate.
+Passing evidence is not adoption. Never invent facts, hide Attention, or treat
+focus as permission. Preserve paths, IDs, enums, commands, numeric facts,
+quoted events, and every adoption-changing surface.
 `;
 }
 
@@ -157,7 +143,7 @@ Runtime generates event, evidence, condition, obligation, verifier, definition,
 plan, and contract IDs:
 
 ~~~json
-${JSON.stringify(DELEGATION_PREPARE_EXAMPLE, null, 2)}
+${JSON.stringify(DELEGATION_PREPARE_EXAMPLE, null, 1)}
 ~~~
 
 Replace or remove the example Evidence window after repository inspection;
