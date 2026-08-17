@@ -4,6 +4,7 @@ import test from 'node:test';
 import type { FactBundle } from '@sovea/stetra-core';
 
 import type { AuthoringPacket } from '../src/workflow/authoring.ts';
+import type { ChallengeExecutionPacket } from '../src/workflow/challenge-projection.ts';
 import type { DeveloperDecisionBrief } from '../src/workflow/decision-brief.ts';
 import {
   adverseChallengeHostAction,
@@ -22,7 +23,7 @@ test('host actions route the initial lifecycle with executable task argv', () =>
     command: { argv: ['stetra', 'change', 'collect', '.', '--task', 'task-id', '--json'] },
   });
   assert.equal(diagnosisHostAction('repair-implementation', 'task-id').kind, 'implement-and-collect');
-  const challenge = diagnosisHostAction('challenge', 'task-id', packet('challenge'));
+  const challenge = diagnosisHostAction('challenge', 'task-id', challengePacket());
   assert.equal(challenge.kind, 'perform-independent-challenge');
   assert.equal(challenge.challengeExecutionRequest?.role, 'independent-challenger');
   assert.equal(challenge.challengeExecutionRequest?.agentProfile, 'stetra-challenger');
@@ -31,7 +32,7 @@ test('host actions route the initial lifecycle with executable task argv', () =>
   assert.equal(challenge.challengeExecutionRequest?.bindsTo.attemptId, 'attempt:1');
   assert.equal(challenge.challengeExecutionRequest?.bindsTo.factCollectionId, digest('c'));
   assert.match(
-    challenge.challengeExecutionRequest?.bindsTo.authoringPacketFingerprint ?? '',
+    challenge.challengeExecutionRequest?.bindsTo.challengeExecutionPacketFingerprint ?? '',
     /^sha256:[0-9a-f]{64}$/,
   );
   assert.match(challenge.challengeExecutionRequest?.requestId ?? '', /^sha256:[0-9a-f]{64}$/);
@@ -39,8 +40,10 @@ test('host actions route the initial lifecycle with executable task argv', () =>
   assert.equal(challenge.challengeExecutionRequest?.contextPolicy, 'fresh-required');
   assert.equal(challenge.challengeExecutionRequest?.outputRepairBudget, 1);
   assert.deepEqual(challenge.challengeExecutionRequest?.expectedOutput, {
-    serialization: 'json', schema: 'challenge-document', source: 'authoringPacket.draft',
+    serialization: 'json', schema: 'challenge-document', source: 'challengeExecutionPacket.draft',
   });
+  assert.equal(challenge.authoringPacket, undefined);
+  assert.equal(challenge.challengeExecutionPacket?.target.obligation.id, 'obligation:test');
   assert.equal(challenge.inputBinding?.source, 'hostChallengeSubmission');
   assert.equal(diagnosisHostAction(
     'revise-verification', 'task-id', packet('verification-revision'),
@@ -81,7 +84,7 @@ test('collection routes timeout, diagnosis, required challenge, and ordinary han
     facts: passed,
     taskId: 'task-id',
     diagnosisPacket: packet('diagnosis'),
-    challengePacket: packet('challenge'),
+    challengePacket: challengePacket(),
     handoffPacket: packet('handoff'),
   };
   assert.equal(collectedHostAction({
@@ -182,6 +185,63 @@ function packet(inputKind: AuthoringPacket['inputKind']): AuthoringPacket {
       conditions: [], obligations: [], checks: [], changedFiles: [], challenges: [], attention: [],
     },
     outstandingObligations: [],
+  };
+}
+
+function challengePacket(): ChallengeExecutionPacket {
+  return {
+    inputKind: 'challenge',
+    bindsTo: {
+      taskId: 'task-id', revision: 1, effectiveContractId: digest('e'),
+      attemptId: 'attempt:1', factCollectionId: digest('c'),
+    },
+    target: {
+      condition: {
+        authority: 'agent-judgment', id: 'condition:test', key: 'condition',
+        statement: 'Condition.', adoptionRationale: 'Changes adoption.', criticality: 'material',
+      },
+      obligation: {
+        authority: 'agent-judgment', id: 'obligation:test', key: 'obligation',
+        conditionId: 'condition:test', statement: 'Obligation.',
+        falsification: {
+          failureHypothesis: 'The implementation may be wrong.',
+          scenario: 'Exercise the boundary.',
+          supportingObservation: 'The boundary holds.',
+          contradictingObservation: 'The boundary fails.',
+        },
+        strategies: [{ kind: 'independent-challenge', policy: 'required' }],
+      },
+      exactDeveloperEvents: {
+        authority: 'human-event',
+        events: [{
+          id: 'human:test', kind: 'task', content: 'Exact developer request.',
+          contentFingerprint: digest('h'),
+        }],
+      },
+    },
+    evidence: {
+      changedFiles: [], checks: [], repositoryEvidence: [], verifierMutations: [], patch: null,
+    },
+    draft: {
+      obligationIds: ['obligation:test'],
+      falsification: {
+        failureHypothesis: 'The implementation may be wrong.',
+        scenario: 'Exercise the boundary.',
+        supportingObservation: 'The boundary holds.',
+        contradictingObservation: 'The boundary fails.',
+      },
+      evidence: {
+        changedFiles: [], checks: [], repositoryEvidence: [], humanEvents: ['human:test'], patch: false,
+      },
+      falsificationAttempt: '', observedResult: '', supportingEvidence: [], counterEvidence: [],
+      outcome: '', conclusion: '',
+    },
+    output: {
+      authority: 'agent-judgment',
+      allowedOutcomes: ['supported', 'partial', 'contradicted', 'unknown'],
+      evidenceItemShape: { statement: '<statement>', references: [{ kind: '<kind>', id: '<id>' }] },
+      instruction: 'Fill the draft.',
+    },
   };
 }
 

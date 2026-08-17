@@ -174,22 +174,67 @@ try {
   assert.equal(collected.hostAction.challengeExecutionRequest.agentProfile, 'stetra-challenger');
 
   const challengePath = join(temporary, 'challenge.json');
-  const challengeDraft = structuredClone(collected.hostAction.authoringPacket.draft);
+  assert.equal(collected.hostAction.authoringPacket, undefined);
+  assert.match(
+    collected.hostAction.challengeExecutionRequest.bindsTo.challengeExecutionPacketFingerprint,
+    /^sha256:[0-9a-f]{64}$/,
+  );
+  const challengeDraft = structuredClone(collected.hostAction.challengeExecutionPacket.draft);
   challengeDraft.falsificationAttempt = 'Inspected whether the passing command depends on the changed export.';
-  challengeDraft.observedResult = 'The packed command observes value 2, but the thin Host cannot attest context independence.';
+  challengeDraft.observedResult = 'The packed command observes value 2 in a Host-observed separate context.';
   challengeDraft.supportingEvidence = [{
     statement: 'The current Runtime check supports the bounded export observation.',
     references: challengeDraft.evidence.checks.map((id) => ({ kind: 'check', id })),
   }];
   challengeDraft.outcome = 'supported';
-  challengeDraft.conclusion = 'The bounded observation is supported without trusted Host attestation.';
-  writeFileSync(challengePath, `${JSON.stringify({ challenge: challengeDraft }, null, 2)}\n`, 'utf8');
-  const challenged = runInstalledCli([
-    'change', 'challenge', project, '--task', prepared.taskId, '--input', challengePath, '--json',
-  ]);
-  assert.equal(challenged.challenge.independence, 'unverified');
+  challengeDraft.conclusion = 'The bounded observation is supported by the Host-observed Challenge.';
+  writeFileSync(challengePath, `${JSON.stringify({
+    project,
+    taskId: prepared.taskId,
+    request: collected.hostAction.challengeExecutionRequest,
+    challenge: challengeDraft,
+  }, null, 2)}\n`, 'utf8');
+  const trustedChallengePath = join(consumer, 'trusted-challenge.mjs');
+  writeFileSync(trustedChallengePath, [
+    "import { readFileSync } from 'node:fs';",
+    "import { Readable } from 'node:stream';",
+    "import { HostChallengeLifecycle, runCli } from '@sovea/stetra/host';",
+    "const input = JSON.parse(readFileSync(process.argv[2], 'utf8'));",
+    "const lifecycle = new HostChallengeLifecycle('evaluation-runner');",
+    'lifecycle.observeStart({',
+    '  request: input.request,',
+    "  agentType: 'stetra-challenger',",
+    "  parentContextId: 'context:packed-implementer',",
+    "  challengerContextId: 'context:packed-challenger',",
+    "  mutationPolicy: 'host-read-only',",
+    '});',
+    'const stopped = lifecycle.observeStop({',
+    '  requestId: input.request.requestId,',
+    "  agentType: 'stetra-challenger',",
+    "  challengerContextId: 'context:packed-challenger',",
+    '  output: input.challenge,',
+    '});',
+    "if (stopped.status !== 'completed') throw new Error('Packed Challenge output is invalid.');",
+    'const execution = await runCli([',
+    "  'change', 'challenge', input.project, '--task', input.taskId, '--input', '-', '--json',",
+    '], {',
+    '  interactive: false, color: false,',
+    '  input: Readable.from([JSON.stringify(stopped.submission)]),',
+    '  hostAttestations: {',
+    "    provenance: 'evaluation-runner',",
+    '    async evaluatePolicies() { return []; },',
+    '    verifyChallengeRun: lifecycle.verifyChallengeRun,',
+    '  },',
+    '});',
+    "process.stdout.write(typeof execution.output === 'string' ? execution.output : JSON.stringify(execution.output));",
+    '',
+  ].join('\n'), 'utf8');
+  const challenged = runJson(process.execPath, [trustedChallengePath, challengePath], consumer, {
+    shell: false,
+  });
+  assert.equal(challenged.challenge.independence, 'host-attested');
   assert.equal(challenged.hostAction.kind, 'author-handoff');
-  assert.ok(challenged.hostAction.authoringPacket.outstandingObligations.some(
+  assert.ok(!challenged.hostAction.authoringPacket.outstandingObligations.some(
     (item) => item.code === 'direct-human-review-required',
   ));
 
@@ -201,16 +246,16 @@ try {
     .map((check) => check.definitionId);
   handoffDraft.summary = 'The packed fixture now exports value 2 instead of value 1.';
   for (const conclusion of handoffDraft.obligationConclusions) {
-    conclusion.status = 'partial';
+    conclusion.status = 'supported';
     conclusion.falsification = {
       attempt: 'Inspected whether the passing command observes the changed export boundary.',
       observedResult: 'The command result depended on the exported value being 2.',
     };
-    conclusion.conclusion = 'The current check passes, while independent falsification is unavailable in the thin Host.';
+    conclusion.conclusion = 'The current check and Host-attested Challenge support the bounded obligation.';
   }
   for (const conclusion of handoffDraft.conditionConclusions) {
-    conclusion.status = 'partial';
-    conclusion.summary = 'The missing independent challenge prevents full support.';
+    conclusion.status = 'supported';
+    conclusion.summary = 'The current evidence supports the bounded condition.';
   }
   handoffDraft.importantSystemEffects = ['The export is now 2.'];
   for (const question of handoffDraft.reviewQuestions) {
@@ -221,9 +266,9 @@ try {
     ];
   }
   handoffDraft.recommendation = {
-    action: 'defer',
-    rationale: 'Current facts support review, while the thin Host cannot attest challenge independence.',
-    caveats: ['Challenge independence remains a direct Human review concern.'],
+    action: 'accept',
+    rationale: 'Current facts and the Host-attested Challenge support adoption review.',
+    caveats: [],
   };
   writeFileSync(handoffPath, `${JSON.stringify(handoffDraft, null, 2)}\n`, 'utf8');
   const handedOff = runInstalledCli(['change', 'handoff', project, '--task', prepared.taskId, '--input', handoffPath, '--json']);

@@ -89,7 +89,9 @@ test('project init generates the Cognitive Adoption host projection and manifest
     assert.match(challengerAgent, /name = "stetra-challenger"/);
     assert.match(challengerAgent, /sandbox_mode = "read-only"/);
     assert.match(challengerAgent, /Return exactly one JSON Challenge Document/);
-    assert.match(challengerAgent, /Never author request identity, context identity, independence/);
+    assert.match(challengerAgent, /Never\s+author request identity, context identity, independence/);
+    assert.match(challengerAgent, /do not load the\s+general Stetra skill/);
+    assert.match(challengerAgent, /challengeExecutionPacket\.draft/);
     assert.match(skill, /do not reread an\s+unchanged page/);
     assert.match(change, /change prepare/);
     assert.match(change, /developerEvent/);

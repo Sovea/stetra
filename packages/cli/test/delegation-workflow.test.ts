@@ -728,7 +728,7 @@ test('a thin Host runs the bounded Challenger but preserves unverified direct re
       guardedChallenge.hostAction?.challengeExecutionRequest?.requestId,
       collected.hostAction.challengeExecutionRequest.requestId,
     );
-    const challengeDraft = structuredClone(collected.hostAction.authoringPacket.draft);
+    const challengeDraft = structuredClone(collected.hostAction.challengeExecutionPacket.draft);
     challengeDraft.falsificationAttempt = 'Inspected the changed verifier in a separate but unattested context.';
     challengeDraft.observedResult = 'The selected evidence did not expose the frozen failure hypothesis.';
     challengeDraft.supportingEvidence = [{
@@ -857,7 +857,7 @@ test('a tree verifier selector detects a changed descendant and triggers challen
   }
 });
 
-test('a canonical Challenge Authoring Packet completes the persisted challenge-to-handoff path', async () => {
+test('a bounded Challenge Execution Packet completes the persisted challenge-to-handoff path', async () => {
   const root = createRepository();
   try {
     const document = prepareDocument({
@@ -870,26 +870,26 @@ test('a canonical Challenge Authoring Packet completes the persisted challenge-t
     writeFileSync(join(root, 'source.txt'), 'changed verifier surface\n', 'utf8');
     const collected = await collect(root, prepared.taskId, trustedHost);
     assert.equal(collected.hostAction.kind, 'perform-independent-challenge');
-    assert.deepEqual(
-      Object.keys(collected.hostAction.authoringPacket.referenceCatalog),
-      ['conditions', 'obligations', 'checks', 'changedFiles', 'challenges', 'repositoryEvidence'],
-    );
+    assert.equal(collected.hostAction.authoringPacket, undefined);
+    assert.deepEqual(Object.keys(collected.hostAction.challengeExecutionPacket), [
+      'inputKind', 'bindsTo', 'target', 'evidence', 'draft', 'output',
+    ]);
     assert.equal(
-      collected.hostAction.authoringPacket.semanticContext.exactDeveloperEvents.events[0].content,
+      collected.hostAction.challengeExecutionPacket.target.exactDeveloperEvents.events[0].content,
       'Keep the exact developer phrase "arguments" visible.',
     );
     assert.equal(
-      collected.hostAction.authoringPacket.semanticContext.agentInterpretation.desiredOutcome,
-      'Preserve the requested public wording.',
+      collected.hostAction.challengeExecutionPacket.target.condition.statement,
+      prepared.taskContract.adoptionConditions[0].statement,
     );
-    assert.equal(collected.hostAction.authoringPacket.semanticContext.exactDeveloperEvents.authority, 'human-event');
-    assert.equal(collected.hostAction.authoringPacket.semanticContext.agentInterpretation.authority, 'agent-judgment');
+    assert.equal(collected.hostAction.challengeExecutionPacket.target.exactDeveloperEvents.authority, 'human-event');
+    assert.equal(collected.hostAction.challengeExecutionPacket.target.condition.authority, 'agent-judgment');
     assert.deepEqual(collected.hostAction.inputBinding, {
       transport: 'stdin', source: 'hostChallengeSubmission', serialization: 'json', execution: 'one-shot',
     });
 
-    const challengeDraft = structuredClone(collected.hostAction.authoringPacket.draft);
-    const changedFileIds = collected.hostAction.authoringPacket.referenceCatalog.changedFiles
+    const challengeDraft = structuredClone(collected.hostAction.challengeExecutionPacket.draft);
+    const changedFileIds = collected.hostAction.challengeExecutionPacket.evidence.changedFiles
       .map((item: { id: string }) => item.id);
     assert.deepEqual(challengeDraft.evidence.changedFiles, changedFileIds);
     challengeDraft.falsificationAttempt = 'Inspected the changed verifier and exercised the bounded behavior independently.';
@@ -983,11 +983,17 @@ test('Challenge receipts require current request, exact output, trusted verifica
     }));
     writeFileSync(join(root, 'source.txt'), 'challenge receipt boundary\n', 'utf8');
     const collected = await collect(root, prepared.taskId, trustedHost);
-    const draft = structuredClone(collected.hostAction.authoringPacket.draft);
+    const draft = structuredClone(collected.hostAction.challengeExecutionPacket.draft);
     draft.falsificationAttempt = 'Inspected the exact bounded behavior in a separate context.';
     draft.observedResult = 'The stated counterexample was not observed.';
     draft.outcome = 'supported';
     draft.conclusion = 'The bounded obligation is supported by the cited current evidence.';
+    const alteredSelection = structuredClone(draft);
+    alteredSelection.evidence.checks = [];
+    await assert.rejects(
+      challenge(root, prepared.taskId, alteredSelection),
+      /preserve the exact frozen falsification and evidence selection/,
+    );
     const submission: any = challengeSubmission(
       root,
       prepared.taskId,
@@ -1081,7 +1087,7 @@ test('Challenge receipt cannot outlive the collected worktree facts', async () =
     }));
     writeFileSync(join(root, 'source.txt'), 'collected implementation\n', 'utf8');
     const collected = await collect(root, prepared.taskId, trustedHost);
-    const draft = structuredClone(collected.hostAction.authoringPacket.draft);
+    const draft = structuredClone(collected.hostAction.challengeExecutionPacket.draft);
     draft.falsificationAttempt = 'Inspected the current collected implementation.';
     draft.observedResult = 'The current collected boundary was supported.';
     draft.outcome = 'supported';
@@ -1116,7 +1122,7 @@ test('an adverse Challenge returns to bounded diagnosis and a successor Attempt 
     const collected = await collect(root, prepared.taskId, trustedHost);
     assert.equal(collected.hostAction.kind, 'perform-independent-challenge');
 
-    const challengeDraft = structuredClone(collected.hostAction.authoringPacket.draft);
+    const challengeDraft = structuredClone(collected.hostAction.challengeExecutionPacket.draft);
     const checkId = challengeDraft.evidence.checks[0];
     challengeDraft.falsificationAttempt = 'Exercised the declared counterexample in a fresh context.';
     challengeDraft.observedResult = 'The counterexample contradicted the bounded obligation.';
@@ -1160,7 +1166,7 @@ test('an adverse Challenge returns to bounded diagnosis and a successor Attempt 
     assert.equal(recollected.attemptId, 'attempt:2');
     assert.equal(recollected.hostAction.kind, 'perform-independent-challenge');
     assert.notEqual(
-      recollected.hostAction.authoringPacket.bindsTo.factCollectionId,
+      recollected.hostAction.challengeExecutionPacket.bindsTo.factCollectionId,
       challenged.challenge.factCollectionId,
     );
   } finally {

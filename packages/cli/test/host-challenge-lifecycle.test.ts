@@ -34,6 +34,13 @@ test('Host Challenge lifecycle binds start, stop, exact output, and single consu
     receipt: stopped.submission.hostReceipt,
     challenge,
   }), false);
+  const alteredPacketRequest = structuredClone(request);
+  alteredPacketRequest.bindsTo.challengeExecutionPacketFingerprint = digest('b');
+  assert.equal(await lifecycle.verifyChallengeRun({
+    request: alteredPacketRequest,
+    receipt: stopped.submission.hostReceipt,
+    challenge,
+  }), false);
   assert.equal(await lifecycle.verifyChallengeRun({
     request,
     receipt: stopped.submission.hostReceipt,
@@ -122,7 +129,7 @@ function requestFixture(character: string): ChallengeExecutionRequest {
       effectiveContractId: digest('e'),
       attemptId: 'attempt:1',
       factCollectionId: digest('f'),
-      authoringPacketFingerprint: digest('a'),
+      challengeExecutionPacketFingerprint: digest('a'),
     },
     contextPolicy: 'fresh-required',
     mutationPolicy: 'forbidden',
@@ -131,7 +138,7 @@ function requestFixture(character: string): ChallengeExecutionRequest {
     expectedOutput: {
       serialization: 'json',
       schema: 'challenge-document',
-      source: 'authoringPacket.draft',
+      source: 'challengeExecutionPacket.draft',
     },
   };
 }
