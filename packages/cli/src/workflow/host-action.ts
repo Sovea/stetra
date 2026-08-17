@@ -7,6 +7,7 @@ import type {
 } from '@sovea/stetra-core';
 
 import type { AuthoringPacket } from './authoring.ts';
+import type { ChallengeExecutionPacket } from './challenge-projection.ts';
 import type { DeveloperDecisionBrief } from './decision-brief.ts';
 import { stableFingerprint } from '../protocol.ts';
 
@@ -26,7 +27,7 @@ export interface ChallengeExecutionRequest {
     effectiveContractId: string;
     attemptId: string;
     factCollectionId: string;
-    authoringPacketFingerprint: string;
+    challengeExecutionPacketFingerprint: string;
   };
   contextPolicy: 'fresh-required';
   mutationPolicy: 'forbidden';
@@ -35,7 +36,7 @@ export interface ChallengeExecutionRequest {
   expectedOutput: {
     serialization: 'json';
     schema: 'challenge-document';
-    source: 'authoringPacket.draft';
+    source: 'challengeExecutionPacket.draft';
   };
 }
 
@@ -62,6 +63,7 @@ export interface HostAction {
     execution: 'one-shot';
   };
   authoringPacket?: AuthoringPacket;
+  challengeExecutionPacket?: ChallengeExecutionPacket;
   challengeExecutionRequest?: ChallengeExecutionRequest;
   developerDecisionBrief?: DeveloperDecisionBrief;
   presentationRequirements?: {
@@ -147,7 +149,7 @@ export function collectedHostAction(input: {
   facts: FactBundle;
   taskId: string;
   diagnosisPacket: AuthoringPacket;
-  challengePacket: AuthoringPacket;
+  challengePacket?: ChallengeExecutionPacket;
   handoffPacket: AuthoringPacket;
   pendingChallengeObligationIds: string[];
 }): HostAction {
@@ -169,7 +171,10 @@ export function collectedHostAction(input: {
     return inputAction('diagnose-collected-evidence', 'recovery', 'diagnose', input.taskId, input.diagnosisPacket);
   }
   if (input.pendingChallengeObligationIds.length) {
-    return challengeInputAction(input.taskId, input.challengePacket);
+    return challengeInputAction(
+      input.taskId,
+      requiredChallengeExecutionPacket(input.challengePacket, 'challenge'),
+    );
   }
   return inputAction('author-handoff', 'handoff', 'handoff', input.taskId, input.handoffPacket);
 }
@@ -182,7 +187,7 @@ export function diagnosisHostAction(
     | 'handoff'
     | 'ask-human',
   taskId: string,
-  packet?: AuthoringPacket,
+  packet?: AuthoringPacket | ChallengeExecutionPacket,
 ): HostAction {
   if (route === 'repair-implementation') return preparedHostAction(taskId);
   if (route === 'revise-verification') {
@@ -192,7 +197,7 @@ export function diagnosisHostAction(
     );
   }
   if (route === 'challenge') {
-    return challengeInputAction(taskId, requiredAuthoringPacket(packet, route));
+    return challengeInputAction(taskId, requiredChallengeExecutionPacket(packet, route));
   }
   if (route === 'handoff') {
     return inputAction(
@@ -206,11 +211,14 @@ export function diagnosisHostAction(
 export function challengeHostAction(
   taskId: string,
   needsAnotherChallenge: boolean,
-  packet: AuthoringPacket,
+  packet: AuthoringPacket | ChallengeExecutionPacket,
 ): HostAction {
   return needsAnotherChallenge
-    ? challengeInputAction(taskId, packet)
-    : inputAction('author-handoff', 'handoff', 'handoff', taskId, packet);
+    ? challengeInputAction(taskId, requiredChallengeExecutionPacket(packet, 'challenge'))
+    : inputAction(
+        'author-handoff', 'handoff', 'handoff', taskId,
+        requiredAuthoringPacket(packet, 'handoff'),
+      );
 }
 
 export function adverseChallengeHostAction(
@@ -303,22 +311,19 @@ function inputAction(
 
 function challengeInputAction(
   taskId: string,
-  authoringPacket: AuthoringPacket,
+  challengeExecutionPacket: ChallengeExecutionPacket,
 ): HostAction {
-  const factCollectionId = authoringPacket.bindsTo.factCollectionId;
-  if (!factCollectionId) {
-    throw new Error('Independent Challenge requires an Authoring Packet bound to collected facts.');
-  }
-  const authoringPacketFingerprint = stableFingerprint(authoringPacket);
+  const factCollectionId = challengeExecutionPacket.bindsTo.factCollectionId;
+  const challengeExecutionPacketFingerprint = stableFingerprint(challengeExecutionPacket);
   const requestBody = {
     role: 'independent-challenger' as const,
     agentProfile: 'stetra-challenger' as const,
     bindsTo: {
       taskId,
-      effectiveContractId: authoringPacket.bindsTo.effectiveContractId,
-      attemptId: authoringPacket.bindsTo.attemptId,
+      effectiveContractId: challengeExecutionPacket.bindsTo.effectiveContractId,
+      attemptId: challengeExecutionPacket.bindsTo.attemptId,
       factCollectionId,
-      authoringPacketFingerprint,
+      challengeExecutionPacketFingerprint,
     },
     contextPolicy: 'fresh-required' as const,
     mutationPolicy: 'forbidden' as const,
@@ -327,18 +332,22 @@ function challengeInputAction(
     expectedOutput: {
       serialization: 'json' as const,
       schema: 'challenge-document' as const,
-      source: 'authoringPacket.draft' as const,
+      source: 'challengeExecutionPacket.draft' as const,
     },
   };
-  const action = inputAction(
-      'perform-independent-challenge', 'challenge', 'challenge', taskId, authoringPacket,
-    );
   return {
-    ...action,
-    inputBinding: {
-      ...action.inputBinding!,
-      source: 'hostChallengeSubmission',
+    kind: 'perform-independent-challenge',
+    reference: 'challenge',
+    command: {
+      argv: ['stetra', 'change', 'challenge', '.', '--task', taskId, '--input', '-', '--json'],
     },
+    inputBinding: {
+      transport: 'stdin',
+      source: 'hostChallengeSubmission',
+      serialization: 'json',
+      execution: 'one-shot',
+    },
+    challengeExecutionPacket,
     challengeExecutionRequest: {
       requestId: stableFingerprint(requestBody),
       ...requestBody,
@@ -347,10 +356,22 @@ function challengeInputAction(
 }
 
 function requiredAuthoringPacket(
-  packet: AuthoringPacket | undefined,
+  packet: AuthoringPacket | ChallengeExecutionPacket | undefined,
   route: string,
 ): AuthoringPacket {
-  if (!packet) throw new Error(`Route ${route} requires an Authoring Packet.`);
+  if (!packet || packet.inputKind === 'challenge') {
+    throw new Error(`Route ${route} requires an Authoring Packet.`);
+  }
+  return packet;
+}
+
+function requiredChallengeExecutionPacket(
+  packet: AuthoringPacket | ChallengeExecutionPacket | undefined,
+  route: string,
+): ChallengeExecutionPacket {
+  if (!packet || packet.inputKind !== 'challenge') {
+    throw new Error(`Route ${route} requires a Challenge Execution Packet.`);
+  }
   return packet;
 }
 

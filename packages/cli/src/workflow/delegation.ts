@@ -90,13 +90,13 @@ import {
   type FinalResponseGuard,
 } from './host-action.ts';
 import {
-  challengeAuthoringPacket,
   decisionAuthoringPacket,
   diagnosisAuthoringPacket,
   handoffAuthoringPacket,
   resolutionAuthoringPacket,
   verificationRevisionAuthoringPacket,
 } from './authoring.ts';
+import { challengeExecutionPacket } from './challenge-projection.ts';
 import { buildDeveloperDecisionBrief } from './decision-brief.ts';
 import {
   canonicalProjectRoot,
@@ -637,13 +637,15 @@ export async function collectDelegationFacts(options: {
       diagnosisPacket: diagnosisAuthoringPacket({
         task: transitioned.projection, contract: currentContract, facts: collectedFacts,
       }),
-      challengePacket: challengeAuthoringPacket({
-        task: transitioned.projection,
-        contract: currentContract,
-        facts: collectedFacts,
-        challenges: collectedChallenges,
-        requiredObligationIds: requiredChallenges,
-      }),
+      ...(pendingChallenges.length ? {
+        challengePacket: challengeExecutionPacket({
+          task: transitioned.projection,
+          contract: currentContract,
+          facts: collectedFacts,
+          completedObligationIds: completedChallengeObligationIds(collectedChallenges),
+          requiredObligationIds: requiredChallenges,
+        }),
+      } : {}),
       handoffPacket: handoffAuthoringPacket({
         task: transitioned.projection,
         contract: currentContract,
@@ -794,9 +796,10 @@ export async function diagnoseCollectedEvidence(options: {
           facts: currentFacts,
         })
     : route === 'challenge' && currentFacts
-      ? challengeAuthoringPacket({
+      ? challengeExecutionPacket({
           task: transitioned.projection, contract: currentContract, facts: currentFacts,
-          challenges, requiredObligationIds: required,
+          completedObligationIds: completedChallengeObligationIds(challenges),
+          requiredObligationIds: required,
         })
       : route === 'handoff' && currentFacts
         ? handoffAuthoringPacket({
@@ -849,16 +852,20 @@ export async function recordChallenge(options: {
       const requestedAction = currentTaskHostAction(task, true);
       if (requestedAction?.kind !== 'perform-independent-challenge'
         || !requestedAction.challengeExecutionRequest
-        || !requestedAction.authoringPacket) {
+        || !requestedAction.challengeExecutionPacket) {
         throw usageError('The current task state does not request an Independent Challenge.');
       }
       const request = requestedAction.challengeExecutionRequest;
-      const requestedObligationIds = (
-        requestedAction.authoringPacket.draft as { obligationIds?: unknown }
-      ).obligationIds;
-      if (!Array.isArray(requestedObligationIds)
-        || stableFingerprint(requestedObligationIds) !== stableFingerprint(source.challenge.obligationIds)) {
+      const requestedDraft = requestedAction.challengeExecutionPacket.draft;
+      if (stableFingerprint(requestedDraft.obligationIds)
+        !== stableFingerprint(source.challenge.obligationIds)) {
         throw inputError('Challenge must answer the exact Evidence Obligation in the current Challenge Execution Request.');
+      }
+      if (stableFingerprint(requestedDraft.falsification)
+          !== stableFingerprint(source.challenge.falsification)
+        || stableFingerprint(requestedDraft.evidence)
+          !== stableFingerprint(source.challenge.evidence)) {
+        throw inputError('Challenge must preserve the exact frozen falsification and evidence selection in the current Challenge Execution Packet.');
       }
       if (source.requestId && source.requestId !== request.requestId) {
         throw inputError('Challenge requestId does not match the current Challenge Execution Request.');
@@ -933,29 +940,29 @@ export async function recordChallenge(options: {
   const challengeAttestationAvailable = Boolean(options.hostAttestations?.verifyChallengeRun);
   const adverse = challenge!.outcome !== 'supported';
   const performAnotherChallenge = !adverse && pending.length > 0;
-  const packet = adverse
-    ? diagnosisAuthoringPacket({
+  const nextAction = adverse
+    ? adverseChallengeHostAction(transitioned.taskId, diagnosisAuthoringPacket({
         task: transitioned.projection,
         contract: transitionedContract,
         facts: transitionedFacts,
         challenges,
-      })
+      }))
     : performAnotherChallenge
-    ? challengeAuthoringPacket({
-        task: transitioned.projection,
-        contract: transitionedContract,
-        facts: transitionedFacts,
-        challenges,
-        requiredObligationIds: required,
-      })
-    : handoffAuthoringPacket({
-        task: transitioned.projection,
-        contract: transitionedContract,
-        facts: transitionedFacts,
-        challenges,
-        requiredObligationIds: required,
-        challengeAttestationAvailable,
-      });
+      ? challengeHostAction(transitioned.taskId, true, challengeExecutionPacket({
+          task: transitioned.projection,
+          contract: transitionedContract,
+          facts: transitionedFacts,
+          completedObligationIds: completedChallengeObligationIds(challenges),
+          requiredObligationIds: required,
+        }))
+      : challengeHostAction(transitioned.taskId, false, handoffAuthoringPacket({
+          task: transitioned.projection,
+          contract: transitionedContract,
+          facts: transitionedFacts,
+          challenges,
+          requiredObligationIds: required,
+          challengeAttestationAvailable,
+        }));
   return {
     protocol: DELEGATION_PROTOCOL,
     schemaVersion: DELEGATION_SCHEMA_VERSION,
@@ -964,9 +971,7 @@ export async function recordChallenge(options: {
     attemptId: challenge!.attemptId,
     factCollectionId: challenge!.factCollectionId,
     challenge: challenge!,
-    hostAction: adverse
-      ? adverseChallengeHostAction(transitioned.taskId, packet)
-      : challengeHostAction(transitioned.taskId, performAnotherChallenge, packet),
+    hostAction: nextAction,
   };
 }
 
@@ -1340,8 +1345,9 @@ export async function resolveHumanChoice(options: {
       const challengeAttestationAvailable = Boolean(options.hostAttestations?.verifyChallengeRun);
       const performChallenge = needsChallenge;
       const packet = performChallenge
-        ? challengeAuthoringPacket({
-            task: transitioned.projection, contract, facts, challenges,
+        ? challengeExecutionPacket({
+            task: transitioned.projection, contract, facts,
+            completedObligationIds: completedChallengeObligationIds(challenges),
             requiredObligationIds: required,
           })
         : handoffAuthoringPacket({
@@ -1715,8 +1721,9 @@ function currentTaskHostAction(task: LoadedTask, challengeAttestationAvailable =
     const packet = disposition.route === 'revise-verification'
       ? verificationRevisionAuthoringPacket({ task: task.projection, contract, facts })
       : disposition.route === 'challenge'
-        ? challengeAuthoringPacket({
-            task: task.projection, contract, facts, challenges,
+        ? challengeExecutionPacket({
+            task: task.projection, contract, facts,
+            completedObligationIds: completedChallengeObligationIds(challenges),
             requiredObligationIds: required,
           })
         : disposition.route === 'handoff'
@@ -1740,10 +1747,13 @@ function currentTaskHostAction(task: LoadedTask, challengeAttestationAvailable =
     facts,
     taskId: task.taskId,
     diagnosisPacket: diagnosisAuthoringPacket({ task: task.projection, contract, facts }),
-    challengePacket: challengeAuthoringPacket({
-      task: task.projection, contract, facts, challenges,
-      requiredObligationIds: required,
-    }),
+    ...(pending.length ? {
+      challengePacket: challengeExecutionPacket({
+        task: task.projection, contract, facts,
+        completedObligationIds: completedChallengeObligationIds(challenges),
+        requiredObligationIds: required,
+      }),
+    } : {}),
     handoffPacket: handoffAuthoringPacket({
       task: task.projection, contract, facts, challenges,
       requiredObligationIds: required,
@@ -2439,6 +2449,10 @@ function pendingChallengeObligationIds(
 ): string[] {
   const covered = new Set(challenges.flatMap((challenge) => challenge.obligationIds));
   return requiredObligationIds.filter((id) => !covered.has(id));
+}
+
+function completedChallengeObligationIds(challenges: IndependentChallenge[]): string[] {
+  return unique(challenges.flatMap((challenge) => challenge.obligationIds));
 }
 
 function attemptOutcomeFingerprint(facts: FactBundle): string {

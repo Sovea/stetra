@@ -185,7 +185,7 @@ function validateChallenges(input: EvaluateHandoffInput): void {
   for (const [index, challenge] of input.challenges.entries()) {
     const path = `challenges[${index}]`;
     if (!challenge) {
-      issues.push(issue('challenge-object-required', path, 'Challenge must be an object.', 'Use the current Challenge Authoring Packet.'));
+      issues.push(issue('challenge-object-required', path, 'Challenge must be an object.', 'Use the current Challenge Execution Packet.'));
       continue;
     }
     const selected = challenge?.obligationIds?.map((id) => obligations.get(id));
@@ -201,12 +201,12 @@ function validateChallenges(input: EvaluateHandoffInput): void {
     if (challenge.effectiveContractId !== input.contract.effectiveContractId
       || challenge.attemptId !== input.factBundle.attemptId
       || challenge.factCollectionId !== input.factBundle.factCollectionId) {
-      issues.push(issue('challenge-binding-invalid', path, 'Challenge is not bound to the current contract, Attempt, and facts.', 'Regenerate it from the current Challenge Authoring Packet.'));
+      issues.push(issue('challenge-binding-invalid', path, 'Challenge is not bound to the current contract, Attempt, and facts.', 'Regenerate it from the current Challenge Execution Packet.'));
     }
     if (!Array.isArray(challenge.obligationIds) || !challenge.obligationIds.length
       || new Set(challenge.obligationIds).size !== challenge.obligationIds.length
       || selected.some((item) => !item)) {
-      issues.push(issue('challenge-obligation-reference-invalid', `${path}.obligationIds`, 'Challenge obligations are missing, duplicated, or not part of the current contract.', 'Use exact obligation ids from the current Challenge Authoring Packet.'));
+      issues.push(issue('challenge-obligation-reference-invalid', `${path}.obligationIds`, 'Challenge obligations are missing, duplicated, or not part of the current contract.', 'Use exact obligation ids from the current Challenge Execution Packet.'));
     }
     if (!Array.isArray(challenge.conditionIds)
       || stableFingerprint(challenge.conditionIds) !== stableFingerprint(expectedConditions)) {
@@ -230,7 +230,7 @@ function validateChallenges(input: EvaluateHandoffInput): void {
       issues.push(issue('challenge-conclusion-required', `${path}.conclusion`, 'A concrete challenge conclusion is required.', 'Explain the bounded result of the challenge.'));
     }
     if (!challenge.evidence) {
-      issues.push(issue('challenge-evidence-required', `${path}.evidence`, 'Challenge evidence selection is required.', 'Use the evidence selection from the current Challenge Authoring Packet.'));
+      issues.push(issue('challenge-evidence-required', `${path}.evidence`, 'Challenge evidence selection is required.', 'Use the evidence selection from the current Challenge Execution Packet.'));
     } else {
       validateChallengeRefs(challenge.evidence.changedFiles, changedFileIds, `${path}.evidence.changedFiles`, 'changed-file', issues);
       validateChallengeRefs(challenge.evidence.checks, definitionIds, `${path}.evidence.checks`, 'check', issues);
@@ -256,7 +256,7 @@ function validateChallengeFalsification(
   issues: HandoffValidationIssue[],
 ): void {
   if (!isRecord(value)) {
-    issues.push(issue('challenge-falsification-design-invalid', path, 'Challenge falsification design must be an object.', 'Use the frozen design from the current Challenge Authoring Packet.'));
+    issues.push(issue('challenge-falsification-design-invalid', path, 'Challenge falsification design must be an object.', 'Use the frozen design from the current Challenge Execution Packet.'));
     return;
   }
   exact(value, [
@@ -282,7 +282,7 @@ function validateChallengeRefs(
   issues: HandoffValidationIssue[],
 ): void {
   if (!Array.isArray(value)) {
-    issues.push(issue('challenge-evidence-references-invalid', path, `${kind} references must be an array.`, `Use exact ${kind} ids from the current Challenge Authoring Packet.`));
+    issues.push(issue('challenge-evidence-references-invalid', path, `${kind} references must be an array.`, `Use exact ${kind} ids from the current Challenge Execution Packet.`));
     return;
   }
   if (new Set(value).size !== value.length) {
@@ -290,7 +290,7 @@ function validateChallengeRefs(
   }
   for (const [index, reference] of value.entries()) {
     if (typeof reference !== 'string' || !available.has(reference)) {
-      issues.push(issue('challenge-evidence-reference-invalid', `${path}[${index}]`, `Unknown current ${kind} identity ${JSON.stringify(reference)}.`, `Use an exact ${kind} id from the current Challenge Authoring Packet.`));
+      issues.push(issue('challenge-evidence-reference-invalid', `${path}[${index}]`, `Unknown current ${kind} identity ${JSON.stringify(reference)}.`, `Use an exact ${kind} id from the current Challenge Execution Packet.`));
     }
   }
 }

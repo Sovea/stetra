@@ -30,6 +30,14 @@ export type {
 } from './runtime-context.ts';
 export type { AuthoringPacket } from './workflow/authoring.ts';
 export type {
+  ChallengeChangedFile,
+  ChallengeCheck,
+  ChallengeDocumentDraft,
+  ChallengeExecutionPacket,
+  ChallengeRepositoryEvidence,
+} from './workflow/challenge-projection.ts';
+export type {
+  ChallengeDocument,
   ChallengeSubmission,
   HostChallengeRunReceipt,
 } from './schemas/delegation.ts';
