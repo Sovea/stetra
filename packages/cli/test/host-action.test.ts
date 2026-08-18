@@ -1,11 +1,14 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import type { FactBundle } from '@sovea/stetra-core';
+import type { FactBundle, HandoffAttentionItem } from '@sovea/stetra-core';
 
 import type { AuthoringPacket } from '../src/workflow/authoring.ts';
 import type { ChallengeExecutionPacket } from '../src/workflow/challenge-projection.ts';
-import type { DeveloperDecisionBrief } from '../src/workflow/decision-brief.ts';
+import {
+  aggregateDecisionAttention,
+  type DeveloperDecisionBrief,
+} from '../src/workflow/decision-brief.ts';
 import {
   adverseChallengeHostAction,
   collectedHostAction,
@@ -16,6 +19,36 @@ import {
   resolutionHostAction,
   staleFactsHostAction,
 } from '../src/workflow/host-action.ts';
+
+test('decision attention groups only by exact group and required resolution', () => {
+  const attention = [
+    attentionItem('attention:one', 'obligation', 'inspect', {
+      obligations: ['obligation:one'],
+    }),
+    attentionItem('attention:two', 'obligation', 'inspect', {
+      obligations: ['obligation:two'], conditions: ['condition:two'],
+    }),
+    attentionItem('attention:three', 'obligation', 'repair', {
+      obligations: ['obligation:one'],
+    }),
+  ];
+
+  const grouped = aggregateDecisionAttention(attention);
+
+  assert.equal(grouped.length, 2);
+  assert.deepEqual(grouped[0], {
+    group: 'obligation', resolution: 'inspect',
+    references: {
+      obligations: ['obligation:one', 'obligation:two'], conditions: ['condition:two'],
+    },
+    items: [attention[0], attention[1]],
+  });
+  assert.deepEqual(grouped[1], {
+    group: 'obligation', resolution: 'repair',
+    references: { obligations: ['obligation:one'] },
+    items: [attention[2]],
+  });
+});
 
 test('host actions route the initial lifecycle with executable task argv', () => {
   assert.deepEqual(preparedHostAction('task-id'), {
@@ -269,10 +302,12 @@ function brief(): DeveloperDecisionBrief {
       recommendation: 'defer', adoption: 'pending',
     },
     changeMeaning: {
-      desiredOutcome: 'Requested outcome.', actualSystemMeaning: 'Actual change.',
+      authority: 'agent-judgment', intendedOutcome: 'Requested outcome.',
+      actualSystemMeaning: 'Actual change.',
       importantSystemEffects: [],
     },
     conditions: [{
+      authority: 'agent-judgment',
       id: 'condition:test', statement: 'Condition.', criticality: 'material',
       status: 'partial', summary: 'Partially supported.', obligations: [],
     }],
@@ -286,12 +321,27 @@ function brief(): DeveloperDecisionBrief {
       }],
     }],
     evidenceHistory: [],
-    runtimeEvidence: { changedFiles: [], checks: [] },
+    runtimeEvidence: { authority: 'runtime-fact', changedFiles: [], checks: [] },
     requestedDecision: {
+      authority: 'human-decision',
       actions: ['accepted', 'correction-requested', 'rejected', 'deferred'],
-      acceptanceRequiresExceptionsFor: ['attention:test'],
+      acceptanceRequiresExceptionsFor: [{
+        decisionIssueId: 'decision-issue:test', attentionIds: ['attention:test'],
+      }],
     },
     detailSections: ['contract'],
+  };
+}
+
+function attentionItem(
+  id: string,
+  group: HandoffAttentionItem['group'],
+  resolution: HandoffAttentionItem['resolution']['kind'],
+  references: HandoffAttentionItem['references'],
+): HandoffAttentionItem {
+  return {
+    id, group, resolution: { kind: resolution }, references,
+    codes: ['direct-review-required'],
   };
 }
 

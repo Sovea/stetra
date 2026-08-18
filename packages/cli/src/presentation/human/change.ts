@@ -148,8 +148,9 @@ function appendDeveloperDecisionBrief(
   if (isRecord(brief.changeMeaning)) {
     lines.push(
       '',
-      `${colors.bold('Desired outcome:')} ${String(brief.changeMeaning.desiredOutcome ?? '')}`,
-      `${colors.bold('Actual system meaning:')} ${String(brief.changeMeaning.actualSystemMeaning ?? '')}`,
+      colors.bold('Agent interpretation'),
+      `${colors.bold('Intended outcome:')} ${String(brief.changeMeaning.intendedOutcome ?? '')}`,
+      `${colors.bold('Account of the actual system change:')} ${String(brief.changeMeaning.actualSystemMeaning ?? '')}`,
     );
     if (Array.isArray(brief.changeMeaning.importantSystemEffects)) {
       for (const effect of brief.changeMeaning.importantSystemEffects) {
@@ -158,7 +159,7 @@ function appendDeveloperDecisionBrief(
     }
   }
   if (Array.isArray(brief.conditions) && brief.conditions.length) {
-    lines.push('', colors.bold('Adoption conditions'));
+    lines.push('', colors.bold('Agent evidence conclusions'));
     for (const condition of brief.conditions) {
       if (!isRecord(condition)) continue;
       lines.push(
@@ -191,11 +192,25 @@ function appendDeveloperDecisionBrief(
   }
   if (Array.isArray(brief.decisionIssues) && brief.decisionIssues.length) {
     lines.push('', colors.bold('Decision issues'));
+    const conditionStatements = new Map<string, string>();
+    if (Array.isArray(brief.conditions)) {
+      for (const condition of brief.conditions) {
+        if (isRecord(condition) && typeof condition.id === 'string') {
+          conditionStatements.set(condition.id, String(condition.statement ?? condition.id));
+        }
+      }
+    }
     for (const issue of brief.decisionIssues) {
       if (!isRecord(issue)) continue;
-      const codes = Array.isArray(issue.codes) ? issue.codes.join(' + ') : 'unknown';
       const resolutions = Array.isArray(issue.resolutions) ? issue.resolutions.join(' / ') : 'inspect';
-      lines.push(`${colors.yellow('•')} ${codes} — ${resolutions} (${String(issue.id ?? '')})`);
+      const findingCount = Array.isArray(issue.attentionIds) ? issue.attentionIds.length : 0;
+      lines.push(`${colors.yellow('•')} ${String(issue.group ?? 'delivery')} — ${resolutions} (${findingCount} related finding(s))`);
+      if (Array.isArray(issue.conditionIds)) {
+        for (const conditionId of issue.conditionIds) {
+          const statement = conditionStatements.get(String(conditionId));
+          if (statement) lines.push(`  Affects: ${statement}`);
+        }
+      }
       if (Array.isArray(issue.residualUnknowns)) {
         for (const unknown of issue.residualUnknowns) {
           if (isRecord(unknown)) {
@@ -229,7 +244,7 @@ function appendDeveloperDecisionBrief(
       ? brief.runtimeEvidence.changedFiles : [];
     const checks = Array.isArray(brief.runtimeEvidence.checks)
       ? brief.runtimeEvidence.checks : [];
-    lines.push('', colors.bold('Runtime evidence'), `Changed files: ${changedFiles.length}`);
+    lines.push('', colors.bold('Runtime observations'), `Changed files: ${changedFiles.length}`);
     for (const check of checks) {
       if (isRecord(check)) {
         lines.push(`${colors.cyan('•')} ${JSON.stringify(check.argv ?? [])} — ${String(check.status ?? 'unknown')} (${String(check.baselineRelation ?? 'unknown')})`);

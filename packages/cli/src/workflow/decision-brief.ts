@@ -19,11 +19,13 @@ export interface DeveloperDecisionBrief {
     adoption: HandoffEvaluation['adoption']['status'];
   };
   changeMeaning: {
-    desiredOutcome: string;
+    authority: 'agent-judgment';
+    intendedOutcome: string;
     actualSystemMeaning: string;
     importantSystemEffects: string[];
   };
   conditions: Array<{
+    authority: 'agent-judgment';
     id: string;
     statement: string;
     criticality: 'material' | 'adoption-critical';
@@ -65,6 +67,7 @@ export interface DeveloperDecisionBrief {
     };
   }>;
   runtimeEvidence: {
+    authority: 'runtime-fact';
     changedFiles: Array<{
       path: string;
       operation: DecisionPacket['runtimeFacts']['changedFiles'][number]['operation'];
@@ -80,8 +83,12 @@ export interface DeveloperDecisionBrief {
     }>;
   };
   requestedDecision: {
+    authority: 'human-decision';
     actions: HumanDecisionAction[];
-    acceptanceRequiresExceptionsFor: string[];
+    acceptanceRequiresExceptionsFor: Array<{
+      decisionIssueId: string;
+      attentionIds: string[];
+    }>;
   };
   detailSections: DecisionPacket['detailSections'];
 }
@@ -119,6 +126,47 @@ export function buildDeveloperDecisionBrief(input: {
     [file.path, file.id] as const));
   const challengeById = new Map(input.packet.evidenceJudgments.challenges.map((challenge) =>
     [challenge.id, challenge] as const));
+  const decisionIssues = aggregateDecisionAttention(input.packet.attention).map((group) => {
+    const obligationIds = new Set(group.references.obligations ?? []);
+    for (const definitionId of group.references.checks ?? []) {
+      const verifierId = verifierByDefinition.get(definitionId);
+      if (!verifierId) continue;
+      for (const [obligationId, obligation] of obligationById) {
+        if (obligation.strategies.some((strategy) =>
+          strategy.kind === 'runtime-check' && strategy.verifierIds.includes(verifierId))) {
+          obligationIds.add(obligationId);
+        }
+      }
+    }
+    const conditionIds = new Set(group.references.conditions ?? []);
+    for (const obligationId of obligationIds) {
+      const conditionId = conditionByObligation.get(obligationId);
+      if (conditionId) conditionIds.add(conditionId);
+    }
+    const target = {
+      conditionIds: [...conditionIds].sort(),
+      obligationIds: [...obligationIds].sort(),
+      evidenceKeys: attentionEvidenceKeys(group.references, changedFileIdByPath),
+    };
+    return {
+      id: `decision-issue:${stableFingerprint({
+        effectiveContractId: input.contract.effectiveContractId,
+        group: group.group,
+        resolution: group.resolution,
+      }).slice('sha256:'.length)}`,
+      attentionIds: group.items.map((item) => item.id).sort(),
+      codes: [...new Set(group.items.flatMap((item) => item.codes))].sort(),
+      group: group.group,
+      resolutions: [group.resolution],
+      references: group.references,
+      conditionIds: target.conditionIds,
+      obligationIds: target.obligationIds,
+      residualUnknowns: input.packet.systemMeaning.residualUnknowns.filter((unknown) =>
+        overlaps(unknown.conditionIds, conditionIds) || overlaps(unknown.obligationIds, obligationIds)),
+      reviewQuestions: input.packet.reviewQuestions.filter((question) =>
+        questionMatchesTarget(question, target)),
+    } satisfies DeveloperDecisionIssue;
+  });
 
   return {
     decisionState: {
@@ -128,11 +176,13 @@ export function buildDeveloperDecisionBrief(input: {
       adoption: input.evaluation.adoption.status,
     },
     changeMeaning: {
-      desiredOutcome: input.packet.semanticContract.desiredOutcome,
+      authority: 'agent-judgment',
+      intendedOutcome: input.packet.semanticContract.desiredOutcome,
       actualSystemMeaning: input.packet.systemMeaning.summary,
       importantSystemEffects: input.packet.systemMeaning.importantSystemEffects,
     },
     conditions: input.packet.conditions.map((condition) => ({
+      authority: 'agent-judgment',
       id: condition.id,
       statement: condition.statement,
       criticality: condition.criticality,
@@ -161,45 +211,7 @@ export function buildDeveloperDecisionBrief(input: {
         },
       })),
     })),
-    decisionIssues: aggregateAttention(input.packet.attention).map((group) => {
-      const obligationIds = new Set(group.references.obligations ?? []);
-      for (const definitionId of group.references.checks ?? []) {
-        const verifierId = verifierByDefinition.get(definitionId);
-        if (!verifierId) continue;
-        for (const [obligationId, obligation] of obligationById) {
-          if (obligation.strategies.some((strategy) =>
-            strategy.kind === 'runtime-check' && strategy.verifierIds.includes(verifierId))) {
-            obligationIds.add(obligationId);
-          }
-        }
-      }
-      const conditionIds = new Set(group.references.conditions ?? []);
-      for (const obligationId of obligationIds) {
-        const conditionId = conditionByObligation.get(obligationId);
-        if (conditionId) conditionIds.add(conditionId);
-      }
-      const target = {
-        conditionIds: [...conditionIds].sort(),
-        obligationIds: [...obligationIds].sort(),
-        evidenceKeys: attentionEvidenceKeys(group.references, changedFileIdByPath),
-      };
-      return {
-        id: `decision-issue:${stableFingerprint({
-          group: group.group, references: group.references,
-        }).slice('sha256:'.length)}`,
-        attentionIds: group.items.map((item) => item.id).sort(),
-        codes: [...new Set(group.items.flatMap((item) => item.codes))].sort(),
-        group: group.group,
-        resolutions: [...new Set(group.items.map((item) => item.resolution.kind))].sort(),
-        references: group.references,
-        conditionIds: target.conditionIds,
-        obligationIds: target.obligationIds,
-        residualUnknowns: input.packet.systemMeaning.residualUnknowns.filter((unknown) =>
-          overlaps(unknown.conditionIds, conditionIds) || overlaps(unknown.obligationIds, obligationIds)),
-        reviewQuestions: input.packet.reviewQuestions.filter((question) =>
-          questionMatchesTarget(question, target)),
-      };
-    }),
+    decisionIssues,
     evidenceHistory: input.packet.evidenceJudgments.dispositions.map((disposition) => ({
       dispositionId: disposition.dispositionId,
       attemptId: disposition.attemptId,
@@ -215,6 +227,7 @@ export function buildDeveloperDecisionBrief(input: {
       },
     })),
     runtimeEvidence: {
+      authority: 'runtime-fact',
       changedFiles: input.packet.runtimeFacts.changedFiles.map((file) => ({
         path: file.path,
         operation: file.operation,
@@ -230,8 +243,12 @@ export function buildDeveloperDecisionBrief(input: {
       })),
     },
     requestedDecision: {
+      authority: 'human-decision',
       actions: [...HUMAN_DECISION_ACTIONS],
-      acceptanceRequiresExceptionsFor: input.packet.attention.map((item) => item.id),
+      acceptanceRequiresExceptionsFor: decisionIssues.map((issue) => ({
+        decisionIssueId: issue.id,
+        attentionIds: issue.attentionIds,
+      })),
     },
     detailSections: input.packet.detailSections,
   };
@@ -251,25 +268,50 @@ function attentionEvidenceKeys(
   return keys;
 }
 
-function aggregateAttention(items: HandoffAttentionItem[]): Array<{
+export function aggregateDecisionAttention(items: HandoffAttentionItem[]): Array<{
   group: HandoffAttentionItem['group'];
+  resolution: HandoffAttentionItem['resolution']['kind'];
   references: HandoffAttentionItem['references'];
   items: HandoffAttentionItem[];
 }> {
   const grouped = new Map<string, {
     group: HandoffAttentionItem['group'];
+    resolution: HandoffAttentionItem['resolution']['kind'];
     references: HandoffAttentionItem['references'];
     items: HandoffAttentionItem[];
   }>();
   for (const item of items) {
-    const references = normalizedReferences(item.references);
-    const key = stableFingerprint({ group: item.group, references });
+    const key = stableFingerprint({ group: item.group, resolution: item.resolution.kind });
     const existing = grouped.get(key);
-    if (existing) existing.items.push(item);
-    else grouped.set(key, { group: item.group, references, items: [item] });
+    if (existing) {
+      existing.items.push(item);
+      existing.references = mergeReferences(existing.references, item.references);
+    } else {
+      grouped.set(key, {
+        group: item.group,
+        resolution: item.resolution.kind,
+        references: normalizedReferences(item.references),
+        items: [item],
+      });
+    }
   }
   return [...grouped.values()].sort((left, right) =>
-    left.items[0].id.localeCompare(right.items[0].id));
+    left.group.localeCompare(right.group) || left.resolution.localeCompare(right.resolution));
+}
+
+function mergeReferences(
+  left: HandoffAttentionItem['references'],
+  right: HandoffAttentionItem['references'],
+): HandoffAttentionItem['references'] {
+  return normalizedReferences(Object.fromEntries(
+    [...new Set([...Object.keys(left), ...Object.keys(right)])].map((key) => [
+      key,
+      [
+        ...(left[key as keyof HandoffAttentionItem['references']] ?? []),
+        ...(right[key as keyof HandoffAttentionItem['references']] ?? []),
+      ],
+    ]),
+  ));
 }
 
 function normalizedReferences(

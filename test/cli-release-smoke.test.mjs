@@ -200,6 +200,11 @@ try {
     statement: 'The current Runtime check supports the bounded export observation.',
     references: challengeDraft.evidence.checks.map((id) => ({ kind: 'check', id })),
   }];
+  challengeDraft.evidenceCoverage = {
+    status: 'sufficient',
+    rationale: 'The current check and isolated Challenge cover the bounded export observation.',
+    gaps: [],
+  };
   challengeDraft.outcome = 'supported';
   challengeDraft.conclusion = 'The bounded observation is supported by the Host-observed Challenge.';
   writeFileSync(challengePath, `${JSON.stringify({
@@ -270,6 +275,11 @@ try {
       attempt: 'Inspected whether the passing command observes the changed export boundary.',
       observedResult: 'The command result depended on the exported value being 2.',
     };
+    conclusion.evidenceCoverage = {
+      status: 'sufficient',
+      rationale: 'The current check and Host-attested Challenge cover the bounded obligation.',
+      gaps: [],
+    };
     conclusion.conclusion = 'The current check and Host-attested Challenge support the bounded obligation.';
   }
   for (const conclusion of handoffDraft.conditionConclusions) {
@@ -298,6 +308,9 @@ try {
   assert.equal(handedOff.hostAction.kind, 'present-handoff-and-await-human-decision');
   assert.equal(handedOff.hostAction.command, undefined);
   assert.equal(handedOff.hostAction.developerDecisionBrief.decisionState.adoption, 'pending');
+  assert.equal(handedOff.hostAction.developerDecisionBrief.changeMeaning.authority, 'agent-judgment');
+  assert.equal(handedOff.hostAction.developerDecisionBrief.runtimeEvidence.authority, 'runtime-fact');
+  assert.equal(handedOff.hostAction.developerDecisionBrief.requestedDecision.authority, 'human-decision');
   assert.equal(handedOff.hostAction.developerDecisionBrief.decisionIssues.length > 0, true);
   assert.equal(handedOff.hostAction.decisionContinuation.requiresNewHumanEvent, true);
 

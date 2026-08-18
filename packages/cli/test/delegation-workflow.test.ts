@@ -725,6 +725,12 @@ test('a Human correction creates a successor Attempt and preserves the prior dec
       handedOff.hostAction.developerDecisionBrief.changeMeaning.actualSystemMeaning,
       'The first implementation is ready for review.',
     );
+    assert.equal(
+      handedOff.hostAction.developerDecisionBrief.changeMeaning.authority,
+      'agent-judgment',
+    );
+    assert.equal(handedOff.hostAction.developerDecisionBrief.runtimeEvidence.authority, 'runtime-fact');
+    assert.equal(handedOff.hostAction.developerDecisionBrief.requestedDecision.authority, 'human-decision');
     assert.equal(handedOff.hostAction.developerDecisionBrief.conditions[0].status, 'supported');
     assert.deepEqual(handedOff.hostAction.developerDecisionBrief.decisionIssues, []);
     const decided = await decide(root, prepared.taskId, {
@@ -871,9 +877,16 @@ test('a thin Host runs the bounded Challenger but preserves unverified direct re
     assert.deepEqual(issue.conditionIds, [condition.id]);
     assert.deepEqual(issue.obligationIds, [obligation.id]);
     assert.equal(issue.reviewQuestions.length, 1);
-    assert.ok(
-      handedOff.hostAction.developerDecisionBrief.requestedDecision
-        .acceptanceRequiresExceptionsFor.includes(issue.attentionIds[0]),
+    const exceptionTargets = handedOff.hostAction.developerDecisionBrief.requestedDecision
+      .acceptanceRequiresExceptionsFor;
+    assert.deepEqual(
+      exceptionTargets.find((target: { decisionIssueId: string }) =>
+        target.decisionIssueId === issue.id),
+      { decisionIssueId: issue.id, attentionIds: issue.attentionIds },
+    );
+    assert.deepEqual(
+      exceptionTargets.flatMap((target: { attentionIds: string[] }) => target.attentionIds).sort(),
+      handedOff.decisionPacket.attention.map((item: { id: string }) => item.id).sort(),
     );
   } finally {
     rmSync(root, { recursive: true, force: true });

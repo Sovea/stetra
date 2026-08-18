@@ -69,12 +69,15 @@ changing task state.
 
 After a current Handoff is evaluated, `hostAction` changes role. It returns a
 transient `developerDecisionBrief` containing the four separate delivery,
-evidence, Agent-recommendation, and Human-adoption states; desired outcome and
-actual system meaning; every condition conclusion; direct-cause decision
-issues; linked review questions; compact Runtime evidence; and diagnosis and
-recovery routes from earlier Attempts. Decision issues with the same exact
-group and references are projected once while retaining every underlying
-Attention ID, code, and resolution. Detailed evidence references, logs, and
+evidence, Agent-recommendation, and Human-adoption states; the Agent's
+interpretation of intended outcome and actual system meaning; every Agent
+condition conclusion; direct-cause decision issues; linked review questions;
+explicitly labelled Runtime observations; and diagnosis and recovery routes
+from earlier Attempts. Decision issues with the same exact protocol group and
+required resolution are projected once while retaining the union of every
+underlying Attention ID, code, and reference. This is structural aggregation,
+not a judgment based on paths, keywords, commands, or repository content.
+Detailed evidence references, logs, and
 immutable artifacts remain available through `change explain`; they are not
 copied into the primary brief. The accompanying `presentationRequirements`
 names every condition, aggregated issue, and question that the Host must

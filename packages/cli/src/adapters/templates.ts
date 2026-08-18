@@ -406,13 +406,15 @@ stetra change handoff . --task <task-id> --input - --json
 
 The returned **hostAction.developerDecisionBrief** is the delivery surface for
 the developer. It distinguishes delivery state, evidence state, Agent
-recommendation, and Human adoption; contrasts desired outcome with actual
-system meaning; preserves every Condition and Obligation conclusion, including
-each Challenge conclusion and exact counter-evidence; and turns each exact
-Attention cause into a decision issue with its relevant review questions.
-Causes with the same exact group and references share one issue while retaining
-all underlying Attention IDs, codes, and resolutions. Prior evidence diagnosis
-and recovery routes remain visible in **evidenceHistory**.
+recommendation, and Human adoption; labels intended and actual system meaning as
+Agent judgment; preserves every Condition and Obligation conclusion, including
+each Challenge conclusion and exact counter-evidence; labels collected change
+and check data as Runtime observations; and turns Attention into decision
+issues with relevant review questions. Attention with the same exact protocol
+group and required resolution shares one issue while retaining the union of all
+underlying Attention IDs, codes, and references. This is structural grouping,
+not inferred semantic similarity. Prior evidence diagnosis and recovery routes
+remain visible in **evidenceHistory**.
 Present that brief as the final task summary even when another active workflow
 has its own completion template. Do not collapse, rename, or omit any item named
 by **presentationRequirements**. Compact Runtime evidence is supporting detail,

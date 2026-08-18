@@ -716,10 +716,15 @@ change the challenged evidence boundary.
 At the Handoff boundary, Dynamic Host Projection also derives an ephemeral
 Developer Decision Brief from the canonical Decision Packet. It is the Host's
 required delivery surface: separate delivery/evidence/recommendation/adoption
-states, intended versus actual system meaning, condition conclusions,
-Challenge conclusions and exact counter-evidence, direct-cause decision issues,
-consequence-directed review questions, and compact Runtime evidence. It adds no
-artifact or authority. The projected
+states; explicitly labelled Agent interpretations of intended and actual
+system meaning; Agent-authored condition and Challenge conclusions with exact
+counter-evidence; structurally aggregated decision issues;
+consequence-directed review questions; explicitly labelled Runtime
+observations; and the pending Human decision. Attention is aggregated only by
+its exact protocol group and required resolution, never by repository or text
+heuristics, while all canonical IDs and references remain in the JSON surface.
+The primary Human rendering can therefore omit machine IDs without weakening
+traceability. The brief adds no artifact or authority. The projected
 decision command is explicitly a continuation that requires a new exact Human
 Event; Handoff presentation and Human decision recording cannot collapse into
 one Host turn.

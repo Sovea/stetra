@@ -92,7 +92,9 @@ test('CLI JSON mode executes compact prepare, baseline-aware collect, layered ha
     assert.equal('attention' in handedOff, false);
     const humanHandoff = formatCliOutput({ ...handoffExecution, json: false, color: false });
     assert.match(humanHandoff, /Decision state/);
-    assert.match(humanHandoff, /Actual system meaning:/);
+    assert.match(humanHandoff, /Agent interpretation/);
+    assert.match(humanHandoff, /Account of the actual system change:/);
+    assert.match(humanHandoff, /Runtime observations/);
     assert.match(humanHandoff, /Human adoption: pending/);
     assert.match(humanHandoff, /Developer decision required:/);
 
