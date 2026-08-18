@@ -279,27 +279,6 @@ export const HostChallengeRunReceiptSchema = z.strictObject({
   message: 'must identify a context distinct from the implementer context',
 });
 
-export const ChallengeSubmissionSchema = z.strictObject({
-  requestId: Sha256Schema.optional(),
-  hostReceipt: HostChallengeRunReceiptSchema.optional(),
-  challenge: ChallengeDocumentSchema,
-}).superRefine((value, context) => {
-  if (value.hostReceipt && !value.requestId) {
-    context.addIssue({
-      code: 'custom',
-      path: ['requestId'],
-      message: 'is required when a Host Challenge Run Receipt is supplied',
-    });
-  }
-  if (value.hostReceipt && value.hostReceipt.requestId !== value.requestId) {
-    context.addIssue({
-      code: 'custom',
-      path: ['hostReceipt', 'requestId'],
-      message: 'must match the submitted Challenge requestId',
-    });
-  }
-});
-
 export const CognitiveHandoffDocumentSchema = z.strictObject({
   summary: NonEmptyStringSchema,
   obligationConclusions: z.array(z.strictObject({
@@ -470,7 +449,6 @@ export type DelegationPrepareDocument = z.infer<typeof DelegationPrepareDocument
 export type EvidenceDispositionDocument = z.infer<typeof EvidenceDispositionDocumentSchema>;
 export type ChallengeDocument = z.infer<typeof ChallengeDocumentSchema>;
 export type HostChallengeRunReceipt = z.infer<typeof HostChallengeRunReceiptSchema>;
-export type ChallengeSubmission = z.infer<typeof ChallengeSubmissionSchema>;
 export type CognitiveHandoffDocument = z.infer<typeof CognitiveHandoffDocumentSchema>;
 export type HumanDecisionDocument = z.infer<typeof HumanDecisionDocumentSchema>;
 export type VerificationRevisionDocument = z.infer<typeof VerificationRevisionDocumentSchema>;

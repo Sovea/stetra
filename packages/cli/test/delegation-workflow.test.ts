@@ -21,7 +21,7 @@ import type {
 } from '../src/schemas/delegation.ts';
 import { HostChallengeLifecycle } from '../src/host/challenge-lifecycle.ts';
 import type { HostAttestationProvider } from '../src/runtime-context.ts';
-import { stableFingerprint, taskIdForPrepareRequest } from '../src/protocol.ts';
+import { taskIdForPrepareRequest } from '../src/protocol.ts';
 import {
   collectDelegationFacts,
   diagnoseCollectedEvidence,
@@ -933,7 +933,7 @@ test('a bounded Challenge Execution Packet completes the persisted challenge-to-
     assert.equal(collected.hostAction.challengeExecutionPacket.target.exactDeveloperEvents.authority, 'human-event');
     assert.equal(collected.hostAction.challengeExecutionPacket.target.condition.authority, 'agent-judgment');
     assert.deepEqual(collected.hostAction.inputBinding, {
-      transport: 'stdin', source: 'hostChallengeSubmission', serialization: 'json', execution: 'one-shot',
+      transport: 'stdin', source: 'challengeExecutionPacket.draft', serialization: 'json', execution: 'one-shot',
     });
 
     const challengeDraft = structuredClone(collected.hostAction.challengeExecutionPacket.draft);
@@ -1059,7 +1059,7 @@ test('unavailable nested Challenge evidence cannot mutate task state', async () 
   }
 });
 
-test('Challenge receipts require current request, exact output, trusted verification, and single use', async () => {
+test('Challenge receipts remain Host-owned, bind exact output, and are consumed once', async () => {
   const root = createRepository();
   try {
     const prepared = await prepare(root, prepareDocument({
@@ -1080,46 +1080,44 @@ test('Challenge receipts require current request, exact output, trusted verifica
       challenge(root, prepared.taskId, alteredSelection),
       /preserve the exact frozen falsification and evidence selection/,
     );
-    const submission: any = challengeSubmission(
+    const receipt = observeTrustedChallenge(
       root,
       prepared.taskId,
       draft,
-      trustedHost,
     );
 
+    const wrongRequestHost: HostAttestationProvider = {
+      provenance: 'evaluation-runner',
+      async evaluatePolicies() { return []; },
+      async consumeChallengeRun() {
+        return { ...receipt, requestId: `sha256:${'0'.repeat(64)}` };
+      },
+    };
     await assert.rejects(
       recordChallenge({
         projectRoot: root,
         taskId: prepared.taskId,
         inputPath: '-',
-        input: jsonStream(submission),
+        input: jsonStream(draft),
+        hostAttestations: wrongRequestHost,
       }),
-      /requires a trusted Host integration/,
+      /bound to a different Challenge Execution Request/,
     );
 
-    const wrongRequest = structuredClone(submission);
-    wrongRequest.requestId = stableFingerprint('different request');
-    wrongRequest.hostReceipt!.requestId = wrongRequest.requestId;
+    const wrongOutputHost: HostAttestationProvider = {
+      provenance: 'evaluation-runner',
+      async evaluatePolicies() { return []; },
+      async consumeChallengeRun() {
+        return { ...receipt, outputFingerprint: `sha256:${'1'.repeat(64)}` };
+      },
+    };
     await assert.rejects(
       recordChallenge({
         projectRoot: root,
         taskId: prepared.taskId,
         inputPath: '-',
-        input: jsonStream(wrongRequest),
-        hostAttestations: trustedHost,
-      }),
-      /requestId does not match the current/,
-    );
-
-    const wrongOutput = structuredClone(submission);
-    wrongOutput.hostReceipt!.outputFingerprint = stableFingerprint({ altered: true });
-    await assert.rejects(
-      recordChallenge({
-        projectRoot: root,
-        taskId: prepared.taskId,
-        inputPath: '-',
-        input: jsonStream(wrongOutput),
-        hostAttestations: trustedHost,
+        input: jsonStream(draft),
+        hostAttestations: wrongOutputHost,
       }),
       /does not bind the submitted Challenge output/,
     );
@@ -1127,24 +1125,24 @@ test('Challenge receipts require current request, exact output, trusted verifica
     const rejectingHost: HostAttestationProvider = {
       provenance: 'evaluation-runner',
       async evaluatePolicies() { return []; },
-      async verifyChallengeRun() { return false; },
+      async consumeChallengeRun() { return undefined; },
     };
     await assert.rejects(
       recordChallenge({
         projectRoot: root,
         taskId: prepared.taskId,
         inputPath: '-',
-        input: jsonStream(submission),
+        input: jsonStream(draft),
         hostAttestations: rejectingHost,
       }),
-      /rejected the Challenge Run Receipt/,
+      /rejected or could not match the Challenge run/,
     );
 
     const accepted = await recordChallenge({
       projectRoot: root,
       taskId: prepared.taskId,
       inputPath: '-',
-      input: jsonStream(submission),
+      input: jsonStream(draft),
       hostAttestations: trustedHost,
     }) as any;
     assert.equal(accepted.challenge.independence, 'host-attested');
@@ -1153,7 +1151,7 @@ test('Challenge receipts require current request, exact output, trusted verifica
         projectRoot: root,
         taskId: prepared.taskId,
         inputPath: '-',
-        input: jsonStream(submission),
+        input: jsonStream(draft),
         hostAttestations: trustedHost,
       }),
       /does not request an Independent Challenge|already been consumed/,
@@ -1178,7 +1176,7 @@ test('Challenge receipt cannot outlive the collected worktree facts', async () =
     draft.observedResult = 'The current collected boundary was supported.';
     draft.outcome = 'supported';
     draft.conclusion = 'The bounded conclusion applies only to the collected worktree.';
-    const submission = challengeSubmission(root, prepared.taskId, draft, trustedHost);
+    observeTrustedChallenge(root, prepared.taskId, draft);
 
     writeFileSync(join(root, 'source.txt'), 'changed after challenge observation\n', 'utf8');
     await assert.rejects(
@@ -1186,7 +1184,7 @@ test('Challenge receipt cannot outlive the collected worktree facts', async () =
         projectRoot: root,
         taskId: prepared.taskId,
         inputPath: '-',
-        input: jsonStream(submission),
+        input: jsonStream(draft),
         hostAttestations: trustedHost,
       }),
       /Facts changed before challenge/,
@@ -1568,26 +1566,26 @@ async function challenge(
   document: unknown,
   hostAttestations?: HostAttestationProvider,
 ) {
-  const submission = challengeSubmission(root, taskId, document, hostAttestations);
+  if (hostAttestations?.consumeChallengeRun === trustedHost.consumeChallengeRun) {
+    observeTrustedChallenge(root, taskId, document);
+  }
   return await recordChallenge({
-    projectRoot: root, taskId, inputPath: '-', input: jsonStream(submission), hostAttestations,
+    projectRoot: root, taskId, inputPath: '-', input: jsonStream(document), hostAttestations,
   }) as any;
 }
 
-function challengeSubmission(
+function observeTrustedChallenge(
   root: string,
   taskId: string,
   document: unknown,
-  hostAttestations?: HostAttestationProvider,
 ) {
   const current = explainDelegationTask({
     projectRoot: root,
     taskId,
     section: 'action',
-    hostAttestations,
+    hostAttestations: trustedHost,
   }) as any;
   const request = current.hostAction.challengeExecutionRequest;
-  if (!hostAttestations) return { challenge: document };
   testChallengeLifecycle.observeStart({
     request,
     challengeExecutionPacket: current.hostAction.challengeExecutionPacket,
@@ -1608,7 +1606,7 @@ function challengeSubmission(
   if (stopped.status !== 'completed') {
     throw new Error('Test Challenger output must be schema-valid.');
   }
-  return stopped.submission;
+  return stopped.receipt;
 }
 
 async function decide(root: string, taskId: string, document: unknown) {
@@ -1646,7 +1644,7 @@ const trustedHost: HostAttestationProvider = {
   async evaluatePolicies() {
     return [];
   },
-  verifyChallengeRun: testChallengeLifecycle.verifyChallengeRun,
+  consumeChallengeRun: testChallengeLifecycle.consumeChallengeRun,
 };
 
 function git(root: string, args: string[]): void {

@@ -53,7 +53,7 @@ test('host actions route the initial lifecycle with executable task argv', () =>
   });
   assert.equal(challenge.authoringPacket, undefined);
   assert.equal(challenge.challengeExecutionPacket?.target.obligation.id, 'obligation:test');
-  assert.equal(challenge.inputBinding?.source, 'hostChallengeSubmission');
+  assert.equal(challenge.inputBinding?.source, 'challengeExecutionPacket.draft');
   assert.deepEqual(challenge.executionRequirements, {
     context: 'continuous', targetWorktree: 'read-only', stetraState: 'read-write',
     workspace: 'target', externalEffects: 'forbidden',

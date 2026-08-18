@@ -72,7 +72,7 @@ export interface HostAction {
   command?: { argv: string[] };
   inputBinding?: {
     transport: 'stdin';
-    source: 'authoringPacket.draft' | 'hostChallengeSubmission';
+    source: 'authoringPacket.draft' | 'challengeExecutionPacket.draft';
     serialization: 'json';
     execution: 'one-shot';
   };
@@ -372,7 +372,7 @@ function challengeInputAction(
     },
     inputBinding: {
       transport: 'stdin',
-      source: 'hostChallengeSubmission',
+      source: 'challengeExecutionPacket.draft',
       serialization: 'json',
       execution: 'one-shot',
     },

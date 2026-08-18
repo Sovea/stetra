@@ -61,11 +61,12 @@ import {
 } from '../protocol.ts';
 import { assertNoLegacyArtifacts } from '../project/legacy.ts';
 import {
-  ChallengeSubmissionSchema,
+  ChallengeDocumentSchema,
   CognitiveHandoffDocumentSchema,
   DelegationPrepareDocumentSchema,
   HumanDecisionDocumentSchema,
   HumanResolutionDocumentSchema,
+  HostChallengeRunReceiptSchema,
   HostPolicyEvaluationSchema,
   VerificationRevisionDocumentSchema,
   EvidenceDispositionDocumentSchema,
@@ -156,7 +157,7 @@ export async function prepareDelegationTask(options: {
     }
     return prepareReplayResult(
       existingTask,
-      Boolean(options.hostAttestations?.verifyChallengeRun),
+      Boolean(options.hostAttestations?.consumeChallengeRun),
     );
   }
   const repositoryEvidence = materializeEvidenceWindows(
@@ -357,7 +358,7 @@ export async function prepareDelegationTask(options: {
       }
       return prepareReplayResult(
         concurrentlyPublished,
-        Boolean(options.hostAttestations?.verifyChallengeRun),
+        Boolean(options.hostAttestations?.consumeChallengeRun),
       );
     }
     throw error;
@@ -602,7 +603,7 @@ export async function collectDelegationFacts(options: {
   const collectedChallenges = readCurrentChallenges(transitioned);
   const requiredChallenges = requiredChallengeObligationIds(currentContract, collectedFacts);
   const pendingChallenges = pendingChallengeObligationIds(requiredChallenges, collectedChallenges);
-  const challengeAttestationAvailable = Boolean(options.hostAttestations?.verifyChallengeRun);
+  const challengeAttestationAvailable = Boolean(options.hostAttestations?.consumeChallengeRun);
   return {
     protocol: DELEGATION_PROTOCOL,
     schemaVersion: DELEGATION_SCHEMA_VERSION,
@@ -787,7 +788,7 @@ export async function diagnoseCollectedEvidence(options: {
   const challenges = route === 'repair-delivery' ? [] : readCurrentChallenges(transitioned);
   const required = currentFacts
     ? requiredChallengeObligationIds(currentContract, currentFacts) : [];
-  const challengeAttestationAvailable = Boolean(options.hostAttestations?.verifyChallengeRun);
+  const challengeAttestationAvailable = Boolean(options.hostAttestations?.consumeChallengeRun);
   const packet = route === 'ask-human'
     ? resolutionAuthoringPacket({
         task: transitioned.projection,
@@ -839,7 +840,7 @@ export async function recordChallenge(options: {
     projectRoot,
     options.inputPath,
     options.input,
-    ChallengeSubmissionSchema,
+    ChallengeDocumentSchema,
     'Independent Challenge input',
   );
   let challenge: IndependentChallenge | undefined;
@@ -853,7 +854,7 @@ export async function recordChallenge(options: {
       const facts = readCurrentFacts(task);
       const stale = await currentFactsAreStale(task, facts);
       if (stale) throw usageError('Facts changed before challenge; collect the current worktree first.');
-      validateChallengeReferences(source.challenge, contract, facts);
+      validateChallengeReferences(source, contract, facts);
       const requestedAction = currentTaskHostAction(task, true);
       if (requestedAction?.kind !== 'perform-independent-challenge'
         || !requestedAction.challengeExecutionRequest
@@ -863,54 +864,49 @@ export async function recordChallenge(options: {
       const request = requestedAction.challengeExecutionRequest;
       const requestedDraft = requestedAction.challengeExecutionPacket.draft;
       if (stableFingerprint(requestedDraft.obligationIds)
-        !== stableFingerprint(source.challenge.obligationIds)) {
+        !== stableFingerprint(source.obligationIds)) {
         throw inputError('Challenge must answer the exact Evidence Obligation in the current Challenge Execution Request.');
       }
       if (stableFingerprint(requestedDraft.falsification)
-          !== stableFingerprint(source.challenge.falsification)
+          !== stableFingerprint(source.falsification)
         || stableFingerprint(requestedDraft.evidence)
-          !== stableFingerprint(source.challenge.evidence)) {
+          !== stableFingerprint(source.evidence)) {
         throw inputError('Challenge must preserve the exact frozen falsification and evidence selection in the current Challenge Execution Packet.');
       }
-      if (source.requestId && source.requestId !== request.requestId) {
-        throw inputError('Challenge requestId does not match the current Challenge Execution Request.');
+      const suppliedReceipt = await options.hostAttestations?.consumeChallengeRun?.({
+        request,
+        challenge: source,
+      });
+      if (options.hostAttestations?.consumeChallengeRun && !suppliedReceipt) {
+        throw inputError('The trusted Host integration rejected or could not match the Challenge run.');
       }
-      const receipt = source.hostReceipt;
-      let receiptVerified = false;
+      const receipt = suppliedReceipt
+        ? parseArtifact(HostChallengeRunReceiptSchema, suppliedReceipt, 'Host Challenge Run Receipt')
+        : undefined;
       if (receipt) {
-        if (!options.hostAttestations?.verifyChallengeRun) {
-          throw inputError('A Host Challenge Run Receipt requires a trusted Host integration that can verify it.');
-        }
         if (receipt.requestId !== request.requestId) {
           throw inputError('Host Challenge Run Receipt is bound to a different Challenge Execution Request.');
         }
-        if (receipt.outputFingerprint !== stableFingerprint(source.challenge)) {
+        if (receipt.outputFingerprint !== stableFingerprint(source)) {
           throw inputError('Host Challenge Run Receipt does not bind the submitted Challenge output.');
         }
         if (readChallenges(task).some((item) => item.attestationId === receipt.receiptId)) {
           throw inputError(`Host Challenge Run Receipt ${receipt.receiptId} has already been consumed.`);
         }
-        receiptVerified = await options.hostAttestations.verifyChallengeRun({
-          request,
-          receipt,
-          challenge: source.challenge,
-        });
-        if (!receiptVerified) {
-          throw inputError('The trusted Host integration rejected the Challenge Run Receipt.');
-        }
       }
+      const receiptVerified = Boolean(receipt);
       const obligationById = new Map(contract.adoptionConditions.flatMap((condition) =>
         condition.evidenceObligations.map((obligation) => [obligation.id, obligation] as const)));
       const challengeId = `challenge:${randomUUID()}`;
       challenge = {
         protocol: DELEGATION_PROTOCOL,
         schemaVersion: DELEGATION_SCHEMA_VERSION,
-        ...source.challenge,
+        ...source,
         id: challengeId,
         effectiveContractId: contract.effectiveContractId,
         attemptId: facts.attemptId,
         factCollectionId: facts.factCollectionId,
-        conditionIds: unique(source.challenge.obligationIds.map((id) => obligationById.get(id)!.conditionId)),
+        conditionIds: unique(source.obligationIds.map((id) => obligationById.get(id)!.conditionId)),
         independence: receiptVerified ? 'host-attested' : 'unverified',
         ...(receiptVerified && receipt ? {
           attestationId: receipt.receiptId,
@@ -942,7 +938,7 @@ export async function recordChallenge(options: {
   const challenges = readCurrentChallenges(transitioned);
   const required = requiredChallengeObligationIds(transitionedContract, transitionedFacts);
   const pending = pendingChallengeObligationIds(required, challenges);
-  const challengeAttestationAvailable = Boolean(options.hostAttestations?.verifyChallengeRun);
+  const challengeAttestationAvailable = Boolean(options.hostAttestations?.consumeChallengeRun);
   const adverse = challenge!.outcome !== 'supported';
   const performAnotherChallenge = !adverse && pending.length > 0;
   const nextAction = adverse
@@ -1347,7 +1343,7 @@ export async function resolveHumanChoice(options: {
       const required = requiredChallengeObligationIds(contract, facts);
       const pending = pendingChallengeObligationIds(required, challenges);
       const needsChallenge = pending.length > 0;
-      const challengeAttestationAvailable = Boolean(options.hostAttestations?.verifyChallengeRun);
+      const challengeAttestationAvailable = Boolean(options.hostAttestations?.consumeChallengeRun);
       const performChallenge = needsChallenge;
       const packet = performChallenge
         ? challengeExecutionPacket({
@@ -1555,7 +1551,7 @@ export function explainDelegationTask(options: {
       ...common,
       hostAction: currentTaskHostAction(
         task,
-        Boolean(options.hostAttestations?.verifyChallengeRun),
+        Boolean(options.hostAttestations?.consumeChallengeRun),
       ),
     };
   }
@@ -1643,7 +1639,7 @@ export async function guardFinalResponse(options: {
     ? readFacts(task, currentAttempt.attemptId, currentAttempt.factCollectionId)
     : undefined;
   const factsCurrent = facts ? !(await currentFactsAreStale(task, facts)) : false;
-  const challengeAttestationAvailable = Boolean(options.hostAttestations?.verifyChallengeRun);
+  const challengeAttestationAvailable = Boolean(options.hostAttestations?.consumeChallengeRun);
   let disposition:
     | 'continue-workflow'
     | 'present-decision-brief'

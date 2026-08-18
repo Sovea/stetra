@@ -41,11 +41,10 @@ export interface HostAttestationProvider {
     taskId: string;
     requirements: HostPolicyRequirement[];
   }): Promise<HostPolicyEvaluation[]>;
-  verifyChallengeRun?(input: {
+  consumeChallengeRun?(input: {
     request: ChallengeExecutionRequest;
-    receipt: HostChallengeRunReceipt;
     challenge: ChallengeDocument;
-  }): Promise<boolean>;
+  }): Promise<HostChallengeRunReceipt | undefined>;
 }
 
 export interface CliRuntimeContext {

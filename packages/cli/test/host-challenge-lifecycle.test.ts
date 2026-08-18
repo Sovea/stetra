@@ -28,34 +28,30 @@ test('Host Challenge lifecycle binds start, stop, exact output, and single consu
   });
   assert.equal(stopped.status, 'completed');
   if (stopped.status !== 'completed') return;
-  assert.equal(stopped.submission.hostReceipt.lifecycle, 'start-and-stop-observed');
-  assert.equal(stopped.submission.hostReceipt.targetWorktree, 'read-only');
-  assert.equal(stopped.submission.hostReceipt.executionWorkspace, 'isolated-writable');
-  assert.equal(stopped.submission.hostReceipt.sourceSnapshotFingerprint, digest('w'));
-  assert.deepEqual(stopped.submission.challenge, challenge);
+  assert.equal(stopped.receipt.lifecycle, 'start-and-stop-observed');
+  assert.equal(stopped.receipt.targetWorktree, 'read-only');
+  assert.equal(stopped.receipt.executionWorkspace, 'isolated-writable');
+  assert.equal(stopped.receipt.sourceSnapshotFingerprint, digest('w'));
+  assert.deepEqual(stopped.challenge, challenge);
 
-  assert.equal(await lifecycle.verifyChallengeRun({
+  assert.equal(await lifecycle.consumeChallengeRun({
     request: requestFixture('2'),
-    receipt: stopped.submission.hostReceipt,
     challenge,
-  }), false);
+  }), undefined);
   const alteredPacketRequest = structuredClone(request);
   alteredPacketRequest.bindsTo.challengeExecutionPacketFingerprint = digest('b');
-  assert.equal(await lifecycle.verifyChallengeRun({
+  assert.equal(await lifecycle.consumeChallengeRun({
     request: alteredPacketRequest,
-    receipt: stopped.submission.hostReceipt,
     challenge,
-  }), false);
-  assert.equal(await lifecycle.verifyChallengeRun({
+  }), undefined);
+  assert.deepEqual(await lifecycle.consumeChallengeRun({
     request,
-    receipt: stopped.submission.hostReceipt,
     challenge,
-  }), true);
-  assert.equal(await lifecycle.verifyChallengeRun({
+  }), stopped.receipt);
+  assert.equal(await lifecycle.consumeChallengeRun({
     request,
-    receipt: stopped.submission.hostReceipt,
     challenge,
-  }), false);
+  }), undefined);
 });
 
 test('Host Challenge lifecycle allows one structured-output repair and never invents a receipt', () => {

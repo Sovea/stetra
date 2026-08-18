@@ -345,12 +345,12 @@ counter-evidence remains, use partial, contradicted, or unknown.
 
 Challenge output remains Agent judgment. Independence and context identities
 are injected only by a trusted Host integration; Agent JSON cannot claim them.
-The Challenger returns only the JSON Challenge Document. The Host wraps that
-output as **{requestId, hostReceipt, challenge}**, and only the Host fills the
-receipt after it observed both lifecycle boundaries and bound the exact output
-fingerprint. Send that complete **hostChallengeSubmission** through the returned
-command. Without a trusted receipt, a thin Host still runs the generated
-Challenger profile and submits **{challenge}**. It must not manufacture a
+The Challenger and the action command exchange only the exact JSON Challenge
+Document shown in **challengeExecutionPacket.draft**. A trusted programmatic
+Host keeps the request and receipt outside Agent-authored input, consumes the
+matching receipt through its attestation provider, and binds the exact output
+fingerprint. Without a trusted provider, a thin Host submits the same bare
+Challenge Document. It must not manufacture a
 receipt: Runtime records the result as **unverified**, prevents it from
 supporting a required obligation, and adds direct Human review. Partial,
 contradicted, unknown, or

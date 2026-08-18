@@ -3,7 +3,6 @@ import { randomUUID } from 'node:crypto';
 import {
   ChallengeDocumentSchema,
   type ChallengeDocument,
-  type ChallengeSubmission,
   type HostChallengeRunReceipt,
 } from '../schemas/delegation.ts';
 import { stableFingerprint } from '../protocol.ts';
@@ -35,10 +34,8 @@ export type ChallengeRunStopObservation =
   | {
       status: 'completed';
       requestId: string;
-      submission: ChallengeSubmission & {
-        requestId: string;
-        hostReceipt: HostChallengeRunReceipt;
-      };
+      challenge: ChallengeDocument;
+      receipt: HostChallengeRunReceipt;
     };
 
 interface StartedRun {
@@ -212,28 +209,23 @@ export class HostChallengeLifecycle {
     return {
       status: 'completed',
       requestId: input.requestId,
-      submission: {
-        requestId: input.requestId,
-        hostReceipt: receipt,
-        challenge,
-      },
+      challenge,
+      receipt,
     };
   }
 
-  readonly verifyChallengeRun = async (input: {
+  readonly consumeChallengeRun = async (input: {
     request: ChallengeExecutionRequest;
-    receipt: HostChallengeRunReceipt;
     challenge: ChallengeDocument;
-  }): Promise<boolean> => {
+  }): Promise<HostChallengeRunReceipt | undefined> => {
     const run = this.#runs.get(input.request.requestId);
-    if (!run?.completed || run.completed.consumed) return false;
+    if (!run?.completed || run.completed.consumed) return undefined;
     if (run.requestFingerprint !== stableFingerprint(input.request)
-      || stableFingerprint(run.completed.receipt) !== stableFingerprint(input.receipt)
       || stableFingerprint(run.completed.challenge) !== stableFingerprint(input.challenge)) {
-      return false;
+      return undefined;
     }
     run.completed.consumed = true;
-    return true;
+    return structuredClone(run.completed.receipt);
   };
 }
 

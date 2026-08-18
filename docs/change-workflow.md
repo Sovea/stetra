@@ -56,11 +56,11 @@ An input-bearing action also returns:
 Serialize the completed draft and attach it to the exact argv process at
 creation time. Do not start an interactive process and then attempt to type the
 document. A temporary fallback input must live outside the worktree.
-Challenge is the exception to both the generic packet and draft source. Its
-input binding names `hostChallengeSubmission`. The fresh-context Agent receives
-only the bounded `challengeExecutionPacket` and returns its completed Challenge
-Document; the controlling Host wraps that document with the current request ID
-and a Host Challenge Run Receipt before invoking the command.
+Challenge uses the smaller `challengeExecutionPacket`, but its input binding
+still names that packet's exact `draft`. The fresh-context Agent and the action
+command exchange only the completed Challenge Document. A trusted controlling
+Host keeps the request and receipt outside Agent-authored input and exposes a
+single-use receipt only through its programmatic attestation provider.
 The packet is transient projection, not persisted authority or lifecycle state.
 JSON output places `hostAction` before result detail. Authoring catalogs are
 stage-specific rather than a universal copy of all task facts. Use
@@ -490,7 +490,8 @@ fact or another Challenge identity.
 }
 ```
 
-After observing both lifecycle boundaries, the Host submits:
+After observing both lifecycle boundaries, the Host retains this attestation
+outside Agent-authored command input:
 
 ```json
 {
@@ -514,7 +515,8 @@ After observing both lifecycle boundaries, the Host submits:
 }
 ```
 
-The CLI generates Challenge ID and derives Condition IDs. It accepts
+The CLI command still receives only the bare Challenge Document. It generates
+the Challenge ID and derives Condition IDs. It accepts
 `host-attested` only when the trusted provider verifies the current request,
 distinct contexts, exact source snapshot, target protection, isolated writable
 execution workspace, lifecycle receipt, and exact output. Receipts are
@@ -543,8 +545,8 @@ choosing a bounded outcome.
 
 Generated Markdown skills do not control or attest a fresh Host context, but
 the generated Codex and Claude profiles can still perform the bounded Challenge
-in a separate context. Without a trusted provider, the Host submits
-`{"challenge": ...}` without a Receipt. Runtime records that result as
+in a separate context. Without a trusted provider, the Host submits the same
+bare Challenge Document without a Receipt. Runtime records that result as
 `unverified`, rejects `supported` for the affected required obligation, and
 adds a concrete direct-review obligation. A native Adapter or Evaluator that
 observes both lifecycle boundaries may instead submit the verified Receipt.

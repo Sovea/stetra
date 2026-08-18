@@ -95,7 +95,7 @@ const attestations: HostAttestationProvider = {
       provenance: 'native-adapter',
     }));
   },
-  verifyChallengeRun: challengeLifecycle.verifyChallengeRun,
+  consumeChallengeRun: challengeLifecycle.consumeChallengeRun,
 };
 
 await runCli(['change', 'collect', '.', '--task', taskId, '--json'], {
@@ -117,7 +117,9 @@ starts exactly one `stetra-challenger` context and calls
 read-only while an exact-fingerprint isolated workspace is writable for test
 execution. At the matching Host stop event it
 passes the exact Agent output to `observeStop(...)`; a completed observation
-returns the `hostChallengeSubmission` bytes for the action command. Invalid
+returns the validated Challenge Document and a Host-owned receipt. The action
+command still receives only the exact Challenge Document; the attestation
+provider consumes the matching receipt internally. Invalid
 structure or an evidence reference outside the packet receives at most the
 request's single repair. No receipt is created without both lifecycle
 observations.

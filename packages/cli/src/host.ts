@@ -36,10 +36,7 @@ export type {
   ChallengeExecutionPacket,
   ChallengeRepositoryEvidence,
 } from './workflow/challenge-projection.ts';
-export type {
-  ChallengeSubmission,
-  HostChallengeRunReceipt,
-} from './schemas/delegation.ts';
+export type { HostChallengeRunReceipt } from './schemas/delegation.ts';
 export type { DeveloperDecisionBrief } from './workflow/decision-brief.ts';
 export type {
   ChallengeExecutionRequest,
