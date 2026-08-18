@@ -327,6 +327,11 @@ export function handoffAuthoringPacket(input: {
           ...(challengeByObligation.get(obligation.id)?.outcome === 'supported'
             ? [{ kind: 'challenge', id: challengeByObligation.get(obligation.id)!.id }] : []),
         ],
+        evidenceCoverage: {
+          status: '',
+          rationale: '',
+          gaps: [],
+        },
         falsification: {
           attempt: '',
           observedResult: '',
@@ -367,6 +372,22 @@ export function handoffAuthoringPacket(input: {
         `draft.obligationConclusions[${index}].status`, 'agent-judgment',
         conclusionValuesByObligation.get(obligation.id)!,
         'Conclude the bounded obligation without exceeding its cited evidence and challenge outcome.',
+        ),
+        choiceRequirement(
+          `draft.obligationConclusions[${index}].evidenceCoverage.status`,
+          'agent-judgment',
+          ['sufficient', 'insufficient'],
+          'Assess whether the cited evidence covers this bounded conclusion. Runtime does not infer semantic adequacy.',
+        ),
+        textRequirement(
+          `draft.obligationConclusions[${index}].evidenceCoverage.rationale`,
+          'agent-judgment',
+          'Explain why the cited evidence is sufficient or identify why it cannot support the whole bounded conclusion.',
+        ),
+        textRequirement(
+          `draft.obligationConclusions[${index}].evidenceCoverage.gaps[]`,
+          'agent-judgment',
+          'When coverage is insufficient, name every concrete part of the bounded conclusion that current evidence does not cover; otherwise keep the array empty.',
         ),
         textRequirement(
           `draft.obligationConclusions[${index}].falsification.attempt`, 'agent-judgment',
@@ -423,7 +444,7 @@ export function handoffAuthoringPacket(input: {
       ...obligations.map((obligation) => ({
         code: 'conclude-evidence-obligation',
         targetId: obligation.id,
-        requiredAction: 'State the bounded conclusion, falsification attempt, supporting evidence, and counter-evidence.',
+        requiredAction: 'State the bounded conclusion, explicit evidence-coverage assessment, falsification attempt, supporting evidence, and counter-evidence.',
       })),
       ...input.contract.adoptionConditions.map((condition) => ({
         code: 'conclude-adoption-condition',

@@ -485,6 +485,11 @@ fact or another Challenge identity.
     }
   ],
   "counterEvidence": [],
+  "evidenceCoverage": {
+    "status": "sufficient",
+    "rationale": "The selected evidence exercises the whole bounded conclusion.",
+    "gaps": []
+  },
   "outcome": "supported",
   "conclusion": "Bounded conclusion."
 }
@@ -532,6 +537,11 @@ the same adverse Challenge to another Challenger.
 While any counter-evidence remains, the Challenger must use `partial`,
 `contradicted`, or `unknown`. CLI rejects the inconsistent document early and
 Core independently rejects the same combination if it bypasses CLI parsing.
+The same ceiling applies when `evidenceCoverage` is `insufficient`. The
+Challenger names concrete uncovered aspects; structural-output repair cannot
+erase those authored gaps. Runtime validates this declaration and its effect on
+the outcome, but does not decide whether the natural-language assessment is
+correct.
 
 Repair and recollection never erase Challenge history. Only Challenges bound
 to the current effective Contract, Attempt, and Fact Collection can satisfy a
@@ -568,6 +578,11 @@ bound to the Obligation without being mislabeled or duplicated as support.
       "obligationId": "obligation:exact",
       "status": "supported",
       "evidence": [{ "kind": "check", "id": "sha256:exact-definition" }],
+      "evidenceCoverage": {
+        "status": "sufficient",
+        "rationale": "The cited evidence covers this bounded conclusion.",
+        "gaps": []
+      },
       "falsification": {
         "attempt": "What tried to execute or inspect the frozen scenario.",
         "observedResult": "What that attempt actually observed."
@@ -606,6 +621,10 @@ CLI generates Handoff and Review Question IDs. Every Obligation and Condition is
 concluded exactly once. Runtime rejects a supported Condition when any
 Obligation is partial, contradicted, unknown, or missing. It validates exact
 evidence coverage but does not claim the natural-language statement is true.
+Every Obligation conclusion also declares whether its cited evidence covers the
+whole bounded statement. `insufficient` requires concrete gaps and prevents a
+supported conclusion; Runtime never discovers those gaps from filenames,
+commands, dependencies, or repository text.
 Every missing, adverse, or unverified required Challenge also requires a Review
 Question bound to the exact affected Obligation; a broad Condition-only
 question cannot discharge it.

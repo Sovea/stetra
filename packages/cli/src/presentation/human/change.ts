@@ -169,6 +169,13 @@ function appendDeveloperDecisionBrief(
       for (const obligation of condition.obligations) {
         if (!isRecord(obligation) || !isRecord(obligation.evidenceBoundary)) continue;
         lines.push(`  ${colors.cyan('↳')} ${String(obligation.statement ?? obligation.id)} — ${String(obligation.status ?? 'unknown')}`);
+        if (isRecord(obligation.evidenceBoundary.coverage)) {
+          const coverage = obligation.evidenceBoundary.coverage;
+          lines.push(`    Evidence coverage: ${String(coverage.status ?? 'unknown')} — ${String(coverage.rationale ?? '')}`);
+          if (Array.isArray(coverage.gaps)) {
+            for (const gap of coverage.gaps) lines.push(`    Uncovered: ${String(gap)}`);
+          }
+        }
         const findings = obligation.evidenceBoundary.challengeFindings;
         if (!Array.isArray(findings)) continue;
         for (const finding of findings) {

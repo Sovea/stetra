@@ -685,6 +685,11 @@ test('a Human correction creates a successor Attempt and preserves the prior dec
         obligationId: obligation.id,
         status: 'supported',
         evidence: [{ kind: 'check', id: collected.checks[0].definitionId }],
+        evidenceCoverage: {
+          status: 'sufficient',
+          rationale: 'The exact current check covers the bounded conclusion.',
+          gaps: [],
+        },
         falsification: {
           attempt: 'Inspected whether the command bypasses the intended behavior.',
           observedResult: 'The current command exercised the intended path.',
@@ -783,6 +788,7 @@ test('a thin Host runs the bounded Challenger but preserves unverified direct re
       statement: 'The current check and patch support the bounded observation.',
       references: [{ kind: 'check', id: challengeDraft.evidence.checks[0] }],
     }];
+    markCoverageSufficient(challengeDraft);
     challengeDraft.outcome = 'supported';
     challengeDraft.conclusion = 'The separate review supports the bounded obligation, without Host attestation.';
     const challenged = await challenge(root, prepared.taskId, challengeDraft);
@@ -815,6 +821,11 @@ test('a thin Host runs the bounded Challenger but preserves unverified direct re
     draft.summary = 'The implementation passes its changed verifier, but Host-attested independence is unavailable.';
     for (const conclusion of draft.obligationConclusions) {
       conclusion.status = 'partial';
+      conclusion.evidenceCoverage = {
+        status: 'sufficient',
+        rationale: 'The selected evidence covers the bounded behavior, while Host provenance remains unresolved.',
+        gaps: [],
+      };
       conclusion.falsification = {
         attempt: 'Used the separate Challenger output and inspected the changed acceptance surface.',
         observedResult: 'The check and Challenger support the boundary, but the Host lifecycle is unverified.',
@@ -949,6 +960,7 @@ test('a bounded Challenge Execution Packet completes the persisted challenge-to-
         ...challengeDraft.evidence.checks.map((id: string) => ({ kind: 'check', id })),
       ],
     }];
+    markCoverageSufficient(challengeDraft);
     challengeDraft.outcome = 'supported';
     challengeDraft.conclusion = 'The bounded failure hypothesis was not observed.';
     const challenged = await challenge(root, prepared.taskId, challengeDraft, trustedHost);
@@ -989,6 +1001,11 @@ test('a bounded Challenge Execution Packet completes the persisted challenge-to-
     handoffDraft.summary = 'The changed verifier and implementation are ready for bounded review.';
     for (const conclusion of handoffDraft.obligationConclusions) {
       conclusion.status = 'supported';
+      conclusion.evidenceCoverage = {
+        status: 'sufficient',
+        rationale: 'The current check and independent challenge cover the bounded conclusion.',
+        gaps: [],
+      };
       conclusion.falsification = {
         attempt: 'Inspected the changed verifier and exercised its failure hypothesis.',
         observedResult: 'The independent challenge and current check observed the expected boundary.',
@@ -1038,6 +1055,7 @@ test('unavailable nested Challenge evidence cannot mutate task state', async () 
       statement: 'An unavailable check must not be accepted as current evidence.',
       references: [{ kind: 'check', id: `sha256:${'f'.repeat(64)}` }],
     }];
+    markCoverageSufficient(draft);
     draft.outcome = 'supported';
     draft.conclusion = 'This structurally valid but unavailable reference must be rejected.';
     const before = await guardFinalResponse({ projectRoot: root, taskId: prepared.taskId });
@@ -1072,6 +1090,7 @@ test('Challenge receipts remain Host-owned, bind exact output, and are consumed 
     const draft = structuredClone(collected.hostAction.challengeExecutionPacket.draft);
     draft.falsificationAttempt = 'Inspected the exact bounded behavior in a separate context.';
     draft.observedResult = 'The stated counterexample was not observed.';
+    markCoverageSufficient(draft);
     draft.outcome = 'supported';
     draft.conclusion = 'The bounded obligation is supported by the cited current evidence.';
     const alteredSelection = structuredClone(draft);
@@ -1174,6 +1193,7 @@ test('Challenge receipt cannot outlive the collected worktree facts', async () =
     const draft = structuredClone(collected.hostAction.challengeExecutionPacket.draft);
     draft.falsificationAttempt = 'Inspected the current collected implementation.';
     draft.observedResult = 'The current collected boundary was supported.';
+    markCoverageSufficient(draft);
     draft.outcome = 'supported';
     draft.conclusion = 'The bounded conclusion applies only to the collected worktree.';
     observeTrustedChallenge(root, prepared.taskId, draft);
@@ -1214,6 +1234,7 @@ test('an adverse Challenge returns to bounded diagnosis and a successor Attempt 
       statement: 'The frozen observation remains green while the counterexample fails.',
       references: [{ kind: 'check', id: checkId }],
     }];
+    markCoverageSufficient(challengeDraft);
     challengeDraft.outcome = 'contradicted';
     challengeDraft.conclusion = 'The current implementation does not satisfy the bounded obligation.';
     const challenged = await challenge(root, prepared.taskId, challengeDraft, trustedHost);
@@ -1278,6 +1299,11 @@ test('an adverse Challenge preserves its exact counter-evidence through Handoff 
       statement: counterStatement,
       references: [{ kind: 'check', id: checkId }],
     }];
+    challengeDraft.evidenceCoverage = {
+      status: 'insufficient',
+      rationale: 'The verifier does not cover the complete declared boundary.',
+      gaps: ['Persistent verification for the omitted boundary is missing.'],
+    };
     challengeDraft.outcome = 'partial';
     challengeDraft.conclusion = 'Current behavior has some support, while persistent protection remains incomplete.';
     const challenged = await challenge(root, prepared.taskId, challengeDraft, trustedHost);
@@ -1305,6 +1331,11 @@ test('an adverse Challenge preserves its exact counter-evidence through Handoff 
     }]);
     handoffDraft.summary = 'The implementation behavior is partly supported, with a persistent-verification gap.';
     handoffDraft.obligationConclusions[0].status = 'partial';
+    handoffDraft.obligationConclusions[0].evidenceCoverage = {
+      status: 'insufficient',
+      rationale: 'The behavior probe passes, but persistent verifier coverage remains incomplete.',
+      gaps: ['The persistent verifier does not cover the complete declared boundary.'],
+    };
     handoffDraft.obligationConclusions[0].falsification = {
       attempt: 'Reviewed the independent challenge and its omitted verifier boundary.',
       observedResult: 'The behavior probe passed while persistent coverage remained incomplete.',
@@ -1390,6 +1421,11 @@ test('verification revision preserves history and completes handoff against curr
     handoffDraft.summary = 'The rebound verification passed against the current implementation.';
     for (const conclusion of handoffDraft.obligationConclusions) {
       conclusion.status = 'supported';
+      conclusion.evidenceCoverage = {
+        status: 'sufficient',
+        rationale: 'The current immutable definition covers the bounded conclusion.',
+        gaps: [],
+      };
       conclusion.falsification = {
         attempt: 'Ran the current immutable definition and inspected its bounded result.',
         observedResult: 'The current definition passed and exercised the bounded behavior.',
@@ -1629,6 +1665,14 @@ async function reviseVerification(root: string, taskId: string, document: unknow
 
 function jsonStream(value: unknown): Readable {
   return Readable.from([JSON.stringify(value)]);
+}
+
+function markCoverageSufficient(document: any): void {
+  document.evidenceCoverage = {
+    status: 'sufficient',
+    rationale: 'The selected evidence covers the bounded conclusion exercised by this fixture.',
+    gaps: [],
+  };
 }
 
 function fieldRequirement(packet: any, path: string): any {

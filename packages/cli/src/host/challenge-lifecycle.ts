@@ -50,6 +50,7 @@ interface StartedRun {
   externalEffects: 'forbidden';
   invalidOutputCount: number;
   counterEvidenceRepairConstraint?: ChallengeDocument['counterEvidence'];
+  evidenceCoverageRepairConstraint?: ChallengeDocument['evidenceCoverage'];
   completed?: {
     challenge: ChallengeDocument;
     receipt: HostChallengeRunReceipt;
@@ -134,6 +135,10 @@ export class HostChallengeLifecycle {
         ? supportedCounterEvidenceConstraint(parsedJson.value, parsed!.error.issues)
         : undefined;
       if (constraint) run.counterEvidenceRepairConstraint = constraint;
+      const coverageConstraint = parsedJson.ok
+        ? supportedCoverageConstraint(parsedJson.value, parsed!.error.issues)
+        : undefined;
+      if (coverageConstraint) run.evidenceCoverageRepairConstraint = coverageConstraint;
       run.invalidOutputCount += 1;
       const mayRetry = run.invalidOutputCount <= run.request.outputRepairBudget;
       return {
@@ -177,6 +182,20 @@ export class HostChallengeLifecycle {
         issues: [{
           path: 'counterEvidence',
           message: 'must preserve the counter-evidence authored before structural repair',
+        }],
+      };
+    }
+    if (run.evidenceCoverageRepairConstraint
+      && stableFingerprint(challenge.evidenceCoverage)
+        !== stableFingerprint(run.evidenceCoverageRepairConstraint)) {
+      run.invalidOutputCount += 1;
+      return {
+        status: 'invalid-output',
+        requestId: input.requestId,
+        mayRetry: run.invalidOutputCount <= run.request.outputRepairBudget,
+        issues: [{
+          path: 'evidenceCoverage',
+          message: 'must preserve the declared coverage gaps authored before structural repair',
         }],
       };
     }
@@ -240,6 +259,26 @@ function supportedCounterEvidenceConstraint(
   const counterEvidence = (value as { counterEvidence?: unknown }).counterEvidence;
   return Array.isArray(counterEvidence) && counterEvidence.length
     ? structuredClone(counterEvidence) as ChallengeDocument['counterEvidence']
+    : undefined;
+}
+
+function supportedCoverageConstraint(
+  value: unknown,
+  issues: Array<{ path: PropertyKey[]; message: string }>,
+): ChallengeDocument['evidenceCoverage'] | undefined {
+  if (issues.length !== 1
+    || issues[0].path.join('.') !== 'evidenceCoverage.status'
+    || !issues[0].message.includes('must be sufficient')) return undefined;
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const evidenceCoverage = (value as { evidenceCoverage?: unknown }).evidenceCoverage;
+  if (!evidenceCoverage || typeof evidenceCoverage !== 'object'
+    || Array.isArray(evidenceCoverage)) return undefined;
+  const candidate = evidenceCoverage as Record<string, unknown>;
+  return candidate.status === 'insufficient'
+    && typeof candidate.rationale === 'string'
+    && Array.isArray(candidate.gaps)
+    && candidate.gaps.every((item) => typeof item === 'string')
+    ? structuredClone(evidenceCoverage) as ChallengeDocument['evidenceCoverage']
     : undefined;
 }
 

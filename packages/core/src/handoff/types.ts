@@ -1,5 +1,5 @@
 import type { HumanEvent } from '../authority/types.ts';
-import type { IndependentChallenge } from '../challenge/types.ts';
+import type { EvidenceCoverageAssessment, IndependentChallenge } from '../challenge/types.ts';
 import type { EvidenceObligation, TaskContract } from '../delegation/types.ts';
 import type { EvidenceDisposition, FactBundle } from '../facts/types.ts';
 import type { ProtocolEnvelope } from '../shared/protocol.ts';
@@ -26,6 +26,7 @@ export interface EvidenceObligationConclusion {
   obligationId: string;
   status: ConclusionStatus;
   evidence: HandoffEvidenceReference[];
+  evidenceCoverage: EvidenceCoverageAssessment;
   falsification: {
     attempt: string;
     observedResult: string;
@@ -109,6 +110,7 @@ export type HandoffAttentionCode =
   | 'challenge-missing'
   | 'challenge-adverse'
   | 'challenge-independence-unverified'
+  | 'evidence-coverage-insufficient'
   | 'direct-review-required'
   | 'residual-unknown'
   | 'host-policy-unverified'
@@ -235,7 +237,7 @@ export interface DecisionPacket extends ProtocolEnvelope {
     challenges: Array<Pick<IndependentChallenge,
       'id' | 'obligationIds' | 'conditionIds' | 'independence' | 'falsification'
       | 'falsificationAttempt' | 'observedResult' | 'supportingEvidence'
-      | 'counterEvidence' | 'outcome' | 'conclusion'>>;
+      | 'counterEvidence' | 'evidenceCoverage' | 'outcome' | 'conclusion'>>;
   };
   detailSections: Array<'contract' | 'attempts' | 'challenge' | 'handoff' | 'events'>;
 }

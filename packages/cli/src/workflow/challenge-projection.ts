@@ -50,6 +50,7 @@ export interface ChallengeExecutionPacket {
   output: {
     authority: 'agent-judgment';
     allowedOutcomes: readonly ['supported', 'partial', 'contradicted', 'unknown'];
+    allowedCoverageStatuses: readonly ['sufficient', 'insufficient'];
     evidenceItemShape: {
       statement: string;
       references: Array<{ kind: string; id?: string }>;
@@ -58,7 +59,12 @@ export interface ChallengeExecutionPacket {
   };
 }
 
-export type ChallengeDocumentDraft = Omit<ChallengeDocument, 'outcome'> & {
+export type ChallengeDocumentDraft = Omit<ChallengeDocument, 'evidenceCoverage' | 'outcome'> & {
+  evidenceCoverage: {
+    status: ChallengeDocument['evidenceCoverage']['status'] | '';
+    rationale: string;
+    gaps: string[];
+  };
   outcome: ChallengeDocument['outcome'] | '';
 };
 
@@ -217,12 +223,18 @@ export function challengeExecutionPacket(input: {
       observedResult: '',
       supportingEvidence: [],
       counterEvidence: [],
+      evidenceCoverage: {
+        status: '',
+        rationale: '',
+        gaps: [],
+      },
       outcome: '',
       conclusion: '',
     },
     output: {
       authority: 'agent-judgment',
       allowedOutcomes: CONCLUSION_STATUSES,
+      allowedCoverageStatuses: ['sufficient', 'insufficient'],
       evidenceItemShape: {
         statement: '<bounded evidence statement>',
         references: [{
@@ -230,7 +242,7 @@ export function challengeExecutionPacket(input: {
           id: '<omit id only for patch>',
         }],
       },
-      instruction: 'Fill only the open judgment fields in draft, cite only evidence selected by this packet, and return that exact JSON object without Markdown.',
+      instruction: 'Fill only the open judgment fields in draft, explicitly assess whether the selected evidence covers the bounded conclusion, cite only evidence selected by this packet, and return that exact JSON object without Markdown.',
     },
   };
 }

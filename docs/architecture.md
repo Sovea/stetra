@@ -599,6 +599,11 @@ the implementer's summary. Its output remains Agent judgment with independently
 attested provenance. Without a trusted context boundary, the workflow exposes a
 direct Human review obligation instead of manufacturing independence.
 
+Challenge and Handoff also carry an explicit Agent-authored evidence-coverage
+assessment. A declared gap mechanically caps the related conclusion and remains
+visible in review. Runtime does not infer missing verification from repository
+shape, filenames, dependencies, command names, or test text.
+
 ### Review Completion Loop
 
 ```text

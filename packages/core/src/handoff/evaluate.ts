@@ -1,4 +1,5 @@
 import { validateCompiledContract } from '../delegation/compile.ts';
+import type { EvidenceCoverageAssessment } from '../challenge/types.ts';
 import type { EvidenceObligation, TaskContract } from '../delegation/types.ts';
 import { validateFactBundle } from '../facts/validate.ts';
 import type { EvidenceDisposition, FactBundle } from '../facts/types.ts';
@@ -259,6 +260,20 @@ function validateChallenges(input: EvaluateHandoffInput): void {
         'Preserve the counter-evidence and use partial, contradicted, or unknown.',
       ));
     }
+    const evidenceCoverage = validateEvidenceCoverage(
+      challenge.evidenceCoverage,
+      `${path}.evidenceCoverage`,
+      issues,
+    );
+    if (challenge.outcome === 'supported'
+      && evidenceCoverage?.status !== 'sufficient') {
+      issues.push(issue(
+        'challenge-supported-with-insufficient-coverage',
+        `${path}.evidenceCoverage.status`,
+        'A supported Challenge requires an explicit sufficient evidence-coverage assessment.',
+        'Preserve the declared gaps and use partial, contradicted, or unknown.',
+      ));
+    }
     if (!isNonEmptyString(challenge.conclusion)) {
       issues.push(issue('challenge-conclusion-required', `${path}.conclusion`, 'A concrete challenge conclusion is required.', 'Explain the bounded result of the challenge.'));
     }
@@ -503,7 +518,10 @@ function validateObligationConclusions(
       issues.push(issue('obligation-conclusion-invalid', path, 'Obligation conclusion must be an object.', 'Replace it with a conclusion.'));
       continue;
     }
-    exact(raw, ['obligationId', 'status', 'evidence', 'falsification', 'counterEvidence', 'conclusion'], path, issues);
+    exact(raw, [
+      'obligationId', 'status', 'evidence', 'evidenceCoverage', 'falsification',
+      'counterEvidence', 'conclusion',
+    ], path, issues);
     const obligationId = typeof raw.obligationId === 'string' ? raw.obligationId : '';
     const obligation = obligations.get(obligationId);
     if (!obligation || seen.has(obligationId)) {
@@ -513,6 +531,11 @@ function validateObligationConclusions(
     const status = conclusionStatus(raw.status);
     if (!status) issues.push(issue('obligation-status-invalid', `${path}.status`, 'Obligation status is invalid.', 'Use supported, partial, contradicted, or unknown.'));
     const evidence = validateEvidence(raw.evidence, `${path}.evidence`, contract, facts, challengeIds, issues);
+    const evidenceCoverage = validateEvidenceCoverage(
+      raw.evidenceCoverage,
+      `${path}.evidenceCoverage`,
+      issues,
+    );
     const counterEvidence = validateEvidence(raw.counterEvidence, `${path}.counterEvidence`, contract, facts, challengeIds, issues);
     const supportingIdentities = new Set(evidence.map((item) => `${item.kind}:${item.id ?? ''}`));
     if (counterEvidence.some((item) => supportingIdentities.has(`${item.kind}:${item.id ?? ''}`))) {
@@ -529,6 +552,14 @@ function validateObligationConclusions(
       issues,
     );
     text(raw.conclusion, `${path}.conclusion`, issues);
+    if (status === 'supported' && evidenceCoverage?.status !== 'sufficient') {
+      issues.push(issue(
+        'obligation-supported-with-insufficient-coverage',
+        `${path}.evidenceCoverage.status`,
+        'A supported obligation requires an explicit sufficient evidence-coverage assessment.',
+        'Keep every uncovered aspect visible and use partial, contradicted, or unknown.',
+      ));
+    }
     if (obligation) {
       requireStrategyEvidence(
         obligation,
@@ -556,11 +587,12 @@ function validateObligationConclusions(
         issues.push(issue('challenge-evidence-missing', `${path}.evidence`, 'A completed required challenge must be cited by the obligation conclusion.', 'Reference the exact challenge.'));
       }
     }
-    if (issues.length === before && obligation && status && falsification) {
+    if (issues.length === before && obligation && status && evidenceCoverage && falsification) {
       output.push({
         obligationId,
         status,
         evidence,
+        evidenceCoverage,
         falsification,
         counterEvidence,
         conclusion: String(raw.conclusion).trim(),
@@ -573,6 +605,56 @@ function validateObligationConclusions(
     }
   }
   return output;
+}
+
+function validateEvidenceCoverage(
+  value: unknown,
+  path: string,
+  issues: HandoffValidationIssue[],
+): EvidenceCoverageAssessment | undefined {
+  const before = issues.length;
+  if (!isRecord(value)) {
+    issues.push(issue(
+      'evidence-coverage-invalid',
+      path,
+      'Evidence coverage must be an explicit assessment.',
+      'State whether the declared evidence is sufficient and list every uncovered aspect.',
+    ));
+    return undefined;
+  }
+  exact(value, ['status', 'rationale', 'gaps'], path, issues);
+  const status = value.status === 'sufficient' || value.status === 'insufficient'
+    ? value.status
+    : undefined;
+  if (!status) {
+    issues.push(issue(
+      'evidence-coverage-status-invalid',
+      `${path}.status`,
+      'Evidence coverage status is invalid.',
+      'Use sufficient or insufficient.',
+    ));
+  }
+  text(value.rationale, `${path}.rationale`, issues);
+  const gaps = texts(value.gaps, `${path}.gaps`, issues);
+  if (status === 'sufficient' && gaps.length) {
+    issues.push(issue(
+      'evidence-coverage-conflict',
+      `${path}.gaps`,
+      'Sufficient evidence coverage cannot retain uncovered aspects.',
+      'Use insufficient while any gap remains.',
+    ));
+  }
+  if (status === 'insufficient' && !gaps.length) {
+    issues.push(issue(
+      'evidence-coverage-gap-required',
+      `${path}.gaps`,
+      'Insufficient evidence coverage requires at least one concrete uncovered aspect.',
+      'Name the exact conclusion boundary that current evidence does not cover.',
+    ));
+  }
+  return issues.length === before && status
+    ? { status, rationale: String(value.rationale).trim(), gaps }
+    : undefined;
 }
 
 function validateConclusionFalsification(
@@ -973,6 +1055,11 @@ function deriveAttention(
     }
     if (challenges.some((item) => item.independence !== 'host-attested')) {
       items.push(attention('obligation', ['challenge-independence-unverified'], references, 'inspect'));
+    }
+    const conclusion = handoff.obligationConclusions.find((item) =>
+      item.obligationId === obligation.id);
+    if (conclusion?.evidenceCoverage.status === 'insufficient') {
+      items.push(attention('obligation', ['evidence-coverage-insufficient'], references, 'inspect'));
     }
     const unresolvedChallenge = requiredChallengeObligationIds.includes(obligation.id)
       && (!challenges.length

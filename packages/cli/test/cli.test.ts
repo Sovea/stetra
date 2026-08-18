@@ -245,6 +245,11 @@ function handoffDocument(conditionId: string, obligationId: string, definitionId
     obligationConclusions: [{
       obligationId, status: 'supported',
       evidence: [{ kind: 'check', id: definitionId }],
+      evidenceCoverage: {
+        status: 'sufficient',
+        rationale: 'The exact frozen check covers the bounded fixture conclusion.',
+        gaps: [],
+      },
       falsification: {
         attempt: 'Checked whether the frozen command misses the changed fixture path.',
         observedResult: 'The frozen command completed against the current fixture.',

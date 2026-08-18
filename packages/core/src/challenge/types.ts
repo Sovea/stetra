@@ -24,6 +24,12 @@ export interface ChallengeEvidenceItem {
   references: ChallengeEvidenceReference[];
 }
 
+export interface EvidenceCoverageAssessment {
+  status: 'sufficient' | 'insufficient';
+  rationale: string;
+  gaps: string[];
+}
+
 export interface IndependentChallenge extends ProtocolEnvelope {
   id: string;
   effectiveContractId: string;
@@ -41,6 +47,7 @@ export interface IndependentChallenge extends ProtocolEnvelope {
   observedResult: string;
   supportingEvidence: ChallengeEvidenceItem[];
   counterEvidence: ChallengeEvidenceItem[];
+  evidenceCoverage: EvidenceCoverageAssessment;
   outcome: ChallengeOutcome;
   conclusion: string;
 }

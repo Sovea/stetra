@@ -37,6 +37,7 @@ export interface DeveloperDecisionBrief {
       evidenceBoundary: {
         failureHypothesis: string;
         observedResult: string;
+        coverage: DecisionPacket['conditions'][number]['obligations'][number]['conclusion']['evidenceCoverage'];
         supportingEvidenceCount: number;
         counterEvidenceCount: number;
         challengeFindings: Array<{
@@ -145,6 +146,7 @@ export function buildDeveloperDecisionBrief(input: {
         evidenceBoundary: {
           failureHypothesis: obligation.falsification.failureHypothesis,
           observedResult: obligation.conclusion.falsification.observedResult,
+          coverage: obligation.conclusion.evidenceCoverage,
           supportingEvidenceCount: obligation.conclusion.evidence.length,
           counterEvidenceCount: obligation.conclusion.counterEvidence.length,
           challengeFindings: obligation.challengeIds.flatMap((id) => {

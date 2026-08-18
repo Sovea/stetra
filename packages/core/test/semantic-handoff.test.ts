@@ -419,6 +419,11 @@ test('challenge changed-file evidence uses the canonical Runtime fact identity',
       ],
     }],
     counterEvidence: [],
+    evidenceCoverage: {
+      status: 'sufficient',
+      rationale: 'The selected check and changed verifier cover the bounded conclusion.',
+      gaps: [],
+    },
     outcome: 'supported',
     conclusion: 'The bounded failure hypothesis was not observed.',
   };
@@ -511,6 +516,68 @@ test('a supported challenge cannot retain counter-evidence even when it bypasses
       && item.path === 'challenges[0].counterEvidence'));
     return true;
   });
+});
+
+test('a supported challenge cannot declare insufficient evidence coverage', () => {
+  const contract = compiledContract();
+  const facts = factBundle(contract);
+  const challenges = supportedChallenges(contract, facts);
+  challenges[0].evidenceCoverage = {
+    status: 'insufficient',
+    rationale: 'The current check does not exercise one declared boundary.',
+    gaps: ['The alternate failure path remains unobserved.'],
+  };
+  const handoff = handoffFor(contract, facts, challenges);
+
+  assert.throws(() => evaluateHandoff({
+    ...envelope, contract, factBundle: facts,
+    currentWorktreeFingerprint: facts.current.fingerprint,
+    challenges, currentEvidenceDisposition: undefined, hostPolicyEvaluations: [],
+    deliveryExhausted: false, verificationRevised: false, handoff,
+  }), (error: unknown) => {
+    const candidate = error as { issues?: Array<{ code: string }> };
+    assert.ok(candidate.issues?.some((item) =>
+      item.code === 'challenge-supported-with-insufficient-coverage'));
+    return true;
+  });
+});
+
+test('an obligation cannot claim support beyond its declared evidence coverage', () => {
+  const contract = compiledContract('fact-triggered');
+  const facts = factBundle(contract);
+  const handoff = handoffFor(contract, facts, []);
+  handoff.obligationConclusions[0].evidenceCoverage = {
+    status: 'insufficient',
+    rationale: 'One adoption-relevant path is not covered by current evidence.',
+    gaps: ['The alternate failure path remains unobserved.'],
+  };
+  handoff.handoffFingerprint = fingerprint(withoutFingerprint(handoff));
+
+  assert.throws(() => evaluateHandoff({
+    ...envelope, contract, factBundle: facts,
+    currentWorktreeFingerprint: facts.current.fingerprint,
+    challenges: [], currentEvidenceDisposition: undefined, hostPolicyEvaluations: [],
+    deliveryExhausted: false, verificationRevised: false, handoff,
+  }), (error: unknown) => {
+    const candidate = error as { issues?: Array<{ code: string }> };
+    assert.ok(candidate.issues?.some((item) =>
+      item.code === 'obligation-supported-with-insufficient-coverage'));
+    return true;
+  });
+});
+
+test('declared evidence coverage gaps remain visible as adoption attention', () => {
+  const contract = compiledContract('fact-triggered');
+  const facts = factBundle(contract);
+  const handoff = handoffFor(contract, facts, [], 'partial');
+  const evaluation = evaluateHandoff({
+    ...envelope, contract, factBundle: facts,
+    currentWorktreeFingerprint: facts.current.fingerprint,
+    challenges: [], currentEvidenceDisposition: undefined, hostPolicyEvaluations: [],
+    deliveryExhausted: false, verificationRevised: false, handoff,
+  });
+  assert.ok(evaluation.attention.some((item) =>
+    item.codes.includes('evidence-coverage-insufficient')));
 });
 
 test('a condition cannot claim support beyond its obligation conclusions', () => {
@@ -916,6 +983,15 @@ function handoffFor(
           ...facts.checks.map((check) => ({ kind: 'check' as const, id: check.definitionId })),
           ...(challenge ? [{ kind: 'challenge' as const, id: challenge.id }] : []),
         ],
+        evidenceCoverage: status === 'supported' ? {
+          status: 'sufficient' as const,
+          rationale: 'The selected evidence covers the bounded conclusion.',
+          gaps: [],
+        } : {
+          status: 'insufficient' as const,
+          rationale: 'The current evidence leaves an adoption-relevant aspect uncovered.',
+          gaps: ['The bounded conclusion is not fully observed.'],
+        },
         falsification: {
           attempt: 'Exercised the legacy path and inspected the most plausible bypass.',
           observedResult: 'The legacy path retained the expected behavior.',
@@ -988,6 +1064,11 @@ function supportedChallenges(contract: TaskContract, facts: FactBundle): Indepen
       references: facts.checks.map((item) => ({ kind: 'check' as const, id: item.definitionId })),
     }],
     counterEvidence: [],
+    evidenceCoverage: {
+      status: 'sufficient',
+      rationale: 'The frozen check directly covers the bounded conclusion.',
+      gaps: [],
+    },
     outcome: 'supported',
     conclusion: 'The failure hypothesis was not observed.',
   }));

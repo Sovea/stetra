@@ -240,6 +240,19 @@ const ChallengeEvidenceItemSchema = z.strictObject({
   references: z.array(ChallengeEvidenceReferenceSchema).min(1),
 });
 
+const EvidenceCoverageAssessmentSchema = z.discriminatedUnion('status', [
+  z.strictObject({
+    status: z.literal('sufficient'),
+    rationale: NonEmptyStringSchema,
+    gaps: z.array(z.never()).length(0),
+  }),
+  z.strictObject({
+    status: z.literal('insufficient'),
+    rationale: NonEmptyStringSchema,
+    gaps: z.array(NonEmptyStringSchema).min(1),
+  }),
+]);
+
 export const ChallengeDocumentSchema = z.strictObject({
   obligationIds: z.array(StableIdSchema).min(1),
   falsification: FalsificationDesignSchema,
@@ -248,6 +261,7 @@ export const ChallengeDocumentSchema = z.strictObject({
   observedResult: NonEmptyStringSchema,
   supportingEvidence: z.array(ChallengeEvidenceItemSchema),
   counterEvidence: z.array(ChallengeEvidenceItemSchema),
+  evidenceCoverage: EvidenceCoverageAssessmentSchema,
   outcome: z.enum(CONCLUSION_STATUSES),
   conclusion: NonEmptyStringSchema,
 }).superRefine((value, context) => {
@@ -256,6 +270,13 @@ export const ChallengeDocumentSchema = z.strictObject({
       code: 'custom',
       path: ['counterEvidence'],
       message: 'must be preserved and outcome changed to partial, contradicted, or unknown while counter-evidence remains',
+    });
+  }
+  if (value.outcome === 'supported' && value.evidenceCoverage.status !== 'sufficient') {
+    context.addIssue({
+      code: 'custom',
+      path: ['evidenceCoverage', 'status'],
+      message: 'must be sufficient before the Challenge outcome can be supported',
     });
   }
 });
@@ -285,6 +306,7 @@ export const CognitiveHandoffDocumentSchema = z.strictObject({
     obligationId: StableIdSchema,
     status: z.enum(CONCLUSION_STATUSES),
     evidence: z.array(HandoffEvidenceReferenceSchema),
+    evidenceCoverage: EvidenceCoverageAssessmentSchema,
     falsification: z.strictObject({
       attempt: NonEmptyStringSchema,
       observedResult: NonEmptyStringSchema,

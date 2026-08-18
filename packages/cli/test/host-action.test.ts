@@ -249,11 +249,13 @@ function challengePacket(): ChallengeExecutionPacket {
         changedFiles: [], checks: [], repositoryEvidence: [], humanEvents: ['human:test'], patch: false,
       },
       falsificationAttempt: '', observedResult: '', supportingEvidence: [], counterEvidence: [],
+      evidenceCoverage: { status: '', rationale: '', gaps: [] },
       outcome: '', conclusion: '',
     },
     output: {
       authority: 'agent-judgment',
       allowedOutcomes: ['supported', 'partial', 'contradicted', 'unknown'],
+      allowedCoverageStatuses: ['sufficient', 'insufficient'],
       evidenceItemShape: { statement: '<statement>', references: [{ kind: '<kind>', id: '<id>' }] },
       instruction: 'Fill the draft.',
     },

@@ -176,6 +176,46 @@ test('Host Challenge lifecycle requires repair when a supported result retains c
   assert.equal(repaired.status, 'completed');
 });
 
+test('Host Challenge lifecycle requires a non-supported outcome for declared coverage gaps', () => {
+  const lifecycle = new HostChallengeLifecycle('codex');
+  const request = requestFixture('9');
+  lifecycle.observeStart({
+    request,
+    challengeExecutionPacket: packetFixture(),
+    agentType: 'stetra-challenger',
+    parentContextId: 'context:implementer',
+    challengerContextId: 'context:challenger',
+    ...workspaceObservation(),
+  });
+  const incomplete = challengeFixture();
+  incomplete.evidenceCoverage = {
+    status: 'insufficient',
+    rationale: 'The current evidence omits one declared boundary.',
+    gaps: ['The alternate failure path remains unobserved.'],
+  };
+  const first = lifecycle.observeStop({
+    requestId: request.requestId,
+    agentType: 'stetra-challenger',
+    challengerContextId: 'context:challenger',
+    output: incomplete,
+  });
+  assert.equal(first.status, 'invalid-output');
+  if (first.status !== 'invalid-output') return;
+  assert.deepEqual(first.issues, [{
+    path: 'evidenceCoverage.status',
+    message: 'must be sufficient before the Challenge outcome can be supported',
+  }]);
+
+  incomplete.outcome = 'partial';
+  const repaired = lifecycle.observeStop({
+    requestId: request.requestId,
+    agentType: 'stetra-challenger',
+    challengerContextId: 'context:challenger',
+    output: incomplete,
+  });
+  assert.equal(repaired.status, 'completed');
+});
+
 test('Host Challenge lifecycle does not let output repair erase authored counter-evidence', () => {
   const lifecycle = new HostChallengeLifecycle('codex');
   const request = requestFixture('6');
@@ -329,6 +369,11 @@ function challengeFixture(): ChallengeDocument {
       references: [{ kind: 'check', id: digest('c') }],
     }],
     counterEvidence: [],
+    evidenceCoverage: {
+      status: 'sufficient',
+      rationale: 'The selected evidence directly exercises the bounded conclusion.',
+      gaps: [],
+    },
     outcome: 'supported',
     conclusion: 'The current bounded evidence supports the obligation.',
   };

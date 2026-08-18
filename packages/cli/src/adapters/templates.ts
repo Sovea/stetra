@@ -26,6 +26,9 @@ no isolated workspace is available and inspection cannot support the requested
 observation, return partial or unknown and name that limitation.
 A supported outcome must contain no counterEvidence. If any counter-evidence
 remains, use partial, contradicted, or unknown according to the observation.
+Explicitly assess whether the selected evidence covers the whole bounded
+conclusion. Preserve every uncovered aspect in evidenceCoverage.gaps; an
+insufficient assessment cannot produce a supported outcome.
 
 Return exactly one JSON Challenge Document matching the prefilled
 challengeExecutionPacket.draft. Fill only its open judgment fields. Do not wrap
@@ -329,6 +332,9 @@ tool observations in **observedResult**; never manufacture a Challenge or fact
 identity for them.
 A **supported** outcome requires an empty **counterEvidence** array. If any
 counter-evidence remains, use partial, contradicted, or unknown.
+It also requires **evidenceCoverage.status = sufficient** with no gaps. If the
+selected evidence leaves any part of the bounded conclusion uncovered, preserve
+those concrete gaps, use **insufficient**, and keep the outcome below supported.
 
 ~~~json
 {
@@ -339,6 +345,7 @@ counter-evidence remains, use partial, contradicted, or unknown.
   "observedResult":"what the independent attempt actually observed",
   "supportingEvidence":[{"statement":"bounded support","references":[{"kind":"check","id":"definition id"}]}],
   "counterEvidence":[],
+  "evidenceCoverage":{"status":"sufficient","rationale":"why the selected evidence covers the bounded conclusion","gaps":[]},
   "outcome":"supported","conclusion":"bounded conclusion"
 }
 ~~~
@@ -377,7 +384,11 @@ consequence-directed review questions, and an Agent recommendation. Evidence is
 an array of exact references such as **{"kind":"check","id":"..."}** or
 **{"kind":"patch"}**. Every Obligation conclusion states the concrete
 falsification attempt and its observed result against the frozen scenario. Do
-not repeat Runtime facts as Agent prose or create one review item per changed
+not mark evidenceCoverage sufficient unless the cited evidence covers the whole
+bounded conclusion; preserve every uncovered aspect as a concrete gap and keep
+the conclusion below supported. Runtime checks this declaration but does not
+infer semantic coverage from the repository. Do not repeat Runtime facts as
+Agent prose or create one review item per changed
 file. Recommend **accept** only when every Condition and Obligation is
 supported, every required Challenge is trusted and favorable, checks pass, and
 no adoption-changing unknown, required Host-policy gap, exhausted repair, or

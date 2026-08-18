@@ -2131,6 +2131,7 @@ function buildDecisionPacket(
         observedResult: challenge.observedResult,
         supportingEvidence: challenge.supportingEvidence,
         counterEvidence: challenge.counterEvidence,
+        evidenceCoverage: challenge.evidenceCoverage,
         outcome: challenge.outcome,
         conclusion: challenge.conclusion,
       })),
