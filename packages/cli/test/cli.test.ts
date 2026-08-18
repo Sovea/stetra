@@ -152,13 +152,33 @@ test('unsupported input is rejected without migration or compatibility state', a
           code?: string;
           inputCorrection?: {
             kind: string;
-            submittedDocument: { schemaVersion?: string };
+            submittedInput: {
+              fingerprint: string;
+              preview: { kind: string; keys?: string[] };
+            };
+            issueContexts: Array<{
+              path: string;
+              value: { kind: string; value?: string };
+              parent?: { path: string; preview: { kind: string; keys?: string[] } };
+            }>;
             issues: Array<{ path: string }>;
             stateWritten: boolean;
           };
         };
         assert.equal(candidate.inputCorrection?.kind, 'correct-protocol-input');
-        assert.equal(candidate.inputCorrection?.submittedDocument.schemaVersion, 'unsupported');
+        assert.match(candidate.inputCorrection?.submittedInput.fingerprint ?? '', /^sha256:[a-f0-9]{64}$/);
+        assert.equal(candidate.inputCorrection?.submittedInput.preview.kind, 'object');
+        assert.ok(candidate.inputCorrection?.submittedInput.preview.keys?.includes('schemaVersion'));
+        assert.deepEqual(candidate.inputCorrection?.issueContexts[0], {
+          path: 'schemaVersion',
+          value: {
+            kind: 'string', value: 'unsupported', length: 11, truncated: false,
+          },
+          parent: {
+            path: '$',
+            preview: candidate.inputCorrection?.submittedInput.preview,
+          },
+        });
         assert.equal(candidate.inputCorrection?.issues[0].path, 'schemaVersion');
         assert.equal(candidate.inputCorrection?.stateWritten, false);
         return candidate.code === 'INVALID_INPUT';

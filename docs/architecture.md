@@ -727,8 +727,9 @@ it still holds; the guard can then report that the Action is unchanged without
 repeating its Packet. A mismatch always returns the complete current Action.
 On-demand inspection defaults to an artifact index and expands only a named
 canonical section. Schema-invalid Agent input may return an ephemeral
-correction packet containing the submitted document and exact structural
-issues, but this writes no task state and adds no repair lifecycle. These
+correction packet containing the submitted-input fingerprint, exact structural
+issues, and bounded issue-local previews, but never the full document; this
+writes no task state and adds no repair lifecycle. These
 projections reduce repeated context without weakening identity or currency.
 
 The guard closes the final delivery boundary without a new lifecycle state or

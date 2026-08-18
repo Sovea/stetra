@@ -466,8 +466,9 @@ Use **stetra change explain . --task <task-id> --section
 contract|baseline|plan|attempts|challenge|revision|handoff|decision|events --json** for exact
 artifacts. Omit **--section** (or use **index**) to list available artifacts
 without expanding the Ledger. An invalid input returns an ephemeral
-**inputCorrection** containing the submitted document and exact schema issues;
-repair that document and retry the unchanged command. Supplemental Host probes
+**inputCorrection** containing the submitted-input fingerprint, bounded value
+previews for exact issue paths, and exact schema issues; repair the held draft
+and retry the unchanged command. Supplemental Host probes
 remain labeled Agent evidence.
 `;
 

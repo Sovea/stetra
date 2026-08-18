@@ -677,6 +677,8 @@ Call one exact detail section only when it is needed for a current judgment.
 
 Unsupported shapes fail with actionable errors and write no compatibility
 state. A schema-invalid JSON document returns a transient `inputCorrection`
-with the submitted document, exact issue paths, and `stateWritten: false`; the
-Host repairs that document and retries the same lifecycle command. Invalid JSON
-that cannot be parsed has no submitted document to project.
+with the submitted-input fingerprint, a bounded structural preview, exact issue
+paths, bounded issue-value and parent previews, and `stateWritten: false`; the
+Host repairs the draft it already holds and retries the same lifecycle command.
+The correction never echoes the full submitted document. Invalid JSON that
+cannot be parsed has no structured input to preview.
