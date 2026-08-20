@@ -16,7 +16,7 @@ import { CONCLUSION_STATUSES, type ChallengeDocument, type TaskProjection } from
 type ChallengeTaskBinding = Pick<TaskProjection, 'taskId' | 'revision' | 'currentAttemptId'>;
 
 export interface ChallengeExecutionPacket {
-  inputKind: 'challenge';
+  inputKind: 'challenge-round';
   bindsTo: {
     taskId: string;
     revision: number;
@@ -25,6 +25,25 @@ export interface ChallengeExecutionPacket {
     factCollectionId: string;
     worktreeFingerprint: string;
   };
+  sharedEvidence: {
+    changedFiles: ChallengeChangedFile[];
+    patch: FactBundle['patch'] | null;
+  };
+  cases: ChallengeCase[];
+  draft: ChallengeRoundDocumentDraft;
+  output: {
+    authority: 'agent-judgment';
+    allowedOutcomes: readonly ['supported', 'partial', 'contradicted', 'unknown'];
+    allowedCoverageStatuses: readonly ['sufficient', 'insufficient'];
+    evidenceItemShape: {
+      statement: string;
+      references: Array<{ kind: string; id?: string }>;
+    };
+    instruction: string;
+  };
+}
+
+export interface ChallengeCase {
   target: {
     condition: Pick<
       AdoptionCondition,
@@ -40,23 +59,15 @@ export interface ChallengeExecutionPacket {
     };
   };
   evidence: {
-    changedFiles: ChallengeChangedFile[];
     checks: ChallengeCheck[];
     repositoryEvidence: ChallengeRepositoryEvidence[];
     verifierMutations: VerifierMutation[];
-    patch: FactBundle['patch'] | null;
   };
   draft: ChallengeDocumentDraft;
-  output: {
-    authority: 'agent-judgment';
-    allowedOutcomes: readonly ['supported', 'partial', 'contradicted', 'unknown'];
-    allowedCoverageStatuses: readonly ['sufficient', 'insufficient'];
-    evidenceItemShape: {
-      statement: string;
-      references: Array<{ kind: string; id?: string }>;
-    };
-    instruction: string;
-  };
+}
+
+export interface ChallengeRoundDocumentDraft {
+  results: ChallengeDocumentDraft[];
 }
 
 export type ChallengeDocumentDraft = Omit<ChallengeDocument, 'evidenceCoverage' | 'outcome'> & {
@@ -113,50 +124,83 @@ export function challengeExecutionPacket(input: {
   requiredObligationIds: string[];
 }): ChallengeExecutionPacket {
   const completed = new Set(input.completedObligationIds);
-  const targetId = input.requiredObligationIds.find((id) => !completed.has(id));
-  const target = input.contract.adoptionConditions.flatMap((condition) =>
+  const targets = input.contract.adoptionConditions.flatMap((condition) =>
     condition.evidenceObligations.map((obligation) => ({ condition, obligation })))
-    .find(({ obligation }) => obligation.id === targetId);
-  if (!target) {
-    throw new Error('Independent Challenge projection requires one outstanding Evidence Obligation.');
+    .filter(({ obligation }) =>
+      input.requiredObligationIds.includes(obligation.id) && !completed.has(obligation.id));
+  if (!targets.length) {
+    throw new Error('Independent Challenge projection requires at least one outstanding Evidence Obligation.');
   }
 
-  const { condition, obligation } = target;
-  const definitionIds = currentDefinitionIds(obligation, input.contract);
-  const definitionIdSet = new Set(definitionIds);
-  const relevantMutations = input.facts.verifierMutations.filter((mutation) =>
-    definitionIdSet.has(mutation.definitionId));
-  const conditionEvidenceIds = new Set(condition.basis.repositoryEvidenceIds);
-  const obligationEvidenceIds = new Set(repositoryEvidenceIds(obligation));
-  const relevantEvidenceIds = new Set([...conditionEvidenceIds, ...obligationEvidenceIds]);
-  const repositoryEvidence = input.contract.repositoryEvidence
-    .filter((item) => relevantEvidenceIds.has(item.id))
-    .map((item) => ({
-      ...item,
-      declaredRelations: [
-        ...(conditionEvidenceIds.has(item.id) ? ['condition-basis' as const] : []),
-        ...(obligationEvidenceIds.has(item.id) ? ['obligation-strategy' as const] : []),
-      ],
-    }));
   const repositoryEvidenceByPath = new Map<string, string[]>();
-  for (const item of repositoryEvidence) {
-    repositoryEvidenceByPath.set(item.path, [
-      ...(repositoryEvidenceByPath.get(item.path) ?? []),
-      item.id,
-    ]);
-  }
   const mutationDefinitionIdsByChangedFile = new Map<string, string[]>();
-  for (const mutation of relevantMutations) {
-    mutationDefinitionIdsByChangedFile.set(mutation.changedFileId, [
-      ...(mutationDefinitionIdsByChangedFile.get(mutation.changedFileId) ?? []),
-      mutation.definitionId,
-    ]);
-  }
+  const cases = targets.map(({ condition, obligation }) => {
+    const definitionIds = currentDefinitionIds(obligation, input.contract);
+    const definitionIdSet = new Set(definitionIds);
+    const relevantMutations = input.facts.verifierMutations.filter((mutation) =>
+      definitionIdSet.has(mutation.definitionId));
+    const conditionEvidenceIds = new Set(condition.basis.repositoryEvidenceIds);
+    const obligationEvidenceIds = new Set(repositoryEvidenceIds(obligation));
+    const relevantEvidenceIds = new Set([...conditionEvidenceIds, ...obligationEvidenceIds]);
+    const repositoryEvidence = input.contract.repositoryEvidence
+      .filter((item) => relevantEvidenceIds.has(item.id))
+      .map((item) => ({
+        ...item,
+        declaredRelations: [
+          ...(conditionEvidenceIds.has(item.id) ? ['condition-basis' as const] : []),
+          ...(obligationEvidenceIds.has(item.id) ? ['obligation-strategy' as const] : []),
+        ],
+      }));
+    for (const item of repositoryEvidence) {
+      repositoryEvidenceByPath.set(item.path, unique([
+        ...(repositoryEvidenceByPath.get(item.path) ?? []),
+        item.id,
+      ]));
+    }
+    for (const mutation of relevantMutations) {
+      mutationDefinitionIdsByChangedFile.set(mutation.changedFileId, unique([
+        ...(mutationDefinitionIdsByChangedFile.get(mutation.changedFileId) ?? []),
+        mutation.definitionId,
+      ]));
+    }
+    const exactDeveloperEventIds = new Set(condition.basis.humanEventIds);
+    return {
+      target: {
+        condition: {
+          authority: 'agent-judgment' as const,
+          id: condition.id,
+          key: condition.key,
+          statement: condition.statement,
+          adoptionRationale: condition.adoptionRationale,
+          criticality: condition.criticality,
+        },
+        obligation: {
+          authority: 'agent-judgment' as const,
+          id: obligation.id,
+          key: obligation.key,
+          conditionId: obligation.conditionId,
+          statement: obligation.statement,
+          falsification: obligation.falsification,
+          strategies: obligation.strategies,
+        },
+        exactDeveloperEvents: {
+          authority: 'human-event' as const,
+          events: input.contract.authority.developerEvents.filter((event) =>
+            exactDeveloperEventIds.has(event.id)),
+        },
+      },
+      evidence: {
+        checks: relevantChecks(definitionIds, input.contract, input.facts),
+        repositoryEvidence,
+        verifierMutations: relevantMutations,
+      },
+      draft: challengeDraft(condition, obligation, definitionIds, obligationEvidenceIds, input.facts),
+    };
+  });
   const checkInducedIds = new Set(input.facts.checkInducedChanges.map((item) => item.id));
-  const exactDeveloperEventIds = new Set(condition.basis.humanEventIds);
 
   return {
-    inputKind: 'challenge',
+    inputKind: 'challenge-round',
     bindsTo: {
       taskId: input.task.taskId,
       revision: input.task.revision,
@@ -165,31 +209,7 @@ export function challengeExecutionPacket(input: {
       factCollectionId: input.facts.factCollectionId,
       worktreeFingerprint: input.facts.current.fingerprint,
     },
-    target: {
-      condition: {
-        authority: 'agent-judgment',
-        id: condition.id,
-        key: condition.key,
-        statement: condition.statement,
-        adoptionRationale: condition.adoptionRationale,
-        criticality: condition.criticality,
-      },
-      obligation: {
-        authority: 'agent-judgment',
-        id: obligation.id,
-        key: obligation.key,
-        conditionId: obligation.conditionId,
-        statement: obligation.statement,
-        falsification: obligation.falsification,
-        strategies: obligation.strategies,
-      },
-      exactDeveloperEvents: {
-        authority: 'human-event',
-        events: input.contract.authority.developerEvents.filter((event) =>
-          exactDeveloperEventIds.has(event.id)),
-      },
-    },
-    evidence: {
+    sharedEvidence: {
       changedFiles: input.facts.changedFiles.map((file) => ({
         id: file.id,
         path: file.path,
@@ -205,33 +225,10 @@ export function challengeExecutionPacket(input: {
           ]),
         },
       })),
-      checks: relevantChecks(definitionIds, input.contract, input.facts),
-      repositoryEvidence,
-      verifierMutations: relevantMutations,
       patch: input.facts.patch ?? null,
     },
-    draft: {
-      obligationIds: [obligation.id],
-      falsification: obligation.falsification,
-      evidence: {
-        changedFiles: input.facts.changedFiles.map((item) => item.id),
-        checks: definitionIds,
-        repositoryEvidence: [...obligationEvidenceIds],
-        humanEvents: condition.basis.humanEventIds,
-        patch: Boolean(input.facts.patch),
-      },
-      falsificationAttempt: '',
-      observedResult: '',
-      supportingEvidence: [],
-      counterEvidence: [],
-      evidenceCoverage: {
-        status: '',
-        rationale: '',
-        gaps: [],
-      },
-      outcome: '',
-      conclusion: '',
-    },
+    cases,
+    draft: { results: cases.map((item) => item.draft) },
     output: {
       authority: 'agent-judgment',
       allowedOutcomes: CONCLUSION_STATUSES,
@@ -243,8 +240,35 @@ export function challengeExecutionPacket(input: {
           id: '<omit id only for patch>',
         }],
       },
-      instruction: 'Fill only the open judgment fields in draft, explicitly assess whether the selected evidence covers the bounded conclusion, cite only evidence selected by this packet, and return that exact JSON object without Markdown.',
+      instruction: 'Fill only the open judgment fields in every draft result, explicitly assess whether each selected evidence set covers its bounded conclusion, cite only evidence selected by that case, and return the exact Challenge Round JSON object without Markdown.',
     },
+  };
+}
+
+function challengeDraft(
+  condition: AdoptionCondition,
+  obligation: EvidenceObligation,
+  definitionIds: string[],
+  obligationEvidenceIds: Set<string>,
+  facts: FactBundle,
+): ChallengeDocumentDraft {
+  return {
+    obligationIds: [obligation.id],
+    falsification: obligation.falsification,
+    evidence: {
+      changedFiles: facts.changedFiles.map((item) => item.id),
+      checks: definitionIds,
+      repositoryEvidence: [...obligationEvidenceIds],
+      humanEvents: condition.basis.humanEventIds,
+      patch: Boolean(facts.patch),
+    },
+    falsificationAttempt: '',
+    observedResult: '',
+    supportingEvidence: [],
+    counterEvidence: [],
+    evidenceCoverage: { status: '', rationale: '', gaps: [] },
+    outcome: '',
+    conclusion: '',
   };
 }
 

@@ -244,6 +244,9 @@ function validateChallenges(input: EvaluateHandoffInput): void {
     } else {
       challengeIds.add(challenge.id);
     }
+    if (!isStableId(challenge.roundId)) {
+      issues.push(issue('challenge-round-id-invalid', `${path}.roundId`, 'Challenge Round id is invalid.', 'Use the Runtime-generated Challenge Round id.'));
+    }
     if (challenge.effectiveContractId !== input.contract.effectiveContractId
       || challenge.attemptId !== input.factBundle.attemptId
       || challenge.factCollectionId !== input.factBundle.factCollectionId) {

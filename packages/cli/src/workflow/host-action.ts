@@ -48,7 +48,7 @@ export interface ChallengeExecutionRequest {
   outputRepairBudget: 1;
   expectedOutput: {
     serialization: 'json';
-    schema: 'challenge-document';
+    schema: 'challenge-round-document';
     source: 'challengeExecutionPacket.draft';
   };
 }
@@ -359,7 +359,7 @@ function challengeInputAction(
     outputRepairBudget: 1 as const,
     expectedOutput: {
       serialization: 'json' as const,
-      schema: 'challenge-document' as const,
+      schema: 'challenge-round-document' as const,
       source: 'challengeExecutionPacket.draft' as const,
     },
   };
@@ -412,7 +412,7 @@ function requiredAuthoringPacket(
   packet: AuthoringPacket | ChallengeExecutionPacket | undefined,
   route: string,
 ): AuthoringPacket {
-  if (!packet || packet.inputKind === 'challenge') {
+  if (!packet || packet.inputKind === 'challenge-round') {
     throw new Error(`Route ${route} requires an Authoring Packet.`);
   }
   return packet;
@@ -422,7 +422,7 @@ function requiredChallengeExecutionPacket(
   packet: AuthoringPacket | ChallengeExecutionPacket | undefined,
   route: string,
 ): ChallengeExecutionPacket {
-  if (!packet || packet.inputKind !== 'challenge') {
+  if (!packet || packet.inputKind !== 'challenge-round') {
     throw new Error(`Route ${route} requires a Challenge Execution Packet.`);
   }
   return packet;

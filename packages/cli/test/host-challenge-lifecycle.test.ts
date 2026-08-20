@@ -3,7 +3,7 @@ import test from 'node:test';
 
 import { HostChallengeLifecycle } from '../src/host/challenge-lifecycle.ts';
 import { stableFingerprint } from '../src/protocol.ts';
-import type { ChallengeDocument } from '../src/schemas/delegation.ts';
+import type { ChallengeDocument, ChallengeRoundDocument } from '../src/schemas/delegation.ts';
 import type { ChallengeExecutionPacket } from '../src/workflow/challenge-projection.ts';
 import type { ChallengeExecutionRequest } from '../src/workflow/host-action.ts';
 
@@ -11,6 +11,7 @@ test('Host Challenge lifecycle binds start, stop, exact output, and single consu
   const lifecycle = new HostChallengeLifecycle('codex');
   const request = requestFixture('1');
   const challenge = challengeFixture();
+  const round = roundFixture(challenge);
   lifecycle.observeStart({
     request,
     challengeExecutionPacket: packetFixture(),
@@ -24,7 +25,7 @@ test('Host Challenge lifecycle binds start, stop, exact output, and single consu
     requestId: request.requestId,
     agentType: 'stetra-challenger',
     challengerContextId: 'context:challenger',
-    output: JSON.stringify(challenge),
+    output: JSON.stringify(round),
   });
   assert.equal(stopped.status, 'completed');
   if (stopped.status !== 'completed') return;
@@ -32,25 +33,25 @@ test('Host Challenge lifecycle binds start, stop, exact output, and single consu
   assert.equal(stopped.receipt.targetWorktree, 'read-only');
   assert.equal(stopped.receipt.executionWorkspace, 'isolated-writable');
   assert.equal(stopped.receipt.sourceSnapshotFingerprint, digest('w'));
-  assert.deepEqual(stopped.challenge, challenge);
+  assert.deepEqual(stopped.round, round);
 
   assert.equal(await lifecycle.consumeChallengeRun({
     request: requestFixture('2'),
-    challenge,
+    round,
   }), undefined);
   const alteredPacketRequest = structuredClone(request);
   alteredPacketRequest.bindsTo.challengeExecutionPacketFingerprint = digest('b');
   assert.equal(await lifecycle.consumeChallengeRun({
     request: alteredPacketRequest,
-    challenge,
+    round,
   }), undefined);
   assert.deepEqual(await lifecycle.consumeChallengeRun({
     request,
-    challenge,
+    round,
   }), stopped.receipt);
   assert.equal(await lifecycle.consumeChallengeRun({
     request,
-    challenge,
+    round,
   }), undefined);
 });
 
@@ -91,7 +92,7 @@ test('Host Challenge lifecycle allows one structured-output repair and never inv
     requestId: request.requestId,
     agentType: 'stetra-challenger',
     challengerContextId: 'context:challenger',
-    output: challengeFixture(),
+    output: roundFixture(),
   }), /exhausted its output repair budget/);
 });
 
@@ -113,14 +114,14 @@ test('Host Challenge lifecycle repairs unavailable nested evidence before issuin
     requestId: request.requestId,
     agentType: 'stetra-challenger',
     challengerContextId: 'context:challenger',
-    output: invalid,
+    output: roundFixture(invalid),
   });
   assert.deepEqual(rejected, {
     status: 'invalid-output',
     requestId: request.requestId,
     mayRetry: true,
     issues: [{
-      path: 'supportingEvidence[0].references[0].id',
+      path: 'results.0.supportingEvidence[0].references[0].id',
       message: `references unavailable check identity ${JSON.stringify(digest('d'))}`,
     }],
   });
@@ -130,7 +131,7 @@ test('Host Challenge lifecycle repairs unavailable nested evidence before issuin
     requestId: request.requestId,
     agentType: 'stetra-challenger',
     challengerContextId: 'context:challenger',
-    output: invalid,
+    output: roundFixture(invalid),
   });
   assert.equal(completed.status, 'completed');
 });
@@ -156,13 +157,13 @@ test('Host Challenge lifecycle requires repair when a supported result retains c
     requestId: request.requestId,
     agentType: 'stetra-challenger',
     challengerContextId: 'context:challenger',
-    output: inconsistent,
+    output: roundFixture(inconsistent),
   });
   assert.equal(first.status, 'invalid-output');
   if (first.status !== 'invalid-output') return;
   assert.equal(first.mayRetry, true);
   assert.deepEqual(first.issues, [{
-    path: 'counterEvidence',
+    path: 'results.0.counterEvidence',
     message: 'must be preserved and outcome changed to partial, contradicted, or unknown while counter-evidence remains',
   }]);
 
@@ -171,7 +172,7 @@ test('Host Challenge lifecycle requires repair when a supported result retains c
     requestId: request.requestId,
     agentType: 'stetra-challenger',
     challengerContextId: 'context:challenger',
-    output: inconsistent,
+    output: roundFixture(inconsistent),
   });
   assert.equal(repaired.status, 'completed');
 });
@@ -197,12 +198,12 @@ test('Host Challenge lifecycle requires a non-supported outcome for declared cov
     requestId: request.requestId,
     agentType: 'stetra-challenger',
     challengerContextId: 'context:challenger',
-    output: incomplete,
+    output: roundFixture(incomplete),
   });
   assert.equal(first.status, 'invalid-output');
   if (first.status !== 'invalid-output') return;
   assert.deepEqual(first.issues, [{
-    path: 'evidenceCoverage.status',
+    path: 'results.0.evidenceCoverage.status',
     message: 'must be sufficient before the Challenge outcome can be supported',
   }]);
 
@@ -211,7 +212,7 @@ test('Host Challenge lifecycle requires a non-supported outcome for declared cov
     requestId: request.requestId,
     agentType: 'stetra-challenger',
     challengerContextId: 'context:challenger',
-    output: incomplete,
+    output: roundFixture(incomplete),
   });
   assert.equal(repaired.status, 'completed');
 });
@@ -236,7 +237,7 @@ test('Host Challenge lifecycle does not let output repair erase authored counter
     requestId: request.requestId,
     agentType: 'stetra-challenger',
     challengerContextId: 'context:challenger',
-    output: inconsistent,
+    output: roundFixture(inconsistent),
   });
   assert.equal(first.status, 'invalid-output');
 
@@ -245,14 +246,14 @@ test('Host Challenge lifecycle does not let output repair erase authored counter
     requestId: request.requestId,
     agentType: 'stetra-challenger',
     challengerContextId: 'context:challenger',
-    output: inconsistent,
+    output: roundFixture(inconsistent),
   });
   assert.deepEqual(erased, {
     status: 'invalid-output',
     requestId: request.requestId,
     mayRetry: false,
     issues: [{
-      path: 'counterEvidence',
+      path: 'results.0.counterEvidence',
       message: 'must preserve the counter-evidence authored before structural repair',
     }],
   });
@@ -324,7 +325,7 @@ function requestFixture(character: string): ChallengeExecutionRequest {
     outputRepairBudget: 1,
     expectedOutput: {
       serialization: 'json',
-      schema: 'challenge-document',
+      schema: 'challenge-round-document',
       source: 'challengeExecutionPacket.draft',
     },
   };
@@ -333,8 +334,8 @@ function requestFixture(character: string): ChallengeExecutionRequest {
 function packetFixture(): ChallengeExecutionPacket {
   return {
     bindsTo: { worktreeFingerprint: digest('w') },
-    draft: { evidence: challengeFixture().evidence },
-  } as ChallengeExecutionPacket;
+    cases: [{ draft: { evidence: challengeFixture().evidence } }],
+  } as unknown as ChallengeExecutionPacket;
 }
 
 function workspaceObservation() {
@@ -377,6 +378,10 @@ function challengeFixture(): ChallengeDocument {
     outcome: 'supported',
     conclusion: 'The current bounded evidence supports the obligation.',
   };
+}
+
+function roundFixture(result: ChallengeDocument = challengeFixture()): ChallengeRoundDocument {
+  return { results: [result] };
 }
 
 function digest(character: string): string {

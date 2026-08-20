@@ -404,6 +404,7 @@ test('challenge changed-file evidence uses the canonical Runtime fact identity',
   const challenge: IndependentChallenge = {
     ...envelope,
     id: 'challenge:changed-verifier',
+    roundId: 'challenge-round:changed-verifier',
     effectiveContractId: contract.effectiveContractId,
     attemptId: facts.attemptId,
     factCollectionId: facts.factCollectionId,
@@ -1114,6 +1115,7 @@ function supportedChallenges(contract: TaskContract, facts: FactBundle): Indepen
   return obligations.map((obligation, index) => ({
     ...envelope,
     id: `challenge:${index + 1}`,
+    roundId: 'challenge-round:1',
     effectiveContractId: contract.effectiveContractId,
     attemptId: facts.attemptId,
     factCollectionId: facts.factCollectionId,
@@ -1121,8 +1123,8 @@ function supportedChallenges(contract: TaskContract, facts: FactBundle): Indepen
     conditionIds: [obligation.conditionId],
     independence: 'host-attested',
     implementerContextId: 'context:implementer',
-    challengerContextId: `context:challenger-${index + 1}`,
-    attestationId: `attestation:${index + 1}`,
+    challengerContextId: 'context:challenger-1',
+    attestationId: 'attestation:1',
     falsification: obligation.falsification,
     evidence: {
       changedFiles: [],

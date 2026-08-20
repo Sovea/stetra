@@ -82,10 +82,10 @@ test('host actions route the initial lifecycle with executable task argv', () =>
   assert.equal(challenge.challengeExecutionRequest?.contextPolicy, 'fresh-required');
   assert.equal(challenge.challengeExecutionRequest?.outputRepairBudget, 1);
   assert.deepEqual(challenge.challengeExecutionRequest?.expectedOutput, {
-    serialization: 'json', schema: 'challenge-document', source: 'challengeExecutionPacket.draft',
+    serialization: 'json', schema: 'challenge-round-document', source: 'challengeExecutionPacket.draft',
   });
   assert.equal(challenge.authoringPacket, undefined);
-  assert.equal(challenge.challengeExecutionPacket?.target.obligation.id, 'obligation:test');
+  assert.equal(challenge.challengeExecutionPacket?.cases[0].target.obligation.id, 'obligation:test');
   assert.equal(challenge.inputBinding?.source, 'challengeExecutionPacket.draft');
   assert.deepEqual(challenge.executionRequirements, {
     context: 'continuous', targetWorktree: 'read-only', stetraState: 'read-write',
@@ -270,12 +270,14 @@ function packet(inputKind: AuthoringPacket['inputKind']): AuthoringPacket {
 
 function challengePacket(): ChallengeExecutionPacket {
   return {
-    inputKind: 'challenge',
+    inputKind: 'challenge-round',
     bindsTo: {
       taskId: 'task-id', revision: 1, effectiveContractId: digest('e'),
       attemptId: 'attempt:1', factCollectionId: digest('c'), worktreeFingerprint: digest('w'),
     },
-    target: {
+    sharedEvidence: { changedFiles: [], patch: null },
+    cases: [{
+      target: {
       condition: {
         authority: 'agent-judgment', id: 'condition:test', key: 'condition',
         statement: 'Condition.', adoptionRationale: 'Changes adoption.', criticality: 'material',
@@ -299,10 +301,8 @@ function challengePacket(): ChallengeExecutionPacket {
         }],
       },
     },
-    evidence: {
-      changedFiles: [], checks: [], repositoryEvidence: [], verifierMutations: [], patch: null,
-    },
-    draft: {
+      evidence: { checks: [], repositoryEvidence: [], verifierMutations: [] },
+      draft: {
       obligationIds: ['obligation:test'],
       falsification: {
         failureHypothesis: 'The implementation may be wrong.',
@@ -316,7 +316,23 @@ function challengePacket(): ChallengeExecutionPacket {
       falsificationAttempt: '', observedResult: '', supportingEvidence: [], counterEvidence: [],
       evidenceCoverage: { status: '', rationale: '', gaps: [] },
       outcome: '', conclusion: '',
-    },
+      },
+    }],
+    draft: { results: [{
+      obligationIds: ['obligation:test'],
+      falsification: {
+        failureHypothesis: 'The implementation may be wrong.',
+        scenario: 'Exercise the boundary.',
+        supportingObservation: 'The boundary holds.',
+        contradictingObservation: 'The boundary fails.',
+      },
+      evidence: {
+        changedFiles: [], checks: [], repositoryEvidence: [], humanEvents: ['human:test'], patch: false,
+      },
+      falsificationAttempt: '', observedResult: '', supportingEvidence: [], counterEvidence: [],
+      evidenceCoverage: { status: '', rationale: '', gaps: [] },
+      outcome: '', conclusion: '',
+    }] },
     output: {
       authority: 'agent-judgment',
       allowedOutcomes: ['supported', 'partial', 'contradicted', 'unknown'],

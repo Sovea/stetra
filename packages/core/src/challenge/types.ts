@@ -32,6 +32,7 @@ export interface EvidenceCoverageAssessment {
 
 export interface IndependentChallenge extends ProtocolEnvelope {
   id: string;
+  roundId: string;
   effectiveContractId: string;
   attemptId: string;
   factCollectionId: string;

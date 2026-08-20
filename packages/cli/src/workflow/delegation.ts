@@ -65,7 +65,7 @@ import {
 } from '../protocol.ts';
 import { assertNoLegacyArtifacts } from '../project/legacy.ts';
 import {
-  ChallengeDocumentSchema,
+  ChallengeRoundDocumentSchema,
   CognitiveHandoffDocumentSchema,
   DelegationPrepareDocumentSchema,
   HumanDecisionDocumentSchema,
@@ -895,10 +895,11 @@ export async function recordChallenge(options: {
     projectRoot,
     options.inputPath,
     options.input,
-    ChallengeDocumentSchema,
-    'Independent Challenge input',
+    ChallengeRoundDocumentSchema,
+    'Independent Challenge Round input',
   );
-  let challenge: IndependentChallenge | undefined;
+  let recordedChallenges: IndependentChallenge[] = [];
+  let roundId: string | undefined;
   const transitioned = await transitionTask({
     projectRoot,
     taskId: options.taskId,
@@ -909,7 +910,6 @@ export async function recordChallenge(options: {
       const facts = readCurrentFacts(task);
       const stale = await currentFactsAreStale(task, facts);
       if (stale) throw usageError('Facts changed before challenge; collect the current worktree first.');
-      validateChallengeReferences(source, contract, facts);
       const requestedAction = currentTaskHostAction(task, true);
       if (requestedAction?.kind !== 'perform-independent-challenge'
         || !requestedAction.challengeExecutionRequest
@@ -917,20 +917,27 @@ export async function recordChallenge(options: {
         throw usageError('The current task state does not request an Independent Challenge.');
       }
       const request = requestedAction.challengeExecutionRequest;
-      const requestedDraft = requestedAction.challengeExecutionPacket.draft;
-      if (stableFingerprint(requestedDraft.obligationIds)
-        !== stableFingerprint(source.obligationIds)) {
-        throw inputError('Challenge must answer the exact Evidence Obligation in the current Challenge Execution Request.');
+      const requestedDrafts = requestedAction.challengeExecutionPacket.draft.results;
+      if (requestedDrafts.length !== source.results.length) {
+        throw inputError('Challenge Round must answer every exact Evidence Obligation in the current request once.');
       }
-      if (stableFingerprint(requestedDraft.falsification)
-          !== stableFingerprint(source.falsification)
-        || stableFingerprint(requestedDraft.evidence)
-          !== stableFingerprint(source.evidence)) {
-        throw inputError('Challenge must preserve the exact frozen falsification and evidence selection in the current Challenge Execution Packet.');
+      for (const [index, result] of source.results.entries()) {
+        validateChallengeReferences(result, contract, facts);
+        const requestedDraft = requestedDrafts[index]!;
+        if (stableFingerprint(requestedDraft.obligationIds)
+          !== stableFingerprint(result.obligationIds)) {
+          throw inputError(`Challenge Round result ${index} must answer its exact Evidence Obligation.`);
+        }
+        if (stableFingerprint(requestedDraft.falsification)
+            !== stableFingerprint(result.falsification)
+          || stableFingerprint(requestedDraft.evidence)
+            !== stableFingerprint(result.evidence)) {
+          throw inputError(`Challenge Round result ${index} must preserve its frozen falsification and evidence selection.`);
+        }
       }
       const suppliedReceipt = await options.hostAttestations?.consumeChallengeRun?.({
         request,
-        challenge: source,
+        round: source,
       });
       if (options.hostAttestations?.consumeChallengeRun && !suppliedReceipt) {
         throw inputError('The trusted Host integration rejected or could not match the Challenge run.');
@@ -943,7 +950,7 @@ export async function recordChallenge(options: {
           throw inputError('Host Challenge Run Receipt is bound to a different Challenge Execution Request.');
         }
         if (receipt.outputFingerprint !== stableFingerprint(source)) {
-          throw inputError('Host Challenge Run Receipt does not bind the submitted Challenge output.');
+          throw inputError('Host Challenge Run Receipt does not bind the submitted Challenge Round output.');
         }
         if (readChallenges(task).some((item) => item.attestationId === receipt.receiptId)) {
           throw inputError(`Host Challenge Run Receipt ${receipt.receiptId} has already been consumed.`);
@@ -952,27 +959,29 @@ export async function recordChallenge(options: {
       const receiptVerified = Boolean(receipt);
       const obligationById = new Map(contract.adoptionConditions.flatMap((condition) =>
         condition.evidenceObligations.map((obligation) => [obligation.id, obligation] as const)));
-      const challengeId = `challenge:${randomUUID()}`;
-      challenge = {
+      roundId = `challenge-round:${randomUUID()}`;
+      recordedChallenges = source.results.map((result) => ({
         protocol: DELEGATION_PROTOCOL,
         schemaVersion: DELEGATION_SCHEMA_VERSION,
-        ...source,
-        id: challengeId,
+        ...result,
+        id: `challenge:${randomUUID()}`,
+        roundId: roundId!,
         effectiveContractId: contract.effectiveContractId,
         attemptId: facts.attemptId,
         factCollectionId: facts.factCollectionId,
-        conditionIds: unique(source.obligationIds.map((id) => obligationById.get(id)!.conditionId)),
+        conditionIds: unique(result.obligationIds.map((id) => obligationById.get(id)!.conditionId)),
         independence: receiptVerified ? 'host-attested' : 'unverified',
         ...(receiptVerified && receipt ? {
           attestationId: receipt.receiptId,
           implementerContextId: receipt.parentContextId,
           challengerContextId: receipt.challengerContextId,
         } : {}),
-      };
-      const relativePath = challengePath(challengeId);
-      const path = taskArtifactPath(task.taskDirectory, relativePath);
-      writeImmutableJson(path, challenge);
-      const artifactRefs = [projectRelativePath(task.projectRoot, path)];
+      }));
+      const artifactRefs = recordedChallenges.map((item) => {
+        const path = taskArtifactPath(task.taskDirectory, challengePath(item.id));
+        writeImmutableJson(path, item);
+        return projectRelativePath(task.projectRoot, path);
+      });
       if (receiptVerified && receipt) {
         const receiptRelativePath = hostChallengeReceiptPath(receipt.receiptId);
         const receiptPath = taskArtifactPath(task.taskDirectory, receiptRelativePath);
@@ -982,7 +991,10 @@ export async function recordChallenge(options: {
       return {
         projection: {
           ...task.projection,
-          challengeIds: [...task.projection.challengeIds, challengeId],
+          challengeIds: [
+            ...task.projection.challengeIds,
+            ...recordedChallenges.map((item) => item.id),
+          ],
         },
         artifactRefs,
       };
@@ -994,7 +1006,7 @@ export async function recordChallenge(options: {
   const required = requiredChallengeObligationIds(transitionedContract, transitionedFacts);
   const pending = pendingChallengeObligationIds(required, challenges);
   const challengeAttestationAvailable = Boolean(options.hostAttestations?.consumeChallengeRun);
-  const adverse = challenge!.outcome !== 'supported';
+  const adverse = recordedChallenges.some((item) => item.outcome !== 'supported');
   const performAnotherChallenge = !adverse && pending.length > 0;
   const nextAction = adverse
     ? adverseChallengeHostAction(transitioned.taskId, diagnosisAuthoringPacket({
@@ -1024,9 +1036,10 @@ export async function recordChallenge(options: {
     schemaVersion: DELEGATION_SCHEMA_VERSION,
     status: 'challenge-recorded' as const,
     taskId: transitioned.taskId,
-    attemptId: challenge!.attemptId,
-    factCollectionId: challenge!.factCollectionId,
-    challenge: challenge!,
+    attemptId: transitionedFacts.attemptId,
+    factCollectionId: transitionedFacts.factCollectionId,
+    roundId: roundId!,
+    challenges: recordedChallenges,
     hostAction: nextAction,
   };
 }
@@ -1986,12 +1999,12 @@ function readHostChallengeReceipts(
   task: LoadedTask,
   challenges: IndependentChallenge[],
 ): HostChallengeRunReceipt[] {
-  return challenges.flatMap((challenge) => challenge.attestationId
-    ? [readJsonArtifact<HostChallengeRunReceipt>(
-        taskArtifactPath(task.taskDirectory, hostChallengeReceiptPath(challenge.attestationId)),
-        `Host Challenge Run Receipt ${challenge.attestationId}`,
-      )]
-    : []);
+  return unique(challenges.flatMap((challenge) => challenge.attestationId
+    ? [challenge.attestationId] : [])).map((attestationId) =>
+    readJsonArtifact<HostChallengeRunReceipt>(
+      taskArtifactPath(task.taskDirectory, hostChallengeReceiptPath(attestationId)),
+      `Host Challenge Run Receipt ${attestationId}`,
+    ));
 }
 
 function readVerificationRevisions(task: LoadedTask): unknown[] {

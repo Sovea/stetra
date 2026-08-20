@@ -30,15 +30,16 @@ Explicitly assess whether the selected evidence covers the whole bounded
 conclusion. Preserve every uncovered aspect in evidenceCoverage.gaps; an
 insufficient assessment cannot produce a supported outcome.
 
-Return exactly one JSON Challenge Document matching the prefilled
-challengeExecutionPacket.draft. Fill only its open judgment fields. Do not wrap
-it in Markdown or add prose. Cite only exact IDs present in the packet. Never
+Return exactly one JSON Challenge Round matching the prefilled
+challengeExecutionPacket.draft. Fill every result's open judgment fields. Do
+not wrap it in Markdown or add prose. Cite only exact IDs present in that case.
+Never
 author request identity, context identity, independence, or a Host receipt; the
 controlling Host owns those fields.`;
 
 export function renderCodexChallengerAgent(): string {
   return `name = "stetra-challenger"
-description = "Independently challenge one Stetra evidence obligation in a fresh read-only context."
+description = "Independently challenge one Stetra evidence round in a fresh read-only context."
 sandbox_mode = "read-only"
 developer_instructions = """
 ${CHALLENGER_INSTRUCTIONS}
@@ -318,18 +319,18 @@ route uses only explicit obligation/verifier/mutation relationships. Never infer
 it from filenames, test names, error text, or diff shape.
 
 Pass **hostAction.challengeExecutionPacket** to that fresh context. It contains
-exactly one target Condition and Evidence Obligation, only their exact
-Human-event basis, only explicitly related Checks, Repository Evidence, and
-Verifier mutations, plus a compact list of every changed file and one Patch
-reference. Declared relations come only from frozen IDs, selectors, and exact
-repository-evidence paths; they are not relevance guesses. The packet is
-self-contained for this role. Do not ask the Challenger to load the general
-Stetra skill or workflow references.
+one case for every outstanding Evidence Obligation. Each case contains its
+target Condition, exact Human-event basis, and only explicitly related Checks,
+Repository Evidence, and Verifier mutations. Shared evidence contains one
+compact list of every changed file and one Patch reference. Declared relations
+come only from frozen IDs, selectors, and exact repository-evidence paths; they
+are not relevance guesses. The packet is self-contained for this role. Do not
+ask the Challenger to load the general Stetra skill or workflow references.
 
-Start from **challengeExecutionPacket.draft**. Its changedFiles, checks,
-repositoryEvidence, and humanEvents are canonical identities, not paths or
-display labels. Preserve its obligation IDs, falsification design, and evidence
-selection exactly. Use **output.allowedOutcomes** and
+Start from **challengeExecutionPacket.draft.results**. Each result's
+changedFiles, checks, repositoryEvidence, and humanEvents are canonical
+identities, not paths or display labels. Preserve each result's obligation IDs,
+falsification design, and evidence selection exactly. Use **output.allowedOutcomes** and
 **output.evidenceItemShape** for the open Agent-judgment fields.
 A Challenge may cite only patch, changed-file, check, repository-evidence, or
 human-event references selected by that packet. Describe additional read-only
@@ -343,26 +344,29 @@ those concrete gaps, use **insufficient**, and keep the outcome below supported.
 
 ~~~json
 {
-  "obligationIds":["obligation id prefilled by challengeExecutionPacket"],
-  "falsification":{"failureHypothesis":"concrete way the conclusion could be wrong","scenario":"specific boundary to exercise","supportingObservation":"result supporting the conclusion","contradictingObservation":"result contradicting the conclusion"},
-  "evidence":{"changedFiles":["changed-file id"],"checks":["definition id"],"repositoryEvidence":[],"humanEvents":["event id"],"patch":true},
-  "falsificationAttempt":"what was inspected or executed",
-  "observedResult":"what the independent attempt actually observed",
-  "supportingEvidence":[{"statement":"bounded support","references":[{"kind":"check","id":"definition id"}]}],
-  "counterEvidence":[],
-  "evidenceCoverage":{"status":"sufficient","rationale":"why the selected evidence covers the bounded conclusion","gaps":[]},
-  "outcome":"supported","conclusion":"bounded conclusion"
+  "results":[{
+    "obligationIds":["obligation id prefilled by challengeExecutionPacket"],
+    "falsification":{"failureHypothesis":"concrete way the conclusion could be wrong","scenario":"specific boundary to exercise","supportingObservation":"result supporting the conclusion","contradictingObservation":"result contradicting the conclusion"},
+    "evidence":{"changedFiles":["changed-file id"],"checks":["definition id"],"repositoryEvidence":[],"humanEvents":["event id"],"patch":true},
+    "falsificationAttempt":"what was inspected or executed",
+    "observedResult":"what the independent attempt actually observed",
+    "supportingEvidence":[{"statement":"bounded support","references":[{"kind":"check","id":"definition id"}]}],
+    "counterEvidence":[],
+    "evidenceCoverage":{"status":"sufficient","rationale":"why the selected evidence covers the bounded conclusion","gaps":[]},
+    "outcome":"supported","conclusion":"bounded conclusion"
+  }]
 }
 ~~~
 
 Challenge output remains Agent judgment. Independence and context identities
 are injected only by a trusted Host integration; Agent JSON cannot claim them.
 The Challenger and the action command exchange only the exact JSON Challenge
-Document shown in **challengeExecutionPacket.draft**. A trusted programmatic
+Round shown in **challengeExecutionPacket.draft**. A trusted programmatic
 Host keeps the request and receipt outside Agent-authored input, consumes the
-matching receipt through its attestation provider, and binds the exact output
-fingerprint. Without a trusted provider, a thin Host submits the same bare
-Challenge Document. It must not manufacture a
+matching receipt through its attestation provider, and binds the exact round
+output fingerprint. Runtime materializes one Challenge artifact per result,
+all bound to the same Round and Host context. Without a trusted provider, a
+thin Host submits the same bare Challenge Round. It must not manufacture a
 receipt: Runtime records the result as **unverified**, prevents it from
 supporting a required obligation, and adds direct Human review. Partial,
 contradicted, unknown, or

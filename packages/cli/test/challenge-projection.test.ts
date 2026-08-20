@@ -28,27 +28,27 @@ test('Challenge projection contains one exact obligation and only its explicit e
     requiredObligationIds: [targetObligation.id],
   });
 
-  assert.equal(packet.target.condition.id, targetCondition.id);
-  assert.equal(packet.target.obligation.id, targetObligation.id);
+  assert.equal(packet.cases[0].target.condition.id, targetCondition.id);
+  assert.equal(packet.cases[0].target.obligation.id, targetObligation.id);
   assert.deepEqual(
-    packet.target.exactDeveloperEvents.events.map((item) => item.content),
+    packet.cases[0].target.exactDeveloperEvents.events.map((item) => item.content),
     ['Exact target request.'],
   );
-  assert.ok(!packet.target.exactDeveloperEvents.events.some((item) =>
+  assert.ok(!packet.cases[0].target.exactDeveloperEvents.events.some((item) =>
     item.id === contract.authority.developerEvents.find((event) =>
       event.content === 'Unrelated developer context.')!.id));
-  assert.deepEqual(packet.evidence.checks.map((item) => item.definitionId), [targetDefinition.definitionId]);
-  assert.ok(!packet.evidence.checks.some((item) => item.definitionId === otherDefinition.definitionId));
-  assert.deepEqual(packet.evidence.repositoryEvidence.map((item) => item.path), ['src/target.ts']);
-  assert.deepEqual(packet.evidence.repositoryEvidence[0].declaredRelations, [
+  assert.deepEqual(packet.cases[0].evidence.checks.map((item) => item.definitionId), [targetDefinition.definitionId]);
+  assert.ok(!packet.cases[0].evidence.checks.some((item) => item.definitionId === otherDefinition.definitionId));
+  assert.deepEqual(packet.cases[0].evidence.repositoryEvidence.map((item) => item.path), ['src/target.ts']);
+  assert.deepEqual(packet.cases[0].evidence.repositoryEvidence[0].declaredRelations, [
     'condition-basis', 'obligation-strategy',
   ]);
-  assert.deepEqual(packet.evidence.verifierMutations.map((item) => item.definitionId), [
+  assert.deepEqual(packet.cases[0].evidence.verifierMutations.map((item) => item.definitionId), [
     targetDefinition.definitionId,
   ]);
-  assert.equal(packet.evidence.changedFiles.length, 3);
+  assert.equal(packet.sharedEvidence.changedFiles.length, 3);
   assert.deepEqual(
-    packet.evidence.changedFiles.find((item) => item.path === 'src/target.ts')!.declaredRelations,
+    packet.sharedEvidence.changedFiles.find((item) => item.path === 'src/target.ts')!.declaredRelations,
     {
       verifierDefinitionIds: [],
       repositoryEvidenceIds: [contract.repositoryEvidence.find((item) =>
@@ -56,10 +56,10 @@ test('Challenge projection contains one exact obligation and only its explicit e
     },
   );
   assert.deepEqual(
-    packet.evidence.changedFiles.find((item) => item.path === 'test/target.test.ts')!.declaredRelations,
+    packet.sharedEvidence.changedFiles.find((item) => item.path === 'test/target.test.ts')!.declaredRelations,
     { verifierDefinitionIds: [targetDefinition.definitionId], repositoryEvidenceIds: [] },
   );
-  assert.deepEqual(packet.draft.evidence, {
+  assert.deepEqual(packet.draft.results[0].evidence, {
     changedFiles: facts.changedFiles.map((item) => item.id),
     checks: [targetDefinition.definitionId],
     repositoryEvidence: [contract.repositoryEvidence.find((item) =>
@@ -80,7 +80,7 @@ test('Challenge projection contains one exact obligation and only its explicit e
   assert.ok(!('fieldRequirements' in packet));
 });
 
-test('Challenge projection advances only through explicit completed obligation identities', () => {
+test('Challenge projection batches every outstanding obligation and advances by explicit identity', () => {
   const contract = contractFixture();
   const obligations = contract.adoptionConditions.flatMap((condition) => condition.evidenceObligations);
   const facts = factsFixture(
@@ -88,13 +88,22 @@ test('Challenge projection advances only through explicit completed obligation i
     findDefinition(contract, 'target-check').definitionId,
     findDefinition(contract, 'other-check').definitionId,
   );
-  assert.throws(() => challengeExecutionPacket({
+  const packet = challengeExecutionPacket({
     task: { taskId: '00000000-0000-4000-8000-000000000001', revision: 4, currentAttemptId: 'attempt:1' },
     contract,
     facts,
     completedObligationIds: [obligations[0].id],
-    requiredObligationIds: [obligations[0].id],
-  }), /one outstanding Evidence Obligation/);
+    requiredObligationIds: obligations.map((item) => item.id),
+  });
+  assert.deepEqual(packet.cases.map((item) => item.target.obligation.id), [obligations[1].id]);
+  assert.deepEqual(packet.draft.results.map((item) => item.obligationIds), [[obligations[1].id]]);
+  assert.throws(() => challengeExecutionPacket({
+    task: { taskId: '00000000-0000-4000-8000-000000000001', revision: 4, currentAttemptId: 'attempt:1' },
+    contract,
+    facts,
+    completedObligationIds: obligations.map((item) => item.id),
+    requiredObligationIds: obligations.map((item) => item.id),
+  }), /at least one outstanding Evidence Obligation/);
 });
 
 function contractFixture(): TaskContract {

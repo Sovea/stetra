@@ -869,7 +869,7 @@ test('a thin Host runs the bounded Challenger but preserves unverified direct re
       guardedChallenge.hostAction?.challengeExecutionRequest?.requestId,
       collected.hostAction.challengeExecutionRequest.requestId,
     );
-    const challengeDraft = structuredClone(collected.hostAction.challengeExecutionPacket.draft);
+    const challengeDraft = structuredClone(collected.hostAction.challengeExecutionPacket.draft.results[0]);
     challengeDraft.falsificationAttempt = 'Inspected the changed verifier in a separate but unattested context.';
     challengeDraft.observedResult = 'The selected evidence did not expose the frozen failure hypothesis.';
     challengeDraft.supportingEvidence = [{
@@ -880,7 +880,7 @@ test('a thin Host runs the bounded Challenger but preserves unverified direct re
     challengeDraft.outcome = 'supported';
     challengeDraft.conclusion = 'The separate review supports the bounded obligation, without Host attestation.';
     const challenged = await challenge(root, prepared.taskId, challengeDraft);
-    assert.equal(challenged.challenge.independence, 'unverified');
+    assert.equal(challenged.challenges[0].independence, 'unverified');
     assert.equal(challenged.hostAction.kind, 'author-handoff');
     const guardedHandoff = await guardFinalResponse({
       projectRoot: root,
@@ -1026,24 +1026,24 @@ test('a bounded Challenge Execution Packet completes the persisted challenge-to-
     assert.equal(collected.hostAction.kind, 'perform-independent-challenge');
     assert.equal(collected.hostAction.authoringPacket, undefined);
     assert.deepEqual(Object.keys(collected.hostAction.challengeExecutionPacket), [
-      'inputKind', 'bindsTo', 'target', 'evidence', 'draft', 'output',
+      'inputKind', 'bindsTo', 'sharedEvidence', 'cases', 'draft', 'output',
     ]);
     assert.equal(
-      collected.hostAction.challengeExecutionPacket.target.exactDeveloperEvents.events[0].content,
+      collected.hostAction.challengeExecutionPacket.cases[0].target.exactDeveloperEvents.events[0].content,
       'Keep the exact developer phrase "arguments" visible.',
     );
     assert.equal(
-      collected.hostAction.challengeExecutionPacket.target.condition.statement,
+      collected.hostAction.challengeExecutionPacket.cases[0].target.condition.statement,
       prepared.taskContract.adoptionConditions[0].statement,
     );
-    assert.equal(collected.hostAction.challengeExecutionPacket.target.exactDeveloperEvents.authority, 'human-event');
-    assert.equal(collected.hostAction.challengeExecutionPacket.target.condition.authority, 'agent-judgment');
+    assert.equal(collected.hostAction.challengeExecutionPacket.cases[0].target.exactDeveloperEvents.authority, 'human-event');
+    assert.equal(collected.hostAction.challengeExecutionPacket.cases[0].target.condition.authority, 'agent-judgment');
     assert.deepEqual(collected.hostAction.inputBinding, {
       transport: 'stdin', source: 'challengeExecutionPacket.draft', serialization: 'json', execution: 'one-shot',
     });
 
-    const challengeDraft = structuredClone(collected.hostAction.challengeExecutionPacket.draft);
-    const changedFileIds = collected.hostAction.challengeExecutionPacket.evidence.changedFiles
+    const challengeDraft = structuredClone(collected.hostAction.challengeExecutionPacket.draft.results[0]);
+    const changedFileIds = collected.hostAction.challengeExecutionPacket.sharedEvidence.changedFiles
       .map((item: { id: string }) => item.id);
     assert.deepEqual(challengeDraft.evidence.changedFiles, changedFileIds);
     challengeDraft.falsificationAttempt = 'Inspected the changed verifier and exercised the bounded behavior independently.';
@@ -1060,8 +1060,8 @@ test('a bounded Challenge Execution Packet completes the persisted challenge-to-
     challengeDraft.conclusion = 'The bounded failure hypothesis was not observed.';
     const challenged = await challenge(root, prepared.taskId, challengeDraft, trustedHost);
     assert.equal(challenged.status, 'challenge-recorded');
-    assert.equal(challenged.challenge.independence, 'host-attested');
-    assert.deepEqual(challenged.challenge.evidence.changedFiles, changedFileIds);
+    assert.equal(challenged.challenges[0].independence, 'host-attested');
+    assert.deepEqual(challenged.challenges[0].evidence.changedFiles, changedFileIds);
     assert.equal(challenged.hostAction.kind, 'author-handoff');
     const challengeHistory = explainDelegationTask({
       projectRoot: root, taskId: prepared.taskId, section: 'challenge',
@@ -1069,7 +1069,7 @@ test('a bounded Challenge Execution Packet completes the persisted challenge-to-
     assert.equal(challengeHistory.hostReceipts.length, 1);
     assert.equal(
       challengeHistory.hostReceipts[0].receiptId,
-      challenged.challenge.attestationId,
+      challenged.challenges[0].attestationId,
     );
     assert.equal(challengeHistory.hostReceipts[0].lifecycle, 'start-and-stop-observed');
     const regenerated = explainDelegationTask({
@@ -1115,7 +1115,7 @@ test('a bounded Challenge Execution Packet completes the persisted challenge-to-
       question.question = 'Does the changed verifier still distinguish the intended behavior?';
       question.evidence = [
         ...changedFileIds.map((id: string) => ({ kind: 'changed-file', id })),
-        { kind: 'challenge', id: challenged.challenge.id },
+        { kind: 'challenge', id: challenged.challenges[0].id },
       ];
     }
     handoffDraft.recommendation = {
@@ -1133,6 +1133,60 @@ test('a bounded Challenge Execution Packet completes the persisted challenge-to-
   }
 });
 
+test('one Challenge Round evaluates every outstanding obligation in one Host context', async () => {
+  const root = createRepository();
+  try {
+    const document = prepareDocument({
+      baseline: 'unknown',
+      argv: [process.execPath, '-e', 'process.exit(0)'],
+      critical: true,
+    });
+    document.conditions.push({
+      ...structuredClone(document.conditions[0]),
+      key: 'durability',
+      statement: 'The changed behavior remains protected by durable evidence.',
+      evidenceObligations: [{
+        ...structuredClone(document.conditions[0].evidenceObligations[0]),
+        key: 'durable-observation',
+        statement: 'The same collected facts distinguish the durable behavior boundary.',
+      }],
+    });
+    const prepared = await prepare(root, document);
+    writeFileSync(join(root, 'source.txt'), 'round implementation\n', 'utf8');
+    const collected = await collect(root, prepared.taskId, trustedHost);
+    const packet = collected.hostAction.challengeExecutionPacket;
+    assert.equal(packet.cases.length, 2);
+    assert.equal(packet.draft.results.length, 2);
+
+    const round = structuredClone(packet.draft);
+    for (const result of round.results) {
+      result.falsificationAttempt = 'Exercised this exact obligation in the shared fresh context.';
+      result.observedResult = 'The bounded counterexample was not observed.';
+      markCoverageSufficient(result);
+      result.outcome = 'supported';
+      result.conclusion = 'This bounded obligation is supported by the selected current evidence.';
+    }
+    const receipt = observeTrustedChallenge(root, prepared.taskId, round);
+    const recorded = await recordChallenge({
+      projectRoot: root,
+      taskId: prepared.taskId,
+      inputPath: '-',
+      input: jsonStream(round),
+      hostAttestations: trustedHost,
+    }) as any;
+    assert.equal(recorded.challenges.length, 2);
+    assert.equal(new Set(recorded.challenges.map((item: any) => item.roundId)).size, 1);
+    assert.deepEqual(
+      new Set(recorded.challenges.map((item: any) => item.attestationId)),
+      new Set([receipt.receiptId]),
+    );
+    assert.equal(new Set(recorded.challenges.map((item: any) => item.challengerContextId)).size, 1);
+    assert.equal(recorded.hostAction.kind, 'author-handoff');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('unavailable nested Challenge evidence cannot mutate task state', async () => {
   const root = createRepository();
   try {
@@ -1143,7 +1197,7 @@ test('unavailable nested Challenge evidence cannot mutate task state', async () 
     const prepared = await prepare(root, document);
     writeFileSync(join(root, 'source.txt'), 'changed verifier surface\n', 'utf8');
     const collected = await collect(root, prepared.taskId);
-    const draft = structuredClone(collected.hostAction.challengeExecutionPacket.draft);
+    const draft = structuredClone(collected.hostAction.challengeExecutionPacket.draft.results[0]);
     draft.falsificationAttempt = 'Inspected the selected evidence in a separate context.';
     draft.observedResult = 'The selected evidence did not expose the failure hypothesis.';
     draft.supportingEvidence = [{
@@ -1182,7 +1236,7 @@ test('Challenge receipts remain Host-owned, bind exact output, and are consumed 
     }));
     writeFileSync(join(root, 'source.txt'), 'challenge receipt boundary\n', 'utf8');
     const collected = await collect(root, prepared.taskId, trustedHost);
-    const draft = structuredClone(collected.hostAction.challengeExecutionPacket.draft);
+    const draft = structuredClone(collected.hostAction.challengeExecutionPacket.draft.results[0]);
     draft.falsificationAttempt = 'Inspected the exact bounded behavior in a separate context.';
     draft.observedResult = 'The stated counterexample was not observed.';
     markCoverageSufficient(draft);
@@ -1192,12 +1246,13 @@ test('Challenge receipts remain Host-owned, bind exact output, and are consumed 
     alteredSelection.evidence.checks = [];
     await assert.rejects(
       challenge(root, prepared.taskId, alteredSelection),
-      /preserve the exact frozen falsification and evidence selection/,
+      /preserve its frozen falsification and evidence selection/,
     );
+    const round = { results: [draft] };
     const receipt = observeTrustedChallenge(
       root,
       prepared.taskId,
-      draft,
+      round,
     );
 
     const wrongRequestHost: HostAttestationProvider = {
@@ -1212,7 +1267,7 @@ test('Challenge receipts remain Host-owned, bind exact output, and are consumed 
         projectRoot: root,
         taskId: prepared.taskId,
         inputPath: '-',
-        input: jsonStream(draft),
+        input: jsonStream(round),
         hostAttestations: wrongRequestHost,
       }),
       /bound to a different Challenge Execution Request/,
@@ -1230,10 +1285,10 @@ test('Challenge receipts remain Host-owned, bind exact output, and are consumed 
         projectRoot: root,
         taskId: prepared.taskId,
         inputPath: '-',
-        input: jsonStream(draft),
+        input: jsonStream(round),
         hostAttestations: wrongOutputHost,
       }),
-      /does not bind the submitted Challenge output/,
+      /does not bind the submitted Challenge Round output/,
     );
 
     const rejectingHost: HostAttestationProvider = {
@@ -1246,7 +1301,7 @@ test('Challenge receipts remain Host-owned, bind exact output, and are consumed 
         projectRoot: root,
         taskId: prepared.taskId,
         inputPath: '-',
-        input: jsonStream(draft),
+        input: jsonStream(round),
         hostAttestations: rejectingHost,
       }),
       /rejected or could not match the Challenge run/,
@@ -1256,16 +1311,16 @@ test('Challenge receipts remain Host-owned, bind exact output, and are consumed 
       projectRoot: root,
       taskId: prepared.taskId,
       inputPath: '-',
-      input: jsonStream(draft),
+      input: jsonStream(round),
       hostAttestations: trustedHost,
     }) as any;
-    assert.equal(accepted.challenge.independence, 'host-attested');
+    assert.equal(accepted.challenges[0].independence, 'host-attested');
     await assert.rejects(
       recordChallenge({
         projectRoot: root,
         taskId: prepared.taskId,
         inputPath: '-',
-        input: jsonStream(draft),
+        input: jsonStream(round),
         hostAttestations: trustedHost,
       }),
       /does not request an Independent Challenge|already been consumed/,
@@ -1285,13 +1340,14 @@ test('Challenge receipt cannot outlive the collected worktree facts', async () =
     }));
     writeFileSync(join(root, 'source.txt'), 'collected implementation\n', 'utf8');
     const collected = await collect(root, prepared.taskId, trustedHost);
-    const draft = structuredClone(collected.hostAction.challengeExecutionPacket.draft);
+    const draft = structuredClone(collected.hostAction.challengeExecutionPacket.draft.results[0]);
     draft.falsificationAttempt = 'Inspected the current collected implementation.';
     draft.observedResult = 'The current collected boundary was supported.';
     markCoverageSufficient(draft);
     draft.outcome = 'supported';
     draft.conclusion = 'The bounded conclusion applies only to the collected worktree.';
-    observeTrustedChallenge(root, prepared.taskId, draft);
+    const round = { results: [draft] };
+    observeTrustedChallenge(root, prepared.taskId, round);
 
     writeFileSync(join(root, 'source.txt'), 'changed after challenge observation\n', 'utf8');
     await assert.rejects(
@@ -1299,7 +1355,7 @@ test('Challenge receipt cannot outlive the collected worktree facts', async () =
         projectRoot: root,
         taskId: prepared.taskId,
         inputPath: '-',
-        input: jsonStream(draft),
+        input: jsonStream(round),
         hostAttestations: trustedHost,
       }),
       /Facts changed before challenge/,
@@ -1321,7 +1377,7 @@ test('an adverse Challenge returns to bounded diagnosis and a successor Attempt 
     const collected = await collect(root, prepared.taskId, trustedHost);
     assert.equal(collected.hostAction.kind, 'perform-independent-challenge');
 
-    const challengeDraft = structuredClone(collected.hostAction.challengeExecutionPacket.draft);
+    const challengeDraft = structuredClone(collected.hostAction.challengeExecutionPacket.draft.results[0]);
     const checkId = challengeDraft.evidence.checks[0];
     challengeDraft.falsificationAttempt = 'Exercised the declared counterexample in a fresh context.';
     challengeDraft.observedResult = 'The counterexample contradicted the bounded obligation.';
@@ -1335,7 +1391,7 @@ test('an adverse Challenge returns to bounded diagnosis and a successor Attempt 
     const challenged = await challenge(root, prepared.taskId, challengeDraft, trustedHost);
     assert.equal(challenged.hostAction.kind, 'diagnose-collected-evidence');
     assert.deepEqual(challenged.hostAction.authoringPacket.draft.entries[0].source, {
-      kind: 'challenge', challengeId: challenged.challenge.id, observation: 'adverse',
+      kind: 'challenge', challengeId: challenged.challenges[0].id, observation: 'adverse',
     });
 
     const diagnosis = structuredClone(challenged.hostAction.authoringPacket.draft);
@@ -1360,7 +1416,7 @@ test('an adverse Challenge returns to bounded diagnosis and a successor Attempt 
       projectRoot: root, taskId: prepared.taskId, section: 'challenge',
     }) as any;
     assert.equal(history.challenges.length, 1);
-    assert.equal(history.challenges[0].id, challenged.challenge.id);
+    assert.equal(history.challenges[0].id, challenged.challenges[0].id);
 
     writeFileSync(join(root, 'source.txt'), 'repaired implementation\n', 'utf8');
     const recollected = await collect(root, prepared.taskId, trustedHost);
@@ -1368,7 +1424,7 @@ test('an adverse Challenge returns to bounded diagnosis and a successor Attempt 
     assert.equal(recollected.hostAction.kind, 'perform-independent-challenge');
     assert.notEqual(
       recollected.hostAction.challengeExecutionPacket.bindsTo.factCollectionId,
-      challenged.challenge.factCollectionId,
+      challenged.challenges[0].factCollectionId,
     );
   } finally {
     rmSync(root, { recursive: true, force: true });
@@ -1385,7 +1441,7 @@ test('an adverse Challenge preserves its exact counter-evidence through Handoff 
     }));
     writeFileSync(join(root, 'source.txt'), 'implementation with an unresolved boundary\n', 'utf8');
     const collected = await collect(root, prepared.taskId, trustedHost);
-    const challengeDraft = structuredClone(collected.hostAction.challengeExecutionPacket.draft);
+    const challengeDraft = structuredClone(collected.hostAction.challengeExecutionPacket.draft.results[0]);
     const checkId = challengeDraft.evidence.checks[0];
     const counterStatement = 'The persistent verifier remains green without exercising the declared boundary.';
     challengeDraft.falsificationAttempt = 'Inspected whether the frozen verifier exercises the declared boundary.';
@@ -1422,7 +1478,7 @@ test('an adverse Challenge preserves its exact counter-evidence through Handoff 
     assert.equal(diagnosed.hostAction.kind, 'author-handoff');
     const handoffDraft = structuredClone(diagnosed.hostAction.authoringPacket.draft);
     assert.deepEqual(handoffDraft.obligationConclusions[0].counterEvidence, [{
-      kind: 'challenge', id: challenged.challenge.id,
+      kind: 'challenge', id: challenged.challenges[0].id,
     }]);
     handoffDraft.summary = 'The implementation behavior is partly supported, with a persistent-verification gap.';
     handoffDraft.obligationConclusions[0].status = 'partial';
@@ -1440,7 +1496,7 @@ test('an adverse Challenge preserves its exact counter-evidence through Handoff 
     handoffDraft.conditionConclusions[0].summary = 'Persistent protection remains unresolved.';
     for (const question of handoffDraft.reviewQuestions) {
       question.question = 'Is the missing persistent boundary acceptable for adoption?';
-      question.evidence = [{ kind: 'challenge', id: challenged.challenge.id }];
+      question.evidence = [{ kind: 'challenge', id: challenged.challenges[0].id }];
     }
     handoffDraft.recommendation = {
       action: 'defer',
@@ -1454,7 +1510,7 @@ test('an adverse Challenge preserves its exact counter-evidence through Handoff 
     assert.deepEqual(recorded.counterEvidence[0].references, [{ kind: 'check', id: checkId }]);
     const finding = handedOff.hostAction.developerDecisionBrief
       .conditions[0].obligations[0].evidenceBoundary.challengeFindings[0];
-    assert.equal(finding.id, challenged.challenge.id);
+    assert.equal(finding.id, challenged.challenges[0].id);
     assert.equal(finding.outcome, 'partial');
     assert.equal(finding.conclusion, challengeDraft.conclusion);
     assert.equal(finding.counterEvidence[0].statement, counterStatement);
@@ -1716,11 +1772,12 @@ async function challenge(
   document: unknown,
   hostAttestations?: HostAttestationProvider,
 ) {
+  const round = { results: [document] };
   if (hostAttestations?.consumeChallengeRun === trustedHost.consumeChallengeRun) {
-    observeTrustedChallenge(root, taskId, document);
+    observeTrustedChallenge(root, taskId, round);
   }
   return await recordChallenge({
-    projectRoot: root, taskId, inputPath: '-', input: jsonStream(document), hostAttestations,
+    projectRoot: root, taskId, inputPath: '-', input: jsonStream(round), hostAttestations,
   }) as any;
 }
 

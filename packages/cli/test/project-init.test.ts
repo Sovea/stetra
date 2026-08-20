@@ -91,7 +91,7 @@ test('project init generates the Cognitive Adoption host projection and manifest
     assert.match(skill, /developer owns goals, long-lived tradeoffs, exceptions/);
     assert.match(challengerAgent, /name = "stetra-challenger"/);
     assert.match(challengerAgent, /sandbox_mode = "read-only"/);
-    assert.match(challengerAgent, /Return exactly one JSON Challenge Document/);
+    assert.match(challengerAgent, /Return exactly one JSON Challenge Round/);
     assert.match(challengerAgent, /Never\s+author request identity, context identity, independence/);
     assert.match(challengerAgent, /do not load the\s+general Stetra skill/);
     assert.match(challengerAgent, /challengeExecutionPacket\.draft/);
@@ -110,7 +110,7 @@ test('project init generates the Cognitive Adoption host projection and manifest
     assert.match(delivery, /fieldRequirements/);
     assert.match(challenge, /fresh Host context/);
     assert.match(challenge, /Challenge output remains Agent judgment/);
-    assert.match(challenge, /canonical identities, not paths/);
+    assert.match(challenge, /canonical\s+identities, not paths/);
     assert.match(skill, /owns the final\s+cognitive handoff/);
     assert.match(handoff, /hostAction\.developerDecisionBrief/);
     assert.match(handoff, /Challenge conclusion and exact counter-evidence/);

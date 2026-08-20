@@ -485,11 +485,13 @@ strategy or a visible Human decision, never a fabricated guarantee.
 
 The initial Host boundary exposes one deliberately narrow lifecycle binder for
 Independent Challenge. Runtime derives a task- and fact-bound execution request;
-Runtime also projects one bounded Challenge Execution Packet containing a
-single Evidence Obligation and only its explicit evidence relations. The Host
-observes one named read-only Challenger start and stop, binds the packet and
-exact structured output, and verifies the single-use receipt when recording the
-Challenge. Generated Codex and Claude profiles constrain the role and treat the
+Runtime also projects one bounded Challenge Execution Packet containing one
+separate case for every outstanding Evidence Obligation and only each case's
+explicit evidence relations. One Fact Collection therefore starts one named
+read-only Challenger context rather than one context per Obligation. The Host
+observes that Challenger's start and stop, binds the packet and exact Round
+output, and verifies the single-use receipt when recording all results
+atomically. Generated Codex and Claude profiles constrain the role and treat the
 packet as self-contained, but those files alone do not confer attestation. This
 binder is not a subagent scheduler, generic role registry, transcript store, or
 parallel execution graph.
@@ -715,10 +717,11 @@ available through on-demand inspection.
 
 Independent Challenge uses a narrower projection rather than the generic
 Authoring Packet. Its Challenge Execution Packet keeps all changed files
-compactly visible but includes only the target Condition and Obligation, their
-exact Human-event basis, explicitly referenced Repository Evidence and Checks,
-Runtime-recorded mutations for those Check definitions, and the Patch
-reference. This selection follows exact graph edges and path identities only;
+compactly visible and creates one case per outstanding Obligation. Each case
+contains only its target Condition, exact Human-event basis, explicitly
+referenced Repository Evidence and Checks, and Runtime-recorded mutations for
+those Check definitions; all cases share the current Patch reference. This
+selection follows exact graph edges and path identities only;
 it does not rank repository content or infer relevance. The request and Host
 receipt bind the exact packet fingerprint, so context reduction cannot silently
 change the challenged evidence boundary.

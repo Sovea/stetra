@@ -9,7 +9,7 @@ import type {
   ChallengeExecutionRequest,
 } from './workflow/host-action.ts';
 import type {
-  ChallengeDocument,
+  ChallengeRoundDocument,
   HostChallengeRunReceipt,
 } from './schemas/delegation.ts';
 
@@ -43,7 +43,7 @@ export interface HostAttestationProvider {
   }): Promise<HostPolicyEvaluation[]>;
   consumeChallengeRun?(input: {
     request: ChallengeExecutionRequest;
-    challenge: ChallengeDocument;
+    round: ChallengeRoundDocument;
   }): Promise<HostChallengeRunReceipt | undefined>;
 }
 

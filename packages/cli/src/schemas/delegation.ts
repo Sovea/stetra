@@ -301,6 +301,10 @@ export const ChallengeDocumentSchema = z.strictObject({
   }
 });
 
+export const ChallengeRoundDocumentSchema = z.strictObject({
+  results: z.array(ChallengeDocumentSchema).min(1),
+});
+
 export const HostChallengeRunReceiptSchema = z.strictObject({
   receiptId: StableIdSchema,
   requestId: Sha256Schema,
@@ -490,6 +494,7 @@ export const TaskEventSchema = z.strictObject({
 export type DelegationPrepareDocument = z.infer<typeof DelegationPrepareDocumentSchema>;
 export type EvidenceDispositionDocument = z.infer<typeof EvidenceDispositionDocumentSchema>;
 export type ChallengeDocument = z.infer<typeof ChallengeDocumentSchema>;
+export type ChallengeRoundDocument = z.infer<typeof ChallengeRoundDocumentSchema>;
 export type HostChallengeRunReceipt = z.infer<typeof HostChallengeRunReceiptSchema>;
 export type CognitiveHandoffDocument = z.infer<typeof CognitiveHandoffDocumentSchema>;
 export type HumanDecisionDocument = z.infer<typeof HumanDecisionDocumentSchema>;

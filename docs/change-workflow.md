@@ -58,7 +58,7 @@ creation time. Do not start an interactive process and then attempt to type the
 document. A temporary fallback input must live outside the worktree.
 Challenge uses the smaller `challengeExecutionPacket`, but its input binding
 still names that packet's exact `draft`. The fresh-context Agent and the action
-command exchange only the completed Challenge Document. A trusted controlling
+command exchange only the completed Challenge Round. A trusted controlling
 Host keeps the request and receipt outside Agent-authored input and exposes a
 single-use receipt only through its programmatic attestation provider.
 The packet is transient projection, not persisted authority or lifecycle state.
@@ -467,28 +467,27 @@ write their normal fixtures and caches without modifying the target. Generated
 thin profiles remain read-only fallbacks and cannot attest this isolation.
 
 The transient `challengeExecutionPacket` is a deterministic projection for one
-Evidence Obligation. It contains:
+Fact Collection's outstanding Evidence Obligations. It contains:
 
-- that Obligation and its owning Condition;
-- only the exact Human Events in the Condition basis;
-- only Check definitions named by the Obligation's Runtime-check strategies;
-- only Repository Evidence named by the Condition basis or Obligation strategy;
-- only Verifier mutations for those Check definitions;
+- one separate case for each outstanding Obligation and its owning Condition;
+- in each case, only the exact Human Events in its Condition basis;
+- in each case, only Check definitions, Repository Evidence, and Verifier
+  mutations connected by that Obligation's explicit strategies;
 - a compact inventory of every changed file, with declared relations derived
   only from exact evidence paths and Runtime-recorded selector matches;
 - one Patch path, digest, and byte length when a Patch exists;
-- one prefilled Challenge draft and its bounded output choices.
+- one prefilled result per case and shared bounded output choices.
 
-It does not contain other Conditions, other Obligations, unrelated Checks,
-generic reference catalogs, reusable authoring shapes, or the general Stetra
-workflow. It uses no filename, token, dependency, diff-size, or keyword
-relevance heuristic. The generated Challenger profile treats this packet as
-complete and does not reload the general Stetra skill or reference pages.
+It does not contain unrelated Conditions, Obligations, or Checks, generic
+reference catalogs, reusable authoring shapes, or the general Stetra workflow.
+It uses no filename, token, dependency, diff-size, or keyword relevance
+heuristic. The generated Challenger profile treats this packet as complete and
+does not reload the general Stetra skill or reference pages.
 
-The Challenger fills `challengeExecutionPacket.draft` and returns only this
-Agent-owned document. It preserves the prefilled Obligation IDs,
-falsification design, and evidence selection exactly. It contains no request,
-context, receipt, or independence claim:
+The Challenger fills every entry in `challengeExecutionPacket.draft.results`
+and returns only this Agent-owned Round document. Each result preserves its
+prefilled Obligation IDs, falsification design, and evidence selection exactly.
+The document contains no request, context, receipt, or independence claim:
 
 Supporting and counter-evidence may cite only patch, changed-file, Check,
 Repository Evidence, or Human Event references selected by this packet. An ad
@@ -497,36 +496,40 @@ fact or another Challenge identity.
 
 ```json
 {
-  "obligationIds": ["obligation:exact"],
-  "falsification": {
-    "failureHypothesis": "Concrete way the bounded conclusion could be wrong.",
-    "scenario": "Specific boundary or counterexample to exercise.",
-    "supportingObservation": "Observation supporting the bounded conclusion.",
-    "contradictingObservation": "Observation contradicting the bounded conclusion."
-  },
-  "evidence": {
-    "changedFiles": ["file:exact"],
-    "checks": ["sha256:exact-definition"],
-    "repositoryEvidence": [],
-    "humanEvents": ["event:exact"],
-    "patch": true
-  },
-  "falsificationAttempt": "Independent inspection or execution.",
-  "observedResult": "What the independent attempt actually observed.",
-  "supportingEvidence": [
+  "results": [
     {
-      "statement": "Bounded supporting observation.",
-      "references": [{ "kind": "check", "id": "sha256:exact-definition" }]
+      "obligationIds": ["obligation:exact"],
+      "falsification": {
+        "failureHypothesis": "Concrete way the bounded conclusion could be wrong.",
+        "scenario": "Specific boundary or counterexample to exercise.",
+        "supportingObservation": "Observation supporting the bounded conclusion.",
+        "contradictingObservation": "Observation contradicting the bounded conclusion."
+      },
+      "evidence": {
+        "changedFiles": ["file:exact"],
+        "checks": ["sha256:exact-definition"],
+        "repositoryEvidence": [],
+        "humanEvents": ["event:exact"],
+        "patch": true
+      },
+      "falsificationAttempt": "Independent inspection or execution.",
+      "observedResult": "What the independent attempt actually observed.",
+      "supportingEvidence": [
+        {
+          "statement": "Bounded supporting observation.",
+          "references": [{ "kind": "check", "id": "sha256:exact-definition" }]
+        }
+      ],
+      "counterEvidence": [],
+      "evidenceCoverage": {
+        "status": "sufficient",
+        "rationale": "The selected evidence exercises the whole bounded conclusion.",
+        "gaps": []
+      },
+      "outcome": "supported",
+      "conclusion": "Bounded conclusion."
     }
-  ],
-  "counterEvidence": [],
-  "evidenceCoverage": {
-    "status": "sufficient",
-    "rationale": "The selected evidence exercises the whole bounded conclusion.",
-    "gaps": []
-  },
-  "outcome": "supported",
-  "conclusion": "Bounded conclusion."
+  ]
 }
 ```
 
@@ -545,25 +548,27 @@ outside Agent-authored command input:
     "challengerContextId": "host-child-context",
     "lifecycle": "start-and-stop-observed",
     "contextFingerprint": "sha256:host-context-binding",
-    "outputFingerprint": "sha256:exact-challenge-document",
+    "outputFingerprint": "sha256:exact-challenge-round",
     "targetWorktree": "read-only",
     "executionWorkspace": "isolated-writable",
     "sourceSnapshotFingerprint": "sha256:current-worktree",
     "externalEffects": "forbidden"
   },
-  "challenge": { "...": "the exact Challenger document above" }
+  "round": { "...": "the exact Challenger Round above" }
 }
 ```
 
-The CLI command still receives only the bare Challenge Document. It generates
-the Challenge ID and derives Condition IDs. It accepts
+The CLI command still receives only the bare Challenge Round. It validates all
+results before writing state, generates one Round ID and one Challenge ID per
+result, and derives Condition IDs. Every result is persisted atomically and
+shares the same Host receipt and context binding. It accepts
 `host-attested` only when the trusted provider verifies the current request,
 distinct contexts, exact source snapshot, target protection, isolated writable
 execution workspace, lifecycle receipt, and exact output. Receipts are
-single-use, persisted beside the Challenge, and inspectable through
+single-use, persisted once beside the Challenges, and inspectable through
 `change explain --section challenge`. Thin skills remain `unverified`. A
-supported Challenge advances to the next required Challenge or Handoff. A
-partial, contradicted, or unknown Challenge returns to the Implementer through
+fully supported Round advances to Handoff. Any partial, contradicted, or
+unknown result returns the whole Round to the Implementer through
 the existing evidence-diagnosis action. The diagnosis may choose bounded
 repair, verification revision, Human resolution, or Handoff, but may not send
 the same adverse Challenge to another Challenger.
@@ -583,15 +588,15 @@ to the current effective Contract, Attempt, and Fact Collection can satisfy a
 current obligation; `change explain --section challenge` retains prior adverse
 findings and their lineage.
 
-Challenge input must preserve the exact frozen falsification design for every
-selected Obligation. Obligations with different designs are challenged
-separately. The Agent records both the action and observed result before
-choosing a bounded outcome.
+Each Round result must preserve the exact frozen falsification design for its
+selected Obligation. Different designs remain separate cases even though one
+fresh context evaluates the Round. The Agent records both the action and
+observed result before choosing each bounded outcome.
 
 Generated Markdown skills do not control or attest a fresh Host context, but
 the generated Codex and Claude profiles can still perform the bounded Challenge
 in a separate context. Without a trusted provider, the Host submits the same
-bare Challenge Document without a Receipt. Runtime records that result as
+bare Challenge Round without a Receipt. Runtime records those results as
 `unverified`, rejects `supported` for the affected required obligation, and
 adds a concrete direct-review obligation. A native Adapter or Evaluator that
 observes both lifecycle boundaries may instead submit the verified Receipt.
