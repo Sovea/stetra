@@ -213,6 +213,7 @@ function factsFixture(
     checkComparisons: [targetDefinitionId, otherDefinitionId].map((definitionId) => ({
       definitionId, relation: 'baseline-unknown' as const,
     })),
+    evidenceConcerns: [],
     verifierMutations: [
       mutation(targetDefinition, 'file:target-test', 'test/target.test.ts'),
       mutation(otherDefinition, 'file:unrelated', 'src/unrelated.ts'),

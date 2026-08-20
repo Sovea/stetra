@@ -186,7 +186,7 @@ export function collectedHostAction(input: {
       command: { argv },
     };
   }
-  if (input.facts.checks.some((check) => latestAttempt(check).status !== 'passed')) {
+  if (input.facts.evidenceConcerns.length) {
     return inputAction('diagnose-collected-evidence', 'recovery', 'diagnose', input.taskId, input.diagnosisPacket);
   }
   if (input.pendingChallengeObligationIds.length) {

@@ -521,6 +521,11 @@ export async function collectDelegationFacts(options: {
           checks,
           currentExecutionInputs: afterRetryExecutionInputs,
           checkComparisons: compareChecksToBaseline(priorFacts.baselineVerification, checks),
+          evidenceConcerns: collectCheckEvidenceConcerns(
+            currentContract,
+            priorFacts.baselineVerification,
+            checks,
+          ),
           environment: collectExecutionEnvironment(task.projectRoot, definitions),
         };
         delete (factsBase as Partial<FactBundle>).factCollectionId;
@@ -581,6 +586,11 @@ export async function collectDelegationFacts(options: {
           checkInducedChanges,
           checks,
           checkComparisons: compareChecksToBaseline(baselineVerification, checks),
+          evidenceConcerns: collectCheckEvidenceConcerns(
+            currentContract,
+            baselineVerification,
+            checks,
+          ),
           verifierMutations: collectVerifierMutations(currentContract, worktree.changedFiles),
           environment: collectExecutionEnvironment(task.projectRoot, definitions),
           ...(patch ? { patch } : {}),
@@ -612,7 +622,7 @@ export async function collectDelegationFacts(options: {
       repeatedObservation = ['repair', 'correction'].includes(currentAttempt.trigger)
         && Boolean(parentFacts)
         && attemptOutcomeFingerprint(parentFacts!) === attemptOutcomeFingerprint(facts);
-      const checksNeedJudgment = facts.checks.some((check) => latestCheckAttempt(check).status !== 'passed');
+      const checksNeedJudgment = facts.evidenceConcerns.length > 0;
       const attempts = task.projection.attempts.map((attempt) =>
         attempt.attemptId === currentAttempt.attemptId
           ? {
@@ -672,6 +682,7 @@ export async function collectDelegationFacts(options: {
     })),
     checks: collectedFacts.checks.map(compactCheckFact),
     checkComparisons: collectedFacts.checkComparisons,
+    evidenceConcerns: collectedFacts.evidenceConcerns,
     verifierSurfaces: summarizeVerifierSurfaces(collectedFacts.verifierMutations),
     patch: collectedFacts.patch ?? null,
     environment: collectedFacts.environment,
@@ -2362,6 +2373,7 @@ function factCollectionId(bundle: Omit<FactBundle, 'factCollectionId' | 'bundleF
     checkInducedChanges: bundle.checkInducedChanges,
     checks: bundle.checks,
     checkComparisons: bundle.checkComparisons,
+    evidenceConcerns: bundle.evidenceConcerns,
     verifierMutations: bundle.verifierMutations,
     environment: bundle.environment,
     patch: bundle.patch ?? null,
@@ -2442,6 +2454,43 @@ function compareChecksToBaseline(
   });
 }
 
+function collectCheckEvidenceConcerns(
+  contract: TaskContract,
+  baseline: BaselineVerificationFact,
+  checks: CheckFact[],
+): FactBundle['evidenceConcerns'] {
+  if (contract.verificationPlan.mode !== 'checks') return [];
+  return contract.verificationPlan.definitions.flatMap((definition) => {
+    const concerns: FactBundle['evidenceConcerns'] = [];
+    const current = checks.find((item) => item.definitionId === definition.definitionId)!;
+    if (latestCheckAttempt(current).status !== 'passed') {
+      concerns.push({
+        kind: 'check',
+        definitionId: definition.definitionId,
+        observation: 'current-nonpassing',
+      });
+    }
+    if (definition.baseline.mode === 'task-start') {
+      const observedBaseline = baseline.checks.find((item) =>
+        item.definitionId === definition.definitionId);
+      if (observedBaseline
+        && ['task-start', 'isolated-original'].includes(observedBaseline.mode)
+        && observedBaseline.observation
+        && (latestCheckAttempt(observedBaseline.observation).status
+            !== definition.baseline.expectation.baselineStatus
+          || latestCheckAttempt(current).status
+            !== definition.baseline.expectation.currentStatus)) {
+        concerns.push({
+          kind: 'check',
+          definitionId: definition.definitionId,
+          observation: 'baseline-expectation-mismatch',
+        });
+      }
+    }
+    return concerns;
+  });
+}
+
 function validateEvidenceDispositionInput(
   source: EvidenceDispositionDocument,
   contract: TaskContract,
@@ -2449,18 +2498,16 @@ function validateEvidenceDispositionInput(
   challenges: IndependentChallenge[],
 ): void {
   const expected = [
-    ...facts.checks
-    .filter((check) => latestCheckAttempt(check).status !== 'passed')
-    .map((check) => `check:${check.definitionId}`),
+    ...facts.evidenceConcerns.map(evidenceConcernIdentity),
     ...challenges
       .filter((challenge) => challenge.outcome !== 'supported')
-      .map((challenge) => `challenge:${challenge.id}`),
+      .map((challenge) => `challenge:${challenge.id}:adverse`),
   ].sort();
   const selected = source.entries.map((entry) => evidenceConcernIdentity(entry.source)).sort();
   if (new Set(selected).size !== selected.length
     || selected.length !== expected.length
     || selected.some((id, index) => id !== expected[index])) {
-    throw inputError('Evidence disposition must diagnose every current non-passing check and adverse Challenge exactly once.');
+    throw inputError('Evidence disposition must diagnose every current mechanical Check concern and adverse Challenge exactly once.');
   }
   const availableChecks = new Set(
     contract.verificationPlan.mode === 'checks'
@@ -2475,6 +2522,14 @@ function validateEvidenceDispositionInput(
     }
     if (entry.source.kind === 'challenge' && !availableChallenges.has(entry.source.challengeId)) {
       throw inputError(`Unknown or non-adverse Challenge ${JSON.stringify(entry.source.challengeId)} in evidence disposition.`);
+    }
+    if (entry.source.kind === 'check'
+      && entry.source.observation === 'baseline-expectation-mismatch'
+      && (entry.cause === 'implementation'
+        || entry.changeSurface === 'production')) {
+      throw inputError(
+        'A baseline expectation mismatch cannot be classified or routed as a production implementation repair.',
+      );
     }
     if (!validDispositionChange(entry)) {
       throw inputError(
@@ -2540,8 +2595,8 @@ function validDispositionChange(
 
 function evidenceConcernIdentity(source: EvidenceDispositionDocument['entries'][number]['source']): string {
   return source.kind === 'check'
-    ? `check:${source.definitionId}`
-    : `challenge:${source.challengeId}`;
+    ? `check:${source.definitionId}:${source.observation}`
+    : `challenge:${source.challengeId}:${source.observation}`;
 }
 
 function requiredChallengeObligationIds(contract: TaskContract, facts: FactBundle): string[] {

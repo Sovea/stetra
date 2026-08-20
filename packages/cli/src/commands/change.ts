@@ -94,7 +94,7 @@ export function registerChangeCommands(
       }), command);
     });
 
-  registerInputStage(change, environment, 'diagnose', 'Judge every non-passing check and route evidence without guessing its cause', diagnoseCollectedEvidence);
+  registerInputStage(change, environment, 'diagnose', 'Judge every mechanical evidence concern and route it without guessing its cause', diagnoseCollectedEvidence);
   registerInputStage(change, environment, 'challenge', 'Record a fresh-context challenge bound to current facts', recordChallenge);
   registerInputStage(change, environment, 'handoff', 'Evaluate a fact-bound Cognitive Handoff for Human review', evaluateDelegationHandoff);
   registerInputStage(change, environment, 'decide', 'Record the exact Human adoption decision', recordHumanDecision);

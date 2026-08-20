@@ -54,6 +54,7 @@ export function validateFactBundle(bundle: FactBundle, contract: TaskContract): 
   validateChangedFiles(bundle.checkInducedChanges, 'checkInducedChanges');
   validateChecks(bundle.checks, contract);
   validateCheckComparisons(bundle, contract);
+  validateEvidenceConcerns(bundle, contract);
   validateVerifierMutations(bundle.verifierMutations, bundle.changedFiles, contract);
   validateEnvironment(bundle.environment);
   if (bundle.patch !== undefined) {
@@ -100,6 +101,7 @@ export function factCollectionId(
     checkInducedChanges: bundle.checkInducedChanges,
     checks: bundle.checks,
     checkComparisons: bundle.checkComparisons,
+    evidenceConcerns: bundle.evidenceConcerns,
     verifierMutations: bundle.verifierMutations,
     environment: bundle.environment,
     patch: bundle.patch ?? null,
@@ -189,6 +191,44 @@ function validateCheckComparisons(bundle: FactBundle, contract: TaskContract): v
     if (comparison.relation !== expected) {
       throw new Error(`evaluateHandoff check comparison ${definition.definitionId} does not match its observations.`);
     }
+  }
+}
+
+function validateEvidenceConcerns(bundle: FactBundle, contract: TaskContract): void {
+  if (!Array.isArray(bundle.evidenceConcerns)) {
+    throw new Error('evaluateHandoff evidence concerns must be an array.');
+  }
+  const definitions = contract.verificationPlan.mode === 'checks'
+    ? contract.verificationPlan.definitions : [];
+  const expected = definitions.flatMap((definition) => {
+    const concerns: FactBundle['evidenceConcerns'] = [];
+    const current = bundle.checks.find((item) =>
+      item.definitionId === definition.definitionId)!;
+    if (latestStatus(current) !== 'passed') {
+      concerns.push({
+        kind: 'check',
+        definitionId: definition.definitionId,
+        observation: 'current-nonpassing',
+      });
+    }
+    if (definition.baseline.mode === 'task-start') {
+      const baseline = bundle.baselineVerification.checks.find((item) =>
+        item.definitionId === definition.definitionId);
+      if (baseline && ['task-start', 'isolated-original'].includes(baseline.mode)
+        && baseline.observation
+        && (latestStatus(baseline.observation) !== definition.baseline.expectation.baselineStatus
+          || latestStatus(current) !== definition.baseline.expectation.currentStatus)) {
+        concerns.push({
+          kind: 'check',
+          definitionId: definition.definitionId,
+          observation: 'baseline-expectation-mismatch',
+        });
+      }
+    }
+    return concerns;
+  });
+  if (stableFingerprint(bundle.evidenceConcerns) !== stableFingerprint(expected)) {
+    throw new Error('evaluateHandoff evidence concerns do not match collected check observations.');
   }
 }
 

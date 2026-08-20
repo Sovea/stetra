@@ -439,7 +439,8 @@ believes it means. It includes:
   digests;
 - declared command-definition and verifier-surface mutations, using explicit
   exact-file or repository-tree selectors and concrete matched files;
-- mechanical baseline/current relations;
+- mechanical baseline/current relations and explicit evidence concerns derived
+  from those observations;
 - bounded, non-secret execution-environment observations;
 - fact currency against the current worktree and contract identity.
 
@@ -668,8 +669,10 @@ records the actual mechanical relation and escalates an expectation mismatch;
 it does not infer whether a different result is a semantic regression.
 Otherwise the baseline is honestly unknown.
 
-After collection, every current non-passing Definition receives explicit Agent
-diagnosis:
+After collection, every current non-passing Definition, every declared
+baseline-expectation mismatch, and every adverse Challenge receives explicit
+Agent diagnosis. Runtime records them as distinct mechanical concerns; it does
+not collapse them into an engineering cause:
 
 ```text
 implementation -> bounded repair or handoff
@@ -678,6 +681,11 @@ verification   -> verification revision, handoff, or Human decision
 unknown        -> Challenge, handoff, or Human decision
 semantic drift -> exact Human resolution
 ```
+
+A baseline-expectation mismatch cannot be routed directly to production repair.
+It first requires an Agent judgment about the environment, baseline, or frozen
+verification meaning. This prevents a faulty expectation from masquerading as
+a production defect while preserving the exact observation for review.
 
 Runtime validates explicit route compatibility and coverage. It does not parse
 output text to guess cause. When a revised Definition cannot honestly run
@@ -794,7 +802,7 @@ The current `cognitive-adoption` schema `1` implements one task-scoped loop:
 
 ```text
 prepare -> Agent implementation -> collect
-        -> diagnose non-passing evidence
+        -> diagnose mechanical evidence concerns
         -> bounded repair / verification revision / Challenge or direct review
         -> exact Human resolution when needed
         -> Cognitive Handoff -> exact Human Decision

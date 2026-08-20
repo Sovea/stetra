@@ -65,6 +65,7 @@ export type {
   ChangeRepresentation,
   CheckAttemptFact,
   CheckFact,
+  CheckEvidenceConcernObservation,
   CheckStepAttemptFact,
   CheckStatus,
   CheckStreamFact,

@@ -112,7 +112,15 @@ function validateCurrentEvidenceDisposition(input: EvaluateHandoffInput): void {
   if (!disposition) return;
   const definitionIds = new Set(input.contract.verificationPlan.mode === 'checks'
     ? input.contract.verificationPlan.definitions.map((item) => item.definitionId) : []);
-  const challengeIds = new Set(input.challenges.map((item) => item.id));
+  const challengeIds = new Set(input.challenges
+    .filter((item) => item.outcome !== 'supported')
+    .map((item) => item.id));
+  const expectedSources = new Set([
+    ...input.factBundle.evidenceConcerns.map((item) => evidenceConcernIdentity(item)),
+    ...input.challenges
+      .filter((item) => item.outcome !== 'supported')
+      .map((item) => `challenge:${item.id}:adverse`),
+  ]);
   if (disposition.protocol !== input.protocol
     || disposition.schemaVersion !== input.schemaVersion
     || !isSha256(disposition.dispositionId)
@@ -130,10 +138,10 @@ function validateCurrentEvidenceDisposition(input: EvaluateHandoffInput): void {
   for (const entry of disposition.entries) {
     const sourceValid = entry.source.kind === 'check'
       ? definitionIds.has(entry.source.definitionId)
-      : challengeIds.has(entry.source.challengeId);
-    const sourceIdentity = entry.source.kind === 'check'
-      ? `check:${entry.source.definitionId}`
-      : `challenge:${entry.source.challengeId}`;
+        && input.factBundle.evidenceConcerns.some((item) =>
+          evidenceConcernIdentity(item) === evidenceConcernIdentity(entry.source))
+      : challengeIds.has(entry.source.challengeId) && entry.source.observation === 'adverse';
+    const sourceIdentity = evidenceConcernIdentity(entry.source);
     if (!sourceValid || selected.has(sourceIdentity)
       || !['implementation', 'environment', 'verification', 'unknown'].includes(entry.cause)
       || !isNonEmptyString(entry.diagnosis)
@@ -143,10 +151,18 @@ function validateCurrentEvidenceDisposition(input: EvaluateHandoffInput): void {
       || !isNonEmptyString(entry.expectedDifferentObservation)
       || !Array.isArray(entry.intendedChanges)
       || entry.intendedChanges.some((item) => !isNonEmptyString(item))
+      || (entry.source.kind === 'check'
+        && entry.source.observation === 'baseline-expectation-mismatch'
+        && (entry.cause === 'implementation'
+          || entry.changeSurface === 'production'))
       || !validDispositionChange(entry)) {
       throw new Error('evaluateHandoff current evidence disposition entry is invalid.');
     }
     selected.add(sourceIdentity);
+  }
+  if (selected.size !== expectedSources.size
+    || [...selected].some((identity) => !expectedSources.has(identity))) {
+    throw new Error('evaluateHandoff current evidence disposition must cover every current evidence concern exactly once.');
   }
   const compatibleRoutes: Record<string, string[]> = {
     implementation: ['repair-delivery', 'handoff'],
@@ -176,6 +192,12 @@ function validateCurrentEvidenceDisposition(input: EvaluateHandoffInput): void {
   if (disposition.dispositionId !== stableFingerprint(projection)) {
     throw new Error('evaluateHandoff current evidence disposition fingerprint is invalid.');
   }
+}
+
+function evidenceConcernIdentity(source: EvidenceDisposition['entries'][number]['source']): string {
+  return source.kind === 'check'
+    ? `check:${source.definitionId}:${source.observation}`
+    : `challenge:${source.challengeId}:${source.observation}`;
 }
 
 function validDispositionChange(entry: EvidenceDisposition['entries'][number]): boolean {
@@ -978,22 +1000,10 @@ function deriveAttention(
   requiredChallengeObligationIds: string[],
 ): HandoffAttentionItem[] {
   const items: HandoffAttentionItem[] = [];
-  const nonpassing = input.factBundle.checks.filter((check) => check.attempts.at(-1)?.status !== 'passed');
-  const baselineExpectationMismatches = input.contract.verificationPlan.mode === 'checks'
-    ? input.contract.verificationPlan.definitions.filter((definition) => {
-        if (definition.baseline.mode !== 'task-start') return false;
-        const baseline = input.factBundle.baselineVerification.checks.find((item) =>
-          item.definitionId === definition.definitionId);
-        const current = input.factBundle.checks.find((item) =>
-          item.definitionId === definition.definitionId);
-        if (!baseline || !current
-          || !['task-start', 'isolated-original'].includes(baseline.mode)
-          || !baseline.observation) return false;
-        return baseline.observation.attempts.at(-1)?.status
-            !== definition.baseline.expectation.baselineStatus
-          || current.attempts.at(-1)?.status
-            !== definition.baseline.expectation.currentStatus;
-      }) : [];
+  const nonpassing = input.factBundle.evidenceConcerns.filter((item) =>
+    item.observation === 'current-nonpassing');
+  const baselineExpectationMismatches = input.factBundle.evidenceConcerns.filter((item) =>
+    item.observation === 'baseline-expectation-mismatch');
   const unknownAfterRevision = input.factBundle.checkComparisons.filter((item) =>
     item.relation === 'baseline-unknown-after-revision');
   const verifierDefinitions = sortedUnique(input.factBundle.verifierMutations.map((item) => item.definitionId));
@@ -1090,18 +1100,17 @@ function deriveAttention(
       ], { hostPolicies: [requirement.id] }, requirement.enforcementRequirement === 'required' ? 'resolve' : 'inspect'));
     }
   }
-  const currentNonpassing = input.factBundle.checks
-    .filter((check) => check.attempts.at(-1)?.status !== 'passed')
-    .map((check) => check.definitionId);
-  const missingDisposition = currentNonpassing.length > 0 && !input.currentEvidenceDisposition;
+  const evidenceConcernChecks = input.factBundle.evidenceConcerns.map((item) => item.definitionId);
+  const missingDisposition = input.factBundle.evidenceConcerns.length > 0
+    && !input.currentEvidenceDisposition;
   if (missingDisposition) {
     items.push(attention('delivery', ['evidence-disposition-missing'], {
-      checks: sortedUnique(currentNonpassing),
+      checks: sortedUnique(evidenceConcernChecks),
     }, 'resolve'));
   }
   if (input.deliveryExhausted) {
     items.push(attention('delivery', ['repair-route-exhausted'], {
-      checks: sortedUnique(currentNonpassing),
+      checks: sortedUnique(evidenceConcernChecks),
     }, 'decide-exception'));
   }
   return items.sort((left, right) => left.id.localeCompare(right.id));

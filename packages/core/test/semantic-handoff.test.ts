@@ -736,8 +736,8 @@ test('non-passing facts remain inspectable and explicit Human exceptions preserv
     semanticImpact: 'none' as const,
     proposedRoute: 'handoff' as const,
     routeRationale: 'Carry the environment limitation into Human adoption review.',
-    entries: [{
-      source: { kind: 'check' as const, definitionId: facts.checks[0].definitionId },
+    entries: facts.evidenceConcerns.map((source) => ({
+      source,
       cause: 'environment' as const,
       diagnosis: 'The runner dependency was unavailable.',
       falsificationAttempt: 'Checked whether implementation edits can restore the runner.',
@@ -745,7 +745,7 @@ test('non-passing facts remain inspectable and explicit Human exceptions preserv
       changeSurface: 'none' as const,
       expectedDifferentObservation: 'The frozen command starts when the runner is available.',
       intendedChanges: [],
-    }],
+    })),
     route: 'handoff' as const,
   };
   const evidenceDispositions = [{
@@ -930,6 +930,22 @@ function factBundle(
       definitionId: check.definitionId,
       relation: `${baselineStatus}-before-${currentStatus}-now` as FactBundle['checkComparisons'][number]['relation'],
     })),
+    evidenceConcerns: contract.verificationPlan.definitions.flatMap((definition) => [
+      ...(currentStatus === 'passed' ? [] : [{
+        kind: 'check' as const,
+        definitionId: definition.definitionId,
+        observation: 'current-nonpassing' as const,
+      }]),
+      ...(definition.baseline.mode === 'task-start'
+        && (baselineStatus !== definition.baseline.expectation.baselineStatus
+          || currentStatus !== definition.baseline.expectation.currentStatus)
+        ? [{
+            kind: 'check' as const,
+            definitionId: definition.definitionId,
+            observation: 'baseline-expectation-mismatch' as const,
+          }]
+        : []),
+    ]),
     verifierMutations: options.changedAcceptanceSurface
       ? contract.verificationPlan.definitions.map((definition) => ({
           verifierId: definition.verifierId,

@@ -218,6 +218,9 @@ function factFixture(status: 'passed' | 'failed' | 'unavailable'): FactBundle {
     },
     changeFingerprint: digest('g'), changedFiles: [], checkInducedChanges: [], checks: [check],
     checkComparisons: [{ definitionId: digest('f'), relation: 'baseline-unknown' }],
+    evidenceConcerns: status === 'passed' ? [] : [{
+      kind: 'check', definitionId: digest('f'), observation: 'current-nonpassing',
+    }],
     verifierMutations: [],
     environment: {
       platform: 'linux', architecture: 'x64', cwdFingerprint: digest('4'),

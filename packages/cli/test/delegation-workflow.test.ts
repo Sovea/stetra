@@ -424,6 +424,54 @@ test('prepare selectively captures task-start check observations and freezes the
   }
 });
 
+test('a baseline expectation mismatch is diagnosed even when the current assertion passes', async () => {
+  const root = createRepository();
+  try {
+    const prepared = await prepare(root, prepareDocument({
+      baseline: 'task-start',
+      argv: [
+        process.execPath,
+        '-e',
+        "process.exit(require('node:fs').readFileSync('source.txt','utf8').trim()==='after'?0:1)",
+      ],
+    }));
+    writeFileSync(join(root, 'source.txt'), 'after\n', 'utf8');
+    const collected = await collect(root, prepared.taskId);
+    assert.equal(collected.checks[0].status, 'passed');
+    assert.deepEqual(collected.evidenceConcerns, [{
+      kind: 'check',
+      definitionId: collected.checks[0].definitionId,
+      observation: 'baseline-expectation-mismatch',
+    }]);
+    assert.equal(collected.hostAction.kind, 'diagnose-collected-evidence');
+    assert.equal(
+      collected.hostAction.authoringPacket.draft.entries[0].source.observation,
+      'baseline-expectation-mismatch',
+    );
+
+    const invalid = collected.hostAction.authoringPacket.draft;
+    invalid.semanticImpact = 'none';
+    invalid.proposedRoute = 'repair-delivery';
+    invalid.routeRationale = 'Treat the baseline mismatch as an implementation defect.';
+    invalid.entries[0] = {
+      ...invalid.entries[0],
+      cause: 'implementation',
+      diagnosis: 'The implementation caused the mismatch.',
+      falsificationAttempt: 'Inspected the current implementation.',
+      repositoryChangeCanAlterObservation: true,
+      changeSurface: 'production',
+      expectedDifferentObservation: 'The baseline would pass after changing production code.',
+      intendedChanges: ['Change source.txt.'],
+    };
+    await assert.rejects(
+      diagnose(root, prepared.taskId, invalid),
+      /baseline expectation mismatch cannot be classified or routed as a production implementation repair/i,
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('a non-passing check requires an explicit fact-bound route and environment rebinding can revise verification', async () => {
   const root = createRepository();
   try {
@@ -490,7 +538,11 @@ test('mixed implementation and environment failures may repair the bounded deliv
     const collected = await collect(root, prepared.taskId);
     const input = disposition(collected.checks[0].definitionId, 'implementation');
     input.entries.push({
-      source: { kind: 'check', definitionId: collected.checks[1].definitionId },
+      source: {
+        kind: 'check',
+        definitionId: collected.checks[1].definitionId,
+        observation: 'current-nonpassing',
+      },
       cause: 'environment',
       diagnosis: 'The second command is unavailable for an environment-specific reason.',
       falsificationAttempt: 'Inspected the independent second command and its exact Runtime exit.',
@@ -1283,7 +1335,7 @@ test('an adverse Challenge returns to bounded diagnosis and a successor Attempt 
     const challenged = await challenge(root, prepared.taskId, challengeDraft, trustedHost);
     assert.equal(challenged.hostAction.kind, 'diagnose-collected-evidence');
     assert.deepEqual(challenged.hostAction.authoringPacket.draft.entries[0].source, {
-      kind: 'challenge', challengeId: challenged.challenge.id,
+      kind: 'challenge', challengeId: challenged.challenge.id, observation: 'adverse',
     });
 
     const diagnosis = structuredClone(challenged.hostAction.authoringPacket.draft);
@@ -1419,10 +1471,24 @@ test('verification revision preserves history and completes handoff against curr
     }));
     const semanticContractId = prepared.taskContract.semanticContractId;
     const first = await collect(root, prepared.taskId);
+    const firstDiagnosis = structuredClone(first.hostAction.authoringPacket.draft);
+    firstDiagnosis.semanticImpact = 'none';
+    firstDiagnosis.proposedRoute = 'revise-verification';
+    firstDiagnosis.routeRationale = 'The frozen assertion definition cannot produce the declared observation.';
+    firstDiagnosis.entries = firstDiagnosis.entries.map((entry: any) => ({
+      ...entry,
+      cause: 'verification',
+      diagnosis: 'The frozen assertion exits unsuccessfully by construction.',
+      falsificationAttempt: 'Inspected the exact assertion argv and both Runtime observations.',
+      repositoryChangeCanAlterObservation: false,
+      changeSurface: 'none',
+      expectedDifferentObservation: 'A corrected immutable definition records the intended assertion result.',
+      intendedChanges: [],
+    }));
     const diagnosed = await diagnose(
       root,
       prepared.taskId,
-      disposition(first.checks[0].definitionId, 'verification'),
+      firstDiagnosis,
     );
     assert.equal(diagnosed.disposition.route, 'revise-verification');
     assert.equal(diagnosed.hostAction.kind, 'revise-verification');
@@ -1605,7 +1671,7 @@ function disposition(
     proposedRoute,
     routeRationale: `The declared ${cause} cause requires the selected explicit next step.`,
     entries: [{
-      source: { kind: 'check' as const, definitionId }, cause,
+      source: { kind: 'check' as const, definitionId, observation: 'current-nonpassing' as const }, cause,
       diagnosis: `The observed cause is ${cause}.`,
       falsificationAttempt: 'Inspected the command, environment, and changed implementation.',
       repositoryChangeCanAlterObservation: cause === 'implementation',

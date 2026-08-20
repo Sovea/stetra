@@ -334,12 +334,15 @@ new full collection. `--refresh` explicitly reruns all frozen Definitions;
 `--retry-check` remains the only append-only timeout-recovery path.
 
 Collection returns the actual changed-file set, patch, baseline relation,
-Verifier mutations, environment facts, and the next task-specific packet.
+mechanical evidence concerns, Verifier mutations, environment facts, and the
+next task-specific packet. A concern is an exact observation, currently either
+`current-nonpassing` or `baseline-expectation-mismatch`; it is not a cause
+judgment.
 
 ## Diagnose evidence
 
-Use the returned diagnosis draft; it already contains every current non-passing
-Check and current adverse Challenge exactly once:
+Use the returned diagnosis draft; it already contains every current mechanical
+Check concern and current adverse Challenge exactly once:
 
 ```json
 {
@@ -350,7 +353,8 @@ Check and current adverse Challenge exactly once:
     {
       "source": {
         "kind": "check",
-        "definitionId": "sha256:exact-definition"
+        "definitionId": "sha256:exact-definition",
+        "observation": "current-nonpassing"
       },
       "cause": "implementation",
       "diagnosis": "Concrete fact-bound cause judgment.",
@@ -364,7 +368,11 @@ Check and current adverse Challenge exactly once:
 }
 ```
 
-`source` is exactly a frozen Check definition or a current adverse Challenge.
+`source` is exactly a frozen Check concern or a current adverse Challenge. A
+Challenge source uses `observation: "adverse"`. One Check may require two
+entries when it is both currently non-passing and outside its declared
+baseline/current expectation; the observations remain distinct and
+inspectable.
 Cause is exactly `implementation`, `environment`, `verification`, or `unknown`.
 Implementation may declare a `production` edit. Verification may declare a
 `verification-surface` repository edit, or `none` when the frozen definition
@@ -375,6 +383,12 @@ repository verifier gaps may use delivery repair. Environment and frozen
 verification-definition gaps may revise verification. Unknown may challenge,
 hand off, or ask the developer. Material semantic impact must ask the developer.
 Explicit routing is documented in [Architecture](architecture.md).
+
+A `baseline-expectation-mismatch` describes a disagreement between the
+declared before/current expectation and Runtime observation. It cannot by
+itself be classified or routed as a production implementation repair. The
+Agent must diagnose its environment, baseline, or verification meaning and
+either revise verification, hand off the limitation, or ask the developer.
 
 `repair-delivery` creates a successor Attempt under the unchanged Semantic
 Contract and Verification Plan. It applies when at least one entry supplies a

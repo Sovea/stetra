@@ -118,18 +118,21 @@ export function diagnosisAuthoringPacket(input: {
   facts: FactBundle;
   challenges?: IndependentChallenge[];
 }): AuthoringPacket {
-  const nonpassing = input.facts.checks.filter((check) => latestStatus(check) !== 'passed');
   const adverseChallenges = (input.challenges ?? []).filter((challenge) =>
     challenge.outcome !== 'supported');
   const concerns = [
-    ...nonpassing.map((check) => ({
-      source: { kind: 'check' as const, definitionId: check.definitionId },
-      code: 'diagnose-nonpassing-check',
-      targetId: check.definitionId,
-      action: 'Classify the observed check cause and state how that diagnosis was challenged.',
+    ...input.facts.evidenceConcerns.map((concern) => ({
+      source: concern,
+      code: concern.observation === 'current-nonpassing'
+        ? 'diagnose-nonpassing-check'
+        : 'diagnose-baseline-expectation-mismatch',
+      targetId: concern.definitionId,
+      action: concern.observation === 'current-nonpassing'
+        ? 'Classify the observed current check cause and state how that diagnosis was challenged.'
+        : 'Explain why the declared baseline/current expectation did not match observation; do not treat this observation alone as a production-code defect.',
     })),
     ...adverseChallenges.map((challenge) => ({
-      source: { kind: 'challenge' as const, challengeId: challenge.id },
+      source: { kind: 'challenge' as const, challengeId: challenge.id, observation: 'adverse' as const },
       code: 'diagnose-adverse-challenge',
       targetId: challenge.id,
       action: 'Classify the adverse Challenge without asking another Challenger to choose the engineering route.',

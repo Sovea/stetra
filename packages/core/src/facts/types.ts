@@ -148,9 +148,21 @@ export interface CheckComparisonFact {
 
 export type EvidenceCause = 'implementation' | 'environment' | 'verification' | 'unknown';
 
+export type CheckEvidenceConcernObservation =
+  | 'current-nonpassing'
+  | 'baseline-expectation-mismatch';
+
 export type EvidenceConcernSource =
-  | { kind: 'check'; definitionId: string }
-  | { kind: 'challenge'; challengeId: string };
+  | {
+      kind: 'check';
+      definitionId: string;
+      observation: CheckEvidenceConcernObservation;
+    }
+  | {
+      kind: 'challenge';
+      challengeId: string;
+      observation: 'adverse';
+    };
 
 export interface EvidenceDispositionEntry {
   source: EvidenceConcernSource;
@@ -247,6 +259,7 @@ export interface FactBundle extends ProtocolEnvelope {
   checkInducedChanges: ChangedFileFact[];
   checks: CheckFact[];
   checkComparisons: CheckComparisonFact[];
+  evidenceConcerns: Array<Extract<EvidenceConcernSource, { kind: 'check' }>>;
   verifierMutations: VerifierMutation[];
   environment: ExecutionEnvironment;
   patch?: PatchFact;

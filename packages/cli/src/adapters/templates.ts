@@ -259,8 +259,8 @@ mechanical baseline/current relations, check-induced changes, verifier
 mutations, bounded logs with full-stream digests, and non-secret environment
 identity. Direct Host execution does not replace Runtime facts.
 
-Inspect the complete patch and every non-passing check. Submit one evidence
-disposition covering each current non-passing check exactly once:
+Inspect the complete patch and every mechanical evidence concern. Submit one
+evidence disposition covering each current Check concern exactly once:
 
 ~~~json
 {
@@ -268,7 +268,7 @@ disposition covering each current non-passing check exactly once:
   "proposedRoute":"repair-delivery",
   "routeRationale":"why this next step addresses every declared cause",
   "entries":[{
-    "source":{"kind":"check","definitionId":"definition id prefilled by hostAction.authoringPacket"},
+    "source":{"kind":"check","definitionId":"definition id prefilled by hostAction.authoringPacket","observation":"current-nonpassing"},
     "cause":"implementation",
     "diagnosis":"fact-bound cause judgment",
     "falsificationAttempt":"what was inspected or tried",
@@ -297,7 +297,8 @@ unknown causes declare **none**. Unknown can challenge, hand off, or ask the
 developer. Material semantic impact must ask the developer. Repair-budget
 exhaustion mechanically changes an otherwise valid repair route to handoff
 while preserving the proposal. Mechanical verification relaxation requires
-exact Human authority.
+exact Human authority. A **baseline-expectation-mismatch** is a separate
+mechanical concern and cannot by itself authorize a production repair.
 The returned **fieldRequirements** names every enum choice and references
 reusable object variants through **shapeCatalog**; do not infer a default from
 the ordering.
@@ -460,7 +461,8 @@ Follow **hostAction.kind** exactly:
 
 - **retry-timed-out-check**: keep the worktree unchanged and run the returned
   larger-budget retry; every earlier attempt remains visible.
-- **diagnose-collected-evidence**: classify every non-passing fact and submit a
+- **diagnose-collected-evidence**: classify every mechanical Check concern and
+  adverse Challenge and submit a
   falsifiable evidence disposition. Do not assume repair.
 - **revise-verification**: fill the projected revision draft. Logical verifier
   identity remains stable; exact definitions gain a revision and supersedes

@@ -210,8 +210,16 @@ export const EvidenceDispositionDocumentSchema = z.strictObject({
   routeRationale: NonEmptyStringSchema,
   entries: z.array(z.strictObject({
     source: z.discriminatedUnion('kind', [
-      z.strictObject({ kind: z.literal('check'), definitionId: Sha256Schema }),
-      z.strictObject({ kind: z.literal('challenge'), challengeId: StableIdSchema }),
+      z.strictObject({
+        kind: z.literal('check'),
+        definitionId: Sha256Schema,
+        observation: z.enum(['current-nonpassing', 'baseline-expectation-mismatch']),
+      }),
+      z.strictObject({
+        kind: z.literal('challenge'),
+        challengeId: StableIdSchema,
+        observation: z.literal('adverse'),
+      }),
     ]),
     cause: z.enum(EVIDENCE_CAUSES),
     diagnosis: NonEmptyStringSchema,
