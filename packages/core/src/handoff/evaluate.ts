@@ -51,6 +51,7 @@ export function evaluateHandoff(input: EvaluateHandoffInput): HandoffEvaluation 
       attemptId: input.factBundle.attemptId,
       factCollectionId: input.factBundle.factCollectionId,
       requiredChallengeObligationIds: [],
+      assuranceFulfillment: [],
       attention: [],
       adoption: { authority: 'human', status: 'pending' },
     };
@@ -68,10 +69,24 @@ export function evaluateHandoff(input: EvaluateHandoffInput): HandoffEvaluation 
     requiredChallengeObligationIds,
   );
   const attention = deriveAttention(input, handoff, requiredChallengeObligationIds);
-  validateRecommendationConsistency(input, handoff, requiredChallengeObligationIds);
+  const pendingAssurance = deriveAssuranceFulfillment(
+    input,
+    handoff,
+    requiredChallengeObligationIds,
+    false,
+  );
+  validateRecommendationConsistency(
+    input,
+    handoff,
+    requiredChallengeObligationIds,
+    pendingAssurance,
+  );
   const decision = input.decision
     ? validateDecision(input.decision, handoff, input.contract, input.factBundle, attention)
     : undefined;
+  const assuranceFulfillment = decision
+    ? deriveAssuranceFulfillment(input, handoff, requiredChallengeObligationIds, true)
+    : pendingAssurance;
   return {
     ...ENVELOPE,
     status: attention.length ? 'needs-attention' : 'handoff-ready',
@@ -79,6 +94,7 @@ export function evaluateHandoff(input: EvaluateHandoffInput): HandoffEvaluation 
     attemptId: input.factBundle.attemptId,
     factCollectionId: input.factBundle.factCollectionId,
     requiredChallengeObligationIds,
+    assuranceFulfillment,
     attention,
     adoption: decision
       ? { authority: 'human', status: decision.action, decisionId: decision.decisionId }
@@ -410,7 +426,7 @@ function validateChallengeEvidenceItems(
   }
   for (const [index, item] of value.entries()) {
     const itemPath = `${path}[${index}]`;
-    if (!isRecord(item) || !hasOnlyKeys(item, ['statement', 'references'])
+    if (!isRecord(item) || !hasOnlyKeys(item, ['statement', 'provenance', 'reproduction', 'references'])
       || !isNonEmptyString(item.statement) || !Array.isArray(item.references)
       || !item.references.length) {
       issues.push(issue(
@@ -420,6 +436,33 @@ function validateChallengeEvidenceItems(
         'Use the exact Challenge Execution Packet output shape.',
       ));
       continue;
+    }
+    const provenance = item.provenance;
+    const expectedReproduction = provenance === 'runtime-fact'
+      ? 'runtime-recorded'
+      : provenance === 'reasoned-counterexample'
+        ? 'not-executed'
+        : provenance === 'repository-inspection' || provenance === 'challenger-execution'
+          ? 'agent-reported'
+          : undefined;
+    if (!expectedReproduction || item.reproduction !== expectedReproduction) {
+      issues.push(issue(
+        'challenge-evidence-provenance-invalid',
+        `${itemPath}.reproduction`,
+        'Challenge evidence provenance and reproduction are inconsistent.',
+        'Use the exact provenance/reproduction pairing from the Challenge output shape.',
+      ));
+    }
+    if (provenance === 'runtime-fact'
+      && item.references.some((reference) =>
+        !isRecord(reference)
+        || !['patch', 'changed-file', 'check'].includes(String(reference.kind)))) {
+      issues.push(issue(
+        'challenge-runtime-evidence-reference-invalid',
+        `${itemPath}.references`,
+        'Runtime-fact Challenge evidence may cite only Runtime-collected references.',
+        'Use patch, changed-file, or check references, or choose honest Agent provenance.',
+      ));
     }
     validateEvidence(
       item.references,
@@ -596,14 +639,6 @@ function validateObligationConclusions(
       const obligationChallenges = challenges.filter((item) => item.obligationIds.includes(obligation.id));
       if (status === 'supported' && obligationChallenges.some((item) => item.outcome !== 'supported')) {
         issues.push(issue('challenge-obligation-conflict', `${path}.status`, 'An adverse challenge prevents a supported obligation conclusion.', 'Reflect the challenge outcome.'));
-      }
-      if (status === 'supported' && requiredChallengeObligationIds.includes(obligation.id)
-        && !obligationChallenges.length) {
-        issues.push(issue('challenge-obligation-missing', `${path}.status`, 'A required challenge is missing, so this obligation cannot be supported.', 'Use partial, contradicted, or unknown and direct the developer to the unresolved failure hypothesis.'));
-      }
-      if (status === 'supported' && requiredChallengeObligationIds.includes(obligation.id)
-        && obligationChallenges.some((item) => item.independence !== 'host-attested')) {
-        issues.push(issue('challenge-independence-unverified', `${path}.status`, 'A required challenge lacks trusted Host independence, so this obligation cannot be supported.', 'Use partial, contradicted, or unknown and direct the developer to review the unresolved failure hypothesis.'));
       }
       if (status === 'supported' && requiredChallengeObligationIds.includes(obligation.id)
         && obligationChallenges.length
@@ -1123,6 +1158,7 @@ function validateRecommendationConsistency(
   input: EvaluateHandoffInput,
   handoff: CognitiveHandoff,
   requiredChallengeObligationIds: string[],
+  assuranceFulfillment: HandoffEvaluation['assuranceFulfillment'],
 ): void {
   if (handoff.recommendation.action !== 'accept') return;
   const blockers = new Set<string>();
@@ -1142,6 +1178,9 @@ function validateRecommendationConsistency(
   if (input.deliveryExhausted) blockers.add('repair-route-exhausted');
   if (input.challenges.some((item) => item.outcome !== 'supported')) {
     blockers.add('challenge-adverse');
+  }
+  if (assuranceFulfillment.some((item) => item.status !== 'satisfied')) {
+    blockers.add('assurance-unfulfilled');
   }
   for (const obligationId of requiredChallengeObligationIds) {
     const challenges = input.challenges.filter((item) =>
@@ -1165,6 +1204,99 @@ function validateRecommendationConsistency(
     `Agent recommendation cannot be accept while current evidence has: ${[...blockers].sort().join(', ')}.`,
     'Use request-correction, defer, or reject; only an exact later Human decision may accept current exceptions.',
   )]);
+}
+
+function deriveAssuranceFulfillment(
+  input: EvaluateHandoffInput,
+  handoff: CognitiveHandoff,
+  requiredChallengeObligationIds: string[],
+  humanDecisionRecorded: boolean,
+): HandoffEvaluation['assuranceFulfillment'] {
+  const requiredChallenges = new Set(requiredChallengeObligationIds);
+  const definitions = input.contract.verificationPlan.mode === 'checks'
+    ? input.contract.verificationPlan.definitions : [];
+  return allObligations(input.contract).map((obligation) => {
+    const finding = handoff.obligationConclusions.find((item) =>
+      item.obligationId === obligation.id)!;
+    const strategies = obligation.strategies.map((strategy, strategyIndex) => {
+      if (strategy.kind === 'runtime-check') {
+        const selected = definitions.filter((definition) =>
+          strategy.verifierIds.includes(definition.verifierId));
+        const references = selected.map((definition) => ({
+          kind: 'check' as const,
+          id: definition.definitionId,
+        }));
+        const unavailable = selected.some((definition) =>
+          input.factBundle.checks.find((check) =>
+            check.definitionId === definition.definitionId)?.attempts.at(-1)?.status === 'unavailable');
+        return {
+          strategyIndex,
+          kind: strategy.kind,
+          status: unavailable ? 'unsatisfied' as const : 'satisfied' as const,
+          reason: unavailable ? 'check-unavailable' as const : 'current-check-observed' as const,
+          references,
+        };
+      }
+      if (strategy.kind === 'repository-inspection') {
+        return {
+          strategyIndex,
+          kind: strategy.kind,
+          status: 'satisfied' as const,
+          reason: 'repository-evidence-cited' as const,
+          references: [...finding.evidence, ...finding.counterEvidence]
+            .filter((item) => item.kind === 'repository-evidence'
+              && strategy.repositoryEvidenceIds.includes(item.id!)),
+        };
+      }
+      if (strategy.kind === 'independent-challenge') {
+        if (!requiredChallenges.has(obligation.id)) {
+          return {
+            strategyIndex,
+            kind: strategy.kind,
+            status: 'not-required' as const,
+            reason: 'challenge-not-triggered' as const,
+            references: [],
+          };
+        }
+        const challenges = input.challenges.filter((item) =>
+          item.obligationIds.includes(obligation.id));
+        if (!challenges.length) {
+          return {
+            strategyIndex,
+            kind: strategy.kind,
+            status: 'pending' as const,
+            reason: 'challenge-pending' as const,
+            references: [],
+          };
+        }
+        const attested = challenges.every((item) => item.independence === 'host-attested');
+        return {
+          strategyIndex,
+          kind: strategy.kind,
+          status: attested ? 'satisfied' as const : 'unsatisfied' as const,
+          reason: attested
+            ? 'challenge-host-attested' as const
+            : 'challenge-independence-unverified' as const,
+          references: challenges.map((item) => ({ kind: 'challenge' as const, id: item.id })),
+        };
+      }
+      return {
+        strategyIndex,
+        kind: strategy.kind,
+        status: humanDecisionRecorded ? 'satisfied' as const : 'pending' as const,
+        reason: humanDecisionRecorded
+          ? 'human-decision-recorded' as const
+          : 'human-review-pending' as const,
+        references: [],
+      };
+    });
+    const status = strategies.some((item) => item.status === 'unsatisfied')
+      ? 'unsatisfied' as const
+      : strategies.some((item) => item.status === 'pending')
+        ? 'pending' as const
+        : 'satisfied' as const;
+    return { obligationId: obligation.id, status, strategies };
+  });
 }
 
 function validateDecision(

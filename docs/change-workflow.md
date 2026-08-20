@@ -494,6 +494,14 @@ Repository Evidence, or Human Event references selected by this packet. An ad
 hoc tool observation belongs in `observedResult`; it cannot be promoted into a
 fact or another Challenge identity.
 
+Each evidence item labels its provenance and reproduction boundary. Runtime
+facts use `runtime-fact` / `runtime-recorded` and may cite only Patch,
+changed-file, or Check facts. Repository inspection and Challenger execution
+use `agent-reported`. An unexecuted logical counterexample uses
+`reasoned-counterexample` / `not-executed`. These labels expose how an
+observation was obtained; Runtime validates the pairing and references, not the
+natural-language claim.
+
 ```json
 {
   "results": [
@@ -517,6 +525,8 @@ fact or another Challenge identity.
       "supportingEvidence": [
         {
           "statement": "Bounded supporting observation.",
+          "provenance": "runtime-fact",
+          "reproduction": "runtime-recorded",
           "references": [{ "kind": "check", "id": "sha256:exact-definition" }]
         }
       ],
@@ -597,9 +607,11 @@ Generated Markdown skills do not control or attest a fresh Host context, but
 the generated Codex and Claude profiles can still perform the bounded Challenge
 in a separate context. Without a trusted provider, the Host submits the same
 bare Challenge Round without a Receipt. Runtime records those results as
-`unverified`, rejects `supported` for the affected required obligation, and
-adds a concrete direct-review obligation. A native Adapter or Evaluator that
-observes both lifecycle boundaries may instead submit the verified Receipt.
+`unverified`, marks independent-Challenge assurance unsatisfied, blocks Agent
+acceptance advice, and adds a concrete direct-review obligation. It does not
+rewrite the Agent's semantic finding merely because Host independence is
+unverified. A native Adapter or Evaluator that observes both lifecycle
+boundaries may instead submit the verified Receipt.
 
 ## Handoff
 
@@ -668,6 +680,12 @@ commands, dependencies, or repository text.
 Every missing, adverse, or unverified required Challenge also requires a Review
 Question bound to the exact affected Obligation; a broad Condition-only
 question cannot discharge it.
+
+The Decision Packet labels Agent conclusions as `agentFinding` and places a
+separate Runtime-derived `assurance` result beside every Obligation. Assurance
+is computed from exact Check observation, cited Repository Evidence, Challenge
+trigger and Host attestation, and pending Human review. Missing or unverified
+assurance stays visible without being recast as a semantic contradiction.
 
 The final Developer Decision Brief preserves each related Challenge conclusion
 and its exact counter-evidence under the affected Obligation. A Challenge is not

@@ -151,6 +151,8 @@ test('Host Challenge lifecycle requires repair when a supported result retains c
   const inconsistent = challengeFixture();
   inconsistent.counterEvidence = [{
     statement: 'The persistent verifier does not cover the declared boundary.',
+    provenance: 'repository-inspection',
+    reproduction: 'agent-reported',
     references: [{ kind: 'check', id: digest('c') }],
   }];
   const first = lifecycle.observeStop({
@@ -231,6 +233,8 @@ test('Host Challenge lifecycle does not let output repair erase authored counter
   const inconsistent = challengeFixture();
   inconsistent.counterEvidence = [{
     statement: 'The persistent verifier omits the declared boundary.',
+    provenance: 'repository-inspection',
+    reproduction: 'agent-reported',
     references: [{ kind: 'check', id: digest('c') }],
   }];
   const first = lifecycle.observeStop({
@@ -257,6 +261,33 @@ test('Host Challenge lifecycle does not let output repair erase authored counter
       message: 'must preserve the counter-evidence authored before structural repair',
     }],
   });
+});
+
+test('Host Challenge lifecycle rejects evidence that overstates Runtime provenance', () => {
+  const lifecycle = new HostChallengeLifecycle('codex');
+  const request = requestFixture('a');
+  lifecycle.observeStart({
+    request,
+    challengeExecutionPacket: packetFixture(),
+    agentType: 'stetra-challenger',
+    parentContextId: 'context:implementer',
+    challengerContextId: 'context:challenger',
+    ...workspaceObservation(),
+  });
+  const challenge = challengeFixture();
+  challenge.supportingEvidence[0].provenance = 'challenger-execution';
+  const rejected = lifecycle.observeStop({
+    requestId: request.requestId,
+    agentType: 'stetra-challenger',
+    challengerContextId: 'context:challenger',
+    output: roundFixture(challenge),
+  });
+  assert.equal(rejected.status, 'invalid-output');
+  if (rejected.status !== 'invalid-output') return;
+  assert.deepEqual(rejected.issues, [{
+    path: 'results.0.supportingEvidence.0.reproduction',
+    message: 'must be agent-reported for challenger-execution evidence',
+  }]);
 });
 
 test('Host Challenge lifecycle rejects reused requests and same-context claims', () => {
@@ -367,6 +398,8 @@ function challengeFixture(): ChallengeDocument {
     observedResult: 'The bounded counterexample was not observed.',
     supportingEvidence: [{
       statement: 'The current evidence supports the bounded conclusion.',
+      provenance: 'runtime-fact',
+      reproduction: 'runtime-recorded',
       references: [{ kind: 'check', id: digest('c') }],
     }],
     counterEvidence: [],

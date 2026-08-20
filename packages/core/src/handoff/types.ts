@@ -151,6 +151,35 @@ export interface HostPolicyEvaluation {
   attestationId?: string;
 }
 
+export type AssuranceFulfillmentStatus =
+  | 'satisfied'
+  | 'unsatisfied'
+  | 'pending'
+  | 'not-required';
+
+export interface AssuranceStrategyFulfillment {
+  strategyIndex: number;
+  kind: EvidenceObligation['strategies'][number]['kind'];
+  status: AssuranceFulfillmentStatus;
+  reason:
+    | 'current-check-observed'
+    | 'check-unavailable'
+    | 'repository-evidence-cited'
+    | 'challenge-not-triggered'
+    | 'challenge-pending'
+    | 'challenge-host-attested'
+    | 'challenge-independence-unverified'
+    | 'human-review-pending'
+    | 'human-decision-recorded';
+  references: HandoffEvidenceReference[];
+}
+
+export interface ObligationAssuranceFulfillment {
+  obligationId: string;
+  status: 'satisfied' | 'unsatisfied' | 'pending';
+  strategies: AssuranceStrategyFulfillment[];
+}
+
 export interface EvaluateHandoffInput extends ProtocolEnvelope {
   contract: TaskContract;
   factBundle: FactBundle;
@@ -170,6 +199,7 @@ export interface HandoffEvaluation extends ProtocolEnvelope {
   attemptId: string;
   factCollectionId: string;
   requiredChallengeObligationIds: string[];
+  assuranceFulfillment: ObligationAssuranceFulfillment[];
   attention: HandoffAttentionItem[];
   adoption: {
     authority: 'human';
@@ -203,13 +233,14 @@ export interface DecisionPacket extends ProtocolEnvelope {
     key: string;
     statement: string;
     criticality: 'material' | 'adoption-critical';
-    conclusion: AdoptionConditionConclusion;
+    agentFinding: AdoptionConditionConclusion;
     obligations: Array<{
       id: string;
       key: string;
       statement: string;
       falsification: EvidenceObligation['falsification'];
-      conclusion: EvidenceObligationConclusion;
+      agentFinding: EvidenceObligationConclusion;
+      assurance: ObligationAssuranceFulfillment;
       challengeIds: string[];
     }>;
   }>;
@@ -235,7 +266,7 @@ export interface DecisionPacket extends ProtocolEnvelope {
     dispositions: Array<Pick<EvidenceDisposition,
       'dispositionId' | 'attemptId' | 'semanticImpact' | 'proposedRoute' | 'routeRationale' | 'route' | 'entries'>>;
     challenges: Array<Pick<IndependentChallenge,
-      'id' | 'obligationIds' | 'conditionIds' | 'independence' | 'falsification'
+      'id' | 'roundId' | 'obligationIds' | 'conditionIds' | 'independence' | 'falsification'
       | 'falsificationAttempt' | 'observedResult' | 'supportingEvidence'
       | 'counterEvidence' | 'evidenceCoverage' | 'outcome' | 'conclusion'>>;
   };

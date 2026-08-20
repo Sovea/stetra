@@ -874,6 +874,8 @@ test('a thin Host runs the bounded Challenger but preserves unverified direct re
     challengeDraft.observedResult = 'The selected evidence did not expose the frozen failure hypothesis.';
     challengeDraft.supportingEvidence = [{
       statement: 'The current check and patch support the bounded observation.',
+      provenance: 'runtime-fact',
+      reproduction: 'runtime-recorded',
       references: [{ kind: 'check', id: challengeDraft.evidence.checks[0] }],
     }];
     markCoverageSufficient(challengeDraft);
@@ -892,14 +894,14 @@ test('a thin Host runs the bounded Challenger but preserves unverified direct re
         challenged.hostAction.authoringPacket,
         'draft.obligationConclusions[0].status',
       ).allowedValues,
-      ['partial', 'contradicted', 'unknown'],
+      ['supported', 'partial', 'contradicted', 'unknown'],
     );
     assert.deepEqual(
       fieldRequirement(
         challenged.hostAction.authoringPacket,
         'draft.conditionConclusions[0].status',
       ).allowedValues,
-      ['partial', 'contradicted', 'unknown'],
+      ['supported', 'partial', 'contradicted', 'unknown'],
     );
     assert.ok(challenged.hostAction.authoringPacket.outstandingObligations.some(
       (item: { code: string }) => item.code === 'direct-human-review-required',
@@ -908,7 +910,7 @@ test('a thin Host runs the bounded Challenger but preserves unverified direct re
     const draft = structuredClone(challenged.hostAction.authoringPacket.draft);
     draft.summary = 'The implementation passes its changed verifier, but Host-attested independence is unavailable.';
     for (const conclusion of draft.obligationConclusions) {
-      conclusion.status = 'partial';
+      conclusion.status = 'supported';
       conclusion.evidenceCoverage = {
         status: 'sufficient',
         rationale: 'The selected evidence covers the bounded behavior, while Host provenance remains unresolved.',
@@ -918,11 +920,11 @@ test('a thin Host runs the bounded Challenger but preserves unverified direct re
         attempt: 'Used the separate Challenger output and inspected the changed acceptance surface.',
         observedResult: 'The check and Challenger support the boundary, but the Host lifecycle is unverified.',
       };
-      conclusion.conclusion = 'The check passes, while trusted independent provenance remains unavailable.';
+      conclusion.conclusion = 'The cited evidence supports the bounded behavior finding.';
     }
     for (const conclusion of draft.conditionConclusions) {
-      conclusion.status = 'partial';
-      conclusion.summary = 'The unverified Challenge provenance prevents full support.';
+      conclusion.status = 'supported';
+      conclusion.summary = 'The Agent finds the bounded condition supported by the cited evidence.';
     }
     for (const question of draft.reviewQuestions) {
       question.question = 'Does the changed verifier reject the stated failure hypothesis?';
@@ -951,6 +953,10 @@ test('a thin Host runs the bounded Challenger but preserves unverified direct re
     assert.equal(handedOff.status, 'needs-attention');
     assert.ok(handedOff.decisionPacket.attention.some((item: { codes: string[] }) =>
       item.codes.includes('challenge-independence-unverified')));
+    assert.equal(handedOff.decisionPacket.conditions[0].agentFinding.status, 'supported');
+    assert.equal(handedOff.decisionPacket.conditions[0].obligations[0].agentFinding.status, 'supported');
+    assert.equal(handedOff.decisionPacket.conditions[0].obligations[0].assurance.status, 'unsatisfied');
+    assert.equal(handedOff.hostAction.developerDecisionBrief.conditions[0].obligations[0].assurance.status, 'unsatisfied');
     const issue = handedOff.hostAction.developerDecisionBrief.decisionIssues.find(
       (item: { codes: string[] }) => item.codes.includes('challenge-independence-unverified'),
     );
@@ -1050,6 +1056,8 @@ test('a bounded Challenge Execution Packet completes the persisted challenge-to-
     challengeDraft.observedResult = 'The independent exercise observed the expected bounded behavior.';
     challengeDraft.supportingEvidence = [{
       statement: 'The changed verifier and frozen check were inspected together.',
+      provenance: 'runtime-fact',
+      reproduction: 'runtime-recorded',
       references: [
         ...changedFileIds.map((id: string) => ({ kind: 'changed-file', id })),
         ...challengeDraft.evidence.checks.map((id: string) => ({ kind: 'check', id })),
@@ -1202,6 +1210,8 @@ test('unavailable nested Challenge evidence cannot mutate task state', async () 
     draft.observedResult = 'The selected evidence did not expose the failure hypothesis.';
     draft.supportingEvidence = [{
       statement: 'An unavailable check must not be accepted as current evidence.',
+      provenance: 'runtime-fact',
+      reproduction: 'runtime-recorded',
       references: [{ kind: 'check', id: `sha256:${'f'.repeat(64)}` }],
     }];
     markCoverageSufficient(draft);
@@ -1383,6 +1393,8 @@ test('an adverse Challenge returns to bounded diagnosis and a successor Attempt 
     challengeDraft.observedResult = 'The counterexample contradicted the bounded obligation.';
     challengeDraft.counterEvidence = [{
       statement: 'The frozen observation remains green while the counterexample fails.',
+      provenance: 'challenger-execution',
+      reproduction: 'agent-reported',
       references: [{ kind: 'check', id: checkId }],
     }];
     markCoverageSufficient(challengeDraft);
@@ -1448,6 +1460,8 @@ test('an adverse Challenge preserves its exact counter-evidence through Handoff 
     challengeDraft.observedResult = 'The implementation path passed, but the verifier omitted the boundary.';
     challengeDraft.counterEvidence = [{
       statement: counterStatement,
+      provenance: 'repository-inspection',
+      reproduction: 'agent-reported',
       references: [{ kind: 'check', id: checkId }],
     }];
     challengeDraft.evidenceCoverage = {
@@ -1507,6 +1521,8 @@ test('an adverse Challenge preserves its exact counter-evidence through Handoff 
     const recorded = handedOff.decisionPacket.evidenceJudgments.challenges[0];
     assert.equal(recorded.outcome, 'partial');
     assert.equal(recorded.counterEvidence[0].statement, counterStatement);
+    assert.equal(recorded.counterEvidence[0].provenance, 'repository-inspection');
+    assert.equal(recorded.counterEvidence[0].reproduction, 'agent-reported');
     assert.deepEqual(recorded.counterEvidence[0].references, [{ kind: 'check', id: checkId }]);
     const finding = handedOff.hostAction.developerDecisionBrief
       .conditions[0].obligations[0].evidenceBoundary.challengeFindings[0];
@@ -1514,6 +1530,8 @@ test('an adverse Challenge preserves its exact counter-evidence through Handoff 
     assert.equal(finding.outcome, 'partial');
     assert.equal(finding.conclusion, challengeDraft.conclusion);
     assert.equal(finding.counterEvidence[0].statement, counterStatement);
+    assert.equal(finding.counterEvidence[0].provenance, 'repository-inspection');
+    assert.equal(finding.counterEvidence[0].reproduction, 'agent-reported');
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

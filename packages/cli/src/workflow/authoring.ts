@@ -687,9 +687,7 @@ function supportedConclusionAllowed(
   challenges: IndependentChallenge[],
 ): boolean {
   const relevant = challenges.filter((challenge) => challenge.obligationIds.includes(obligationId));
-  if (requiredObligationIds.includes(obligationId) && relevant.length === 0) return false;
-  return relevant.every((challenge) =>
-    challenge.independence === 'host-attested' && challenge.outcome === 'supported');
+  return relevant.every((challenge) => challenge.outcome === 'supported');
 }
 
 function baselineShapes(): unknown[] {

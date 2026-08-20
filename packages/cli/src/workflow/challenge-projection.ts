@@ -37,6 +37,8 @@ export interface ChallengeExecutionPacket {
     allowedCoverageStatuses: readonly ['sufficient', 'insufficient'];
     evidenceItemShape: {
       statement: string;
+      provenance: string;
+      reproduction: string;
       references: Array<{ kind: string; id?: string }>;
     };
     instruction: string;
@@ -235,12 +237,14 @@ export function challengeExecutionPacket(input: {
       allowedCoverageStatuses: ['sufficient', 'insufficient'],
       evidenceItemShape: {
         statement: '<bounded evidence statement>',
+        provenance: '<runtime-fact, repository-inspection, challenger-execution, or reasoned-counterexample>',
+        reproduction: '<runtime-recorded, agent-reported, or not-executed>',
         references: [{
           kind: '<patch, changed-file, check, repository-evidence, or human-event>',
           id: '<omit id only for patch>',
         }],
       },
-      instruction: 'Fill only the open judgment fields in every draft result, explicitly assess whether each selected evidence set covers its bounded conclusion, cite only evidence selected by that case, and return the exact Challenge Round JSON object without Markdown.',
+      instruction: 'Fill only the open judgment fields in every draft result, label each evidence item with honest provenance and reproduction, explicitly assess whether each selected evidence set covers its bounded conclusion, cite only evidence selected by that case, and return the exact Challenge Round JSON object without Markdown.',
     },
   };
 }

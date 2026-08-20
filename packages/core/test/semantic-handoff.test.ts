@@ -376,13 +376,19 @@ test('changed acceptance surface triggers every related fact-triggered obligatio
   if (result.status !== 'delegation-compiled') return;
   const contract = result.contract;
   const facts = factBundle(contract, { changedAcceptanceSurface: true });
-  assert.throws(() => evaluateHandoff({
+  const supportedFinding = handoffFor(contract, facts, []);
+  supportedFinding.recommendation.action = 'defer';
+  supportedFinding.recommendation.rationale = 'Independent assurance is still pending.';
+  supportedFinding.handoffFingerprint = fingerprint(withoutFingerprint(supportedFinding));
+  const pendingEvaluation = evaluateHandoff({
     ...envelope, contract, factBundle: facts,
     currentWorktreeFingerprint: facts.current.fingerprint,
     challenges: [], currentEvidenceDisposition: undefined, hostPolicyEvaluations: [],
     deliveryExhausted: false, verificationRevised: false,
-    handoff: handoffFor(contract, facts, []),
-  }), /required challenge is missing/);
+    handoff: supportedFinding,
+  });
+  assert.ok(supportedFinding.obligationConclusions.every((item) => item.status === 'supported'));
+  assert.ok(pendingEvaluation.assuranceFulfillment.every((item) => item.status === 'pending'));
   const handoff = handoffFor(contract, facts, [], 'partial');
   const evaluation = evaluateHandoff({
     ...envelope, contract, factBundle: facts,
@@ -426,6 +432,8 @@ test('challenge changed-file evidence uses the canonical Runtime fact identity',
     observedResult: 'The incompatible boundary was rejected as required.',
     supportingEvidence: [{
       statement: 'The exact changed verifier and frozen check were inspected together.',
+      provenance: 'runtime-fact',
+      reproduction: 'runtime-recorded',
       references: [
         { kind: 'changed-file', id: facts.changedFiles[0].id },
         ...facts.checks.map((item) => ({ kind: 'check' as const, id: item.definitionId })),
@@ -513,6 +521,8 @@ test('a supported challenge cannot retain counter-evidence even when it bypasses
   const challenges = supportedChallenges(contract, facts);
   challenges[0].counterEvidence = [{
     statement: 'The persistent verifier leaves the declared boundary unprotected.',
+    provenance: 'repository-inspection',
+    reproduction: 'agent-reported',
     references: facts.checks.map((item) => ({ kind: 'check' as const, id: item.definitionId })),
   }];
   const handoff = handoffFor(contract, facts, challenges);
@@ -636,7 +646,7 @@ test('Agent accept recommendation cannot exceed unresolved conclusions and unkno
       item.code === 'recommendation-evidence-conflict')));
 });
 
-test('an unverified required challenge cannot support its obligation', () => {
+test('an unverified required challenge does not rewrite the Agent finding', () => {
   const contract = compiledContract();
   const facts = factBundle(contract);
   const [attested] = supportedChallenges(contract, facts);
@@ -651,12 +661,24 @@ test('an unverified required challenge cannot support its obligation', () => {
     independence: 'unverified',
   };
   const handoff = handoffFor(contract, facts, [challenge]);
-  assert.throws(() => evaluateHandoff({
+  handoff.recommendation.action = 'defer';
+  handoff.recommendation.rationale = 'Trusted independence remains unavailable.';
+  handoff.handoffFingerprint = fingerprint(withoutFingerprint(handoff));
+  const evaluation = evaluateHandoff({
     ...envelope, contract, factBundle: facts,
     currentWorktreeFingerprint: facts.current.fingerprint,
     challenges: [challenge], currentEvidenceDisposition: undefined, hostPolicyEvaluations: [],
     deliveryExhausted: false, verificationRevised: false, handoff,
-  }), /lacks trusted Host independence/);
+  });
+  assert.equal(handoff.obligationConclusions[0].status, 'supported');
+  assert.equal(evaluation.assuranceFulfillment[0].status, 'unsatisfied');
+  assert.equal(
+    evaluation.assuranceFulfillment[0].strategies.find((item) =>
+      item.kind === 'independent-challenge')?.reason,
+    'challenge-independence-unverified',
+  );
+  assert.ok(evaluation.attention.some((item) =>
+    item.codes.includes('challenge-independence-unverified')));
 });
 
 test('an unresolved required challenge needs an obligation-specific review question', () => {
@@ -1137,6 +1159,8 @@ function supportedChallenges(contract: TaskContract, facts: FactBundle): Indepen
     observedResult: 'The compatibility path retained the expected behavior.',
     supportingEvidence: [{
       statement: 'The frozen check exercises the compatibility path.',
+      provenance: 'runtime-fact',
+      reproduction: 'runtime-recorded',
       references: facts.checks.map((item) => ({ kind: 'check' as const, id: item.definitionId })),
     }],
     counterEvidence: [],

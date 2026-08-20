@@ -448,6 +448,11 @@ A passing command is one observation about one exact Definition. It is never a
 semantic conclusion or an adoption decision. Completed failure, non-timeout
 unavailability, timeout, signal, and spawn failure remain distinct.
 
+Challenge evidence also preserves an explicit provenance boundary: a
+Runtime-recorded fact, Agent-reported repository inspection, Agent-reported
+Challenger execution, or an unexecuted reasoned counterexample. A label cannot
+promote Agent observation into Runtime fact.
+
 ### Execution Environment Manifest
 
 The long-term bounded Environment Manifest should bind relevant verification to:
@@ -521,11 +526,22 @@ The Cognitive Handoff is a decision surface, not a transcript or generated
 summary archive. It communicates:
 
 - what the actual system change means;
-- one evidence-bounded conclusion per Obligation and Condition;
+- one Agent-authored evidence-bounded finding per Obligation and Condition;
+- one separately derived Runtime assurance-fulfillment view for every declared
+  evidence strategy;
 - important system effects;
 - residual unknowns and next actions;
 - consequence-directed Review Questions;
 - an Agent recommendation distinct from Human adoption.
+
+Agent finding and assurance fulfillment answer different questions. A finding
+states what the Agent concludes from evidence. Fulfillment states whether the
+declared process boundary was mechanically satisfied, remains pending, was
+unavailable, or was not triggered. A missing or unverified independent
+Challenge therefore remains a separate assurance gap rather than silently
+downgrading an otherwise bounded Agent finding. It still blocks Agent
+acceptance advice and directs Human review. An adverse Challenge constrains the
+finding because it is counterevidence, not merely a missing process step.
 
 Attention and the Review Map have different roles. Attention identifies
 structural evidence or integrity gaps with exact references. Review Questions

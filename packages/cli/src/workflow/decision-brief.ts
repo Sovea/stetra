@@ -29,17 +29,18 @@ export interface DeveloperDecisionBrief {
     id: string;
     statement: string;
     criticality: 'material' | 'adoption-critical';
-    status: DecisionPacket['conditions'][number]['conclusion']['status'];
+    status: DecisionPacket['conditions'][number]['agentFinding']['status'];
     summary: string;
     obligations: Array<{
       id: string;
       statement: string;
-      status: DecisionPacket['conditions'][number]['obligations'][number]['conclusion']['status'];
+      status: DecisionPacket['conditions'][number]['obligations'][number]['agentFinding']['status'];
       conclusion: string;
+      assurance: DecisionPacket['conditions'][number]['obligations'][number]['assurance'];
       evidenceBoundary: {
         failureHypothesis: string;
         observedResult: string;
-        coverage: DecisionPacket['conditions'][number]['obligations'][number]['conclusion']['evidenceCoverage'];
+        coverage: DecisionPacket['conditions'][number]['obligations'][number]['agentFinding']['evidenceCoverage'];
         supportingEvidenceCount: number;
         counterEvidenceCount: number;
         challengeFindings: Array<{
@@ -186,19 +187,20 @@ export function buildDeveloperDecisionBrief(input: {
       id: condition.id,
       statement: condition.statement,
       criticality: condition.criticality,
-      status: condition.conclusion.status,
-      summary: condition.conclusion.summary,
+      status: condition.agentFinding.status,
+      summary: condition.agentFinding.summary,
       obligations: condition.obligations.map((obligation) => ({
         id: obligation.id,
         statement: obligation.statement,
-        status: obligation.conclusion.status,
-        conclusion: obligation.conclusion.conclusion,
+        status: obligation.agentFinding.status,
+        conclusion: obligation.agentFinding.conclusion,
+        assurance: obligation.assurance,
         evidenceBoundary: {
           failureHypothesis: obligation.falsification.failureHypothesis,
-          observedResult: obligation.conclusion.falsification.observedResult,
-          coverage: obligation.conclusion.evidenceCoverage,
-          supportingEvidenceCount: obligation.conclusion.evidence.length,
-          counterEvidenceCount: obligation.conclusion.counterEvidence.length,
+          observedResult: obligation.agentFinding.falsification.observedResult,
+          coverage: obligation.agentFinding.evidenceCoverage,
+          supportingEvidenceCount: obligation.agentFinding.evidence.length,
+          counterEvidenceCount: obligation.agentFinding.counterEvidence.length,
           challengeFindings: obligation.challengeIds.flatMap((id) => {
             const challenge = challengeById.get(id);
             return challenge ? [{

@@ -257,7 +257,33 @@ const ChallengeEvidenceReferenceSchema = z.union([
 
 const ChallengeEvidenceItemSchema = z.strictObject({
   statement: NonEmptyStringSchema,
+  provenance: z.enum([
+    'runtime-fact', 'repository-inspection', 'challenger-execution', 'reasoned-counterexample',
+  ]),
+  reproduction: z.enum(['runtime-recorded', 'agent-reported', 'not-executed']),
   references: z.array(ChallengeEvidenceReferenceSchema).min(1),
+}).superRefine((value, context) => {
+  const expected = value.provenance === 'runtime-fact'
+    ? 'runtime-recorded'
+    : value.provenance === 'reasoned-counterexample'
+      ? 'not-executed'
+      : 'agent-reported';
+  if (value.reproduction !== expected) {
+    context.addIssue({
+      code: 'custom',
+      path: ['reproduction'],
+      message: `must be ${expected} for ${value.provenance} evidence`,
+    });
+  }
+  if (value.provenance === 'runtime-fact'
+    && value.references.some((reference) =>
+      !['patch', 'changed-file', 'check'].includes(reference.kind))) {
+    context.addIssue({
+      code: 'custom',
+      path: ['references'],
+      message: 'runtime-fact evidence may cite only Runtime-collected patch, changed-file, or check references',
+    });
+  }
 });
 
 const EvidenceCoverageAssessmentSchema = z.discriminatedUnion('status', [

@@ -2142,14 +2142,16 @@ function buildDecisionPacket(
       key: condition.key,
       statement: condition.statement,
       criticality: condition.criticality,
-      conclusion: handoff.conditionConclusions.find((item) =>
+      agentFinding: handoff.conditionConclusions.find((item) =>
         item.conditionId === condition.id)!,
       obligations: condition.evidenceObligations.map((obligation) => ({
         id: obligation.id,
         key: obligation.key,
         statement: obligation.statement,
         falsification: obligation.falsification,
-        conclusion: handoff.obligationConclusions.find((item) =>
+        agentFinding: handoff.obligationConclusions.find((item) =>
+          item.obligationId === obligation.id)!,
+        assurance: evaluation.assuranceFulfillment.find((item) =>
           item.obligationId === obligation.id)!,
         challengeIds: challenges
           .filter((item) => item.obligationIds.includes(obligation.id))
@@ -2194,6 +2196,7 @@ function buildDecisionPacket(
       })),
       challenges: challenges.map((challenge) => ({
         id: challenge.id,
+        roundId: challenge.roundId,
         obligationIds: challenge.obligationIds,
         conditionIds: challenge.conditionIds,
         independence: challenge.independence,

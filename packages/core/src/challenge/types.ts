@@ -19,8 +19,21 @@ export type ChallengeEvidenceReference =
       id: string;
     };
 
+export type ChallengeEvidenceProvenance =
+  | 'runtime-fact'
+  | 'repository-inspection'
+  | 'challenger-execution'
+  | 'reasoned-counterexample';
+
+export type ChallengeEvidenceReproduction =
+  | 'runtime-recorded'
+  | 'agent-reported'
+  | 'not-executed';
+
 export interface ChallengeEvidenceItem {
   statement: string;
+  provenance: ChallengeEvidenceProvenance;
+  reproduction: ChallengeEvidenceReproduction;
   references: ChallengeEvidenceReference[];
 }
 

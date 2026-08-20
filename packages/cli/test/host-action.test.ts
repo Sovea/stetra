@@ -337,7 +337,12 @@ function challengePacket(): ChallengeExecutionPacket {
       authority: 'agent-judgment',
       allowedOutcomes: ['supported', 'partial', 'contradicted', 'unknown'],
       allowedCoverageStatuses: ['sufficient', 'insufficient'],
-      evidenceItemShape: { statement: '<statement>', references: [{ kind: '<kind>', id: '<id>' }] },
+      evidenceItemShape: {
+        statement: '<statement>',
+        provenance: '<provenance>',
+        reproduction: '<reproduction>',
+        references: [{ kind: '<kind>', id: '<id>' }],
+      },
       instruction: 'Fill the draft.',
     },
   };

@@ -12,6 +12,8 @@ export type {
 } from './authority/types.ts';
 export type {
   ChallengeEvidenceItem,
+  ChallengeEvidenceProvenance,
+  ChallengeEvidenceReproduction,
   ChallengeEvidenceReference,
   ChallengeEvidenceSelection,
   ChallengeIndependence,
@@ -90,6 +92,8 @@ export type {
 } from './facts/types.ts';
 export type {
   AdoptionConditionConclusion,
+  AssuranceFulfillmentStatus,
+  AssuranceStrategyFulfillment,
   AgentRecommendation,
   CognitiveHandoff,
   ConclusionStatus,
@@ -106,6 +110,7 @@ export type {
   HandoffValidationIssue,
   HostPolicyEvaluation,
   HumanDecision,
+  ObligationAssuranceFulfillment,
   HumanDecisionAction,
   HumanDecisionException,
   RecommendationAction,

@@ -336,6 +336,11 @@ A Challenge may cite only patch, changed-file, check, repository-evidence, or
 human-event references selected by that packet. Describe additional read-only
 tool observations in **observedResult**; never manufacture a Challenge or fact
 identity for them.
+Every supporting or counter-evidence item must label **provenance** and
+**reproduction**. Use **runtime-fact/runtime-recorded** only for cited patch,
+changed-file, or Check facts. Repository inspection and Challenger execution
+are **agent-reported**. A reasoned counterexample that was not executed is
+**reasoned-counterexample/not-executed**.
 A **supported** outcome requires an empty **counterEvidence** array. If any
 counter-evidence remains, use partial, contradicted, or unknown.
 It also requires **evidenceCoverage.status = sufficient** with no gaps. If the
@@ -350,7 +355,7 @@ those concrete gaps, use **insufficient**, and keep the outcome below supported.
     "evidence":{"changedFiles":["changed-file id"],"checks":["definition id"],"repositoryEvidence":[],"humanEvents":["event id"],"patch":true},
     "falsificationAttempt":"what was inspected or executed",
     "observedResult":"what the independent attempt actually observed",
-    "supportingEvidence":[{"statement":"bounded support","references":[{"kind":"check","id":"definition id"}]}],
+    "supportingEvidence":[{"statement":"bounded support","provenance":"runtime-fact","reproduction":"runtime-recorded","references":[{"kind":"check","id":"definition id"}]}],
     "counterEvidence":[],
     "evidenceCoverage":{"status":"sufficient","rationale":"why the selected evidence covers the bounded conclusion","gaps":[]},
     "outcome":"supported","conclusion":"bounded conclusion"
@@ -368,9 +373,10 @@ output fingerprint. Runtime materializes one Challenge artifact per result,
 all bound to the same Round and Host context. Without a trusted provider, a
 thin Host submits the same bare Challenge Round. It must not manufacture a
 receipt: Runtime records the result as **unverified**, prevents it from
-supporting a required obligation, and adds direct Human review. Partial,
-contradicted, unknown, or
-missing required challenge caps the related obligation conclusion. A partial,
+fulfilling trusted Challenge assurance, blocks Agent acceptance advice, and
+adds direct Human review without rewriting the Agent finding. Partial,
+contradicted, or unknown Challenge evidence still caps the related Agent
+finding. A partial,
 contradicted, or unknown Challenge returns to the Implementer through the
 normal evidence-diagnosis packet. Diagnose its exact Challenge source and
 choose bounded repair, verification revision, Human resolution, or Handoff;
@@ -387,19 +393,21 @@ Fill the exact **hostAction.authoringPacket.draft**; it already contains current
 immutable IDs and outstanding obligations. **fieldRequirements** lists the
 allowed conclusion/recommendation values; each **shapeRef** resolves to one
 reusable variant set in **shapeCatalog** without selecting an answer. The handoff contains a decision
-summary, exactly one conclusion per Evidence Obligation and condition,
+summary, exactly one Agent finding per Evidence Obligation and condition,
 important system effects, residual unknowns,
 consequence-directed review questions, and an Agent recommendation. Evidence is
 an array of exact references such as **{"kind":"check","id":"..."}** or
-**{"kind":"patch"}**. Every Obligation conclusion states the concrete
+**{"kind":"patch"}**. Every Obligation finding states the concrete
 falsification attempt and its observed result against the frozen scenario. Do
 not mark evidenceCoverage sufficient unless the cited evidence covers the whole
 bounded conclusion; preserve every uncovered aspect as a concrete gap and keep
 the conclusion below supported. Runtime checks this declaration but does not
 infer semantic coverage from the repository. Do not repeat Runtime facts as
 Agent prose or create one review item per changed
-file. Recommend **accept** only when every Condition and Obligation is
-supported, every required Challenge is trusted and favorable, checks pass, and
+file. Runtime separately derives assurance fulfillment for each declared
+strategy; a missing or unverified Challenge does not rewrite the Agent finding.
+Recommend **accept** only when every Condition and Obligation finding is
+supported, every required assurance strategy is fulfilled, checks pass, and
 no adoption-changing unknown, required Host-policy gap, exhausted repair, or
 unrepresentable change remains. Otherwise use request-correction, defer, or
 reject; only a later exact Human decision may accept exceptions.
@@ -416,7 +424,8 @@ stetra change handoff . --task <task-id> --input - --json
 The returned **hostAction.developerDecisionBrief** is the delivery surface for
 the developer. It distinguishes delivery state, evidence state, Agent
 recommendation, and Human adoption; labels intended and actual system meaning as
-Agent judgment; preserves every Condition and Obligation conclusion, including
+Agent judgment; preserves every Condition and Obligation finding beside its
+separate Runtime assurance result, including
 each Challenge conclusion and exact counter-evidence; labels collected change
 and check data as Runtime observations; and turns Attention into decision
 issues with relevant review questions. Attention with the same exact protocol

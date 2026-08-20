@@ -122,8 +122,8 @@ function appendDecisionLayerFallback(lines: string[], packet: JsonObject, colors
   if (Array.isArray(packet.conditions) && packet.conditions.length) {
     lines.push(colors.bold('Condition conclusions'));
     for (const condition of packet.conditions) {
-      if (isRecord(condition) && isRecord(condition.conclusion)) {
-        lines.push(`${colors.cyan('•')} ${String(condition.id)} — ${String(condition.conclusion.status)}`);
+      if (isRecord(condition) && isRecord(condition.agentFinding)) {
+        lines.push(`${colors.cyan('•')} ${String(condition.id)} — ${String(condition.agentFinding.status)}`);
       }
     }
   }
@@ -170,6 +170,16 @@ function appendDeveloperDecisionBrief(
       for (const obligation of condition.obligations) {
         if (!isRecord(obligation) || !isRecord(obligation.evidenceBoundary)) continue;
         lines.push(`  ${colors.cyan('↳')} ${String(obligation.statement ?? obligation.id)} — ${String(obligation.status ?? 'unknown')}`);
+        if (isRecord(obligation.assurance)) {
+          lines.push(`    Assurance fulfillment: ${String(obligation.assurance.status ?? 'unknown')}`);
+          if (Array.isArray(obligation.assurance.strategies)) {
+            for (const strategy of obligation.assurance.strategies) {
+              if (isRecord(strategy) && !['satisfied', 'not-required'].includes(String(strategy.status))) {
+                lines.push(`    Assurance gap: ${String(strategy.kind)} — ${String(strategy.reason)}`);
+              }
+            }
+          }
+        }
         if (isRecord(obligation.evidenceBoundary.coverage)) {
           const coverage = obligation.evidenceBoundary.coverage;
           lines.push(`    Evidence coverage: ${String(coverage.status ?? 'unknown')} — ${String(coverage.rationale ?? '')}`);
@@ -183,7 +193,9 @@ function appendDeveloperDecisionBrief(
           if (!isRecord(finding) || !Array.isArray(finding.counterEvidence)) continue;
           for (const counterEvidence of finding.counterEvidence) {
             if (isRecord(counterEvidence)) {
-              lines.push(`    Challenge counter-evidence: ${String(counterEvidence.statement ?? '')}`);
+              lines.push(
+                `    Challenge counter-evidence [${String(counterEvidence.provenance ?? 'agent-judgment')}; ${String(counterEvidence.reproduction ?? 'unknown')}]: ${String(counterEvidence.statement ?? '')}`,
+              );
             }
           }
         }
