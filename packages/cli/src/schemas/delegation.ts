@@ -114,7 +114,19 @@ const VerificationBaselineSchema = z.discriminatedUnion('mode', [
 export const VerificationDefinitionSchema = z.strictObject({
   key: StableIdSchema,
   rationale: NonEmptyStringSchema,
-  argv: z.array(z.string().min(1)).min(1),
+  execution: z.strictObject({
+    preparation: z.array(z.strictObject({
+      key: StableIdSchema,
+      argv: z.array(z.string().min(1)).min(1),
+    })),
+    assertion: z.strictObject({
+      argv: z.array(z.string().min(1)).min(1),
+    }),
+  }),
+  executionInputs: z.array(z.strictObject({
+    kind: z.enum(['file', 'tree']),
+    path: SafeRepositoryPathSchema,
+  })),
   baseline: VerificationBaselineSchema,
   verifierSelectors: z.array(z.strictObject({
     kind: z.enum(['file', 'tree']),

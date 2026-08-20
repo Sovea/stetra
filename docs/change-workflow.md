@@ -201,7 +201,11 @@ enforcement or independent-context provenance.
     {
       "key": "compatibility-test",
       "rationale": "Exercises the public compatibility path.",
-      "argv": ["package-manager", "test"],
+      "execution": {
+        "preparation": [],
+        "assertion": { "argv": ["package-manager", "test"] }
+      },
+      "executionInputs": [],
       "baseline": {
         "mode": "task-start",
         "rationale": "Before/after distinguishes a new regression from a prior failure.",
@@ -242,6 +246,14 @@ Verifier selectors are explicit `file` or `tree` boundaries with one role.
 `file` matches only the exact current or previous path. `tree` matches its root
 and descendants by repository path boundary. There are no globs, regular
 expressions, filesystem-type guesses, or framework filename rules.
+
+Each Check freezes zero or more ordered `execution.preparation` commands and
+one `execution.assertion` command. Preparation establishes an explicit local
+precondition but never counts as passing evidence; only the assertion produces
+the Check status. `executionInputs` names exact file or tree inputs whose state
+may otherwise be hidden by Git ignore rules. Runtime records those inputs
+before preparation, at the assertion boundary, after assertion, and when facts
+are checked for currency. It does not discover or infer undeclared inputs.
 
 Repository Evidence uses either an exact `startLine`/`endLine` range or
 `wholeFile: true`. The latter is not a persisted shortcut: CLI deterministically
@@ -369,7 +381,8 @@ Contract and Verification Plan. It applies when at least one entry supplies a
 bounded production or repository verifier-surface edit. Other environment or
 verification entries may remain visible and are rerun in that Attempt. An
 unknown cause still cannot be repaired. `revise-verification` is reserved for
-changes to frozen argv, baseline policy, selectors, or Obligation bindings; a
+changes to frozen execution commands, declared execution inputs, baseline
+policy, selectors, or Obligation bindings; a
 test-content edit alone does not require a Verification Revision.
 
 ## Revise verification
@@ -385,7 +398,11 @@ A noncritical verification diagnosis returns an exact revision draft:
     {
       "key": "compatibility-test",
       "rationale": "unchanged for execution-rebinding",
-      "argv": ["new-entry", "test"],
+      "execution": {
+        "preparation": [],
+        "assertion": { "argv": ["new-entry", "test"] }
+      },
+      "executionInputs": [],
       "baseline": {
         "mode": "task-start",
         "rationale": "Before/after distinguishes a new regression from a prior failure.",
@@ -403,8 +420,9 @@ A noncritical verification diagnosis returns an exact revision draft:
 }
 ```
 
-`execution-rebinding` may change argv only; all other fields in its complete
-Check list must remain exact. Use `verification-plan` for broader
+`execution-rebinding` may change preparation or assertion commands only; all
+other fields in its complete Check list must remain exact. Use
+`verification-plan` for broader
 changes. Removing a Verifier, task-start baseline, or verifier surface requires:
 
 ```json

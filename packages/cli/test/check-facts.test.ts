@@ -92,11 +92,40 @@ test('bounded logs keep complete-stream digests while persisting only the byte l
   }
 });
 
+test('check facts separate preparation from assertion and capture declared ignored inputs', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'stetra-check-inputs-'));
+  try {
+    const generated = join(root, 'generated');
+    const check = await run(
+      root,
+      [process.execPath, '-e', "process.exit(require('node:fs').existsSync('generated/input.txt') ? 0 : 1)"],
+      1_000,
+      'prepared-check',
+      [{
+        key: 'generate-input',
+        argv: [process.execPath, '-e', "require('node:fs').mkdirSync('generated',{recursive:true});require('node:fs').writeFileSync('generated/input.txt','ready')"],
+      }],
+      [{ kind: 'tree', path: 'generated' }],
+    );
+    const attempt = check.attempts[0];
+    assert.equal(attempt.status, 'passed');
+    assert.deepEqual(attempt.steps.map((step) => step.role), ['preparation', 'assertion']);
+    assert.equal(attempt.executionInputs.beforePreparation.inputs[0].state, 'missing');
+    assert.equal(attempt.executionInputs.readyForAssertion.inputs[0].state, 'present');
+    assert.equal(attempt.executionInputs.readyForAssertion.inputs[0].entries[0].path, 'generated/input.txt');
+    assert.equal(readFileSync(join(generated, 'input.txt'), 'utf8'), 'ready');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 async function run(
   root: string,
   argv: string[],
   timeoutMs = 1_000,
   key = 'check',
+  preparation: Array<{ key: string; argv: string[] }> = [],
+  executionInputs: VerificationDefinition['executionInputs'] = [],
 ) {
   const definition: VerificationDefinition = {
     verifierId: `verifier:${key}`,
@@ -104,7 +133,17 @@ async function run(
     revision: 1,
     key,
     rationale: 'Exercise streaming check facts.',
-    argv,
+    execution: {
+      preparation: preparation.map((step) => ({
+        ...step,
+        stepId: digest(`${key}:preparation:${step.key}:${JSON.stringify(step.argv)}`),
+      })),
+      assertion: {
+        stepId: digest(`${key}:assertion`),
+        argv,
+      },
+    },
+    executionInputs,
     baseline: { mode: 'unknown' },
     verifierRefs: [],
   };

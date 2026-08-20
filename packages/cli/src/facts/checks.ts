@@ -12,12 +12,14 @@ import { Writable } from 'node:stream';
 import type {
   CheckAttemptFact,
   CheckFact,
+  CheckStepAttemptFact,
   CheckStreamFact,
   VerificationDefinition,
 } from '@sovea/stetra-core';
 
 import { runStreamingCommand } from '../infrastructure/process.ts';
 import { sha256, stableFingerprint } from '../protocol.ts';
+import { captureVerificationInputs } from './execution-inputs.ts';
 
 export const MAX_CHECK_LOG_BYTES = 1024 * 1024;
 export const DEFAULT_CHECK_TIMEOUT_MS = 300_000;
@@ -66,7 +68,99 @@ async function runFrozenCheck(input: {
     );
   }
   const attemptNumber = previousAttempts.length + 1;
-  const logStem = `check-${sha256(definition.definitionId).slice(-16)}-attempt-${attemptNumber}`;
+  const startedAt = new Date().toISOString();
+  const startedMs = performance.now();
+  const beforePreparation = captureVerificationInputs(input.projectRoot, [definition])[0];
+  const steps: CheckStepAttemptFact[] = [];
+  for (const [index, step] of definition.execution.preparation.entries()) {
+    const fact = await runCheckStep({
+      ...input,
+      attemptNumber,
+      stepNumber: index + 1,
+      step: { ...step, role: 'preparation' },
+    });
+    steps.push(fact);
+    if (fact.status !== 'passed') break;
+  }
+  const readyForAssertion = captureVerificationInputs(input.projectRoot, [definition])[0];
+  const preparationPassed = steps.every((step) => step.status === 'passed');
+  if (preparationPassed) {
+    steps.push(await runCheckStep({
+      ...input,
+      attemptNumber,
+      stepNumber: definition.execution.preparation.length + 1,
+      step: { ...definition.execution.assertion, role: 'assertion' },
+    }));
+  }
+  const afterAssertion = captureVerificationInputs(input.projectRoot, [definition])[0];
+  const terminal = steps.at(-1);
+  if (!terminal) throw new Error(`Check ${definition.definitionId} produced no execution step.`);
+  const observedPhase = terminal.role;
+  const status = observedPhase === 'assertion' ? terminal.status : 'unavailable';
+  const durationMs = Math.max(0, Math.round(performance.now() - startedMs));
+  const reason = observedPhase === 'preparation'
+    ? `Check assertion was not observed because preparation step ${terminal.key ?? terminal.stepId} did not pass.`
+    : terminal.reason;
+  const attempt: CheckAttemptFact = {
+    attempt: attemptNumber,
+    startedAt,
+    durationMs,
+    timeoutMs: input.timeoutMs,
+    status,
+    observedPhase,
+    termination: terminal.termination,
+    outcomeFingerprint: stableFingerprint({
+      attempt: attemptNumber,
+      timeoutMs: input.timeoutMs,
+      status,
+      observedPhase,
+      termination: terminal.termination,
+      steps: steps.map((step) => step.outcomeFingerprint),
+      executionInputs: {
+        beforePreparation: beforePreparation.fingerprint,
+        readyForAssertion: readyForAssertion.fingerprint,
+        afterAssertion: afterAssertion.fingerprint,
+      },
+    }),
+    stdout: { ...terminal.stdout },
+    stderr: { ...terminal.stderr },
+    steps,
+    executionInputs: {
+      beforePreparation,
+      readyForAssertion,
+      afterAssertion,
+    },
+    ...(reason ? { reason } : {}),
+  };
+  return {
+    verifierId: definition.verifierId,
+    definitionId: definition.definitionId,
+    assertionArgv: [...definition.execution.assertion.argv],
+    definitionFingerprint: stableFingerprint(definition),
+    attempts: [
+      ...previousAttempts.map((item) => structuredClone(item)),
+      attempt,
+    ],
+  };
+}
+
+async function runCheckStep(input: {
+  projectRoot: string;
+  definition: VerificationDefinition;
+  timeoutMs: number;
+  outputDirectory: string;
+  recordedOutputDirectory: string;
+  attemptNumber: number;
+  stepNumber: number;
+  step: {
+    stepId: string;
+    role: 'preparation' | 'assertion';
+    key?: string;
+    argv: string[];
+  };
+}): Promise<CheckStepAttemptFact> {
+  const { definition, step } = input;
+  const logStem = `check-${sha256(definition.definitionId).slice(-16)}-attempt-${input.attemptNumber}-step-${input.stepNumber}`;
   const stdoutPath = resolve(input.outputDirectory, `${logStem}.stdout.log`);
   const stderrPath = resolve(input.outputDirectory, `${logStem}.stderr.log`);
   const recordedStdoutPath = resolve(input.recordedOutputDirectory, `${logStem}.stdout.log`);
@@ -75,7 +169,7 @@ async function runFrozenCheck(input: {
   const stderr = new BoundedLogWriter(stderrPath, MAX_CHECK_LOG_BYTES);
   const stdoutHash = createHash('sha256');
   const stderrHash = createHash('sha256');
-  const [file, ...args] = definition.argv;
+  const [file, ...args] = step.argv;
   const startedAt = new Date().toISOString();
   const startedMs = performance.now();
   const result = await runStreamingCommand({
@@ -103,7 +197,7 @@ async function runFrozenCheck(input: {
     input.projectRoot,
     recordedStderrPath,
   );
-  const termination: CheckAttemptFact['termination'] = result.timedOut
+  const termination: CheckStepAttemptFact['termination'] = result.timedOut
     ? { kind: 'timeout', ...(result.signal ? { signal: result.signal } : {}) }
     : result.executionError
       ? { kind: 'spawn-error', ...(result.code ? { code: result.code } : {}) }
@@ -112,7 +206,7 @@ async function runFrozenCheck(input: {
         : result.exitCode !== null
           ? { kind: 'exit', exitCode: result.exitCode }
           : noTerminationResult(definition.definitionId);
-  const status: CheckAttemptFact['status'] = termination.kind !== 'exit'
+  const status: CheckStepAttemptFact['status'] = termination.kind !== 'exit'
     ? 'unavailable'
     : termination.exitCode === 0 && !result.failed
       ? 'passed' : 'failed';
@@ -125,15 +219,19 @@ async function runFrozenCheck(input: {
         : status === 'failed'
           ? `Check exited with ${termination.exitCode}.`
           : undefined;
-  const attempt: CheckAttemptFact = {
-    attempt: attemptNumber,
+  return {
+    stepId: step.stepId,
+    role: step.role,
+    ...(step.key ? { key: step.key } : {}),
+    argv: [...step.argv],
     startedAt,
     durationMs,
     timeoutMs: input.timeoutMs,
     status,
     termination,
     outcomeFingerprint: stableFingerprint({
-      attempt: attemptNumber,
+      stepId: step.stepId,
+      role: step.role,
       timeoutMs: input.timeoutMs,
       status,
       termination,
@@ -143,20 +241,6 @@ async function runFrozenCheck(input: {
     stdout: stdoutFact,
     stderr: stderrFact,
     ...(reason ? { reason } : {}),
-  };
-  return {
-    verifierId: definition.verifierId,
-    definitionId: definition.definitionId,
-    argv: [...definition.argv],
-    definitionFingerprint: stableFingerprint(definition),
-    attempts: [
-      ...previousAttempts.map((item) => ({
-        ...item,
-        stdout: { ...item.stdout },
-        stderr: { ...item.stderr },
-      })),
-      attempt,
-    ],
   };
 }
 

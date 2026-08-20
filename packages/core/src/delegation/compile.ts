@@ -467,27 +467,143 @@ function validateCheckDrafts(value: unknown, issues: ValidationIssue[]): CheckDr
       issues.push(issue('verification-check-invalid', path, 'Check must be an object.'));
       continue;
     }
-    rejectExtraKeys(candidate, ['key', 'rationale', 'argv', 'baseline', 'verifierSelectors'], path, issues);
+    rejectExtraKeys(candidate, [
+      'key', 'rationale', 'execution', 'executionInputs', 'baseline', 'verifierSelectors',
+    ], path, issues);
     const key = uniqueKey(candidate.key, keys, `${path}.key`, issues);
     const rationale = normalized(candidate.rationale, `${path}.rationale`, issues);
-    if (!Array.isArray(candidate.argv) || !candidate.argv.length
-      || candidate.argv.some((item) => typeof item !== 'string' || !item)) {
-      issues.push(issue('verification-check-argv-invalid', `${path}.argv`, 'Check argv must contain non-empty arguments.'));
-    }
+    const execution = validateCheckExecution(candidate.execution, `${path}.execution`, issues);
+    const executionInputs = repositoryPathSelectors(
+      candidate.executionInputs,
+      `${path}.executionInputs`,
+      issues,
+    );
     const baselineSource = validateBaseline(candidate.baseline, `${path}.baseline`, issues);
     const verifierRefs = repositorySelectors(candidate.verifierSelectors, `${path}.verifierSelectors`, issues);
-    if (issues.length !== before || !key || !rationale || !baselineSource || !verifierRefs) continue;
+    if (issues.length !== before || !key || !rationale || !execution
+      || !executionInputs || !baselineSource || !verifierRefs) continue;
     output.push({
       verifierId: generatedId('verifier', { key }),
       revision: 1,
       key,
       rationale,
-      argv: [...candidate.argv as string[]],
+      execution,
+      executionInputs: executionInputs.map(({ kind, path }) => ({ kind, path })),
       baselineSource,
       verifierRefs,
     });
   }
   return output.sort((left, right) => left.verifierId.localeCompare(right.verifierId));
+}
+
+function repositoryPathSelectors(
+  value: unknown,
+  path: string,
+  issues: ValidationIssue[],
+): VerificationDefinition['executionInputs'] | undefined {
+  if (!Array.isArray(value)) {
+    issues.push(issue(
+      'execution-inputs-invalid', path,
+      'Execution inputs must be an array; use an empty array when no generated or ignored input is relevant.',
+    ));
+    return undefined;
+  }
+  const output: VerificationDefinition['executionInputs'] = value.flatMap((item, index) => {
+    const itemPath = `${path}[${index}]`;
+    if (!isRecord(item)) {
+      issues.push(issue('execution-input-invalid', itemPath, 'Execution input must be an object.'));
+      return [];
+    }
+    rejectExtraKeys(item, ['kind', 'path'], itemPath, issues);
+    const kind: VerificationDefinition['executionInputs'][number]['kind'] | undefined =
+      item.kind === 'file' || item.kind === 'tree' ? item.kind : undefined;
+    if (!kind) {
+      issues.push(issue('execution-input-kind-invalid', `${itemPath}.kind`, 'Execution input kind must be file or tree.'));
+    }
+    if (!isSafeRepositoryPath(item.path)) {
+      issues.push(issue('execution-input-path-invalid', `${itemPath}.path`, 'Execution input path must be repository-relative.'));
+    }
+    return kind && isSafeRepositoryPath(item.path)
+      ? [{ kind, path: item.path as string }]
+      : [];
+  });
+  const identities = output.map((item) => stableFingerprint(item));
+  if (new Set(identities).size !== identities.length) {
+    issues.push(issue('execution-inputs-duplicate', path, 'Execution inputs must not contain duplicates.'));
+  }
+  return output.sort((left, right) => left.kind.localeCompare(right.kind)
+    || left.path.localeCompare(right.path));
+}
+
+function validateCheckExecution(
+  value: unknown,
+  path: string,
+  issues: ValidationIssue[],
+): CheckDraft['execution'] | undefined {
+  const before = issues.length;
+  if (!isRecord(value)) {
+    issues.push(issue('verification-execution-invalid', path, 'Check execution must be an object.'));
+    return undefined;
+  }
+  rejectExtraKeys(value, ['preparation', 'assertion'], path, issues);
+  const preparation: CheckDraft['execution']['preparation'] = [];
+  const preparationKeys = new Set<string>();
+  if (!Array.isArray(value.preparation)) {
+    issues.push(issue(
+      'verification-preparation-invalid', `${path}.preparation`,
+      'Check preparation must be an array; use an empty array when none is required.',
+    ));
+  } else {
+    for (const [index, raw] of value.preparation.entries()) {
+      const stepPath = `${path}.preparation[${index}]`;
+      const stepBefore = issues.length;
+      if (!isRecord(raw)) {
+        issues.push(issue('verification-preparation-step-invalid', stepPath, 'Preparation step must be an object.'));
+        continue;
+      }
+      rejectExtraKeys(raw, ['key', 'argv'], stepPath, issues);
+      const stepKey = uniqueKey(raw.key, preparationKeys, `${stepPath}.key`, issues);
+      const argv = commandArgv(raw.argv, `${stepPath}.argv`, issues);
+      if (issues.length === stepBefore && stepKey && argv) {
+        const projection = { role: 'preparation' as const, key: stepKey, argv };
+        preparation.push({
+          stepId: stableFingerprint(projection),
+          key: stepKey,
+          argv,
+        });
+      }
+    }
+  }
+  let assertion: CheckDraft['execution']['assertion'] | undefined;
+  if (!isRecord(value.assertion)) {
+    issues.push(issue('verification-assertion-invalid', `${path}.assertion`, 'Check assertion must be an object.'));
+  } else {
+    rejectExtraKeys(value.assertion, ['argv'], `${path}.assertion`, issues);
+    const argv = commandArgv(value.assertion.argv, `${path}.assertion.argv`, issues);
+    if (argv) {
+      assertion = {
+        stepId: stableFingerprint({ role: 'assertion', argv }),
+        argv,
+      };
+    }
+  }
+  return issues.length === before && assertion ? { preparation, assertion } : undefined;
+}
+
+function commandArgv(
+  value: unknown,
+  path: string,
+  issues: ValidationIssue[],
+): string[] | undefined {
+  if (!Array.isArray(value) || !value.length
+    || value.some((item) => typeof item !== 'string' || !item)) {
+    issues.push(issue(
+      'verification-command-argv-invalid', path,
+      'Verification command argv must contain non-empty arguments.',
+    ));
+    return undefined;
+  }
+  return [...value] as string[];
 }
 
 function validateBaseline(value: unknown, path: string, issues: ValidationIssue[]): CheckDraft['baselineSource'] | undefined {
@@ -806,7 +922,8 @@ function verificationDefinitionContent(definition: VerificationDefinition) {
     verifierId: definition.verifierId,
     key: definition.key,
     rationale: definition.rationale,
-    argv: definition.argv,
+    execution: definition.execution,
+    executionInputs: definition.executionInputs,
     baseline: definition.baseline,
     verifierRefs: definition.verifierRefs,
   };
@@ -830,25 +947,26 @@ function validateExecutionRebinding(
     ));
     return;
   }
-  let argvChanged = false;
+  let executionChanged = false;
   for (const [verifierId, before] of priorByVerifier) {
     const after = currentByVerifier.get(verifierId)!;
-    if (stableFingerprint(before.argv) !== stableFingerprint(after.argv)) argvChanged = true;
+    if (stableFingerprint(before.execution) !== stableFingerprint(after.execution)) executionChanged = true;
     if (before.rationale !== after.rationale
       || stableFingerprint(before.baseline) !== stableFingerprint(after.baseline)
+      || stableFingerprint(before.executionInputs) !== stableFingerprint(after.executionInputs)
       || stableFingerprint(before.verifierRefs) !== stableFingerprint(after.verifierRefs)) {
       issues.push(issue(
         'execution-rebinding-semantic-surface-changed',
         'revision.checks',
-        `Execution rebinding for ${verifierId} may change argv only; use verification-plan for other changes.`,
+        `Execution rebinding for ${verifierId} may change execution commands only; use verification-plan for other changes.`,
       ));
     }
   }
-  if (!argvChanged) {
+  if (!executionChanged) {
     issues.push(issue(
-      'execution-rebinding-argv-unchanged',
+      'execution-rebinding-execution-unchanged',
       'revision.checks',
-      'Execution rebinding must change at least one argv definition.',
+      'Execution rebinding must change at least one execution command.',
     ));
   }
 }

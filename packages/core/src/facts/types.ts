@@ -49,14 +49,42 @@ export interface CheckStreamFact {
   logPath?: string;
 }
 
+export interface VerificationInputEntryFact {
+  path: string;
+  kind: 'file' | 'symlink';
+  contentDigest: string;
+  mode: string;
+  byteLength: number;
+}
+
+export interface VerificationInputSelectorFact {
+  selector: {
+    kind: 'file' | 'tree';
+    path: string;
+  };
+  state: 'missing' | 'present';
+  entries: VerificationInputEntryFact[];
+  fingerprint: string;
+}
+
+export interface VerificationInputSnapshot {
+  definitionId: string;
+  capturedAt: string;
+  inputs: VerificationInputSelectorFact[];
+  fingerprint: string;
+}
+
 export type CheckTermination =
   | { kind: 'exit'; exitCode: number }
   | { kind: 'signal'; signal: string }
   | { kind: 'timeout'; signal?: string }
   | { kind: 'spawn-error'; code?: string };
 
-export interface CheckAttemptFact {
-  attempt: number;
+export interface CheckStepAttemptFact {
+  stepId: string;
+  role: 'preparation' | 'assertion';
+  key?: string;
+  argv: string[];
   startedAt: string;
   durationMs: number;
   timeoutMs: number;
@@ -68,10 +96,30 @@ export interface CheckAttemptFact {
   reason?: string;
 }
 
+export interface CheckAttemptFact {
+  attempt: number;
+  startedAt: string;
+  durationMs: number;
+  timeoutMs: number;
+  status: CheckStatus;
+  observedPhase: 'preparation' | 'assertion';
+  termination: CheckTermination;
+  outcomeFingerprint: string;
+  stdout: CheckStreamFact;
+  stderr: CheckStreamFact;
+  steps: CheckStepAttemptFact[];
+  executionInputs: {
+    beforePreparation: VerificationInputSnapshot;
+    readyForAssertion: VerificationInputSnapshot;
+    afterAssertion: VerificationInputSnapshot;
+  };
+  reason?: string;
+}
+
 export interface CheckFact {
   verifierId: string;
   definitionId: string;
-  argv: string[];
+  assertionArgv: string[];
   definitionFingerprint: string;
   attempts: CheckAttemptFact[];
 }
@@ -87,6 +135,8 @@ export interface BaselineVerificationFact {
   capturedAt: string;
   preCheck: WorktreeSummary;
   postCheck: WorktreeSummary;
+  preCheckExecutionInputs: VerificationInputSnapshot[];
+  postCheckExecutionInputs: VerificationInputSnapshot[];
   checkInducedChanges: ChangedFileFact[];
   checks: BaselineCheckFact[];
 }
@@ -189,6 +239,8 @@ export interface FactBundle extends ProtocolEnvelope {
   baseline: WorktreeSummary;
   preCheck: WorktreeSummary;
   current: WorktreeSummary;
+  preCheckExecutionInputs: VerificationInputSnapshot[];
+  currentExecutionInputs: VerificationInputSnapshot[];
   baselineVerification: BaselineVerificationFact;
   changeFingerprint: string;
   changedFiles: ChangedFileFact[];

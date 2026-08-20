@@ -86,7 +86,8 @@ export interface ChallengeCheck {
   definitionId: string;
   key: string;
   rationale: string;
-  argv: string[];
+  execution: VerificationDefinition['execution'];
+  executionInputs: VerificationDefinition['executionInputs'];
   baseline: VerificationDefinition['baseline'];
   verifierSelectors: Array<{
     kind: 'file' | 'tree';
@@ -271,7 +272,8 @@ function relevantChecks(
       definitionId,
       key: definition.key,
       rationale: definition.rationale,
-      argv: definition.argv,
+      execution: definition.execution,
+      executionInputs: definition.executionInputs,
       baseline: definition.baseline,
       verifierSelectors: definition.verifierRefs,
       latestAttempt: {

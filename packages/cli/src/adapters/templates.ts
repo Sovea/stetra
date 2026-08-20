@@ -160,7 +160,11 @@ export const DELEGATION_PREPARE_EXAMPLE = {
   checks: [{
     key: 'test',
     rationale: 'decision-relevant observation',
-    argv: ['package-manager', 'test'],
+    execution: {
+      preparation: [],
+      assertion: { argv: ['package-manager', 'test'] },
+    },
+    executionInputs: [],
     baseline: {
       mode: 'task-start',
       rationale: 'why before/after changes this decision',

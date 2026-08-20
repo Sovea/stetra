@@ -194,9 +194,14 @@ function factsFixture(
     effectiveContractId: contract.effectiveContractId, attemptId: 'attempt:1',
     collectedAt: '2026-08-17T00:00:00.000Z',
     baseline: worktree('baseline'), preCheck: worktree('pre-check'), current: worktree('current'),
+    preCheckExecutionInputs: [targetDefinition, otherDefinition].map(executionInputSnapshot),
+    currentExecutionInputs: [targetDefinition, otherDefinition].map(executionInputSnapshot),
     baselineVerification: {
       fingerprint: digest('baseline-verification'), capturedAt: '2026-08-17T00:00:00.000Z',
-      preCheck: worktree('baseline'), postCheck: worktree('baseline'), checkInducedChanges: [],
+      preCheck: worktree('baseline'), postCheck: worktree('baseline'),
+      preCheckExecutionInputs: [targetDefinition, otherDefinition].map(executionInputSnapshot),
+      postCheckExecutionInputs: [targetDefinition, otherDefinition].map(executionInputSnapshot),
+      checkInducedChanges: [],
       checks: [targetDefinitionId, otherDefinitionId].map((definitionId) => ({
         definitionId, mode: 'unknown' as const, observation: null,
       })),
@@ -238,7 +243,11 @@ function check(key: string, path: string) {
   return {
     key,
     rationale: `Observe ${key}.`,
-    argv: ['node', '--test', path],
+    execution: {
+      preparation: [],
+      assertion: { argv: ['node', '--test', path] },
+    },
+    executionInputs: [],
     baseline: { mode: 'unknown' as const },
     verifierSelectors: [{ kind: 'file' as const, path, role: 'acceptance-surface' as const }],
   };
@@ -257,14 +266,42 @@ function checkFact(definition: VerificationDefinition): FactBundle['checks'][num
   return {
     verifierId: definition.verifierId,
     definitionId: definition.definitionId,
-    argv: definition.argv,
+    assertionArgv: definition.execution.assertion.argv,
     definitionFingerprint: digest(`definition-${definition.key}`),
     attempts: [{
       attempt: 1, startedAt: '2026-08-17T00:00:00.000Z', durationMs: 10,
       timeoutMs: 1_000, status: 'passed', termination: { kind: 'exit', exitCode: 0 },
+      observedPhase: 'assertion',
       outcomeFingerprint: digest(`outcome-${definition.key}`),
       stdout: stream(`stdout-${definition.key}`), stderr: stream(`stderr-${definition.key}`),
+      steps: [{
+        stepId: definition.execution.assertion.stepId,
+        role: 'assertion',
+        argv: definition.execution.assertion.argv,
+        startedAt: '2026-08-17T00:00:00.000Z',
+        durationMs: 10,
+        timeoutMs: 1_000,
+        status: 'passed',
+        termination: { kind: 'exit', exitCode: 0 },
+        outcomeFingerprint: digest(`step-${definition.key}`),
+        stdout: stream(`stdout-${definition.key}`),
+        stderr: stream(`stderr-${definition.key}`),
+      }],
+      executionInputs: {
+        beforePreparation: executionInputSnapshot(definition),
+        readyForAssertion: executionInputSnapshot(definition),
+        afterAssertion: executionInputSnapshot(definition),
+      },
     }],
+  };
+}
+
+function executionInputSnapshot(definition: VerificationDefinition) {
+  return {
+    definitionId: definition.definitionId,
+    capturedAt: '2026-08-17T00:00:00.000Z',
+    inputs: [],
+    fingerprint: digest(`inputs-${definition.key}`),
   };
 }
 

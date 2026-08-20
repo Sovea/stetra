@@ -215,10 +215,17 @@ export function verificationRevisionAuthoringPacket(input: {
       { conditionKey: condition.key, obligationKey: obligation.key },
     ] as const)));
   const checks = input.contract.verificationPlan.mode === 'checks'
-    ? input.contract.verificationPlan.definitions.map((definition) => ({
+      ? input.contract.verificationPlan.definitions.map((definition) => ({
         key: definition.key,
         rationale: definition.rationale,
-        argv: definition.argv,
+        execution: {
+          preparation: definition.execution.preparation.map((step) => ({
+            key: step.key,
+            argv: step.argv,
+          })),
+          assertion: { argv: definition.execution.assertion.argv },
+        },
+        executionInputs: definition.executionInputs,
         baseline: definition.baseline.mode === 'task-start'
           ? {
               mode: 'task-start',

@@ -235,7 +235,12 @@ function prepareDocument() {
     delivery: { maxRepairAttempts: 1 },
     checks: [{
       key: 'test', rationale: 'Exercise the fixture.',
-      argv: [process.execPath, '-e', 'process.exit(0)'], baseline: { mode: 'unknown' },
+      execution: {
+        preparation: [],
+        assertion: { argv: [process.execPath, '-e', 'process.exit(0)'] },
+      },
+      executionInputs: [],
+      baseline: { mode: 'unknown' },
       verifierSelectors: [],
     }],
   };

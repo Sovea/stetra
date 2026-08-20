@@ -433,6 +433,8 @@ believes it means. It includes:
 - complete baseline-to-current file operations and representable patch content;
 - pre-check and post-check worktrees and check-induced changes;
 - immutable Verification Definitions and ordered Check Attempts;
+- explicit preparation/assertion boundaries and declared local execution-input
+  snapshots, including named ignored generated surfaces;
 - timeout budgets, structured termination, bounded logs, and complete-stream
   digests;
 - declared command-definition and verifier-surface mutations, using explicit

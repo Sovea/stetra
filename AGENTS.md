@@ -132,7 +132,10 @@ evidence that the extra structure improves a real task.
 Prepare accepts one explicit `prepareRequestId`, one exact developer event,
 separate Agent-authored task meaning, optional exact repository-evidence
 windows, zero or more Conditions, Host policy requirements, a bounded repair
-count, and explicit checks or a concrete no-command rationale.
+count, and explicit checks or a concrete no-command rationale. Each Check
+separates ordered preparation commands from its assertion and may name exact
+local execution inputs whose state must remain inspectable even when Git
+ignores them.
 
 Routine work may have no Condition. Every declared Condition has a material or
 adoption-critical consequence, adoption rationale, exact basis, and at least
@@ -159,8 +162,10 @@ task. Do not deduplicate by semantic similarity.
 
 ## Collect and Fact Spine
 
-Collect executes every current immutable argv Definition without a shell and
-records the complete baseline-to-current change.
+Collect executes every current immutable preparation/assertion Definition
+without a shell, records each declared execution-input boundary, and records
+the complete baseline-to-current change. Preparation establishes a precondition
+but never counts as passing assertion evidence.
 
 Preserve file operations, kinds, modes, digests, representable patch content,
 binary markers, pre-check and post-check worktrees, check-induced changes,

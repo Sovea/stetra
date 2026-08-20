@@ -236,6 +236,32 @@ test('collect reuses current facts without rerunning checks and refresh is expli
   }
 });
 
+test('declared ignored execution inputs participate in fact currency', async () => {
+  const root = createRepository();
+  try {
+    writeFileSync(join(root, '.gitignore'), '.stetra/\ngenerated-input.txt\n', 'utf8');
+    git(root, ['add', '.gitignore']);
+    git(root, ['commit', '-qm', 'ignore generated verification input']);
+    const document = prepareDocument({
+      baseline: 'unknown',
+      argv: [process.execPath, '-e', 'process.exit(0)'],
+    });
+    document.checks![0].executionInputs = [{ kind: 'file', path: 'generated-input.txt' }];
+    const prepared = await prepare(root, document);
+    writeFileSync(join(root, 'generated-input.txt'), 'first\n', 'utf8');
+    const first = await collect(root, prepared.taskId);
+
+    writeFileSync(join(root, 'generated-input.txt'), 'second\n', 'utf8');
+    const recollected = await collect(root, prepared.taskId);
+
+    assert.equal(recollected.status, 'facts-collected');
+    assert.equal(recollected.collectionMode, 'full-collection');
+    assert.notEqual(recollected.factCollectionId, first.factCollectionId);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('final-response guard exposes the current workflow action without writing state', async () => {
   const root = createRepository();
   try {
@@ -452,7 +478,11 @@ test('mixed implementation and environment failures may repair the bounded deliv
     document.checks!.push({
       key: 'environment-check',
       rationale: 'Keep an unrelated environment failure visible during repair.',
-      argv: [process.execPath, '-e', 'process.exit(2)'],
+      execution: {
+        preparation: [],
+        assertion: { argv: [process.execPath, '-e', 'process.exit(2)'] },
+      },
+      executionInputs: [],
       baseline: { mode: 'unknown' },
       verifierSelectors: [],
     });
@@ -1412,7 +1442,7 @@ test('verification revision preserves history and completes handoff against curr
     draft.kind = 'execution-rebinding';
     draft.rationale = 'The original command selected the wrong executable behavior.';
     draft.equivalenceClaim = 'The rebound argv uses the same Node executable and intended fixture boundary.';
-    draft.checks[0].argv = [process.execPath, '-e', 'process.exit(0)'];
+    draft.checks[0].execution.assertion.argv = [process.execPath, '-e', 'process.exit(0)'];
     const revised = await reviseVerification(root, prepared.taskId, draft);
     assert.equal(revised.status, 'verification-revised');
     assert.equal(revised.semanticContractId, semanticContractId);
@@ -1541,7 +1571,12 @@ function prepareDocument(options: {
     hostPolicyRequirements: [],
     delivery: { maxRepairAttempts: options.maxRepairAttempts ?? 2 },
     checks: [{
-      key: 'test', rationale: 'Observe the fixture.', argv: options.argv,
+      key: 'test', rationale: 'Observe the fixture.',
+      execution: {
+        preparation: [],
+        assertion: { argv: options.argv },
+      },
+      executionInputs: [],
       baseline: options.baseline === 'task-start' ? {
         mode: 'task-start',
         rationale: 'The before/after observation distinguishes a regression.',

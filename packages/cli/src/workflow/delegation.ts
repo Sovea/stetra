@@ -43,6 +43,10 @@ import {
 import { collectExecutionEnvironment } from '../facts/environment.ts';
 import { materializeEvidenceWindows } from '../facts/evidence.ts';
 import {
+  captureVerificationInputs,
+  verificationInputSetFingerprint,
+} from '../facts/execution-inputs.ts';
+import {
   assertWorktreeSnapshot,
   captureGitWorktree,
   collectGitWorktreeChange,
@@ -193,12 +197,13 @@ export async function prepareDelegationTask(options: {
     };
   }
   const unavailableExecutables = compiled.contract.verificationPlan.mode === 'checks'
-    ? compiled.contract.verificationPlan.definitions.flatMap((check, index) => {
-        const resolution = resolveExecutable(check.argv[0], projectRoot);
-        return resolution.status === 'unavailable'
-          ? [{ check, index, reason: resolution.error.message }]
-          : [];
-      })
+    ? compiled.contract.verificationPlan.definitions.flatMap((check, index) =>
+        verificationCommands(check).flatMap(({ path, argv }) => {
+          const resolution = resolveExecutable(argv[0], projectRoot);
+          return resolution.status === 'unavailable'
+            ? [{ check, index, path, argv, reason: resolution.error.message }]
+            : [];
+        }))
     : [];
   if (unavailableExecutables.length) {
     return {
@@ -206,10 +211,10 @@ export async function prepareDelegationTask(options: {
       schemaVersion: DELEGATION_SCHEMA_VERSION,
       status: 'verification-required' as const,
       message: 'One or more frozen top-level check executables are unavailable; no task was created.',
-      issues: unavailableExecutables.map(({ check, index, reason }) => ({
+      issues: unavailableExecutables.map(({ check, index, path, argv, reason }) => ({
         code: 'verification-executable-unavailable',
-        path: `checks[${index}].argv[0]`,
-        message: `Check ${check.definitionId} cannot resolve ${JSON.stringify(check.argv[0])}: ${reason}`,
+        path: `checks[${index}].execution.${path}.argv[0]`,
+        message: `Check ${check.definitionId} cannot resolve ${JSON.stringify(argv[0])}: ${reason}`,
         remediation: 'Restore the executable or choose another explicit verification command.',
       })),
       taskCreated: false,
@@ -236,6 +241,10 @@ export async function prepareDelegationTask(options: {
       ? compiled.contract.verificationPlan.definitions : [];
     const taskStartDefinitions = definitions.filter((definition) =>
       definition.baseline.mode === 'task-start');
+    const preBaselineExecutionInputs = captureVerificationInputs(
+      projectRoot,
+      definitions,
+    );
     const baselineObservations = await runFrozenChecks({
       projectRoot,
       executions: taskStartDefinitions.map((definition) => ({
@@ -248,10 +257,16 @@ export async function prepareDelegationTask(options: {
     const baseline = await captureGitWorktree(projectRoot, {
       objectDirectory: workspace.objectDirectory,
     });
+    const postBaselineExecutionInputs = captureVerificationInputs(
+      projectRoot,
+      definitions,
+    );
     const baselineProjection = {
       capturedAt: new Date().toISOString(),
       preCheck: summarizeWorktree(preBaselineCheck),
       postCheck: summarizeWorktree(baseline),
+      preCheckExecutionInputs: preBaselineExecutionInputs,
+      postCheckExecutionInputs: postBaselineExecutionInputs,
       checkInducedChanges: compareGitWorktrees(preBaselineCheck, baseline),
       checks: definitions.map((definition) => ({
         definitionId: definition.definitionId,
@@ -421,7 +436,13 @@ export async function collectDelegationFacts(options: {
           objectDirectory,
           alternateObjectDirectories: [durableObjectDirectory],
         });
-        if (current.fingerprint === priorFacts.current.fingerprint) {
+        const currentExecutionInputs = captureVerificationInputs(
+          task.projectRoot,
+          definitions,
+        );
+        if (current.fingerprint === priorFacts.current.fingerprint
+          && verificationInputSetFingerprint(currentExecutionInputs)
+            === verificationInputSetFingerprint(priorFacts.currentExecutionInputs)) {
           collectionState.mode = 'reused-current';
           collectedFacts = priorFacts;
           const parentFacts = currentAttempt.parentAttemptId
@@ -459,6 +480,14 @@ export async function collectDelegationFacts(options: {
         if (beforeRetry.fingerprint !== priorFacts.current.fingerprint) {
           throw usageError('The worktree changed after collection; run a full collect instead of retrying one check.');
         }
+        const beforeRetryExecutionInputs = captureVerificationInputs(
+          task.projectRoot,
+          definitions,
+        );
+        if (verificationInputSetFingerprint(beforeRetryExecutionInputs)
+          !== verificationInputSetFingerprint(priorFacts.currentExecutionInputs)) {
+          throw usageError('A declared verification execution input changed after collection; run a full collect instead of retrying one check.');
+        }
         const retryPlan = validateTimeoutRetries(retries, definitions, priorFacts.checks);
         const retried = await runFrozenChecks({
           projectRoot: task.projectRoot,
@@ -482,10 +511,15 @@ export async function collectDelegationFacts(options: {
         if (afterRetry.fingerprint !== priorFacts.current.fingerprint) {
           throw usageError('A retried check changed the worktree; run a full collect to rebind every fact.');
         }
+        const afterRetryExecutionInputs = captureVerificationInputs(
+          task.projectRoot,
+          definitions,
+        );
         factsBase = {
           ...priorFacts,
           collectedAt: new Date().toISOString(),
           checks,
+          currentExecutionInputs: afterRetryExecutionInputs,
           checkComparisons: compareChecksToBaseline(priorFacts.baselineVerification, checks),
           environment: collectExecutionEnvironment(task.projectRoot, definitions),
         };
@@ -497,6 +531,10 @@ export async function collectDelegationFacts(options: {
           objectDirectory,
           alternateObjectDirectories: [durableObjectDirectory],
         });
+        const preCheckExecutionInputs = captureVerificationInputs(
+          task.projectRoot,
+          definitions,
+        );
         const checks = await runFrozenChecks({
           projectRoot: task.projectRoot,
           executions: definitions.map((definition) => ({ definition, timeoutMs })),
@@ -507,6 +545,10 @@ export async function collectDelegationFacts(options: {
           objectDirectory,
           alternateObjectDirectories: [durableObjectDirectory],
         });
+        const currentExecutionInputs = captureVerificationInputs(
+          task.projectRoot,
+          definitions,
+        );
         const checkInducedChanges = compareGitWorktrees(preCheck, worktree.current);
         const patchRelative = `${attemptDirectory(currentAttempt.attemptId)}/change-${task.projection.revision + 1}.patch`;
         const patchPath = taskArtifactPath(stagedArtifactsDirectory, patchRelative);
@@ -531,6 +573,8 @@ export async function collectDelegationFacts(options: {
           baseline: summarizeWorktree(baseline),
           preCheck: summarizeWorktree(preCheck),
           current: summarizeWorktree(worktree.current),
+          preCheckExecutionInputs,
+          currentExecutionInputs,
           baselineVerification,
           changeFingerprint: worktree.changeFingerprint,
           changedFiles: worktree.changedFiles,
@@ -1423,11 +1467,12 @@ export async function reviseVerificationPlan(options: {
       revisedContract = compiled.contract;
       const definitions = revisedContract.verificationPlan.mode === 'checks'
         ? revisedContract.verificationPlan.definitions : [];
-      const unavailable = definitions.flatMap((definition) => {
-        const resolution = resolveExecutable(definition.argv[0], task.projectRoot);
-        return resolution.status === 'unavailable'
-          ? [`${definition.definitionId}: ${resolution.error.message}`] : [];
-      });
+      const unavailable = definitions.flatMap((definition) =>
+        verificationCommands(definition).flatMap(({ argv }) => {
+          const resolution = resolveExecutable(argv[0], task.projectRoot);
+          return resolution.status === 'unavailable'
+            ? [`${definition.definitionId}: ${resolution.error.message}`] : [];
+        }));
       if (unavailable.length) {
         throw inputError(`Revised top-level check executables are unavailable: ${unavailable.join('; ')}`);
       }
@@ -1437,6 +1482,8 @@ export async function reviseVerificationPlan(options: {
         capturedAt: new Date().toISOString(),
         preCheck: baselineSummary,
         postCheck: baselineSummary,
+        preCheckExecutionInputs: captureVerificationInputs(task.projectRoot, definitions),
+        postCheckExecutionInputs: captureVerificationInputs(task.projectRoot, definitions),
         checkInducedChanges: [],
         checks: definitions.map((definition) => ({
           definitionId: definition.definitionId,
@@ -2101,7 +2148,7 @@ function buildDecisionPacket(
       checks: facts.checks.map((check) => ({
         verifierId: check.verifierId,
         definitionId: check.definitionId,
-        argv: check.argv,
+        argv: check.assertionArgv,
         latestAttempt: latestCheckAttempt(check),
         attemptCount: check.attempts.length,
         baselineRelation: comparisonByDefinition.get(check.definitionId)!,
@@ -2170,7 +2217,13 @@ async function currentFactsAreStale(task: LoadedTask, facts: FactBundle): Promis
   const current = await captureGitWorktree(task.projectRoot, {
     objectDirectory: taskArtifactPath(task.taskDirectory, WORKTREE_OBJECTS_DIRECTORY),
   });
-  return current.fingerprint !== facts.current.fingerprint;
+  if (current.fingerprint !== facts.current.fingerprint) return true;
+  const contract = readContract(task);
+  const definitions = contract.verificationPlan.mode === 'checks'
+    ? contract.verificationPlan.definitions : [];
+  const currentExecutionInputs = captureVerificationInputs(task.projectRoot, definitions);
+  return verificationInputSetFingerprint(currentExecutionInputs)
+    !== verificationInputSetFingerprint(facts.currentExecutionInputs);
 }
 
 function validateChallengeReferences(
@@ -2301,6 +2354,8 @@ function factCollectionId(bundle: Omit<FactBundle, 'factCollectionId' | 'bundleF
     baseline: bundle.baseline,
     preCheck: bundle.preCheck,
     current: bundle.current,
+    preCheckExecutionInputs: bundle.preCheckExecutionInputs,
+    currentExecutionInputs: bundle.currentExecutionInputs,
     baselineVerification: bundle.baselineVerification,
     changeFingerprint: bundle.changeFingerprint,
     changedFiles: bundle.changedFiles,
@@ -2762,6 +2817,19 @@ function assertStoredContractFingerprints(contract: TaskContract): void {
     })) {
     throw new Error('Stored Task Contract changed after compilation.');
   }
+}
+
+function verificationCommands(definition: VerificationDefinition): Array<{
+  path: string;
+  argv: string[];
+}> {
+  return [
+    ...definition.execution.preparation.map((step, index) => ({
+      path: `preparation[${index}]`,
+      argv: step.argv,
+    })),
+    { path: 'assertion', argv: definition.execution.assertion.argv },
+  ];
 }
 
 function contractPath(revision: number): string {

@@ -65,6 +65,7 @@ export type {
   ChangeRepresentation,
   CheckAttemptFact,
   CheckFact,
+  CheckStepAttemptFact,
   CheckStatus,
   CheckStreamFact,
   EvidenceCause,
@@ -81,6 +82,9 @@ export type {
   PatchFact,
   ToolchainEnvironmentFact,
   VerifierMutation,
+  VerificationInputEntryFact,
+  VerificationInputSelectorFact,
+  VerificationInputSnapshot,
   WorktreeSummary,
 } from './facts/types.ts';
 export type {

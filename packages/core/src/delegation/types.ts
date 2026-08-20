@@ -134,7 +134,19 @@ export type VerificationBaselineInput =
 export interface VerificationDefinitionInput {
   key: string;
   rationale: string;
-  argv: string[];
+  execution: {
+    preparation: Array<{
+      key: string;
+      argv: string[];
+    }>;
+    assertion: {
+      argv: string[];
+    };
+  };
+  executionInputs: Array<{
+    kind: RepositorySelectorKind;
+    path: string;
+  }>;
   baseline: VerificationBaselineInput;
   verifierSelectors: Array<{
     kind: RepositorySelectorKind;
@@ -197,7 +209,21 @@ export interface VerificationDefinition {
   supersedesDefinitionId?: string;
   key: string;
   rationale: string;
-  argv: string[];
+  execution: {
+    preparation: Array<{
+      stepId: string;
+      key: string;
+      argv: string[];
+    }>;
+    assertion: {
+      stepId: string;
+      argv: string[];
+    };
+  };
+  executionInputs: Array<{
+    kind: RepositorySelectorKind;
+    path: string;
+  }>;
   baseline:
     | {
       mode: 'task-start';

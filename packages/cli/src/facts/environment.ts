@@ -18,7 +18,10 @@ export function collectExecutionEnvironment(
   projectRoot: string,
   definitions: VerificationDefinition[],
 ): ExecutionEnvironment {
-  const commands = [...new Set(definitions.map((definition) => definition.argv[0]))]
+  const commands = [...new Set(definitions.flatMap((definition) => [
+    ...definition.execution.preparation.map((step) => step.argv[0]),
+    definition.execution.assertion.argv[0],
+  ]))]
     .sort((left, right) => left.localeCompare(right));
   return {
     platform: process.platform,

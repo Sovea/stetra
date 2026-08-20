@@ -173,17 +173,34 @@ test('compile problems preserve Human choice, verification, and protocol distinc
 
 function factFixture(status: 'passed' | 'failed' | 'unavailable'): FactBundle {
   const check = {
-    verifierId: 'verifier:test', definitionId: digest('f'), argv: ['test'],
+    verifierId: 'verifier:test', definitionId: digest('f'), assertionArgv: ['test'],
     definitionFingerprint: digest('d'),
     attempts: [{
       attempt: 1, startedAt: '2026-08-10T00:00:00.000Z', durationMs: 3,
       timeoutMs: 1000, status,
+      observedPhase: 'assertion' as const,
       termination: status === 'passed'
         ? { kind: 'exit' as const, exitCode: 0 }
         : status === 'failed'
           ? { kind: 'exit' as const, exitCode: 1 }
           : { kind: 'spawn-error' as const, code: 'ENOENT' },
       outcomeFingerprint: digest('o'), stdout: stream('2'), stderr: stream('3'),
+      steps: [{
+        stepId: digest('step'), role: 'assertion' as const, argv: ['test'],
+        startedAt: '2026-08-10T00:00:00.000Z', durationMs: 3,
+        timeoutMs: 1000, status,
+        termination: status === 'passed'
+          ? { kind: 'exit' as const, exitCode: 0 }
+          : status === 'failed'
+            ? { kind: 'exit' as const, exitCode: 1 }
+            : { kind: 'spawn-error' as const, code: 'ENOENT' },
+        outcomeFingerprint: digest('step-outcome'), stdout: stream('2'), stderr: stream('3'),
+      }],
+      executionInputs: {
+        beforePreparation: inputSnapshot(),
+        readyForAssertion: inputSnapshot(),
+        afterAssertion: inputSnapshot(),
+      },
     }],
   };
   return {
@@ -191,9 +208,12 @@ function factFixture(status: 'passed' | 'failed' | 'unavailable'): FactBundle {
     bundleFingerprint: digest('b'), effectiveContractId: digest('e'), attemptId: 'attempt:1',
     collectedAt: '2026-08-10T00:00:00.000Z', baseline: summary('a'),
     preCheck: summary('b'), current: summary('c'),
+    preCheckExecutionInputs: [inputSnapshot()], currentExecutionInputs: [inputSnapshot()],
     baselineVerification: {
       fingerprint: digest('v'), capturedAt: '2026-08-10T00:00:00.000Z',
-      preCheck: summary('a'), postCheck: summary('a'), checkInducedChanges: [],
+      preCheck: summary('a'), postCheck: summary('a'),
+      preCheckExecutionInputs: [inputSnapshot()], postCheckExecutionInputs: [inputSnapshot()],
+      checkInducedChanges: [],
       checks: [{ definitionId: digest('f'), mode: 'unknown', observation: null }],
     },
     changeFingerprint: digest('g'), changedFiles: [], checkInducedChanges: [], checks: [check],
@@ -204,6 +224,15 @@ function factFixture(status: 'passed' | 'failed' | 'unavailable'): FactBundle {
       executables: [], toolchains: [], lockfiles: [], environmentVariableNames: [],
     },
     provenance: { collector: 'stetra-cli', cliVersion: '1', coreVersion: '1' },
+  };
+}
+
+function inputSnapshot() {
+  return {
+    definitionId: digest('f'),
+    capturedAt: '2026-08-10T00:00:00.000Z',
+    inputs: [],
+    fingerprint: digest('inputs'),
   };
 }
 

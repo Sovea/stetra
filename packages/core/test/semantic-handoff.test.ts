@@ -165,7 +165,13 @@ test('verification rebinding preserves semantic identity and supersedes exact de
       kind: 'execution-rebinding',
       rationale: 'The original executable entry is unavailable in this workspace.',
       equivalenceClaim: 'The new argv invokes the same test runner and target.',
-      checks: [{ ...source, argv: ['node', '--test', 'test/feature.test.ts'] }],
+      checks: [{
+        ...source,
+        execution: {
+          ...source.execution,
+          assertion: { argv: ['node', '--test', 'test/feature.test.ts'] },
+        },
+      }],
     },
   } satisfies VerificationRevisionInput);
   assert.equal(result.status, 'delegation-compiled');
@@ -203,7 +209,13 @@ test('verification revision preserves the identity of unchanged definitions', ()
       rationale: 'Only one executable binding has changed.',
       equivalenceClaim: 'The changed argv invokes the same bounded verifier.',
       checks: input.checks!.map((check) => check.key === 'suite'
-        ? { ...check, argv: ['node', '--test', 'test/feature.test.ts'] }
+        ? {
+            ...check,
+            execution: {
+              ...check.execution,
+              assertion: { argv: ['node', '--test', 'test/feature.test.ts'] },
+            },
+          }
         : check),
     },
   } satisfies VerificationRevisionInput);
@@ -811,7 +823,11 @@ function criticalInput(policy: 'required' | 'fact-triggered' = 'required'): Comp
     checks: [{
       key: 'suite',
       rationale: 'Exercises the public behavior.',
-      argv: ['node', '--test'],
+      execution: {
+        preparation: [],
+        assertion: { argv: ['node', '--test'] },
+      },
+      executionInputs: [],
       baseline: {
         mode: 'task-start',
         rationale: 'The before/after result distinguishes a regression from a pre-existing failure.',
@@ -873,6 +889,10 @@ function factBundle(
     capturedAt: '2026-08-11T00:00:00.000Z',
     preCheck: worktree('baseline-pre'),
     postCheck: implementationBaseline,
+    preCheckExecutionInputs: contract.verificationPlan.definitions.map((definition) =>
+      executionInputSnapshot(definition)),
+    postCheckExecutionInputs: contract.verificationPlan.definitions.map((definition) =>
+      executionInputSnapshot(definition)),
     checkInducedChanges: [],
     checks: contract.verificationPlan.definitions.map((definition) => ({
       definitionId: definition.definitionId,
@@ -895,6 +915,10 @@ function factBundle(
     baseline: implementationBaseline,
     preCheck: worktree('current-pre'),
     current: worktree('current-post'),
+    preCheckExecutionInputs: contract.verificationPlan.definitions.map((definition) =>
+      executionInputSnapshot(definition)),
+    currentExecutionInputs: contract.verificationPlan.definitions.map((definition) =>
+      executionInputSnapshot(definition)),
     baselineVerification: {
       fingerprint: fingerprint(baselineWithoutFingerprint), ...baselineWithoutFingerprint,
     },
@@ -938,7 +962,7 @@ function checkFact(
   return {
     verifierId: definition.verifierId,
     definitionId: definition.definitionId,
-    argv: [...definition.argv],
+    assertionArgv: [...definition.execution.assertion.argv],
     definitionFingerprint: checkDefinitionFingerprint(definition),
     attempts: [{
       attempt: 1,
@@ -946,6 +970,7 @@ function checkFact(
       durationMs: 12,
       timeoutMs: 1000,
       status,
+      observedPhase: 'assertion' as const,
       termination: status === 'passed'
         ? { kind: 'exit' as const, exitCode: 0 }
         : status === 'failed'
@@ -954,7 +979,40 @@ function checkFact(
       outcomeFingerprint: digest(`output:${status}`),
       stdout: stream,
       stderr: stream,
+      steps: [{
+        stepId: definition.execution.assertion.stepId,
+        role: 'assertion' as const,
+        argv: [...definition.execution.assertion.argv],
+        startedAt: '2026-08-11T00:00:30.000Z',
+        durationMs: 12,
+        timeoutMs: 1000,
+        status,
+        termination: status === 'passed'
+          ? { kind: 'exit' as const, exitCode: 0 }
+          : status === 'failed'
+            ? { kind: 'exit' as const, exitCode: 1 }
+            : { kind: 'spawn-error' as const, code: 'ENOENT' },
+        outcomeFingerprint: digest(`step-output:${status}`),
+        stdout: stream,
+        stderr: stream,
+      }],
+      executionInputs: {
+        beforePreparation: executionInputSnapshot(definition),
+        readyForAssertion: executionInputSnapshot(definition),
+        afterAssertion: executionInputSnapshot(definition),
+      },
     }],
+  };
+}
+
+function executionInputSnapshot(
+  definition: Extract<TaskContract['verificationPlan'], { mode: 'checks' }>['definitions'][number],
+) {
+  const projection = { definitionId: definition.definitionId, inputs: [] };
+  return {
+    ...projection,
+    capturedAt: '2026-08-11T00:00:20.000Z',
+    fingerprint: fingerprint(projection),
   };
 }
 
