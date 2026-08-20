@@ -349,7 +349,7 @@ function challengePacket(): ChallengeExecutionPacket {
 }
 
 function brief(): DeveloperDecisionBrief {
-  return {
+  const details: DeveloperDecisionBrief['details'] = {
     decisionState: {
       delivery: 'implementation-complete', evidence: 'needs-attention',
       recommendation: 'defer', adoption: 'pending',
@@ -358,6 +358,9 @@ function brief(): DeveloperDecisionBrief {
       authority: 'agent-judgment', intendedOutcome: 'Requested outcome.',
       actualSystemMeaning: 'Actual change.',
       importantSystemEffects: [],
+    },
+    recommendation: {
+      action: 'defer', rationale: 'Review the unresolved verification issue.', caveats: [],
     },
     conditions: [{
       authority: 'agent-judgment',
@@ -373,6 +376,10 @@ function brief(): DeveloperDecisionBrief {
         question: 'Inspect?', adoptionImpact: 'Changes adoption.', evidence: [],
       }],
     }],
+    reviewQuestions: [{
+      id: 'review:test', conditionIds: ['condition:test'], obligationIds: [],
+      question: 'Inspect?', adoptionImpact: 'Changes adoption.', evidence: [],
+    }],
     evidenceHistory: [],
     runtimeEvidence: { authority: 'runtime-fact', changedFiles: [], checks: [] },
     requestedDecision: {
@@ -383,6 +390,33 @@ function brief(): DeveloperDecisionBrief {
       }],
     },
     detailSections: ['contract'],
+  };
+  return {
+    primary: {
+      decisionState: details.decisionState,
+      changeMeaning: details.changeMeaning,
+      recommendation: details.recommendation,
+      conditions: [{
+        statement: 'Condition.', criticality: 'material',
+        finding: { status: 'partial', summary: 'Partially supported.' }, obligations: [],
+      }],
+      blockers: [{
+        group: 'verification', codes: ['verification-nonpassing'], resolutions: ['inspect'],
+        affectedConditions: ['Condition.'], residualUnknowns: [],
+        reviewQuestions: [{ question: 'Inspect?', adoptionImpact: 'Changes adoption.' }],
+      }],
+      reviewFocus: [{
+        question: 'Inspect?', adoptionImpact: 'Changes adoption.',
+        affectedConditions: ['Condition.'],
+      }],
+      runtimeEvidence: { authority: 'runtime-fact', changedFiles: [], checks: [] },
+      requestedDecision: {
+        authority: 'human-decision',
+        actions: ['accepted', 'correction-requested', 'rejected', 'deferred'],
+        acceptanceExceptionIssueCount: 1,
+      },
+    },
+    details,
   };
 }
 

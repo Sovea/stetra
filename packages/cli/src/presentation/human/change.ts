@@ -134,6 +134,8 @@ function appendDeveloperDecisionBrief(
   brief: JsonObject,
   colors: Colors,
 ): void {
+  if (!isRecord(brief.primary)) return;
+  brief = brief.primary;
   if (isRecord(brief.decisionState)) {
     const state = brief.decisionState;
     lines.push(
@@ -145,12 +147,20 @@ function appendDeveloperDecisionBrief(
       `${colors.bold('Human adoption:')} ${String(state.adoption ?? 'pending')}`,
     );
   }
+  if (isRecord(brief.recommendation)) {
+    lines.push(`${colors.bold('Why:')} ${String(brief.recommendation.rationale ?? '')}`);
+    if (Array.isArray(brief.recommendation.caveats)) {
+      for (const caveat of brief.recommendation.caveats) {
+        lines.push(`${colors.yellow('•')} Caveat: ${String(caveat)}`);
+      }
+    }
+  }
   if (isRecord(brief.changeMeaning)) {
     lines.push(
       '',
       colors.bold('Agent interpretation'),
       `${colors.bold('Intended outcome:')} ${String(brief.changeMeaning.intendedOutcome ?? '')}`,
-      `${colors.bold('Account of the actual system change:')} ${String(brief.changeMeaning.actualSystemMeaning ?? '')}`,
+      `${colors.bold('Actual system meaning:')} ${String(brief.changeMeaning.actualSystemMeaning ?? '')}`,
     );
     if (Array.isArray(brief.changeMeaning.importantSystemEffects)) {
       for (const effect of brief.changeMeaning.importantSystemEffects) {
@@ -159,24 +169,26 @@ function appendDeveloperDecisionBrief(
     }
   }
   if (Array.isArray(brief.conditions) && brief.conditions.length) {
-    lines.push('', colors.bold('Agent evidence conclusions'));
+    lines.push('', colors.bold('Agent findings and assurance'));
     for (const condition of brief.conditions) {
-      if (!isRecord(condition)) continue;
+      if (!isRecord(condition) || !isRecord(condition.finding)) continue;
       lines.push(
-        `${colors.cyan('•')} ${String(condition.statement ?? condition.id)} — ${String(condition.status ?? 'unknown')}`,
-        `  ${String(condition.summary ?? '')}`,
+        `${colors.cyan('•')} ${String(condition.statement ?? '')} — ${String(condition.finding.status ?? 'unknown')}`,
+        `  ${String(condition.finding.summary ?? '')}`,
       );
       if (!Array.isArray(condition.obligations)) continue;
       for (const obligation of condition.obligations) {
-        if (!isRecord(obligation) || !isRecord(obligation.evidenceBoundary)) continue;
-        lines.push(`  ${colors.cyan('↳')} ${String(obligation.statement ?? obligation.id)} — ${String(obligation.status ?? 'unknown')}`);
+        if (!isRecord(obligation) || !isRecord(obligation.finding)
+          || !isRecord(obligation.evidenceBoundary)) continue;
+        lines.push(
+          `  ${colors.cyan('↳')} ${String(obligation.statement ?? '')} — ${String(obligation.finding.status ?? 'unknown')}`,
+          `    ${String(obligation.finding.conclusion ?? '')}`,
+        );
         if (isRecord(obligation.assurance)) {
           lines.push(`    Assurance fulfillment: ${String(obligation.assurance.status ?? 'unknown')}`);
-          if (Array.isArray(obligation.assurance.strategies)) {
-            for (const strategy of obligation.assurance.strategies) {
-              if (isRecord(strategy) && !['satisfied', 'not-required'].includes(String(strategy.status))) {
-                lines.push(`    Assurance gap: ${String(strategy.kind)} — ${String(strategy.reason)}`);
-              }
+          if (Array.isArray(obligation.assurance.gaps)) {
+            for (const gap of obligation.assurance.gaps) {
+              if (isRecord(gap)) lines.push(`    Assurance gap: ${String(gap.kind)} — ${String(gap.reason)}`);
             }
           }
         }
@@ -202,38 +214,39 @@ function appendDeveloperDecisionBrief(
       }
     }
   }
-  if (Array.isArray(brief.decisionIssues) && brief.decisionIssues.length) {
-    lines.push('', colors.bold('Decision issues'));
-    const conditionStatements = new Map<string, string>();
-    if (Array.isArray(brief.conditions)) {
-      for (const condition of brief.conditions) {
-        if (isRecord(condition) && typeof condition.id === 'string') {
-          conditionStatements.set(condition.id, String(condition.statement ?? condition.id));
-        }
-      }
-    }
-    for (const issue of brief.decisionIssues) {
+  if (Array.isArray(brief.blockers) && brief.blockers.length) {
+    lines.push('', colors.bold('Adoption blockers'));
+    for (const issue of brief.blockers) {
       if (!isRecord(issue)) continue;
       const resolutions = Array.isArray(issue.resolutions) ? issue.resolutions.join(' / ') : 'inspect';
-      const findingCount = Array.isArray(issue.attentionIds) ? issue.attentionIds.length : 0;
-      lines.push(`${colors.yellow('•')} ${String(issue.group ?? 'delivery')} — ${resolutions} (${findingCount} related finding(s))`);
-      if (Array.isArray(issue.conditionIds)) {
-        for (const conditionId of issue.conditionIds) {
-          const statement = conditionStatements.get(String(conditionId));
-          if (statement) lines.push(`  Affects: ${statement}`);
-        }
+      const codes = Array.isArray(issue.codes) ? issue.codes.join(', ') : 'attention-required';
+      lines.push(`${colors.yellow('•')} ${String(issue.group ?? 'delivery')} — ${resolutions} [${codes}]`);
+      if (Array.isArray(issue.affectedConditions)) {
+        for (const statement of issue.affectedConditions) lines.push(`  Affects: ${String(statement)}`);
       }
       if (Array.isArray(issue.residualUnknowns)) {
         for (const unknown of issue.residualUnknowns) {
           if (isRecord(unknown)) {
-            lines.push(`  Unknown: ${String(unknown.statement ?? '')}`, `  Next: ${String(unknown.nextAction ?? '')}`);
+            lines.push(
+              `  Unknown: ${String(unknown.statement ?? '')}`,
+              `  Adoption impact: ${String(unknown.adoptionImpact ?? '')}`,
+              `  Next: ${String(unknown.nextAction ?? '')}`,
+            );
           }
         }
       }
-      if (Array.isArray(issue.reviewQuestions)) {
-        for (const question of issue.reviewQuestions) {
-          if (isRecord(question)) lines.push(`  Review: ${String(question.question ?? '')}`);
-        }
+    }
+  }
+  if (Array.isArray(brief.reviewFocus) && brief.reviewFocus.length) {
+    lines.push('', colors.bold('Where direct review changes the decision'));
+    for (const item of brief.reviewFocus) {
+      if (!isRecord(item)) continue;
+      lines.push(
+        `${colors.cyan('•')} ${String(item.question ?? '')}`,
+        `  Adoption impact: ${String(item.adoptionImpact ?? '')}`,
+      );
+      if (Array.isArray(item.affectedConditions)) {
+        for (const statement of item.affectedConditions) lines.push(`  Affects: ${String(statement)}`);
       }
     }
   }
@@ -266,8 +279,7 @@ function appendDeveloperDecisionBrief(
   if (isRecord(brief.requestedDecision)) {
     const actions = Array.isArray(brief.requestedDecision.actions)
       ? brief.requestedDecision.actions.join(' / ') : '';
-    const exceptions = Array.isArray(brief.requestedDecision.acceptanceRequiresExceptionsFor)
-      ? brief.requestedDecision.acceptanceRequiresExceptionsFor.length : 0;
+    const exceptions = Number(brief.requestedDecision.acceptanceExceptionIssueCount ?? 0);
     lines.push(
       '',
       `${colors.bold('Developer decision required:')} ${actions}`,

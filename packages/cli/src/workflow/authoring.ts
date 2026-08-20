@@ -363,13 +363,7 @@ export function handoffAuthoringPacket(input: {
       })),
       importantSystemEffects: [],
       residualUnknowns: [],
-      reviewQuestions: input.contract.adoptionConditions.map((condition) => ({
-        conditionIds: [condition.id],
-        obligationIds: condition.evidenceObligations.map((item) => item.id),
-        question: '',
-        adoptionImpact: condition.adoptionRationale,
-        evidence: [],
-      })),
+      reviewQuestions: [],
       recommendation: { action: '', rationale: '', caveats: [] },
     },
     fieldRequirements: [
@@ -439,7 +433,7 @@ export function handoffAuthoringPacket(input: {
       ),
       shapeRequirement(
         'draft.reviewQuestions[]', 'agent-judgment', 'review-question',
-        'Review questions use exact current condition, obligation, and evidence references.',
+        'Keep this array empty unless direct inspection can change adoption judgment. When required, consolidate related obligations into the fewest consequence-directed questions and use exact current references.',
       ),
       choiceRequirement(
         'draft.recommendation.action', 'agent-judgment', RECOMMENDATION_ACTIONS,
@@ -461,6 +455,13 @@ export function handoffAuthoringPacket(input: {
         targetId: condition.id,
         requiredAction: 'Conclude the condition without exceeding its obligation conclusions.',
       })),
+      ...input.contract.adoptionConditions
+        .filter((condition) => condition.criticality === 'adoption-critical')
+        .map((condition) => ({
+          code: 'adoption-critical-review-required',
+          targetId: condition.id,
+          requiredAction: 'Add consequence-directed Review Map coverage for this condition. One question may cover multiple related conditions or obligations when its exact targets and adoption impact are explicit.',
+        })),
       ...input.requiredObligationIds.filter((id) => !challengeByObligation.has(id)).map((id) => ({
         code: input.challengeAttestationAvailable === false
           ? 'direct-human-review-required'

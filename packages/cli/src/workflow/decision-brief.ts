@@ -12,6 +12,82 @@ import { HUMAN_DECISION_ACTIONS, type TaskProjection } from '../schemas/delegati
 import { stableFingerprint } from '../protocol.ts';
 
 export interface DeveloperDecisionBrief {
+  primary: DeveloperDecisionPrimary;
+  details: DeveloperDecisionDetails;
+}
+
+export interface DeveloperDecisionPrimary {
+  decisionState: DeveloperDecisionDetails['decisionState'];
+  changeMeaning: DeveloperDecisionDetails['changeMeaning'];
+  recommendation: DeveloperDecisionDetails['recommendation'];
+  conditions: Array<{
+    statement: string;
+    criticality: 'material' | 'adoption-critical';
+    finding: {
+      status: DeveloperDecisionDetails['conditions'][number]['status'];
+      summary: string;
+    };
+    obligations: Array<{
+      statement: string;
+      finding: {
+        status: DeveloperDecisionDetails['conditions'][number]['obligations'][number]['status'];
+        conclusion: string;
+      };
+      assurance: {
+        status: DeveloperDecisionDetails['conditions'][number]['obligations'][number]['assurance']['status'];
+        gaps: Array<{
+          kind: DeveloperDecisionDetails['conditions'][number]['obligations'][number]['assurance']['strategies'][number]['kind'];
+          reason: DeveloperDecisionDetails['conditions'][number]['obligations'][number]['assurance']['strategies'][number]['reason'];
+        }>;
+      };
+      evidenceBoundary: {
+        failureHypothesis: string;
+        observedResult: string;
+        coverage: DeveloperDecisionDetails['conditions'][number]['obligations'][number]['evidenceBoundary']['coverage'];
+        supportingEvidenceCount: number;
+        counterEvidenceCount: number;
+        challengeFindings: Array<{
+          outcome: DeveloperDecisionDetails['conditions'][number]['obligations'][number]['evidenceBoundary']['challengeFindings'][number]['outcome'];
+          conclusion: string;
+          counterEvidence: Array<{
+            statement: string;
+            provenance: DeveloperDecisionDetails['conditions'][number]['obligations'][number]['evidenceBoundary']['challengeFindings'][number]['counterEvidence'][number]['provenance'];
+            reproduction: DeveloperDecisionDetails['conditions'][number]['obligations'][number]['evidenceBoundary']['challengeFindings'][number]['counterEvidence'][number]['reproduction'];
+          }>;
+        }>;
+      };
+    }>;
+  }>;
+  blockers: Array<{
+    group: DeveloperDecisionIssue['group'];
+    codes: HandoffAttentionCode[];
+    resolutions: HandoffAttentionItem['resolution']['kind'][];
+    affectedConditions: string[];
+    residualUnknowns: Array<{
+      statement: string;
+      adoptionImpact: string;
+      nextAction: string;
+    }>;
+    reviewQuestions: Array<{ question: string; adoptionImpact: string }>;
+  }>;
+  reviewFocus: Array<{
+    question: string;
+    adoptionImpact: string;
+    affectedConditions: string[];
+  }>;
+  runtimeEvidence: {
+    authority: 'runtime-fact';
+    changedFiles: DeveloperDecisionDetails['runtimeEvidence']['changedFiles'];
+    checks: Array<Omit<DeveloperDecisionDetails['runtimeEvidence']['checks'][number], 'definitionId'>>;
+  };
+  requestedDecision: {
+    authority: 'human-decision';
+    actions: HumanDecisionAction[];
+    acceptanceExceptionIssueCount: number;
+  };
+}
+
+export interface DeveloperDecisionDetails {
   decisionState: {
     delivery: TaskProjection['deliveryStatus'];
     evidence: HandoffEvaluation['status'];
@@ -24,6 +100,7 @@ export interface DeveloperDecisionBrief {
     actualSystemMeaning: string;
     importantSystemEffects: string[];
   };
+  recommendation: DecisionPacket['decision']['recommendation'];
   conditions: Array<{
     authority: 'agent-judgment';
     id: string;
@@ -53,6 +130,7 @@ export interface DeveloperDecisionBrief {
     }>;
   }>;
   decisionIssues: DeveloperDecisionIssue[];
+  reviewQuestions: ReviewQuestion[];
   evidenceHistory: Array<{
     dispositionId: string;
     attemptId: string;
@@ -169,7 +247,7 @@ export function buildDeveloperDecisionBrief(input: {
     } satisfies DeveloperDecisionIssue;
   });
 
-  return {
+  const details: DeveloperDecisionDetails = {
     decisionState: {
       delivery: input.task.deliveryStatus,
       evidence: input.evaluation.status,
@@ -182,6 +260,7 @@ export function buildDeveloperDecisionBrief(input: {
       actualSystemMeaning: input.packet.systemMeaning.summary,
       importantSystemEffects: input.packet.systemMeaning.importantSystemEffects,
     },
+    recommendation: input.packet.decision.recommendation,
     conditions: input.packet.conditions.map((condition) => ({
       authority: 'agent-judgment',
       id: condition.id,
@@ -214,6 +293,7 @@ export function buildDeveloperDecisionBrief(input: {
       })),
     })),
     decisionIssues,
+    reviewQuestions: input.packet.reviewQuestions,
     evidenceHistory: input.packet.evidenceJudgments.dispositions.map((disposition) => ({
       dispositionId: disposition.dispositionId,
       attemptId: disposition.attemptId,
@@ -253,6 +333,85 @@ export function buildDeveloperDecisionBrief(input: {
       })),
     },
     detailSections: input.packet.detailSections,
+  };
+  return { primary: primaryBrief(details), details };
+}
+
+function primaryBrief(details: DeveloperDecisionDetails): DeveloperDecisionPrimary {
+  const conditionStatementById = new Map(details.conditions.map((condition) =>
+    [condition.id, condition.statement]));
+  return {
+    decisionState: details.decisionState,
+    changeMeaning: details.changeMeaning,
+    recommendation: details.recommendation,
+    conditions: details.conditions.map((condition) => ({
+      statement: condition.statement,
+      criticality: condition.criticality,
+      finding: { status: condition.status, summary: condition.summary },
+      obligations: condition.obligations.map((obligation) => ({
+        statement: obligation.statement,
+        finding: { status: obligation.status, conclusion: obligation.conclusion },
+        assurance: {
+          status: obligation.assurance.status,
+          gaps: obligation.assurance.strategies
+            .filter((strategy) => !['satisfied', 'not-required'].includes(strategy.status))
+            .map((strategy) => ({ kind: strategy.kind, reason: strategy.reason })),
+        },
+        evidenceBoundary: {
+          failureHypothesis: obligation.evidenceBoundary.failureHypothesis,
+          observedResult: obligation.evidenceBoundary.observedResult,
+          coverage: obligation.evidenceBoundary.coverage,
+          supportingEvidenceCount: obligation.evidenceBoundary.supportingEvidenceCount,
+          counterEvidenceCount: obligation.evidenceBoundary.counterEvidenceCount,
+          challengeFindings: obligation.evidenceBoundary.challengeFindings.map((finding) => ({
+            outcome: finding.outcome,
+            conclusion: finding.conclusion,
+            counterEvidence: finding.counterEvidence.map((item) => ({
+              statement: item.statement,
+              provenance: item.provenance,
+              reproduction: item.reproduction,
+            })),
+          })),
+        },
+      })),
+    })),
+    blockers: details.decisionIssues.map((issue) => ({
+      group: issue.group,
+      codes: issue.codes,
+      resolutions: issue.resolutions,
+      affectedConditions: issue.conditionIds.flatMap((id) => {
+        const statement = conditionStatementById.get(id);
+        return statement ? [statement] : [];
+      }),
+      residualUnknowns: issue.residualUnknowns.map((unknown) => ({
+        statement: unknown.statement,
+        adoptionImpact: unknown.adoptionImpact,
+        nextAction: unknown.nextAction,
+      })),
+      reviewQuestions: issue.reviewQuestions.map((question) => ({
+        question: question.question,
+        adoptionImpact: question.adoptionImpact,
+      })),
+    })),
+    reviewFocus: details.reviewQuestions.map((question) => ({
+      question: question.question,
+      adoptionImpact: question.adoptionImpact,
+      affectedConditions: question.conditionIds.flatMap((id) => {
+        const statement = conditionStatementById.get(id);
+        return statement ? [statement] : [];
+      }),
+    })),
+    runtimeEvidence: {
+      authority: 'runtime-fact',
+      changedFiles: details.runtimeEvidence.changedFiles,
+      checks: details.runtimeEvidence.checks.map(({ definitionId: _definitionId, ...check }) => check),
+    },
+    requestedDecision: {
+      authority: 'human-decision',
+      actions: details.requestedDecision.actions,
+      acceptanceExceptionIssueCount:
+        details.requestedDecision.acceptanceRequiresExceptionsFor.length,
+    },
   };
 }
 

@@ -282,9 +282,9 @@ export function handoffHostAction(
     developerDecisionBrief: brief,
     presentationRequirements: {
       leadWithDecisionState: true,
-      requiredConditionIds: brief.conditions.map((condition) => condition.id),
-      requiredDecisionIssueIds: brief.decisionIssues.map((issue) => issue.id),
-      requiredReviewQuestionIds: [...new Set(brief.decisionIssues.flatMap((issue) =>
+      requiredConditionIds: brief.details.conditions.map((condition) => condition.id),
+      requiredDecisionIssueIds: brief.details.decisionIssues.map((issue) => issue.id),
+      requiredReviewQuestionIds: [...new Set(brief.details.decisionIssues.flatMap((issue) =>
         issue.reviewQuestions.map((question) => question.id)))].sort(),
       prohibitImpliedAdoption: true,
     },

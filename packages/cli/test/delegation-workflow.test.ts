@@ -799,22 +799,22 @@ test('a Human correction creates a successor Attempt and preserves the prior dec
       ).allowedValues,
       ['accepted', 'correction-requested', 'rejected', 'deferred'],
     );
-    assert.deepEqual(handedOff.hostAction.developerDecisionBrief.decisionState, {
+    assert.deepEqual(handedOff.hostAction.developerDecisionBrief.primary.decisionState, {
       delivery: 'implementation-complete', evidence: 'handoff-ready',
       recommendation: 'accept', adoption: 'pending',
     });
     assert.equal(
-      handedOff.hostAction.developerDecisionBrief.changeMeaning.actualSystemMeaning,
+      handedOff.hostAction.developerDecisionBrief.primary.changeMeaning.actualSystemMeaning,
       'The first implementation is ready for review.',
     );
     assert.equal(
-      handedOff.hostAction.developerDecisionBrief.changeMeaning.authority,
+      handedOff.hostAction.developerDecisionBrief.primary.changeMeaning.authority,
       'agent-judgment',
     );
-    assert.equal(handedOff.hostAction.developerDecisionBrief.runtimeEvidence.authority, 'runtime-fact');
-    assert.equal(handedOff.hostAction.developerDecisionBrief.requestedDecision.authority, 'human-decision');
-    assert.equal(handedOff.hostAction.developerDecisionBrief.conditions[0].status, 'supported');
-    assert.deepEqual(handedOff.hostAction.developerDecisionBrief.decisionIssues, []);
+    assert.equal(handedOff.hostAction.developerDecisionBrief.primary.runtimeEvidence.authority, 'runtime-fact');
+    assert.equal(handedOff.hostAction.developerDecisionBrief.primary.requestedDecision.authority, 'human-decision');
+    assert.equal(handedOff.hostAction.developerDecisionBrief.primary.conditions[0].finding.status, 'supported');
+    assert.deepEqual(handedOff.hostAction.developerDecisionBrief.primary.blockers, []);
     const decided = await decide(root, prepared.taskId, {
       humanEvent: { content: 'Correct the wording without changing the current semantic contract.' },
       action: 'correction-requested',
@@ -926,10 +926,12 @@ test('a thin Host runs the bounded Challenger but preserves unverified direct re
       conclusion.status = 'supported';
       conclusion.summary = 'The Agent finds the bounded condition supported by the cited evidence.';
     }
-    for (const question of draft.reviewQuestions) {
-      question.question = 'Does the changed verifier reject the stated failure hypothesis?';
-      question.evidence = [{ kind: 'patch' }];
-    }
+    draft.reviewQuestions.push({
+      conditionIds: [condition.id], obligationIds: [obligation.id],
+      question: 'Does the changed verifier reject the stated failure hypothesis?',
+      adoptionImpact: condition.adoptionRationale,
+      evidence: [{ kind: 'patch' }],
+    });
     draft.recommendation = {
       action: 'accept',
       rationale: 'The changed verifier passed.',
@@ -956,8 +958,8 @@ test('a thin Host runs the bounded Challenger but preserves unverified direct re
     assert.equal(handedOff.decisionPacket.conditions[0].agentFinding.status, 'supported');
     assert.equal(handedOff.decisionPacket.conditions[0].obligations[0].agentFinding.status, 'supported');
     assert.equal(handedOff.decisionPacket.conditions[0].obligations[0].assurance.status, 'unsatisfied');
-    assert.equal(handedOff.hostAction.developerDecisionBrief.conditions[0].obligations[0].assurance.status, 'unsatisfied');
-    const issue = handedOff.hostAction.developerDecisionBrief.decisionIssues.find(
+    assert.equal(handedOff.hostAction.developerDecisionBrief.primary.conditions[0].obligations[0].assurance.status, 'unsatisfied');
+    const issue = handedOff.hostAction.developerDecisionBrief.details.decisionIssues.find(
       (item: { codes: string[] }) => item.codes.includes('challenge-independence-unverified'),
     );
     assert.deepEqual(issue.codes, ['challenge-independence-unverified', 'direct-review-required']);
@@ -965,7 +967,7 @@ test('a thin Host runs the bounded Challenger but preserves unverified direct re
     assert.deepEqual(issue.conditionIds, [condition.id]);
     assert.deepEqual(issue.obligationIds, [obligation.id]);
     assert.equal(issue.reviewQuestions.length, 1);
-    const exceptionTargets = handedOff.hostAction.developerDecisionBrief.requestedDecision
+    const exceptionTargets = handedOff.hostAction.developerDecisionBrief.details.requestedDecision
       .acceptanceRequiresExceptionsFor;
     assert.deepEqual(
       exceptionTargets.find((target: { decisionIssueId: string }) =>
@@ -1119,13 +1121,17 @@ test('a bounded Challenge Execution Packet completes the persisted challenge-to-
       conclusion.status = 'supported';
       conclusion.summary = 'Every declared evidence obligation is supported.';
     }
-    for (const question of handoffDraft.reviewQuestions) {
-      question.question = 'Does the changed verifier still distinguish the intended behavior?';
-      question.evidence = [
+    const condition = prepared.taskContract.adoptionConditions[0];
+    handoffDraft.reviewQuestions.push({
+      conditionIds: [condition.id],
+      obligationIds: condition.evidenceObligations.map((item: { id: string }) => item.id),
+      question: 'Does the changed verifier still distinguish the intended behavior?',
+      adoptionImpact: condition.adoptionRationale,
+      evidence: [
         ...changedFileIds.map((id: string) => ({ kind: 'changed-file', id })),
         { kind: 'challenge', id: challenged.challenges[0].id },
-      ];
-    }
+      ],
+    });
     handoffDraft.recommendation = {
       action: 'defer',
       rationale: 'The bounded evidence is current, while the changed verifier still needs developer review.',
@@ -1508,10 +1514,14 @@ test('an adverse Challenge preserves its exact counter-evidence through Handoff 
     handoffDraft.obligationConclusions[0].conclusion = 'The obligation remains only partially supported.';
     handoffDraft.conditionConclusions[0].status = 'partial';
     handoffDraft.conditionConclusions[0].summary = 'Persistent protection remains unresolved.';
-    for (const question of handoffDraft.reviewQuestions) {
-      question.question = 'Is the missing persistent boundary acceptable for adoption?';
-      question.evidence = [{ kind: 'challenge', id: challenged.challenges[0].id }];
-    }
+    const condition = prepared.taskContract.adoptionConditions[0];
+    handoffDraft.reviewQuestions.push({
+      conditionIds: [condition.id],
+      obligationIds: condition.evidenceObligations.map((item: { id: string }) => item.id),
+      question: 'Is the missing persistent boundary acceptable for adoption?',
+      adoptionImpact: condition.adoptionRationale,
+      evidence: [{ kind: 'challenge', id: challenged.challenges[0].id }],
+    });
     handoffDraft.recommendation = {
       action: 'defer',
       rationale: 'The developer should decide whether persistent protection is required before adoption.',
@@ -1525,7 +1535,7 @@ test('an adverse Challenge preserves its exact counter-evidence through Handoff 
     assert.equal(recorded.counterEvidence[0].reproduction, 'agent-reported');
     assert.deepEqual(recorded.counterEvidence[0].references, [{ kind: 'check', id: checkId }]);
     const finding = handedOff.hostAction.developerDecisionBrief
-      .conditions[0].obligations[0].evidenceBoundary.challengeFindings[0];
+      .details.conditions[0].obligations[0].evidenceBoundary.challengeFindings[0];
     assert.equal(finding.id, challenged.challenges[0].id);
     assert.equal(finding.outcome, 'partial');
     assert.equal(finding.conclusion, challengeDraft.conclusion);
@@ -1619,10 +1629,14 @@ test('verification revision preserves history and completes handoff against curr
       conclusion.status = 'supported';
       conclusion.summary = 'Every current evidence obligation is supported.';
     }
-    for (const question of handoffDraft.reviewQuestions) {
-      question.question = 'Does the execution rebinding preserve the intended verification boundary?';
-      question.evidence = [{ kind: 'check', id: second.checks[0].definitionId }];
-    }
+    const condition = prepared.taskContract.adoptionConditions[0];
+    handoffDraft.reviewQuestions.push({
+      conditionIds: [condition.id],
+      obligationIds: condition.evidenceObligations.map((item: { id: string }) => item.id),
+      question: 'Does the execution rebinding preserve the intended verification boundary?',
+      adoptionImpact: condition.adoptionRationale,
+      evidence: [{ kind: 'check', id: second.checks[0].definitionId }],
+    });
     handoffDraft.recommendation = {
       action: 'defer',
       rationale: 'The implementation evidence is current and the verification revision remains visible.',
@@ -1633,9 +1647,9 @@ test('verification revision preserves history and completes handoff against curr
     assert.equal(handedOff.decisionPacket.runtimeFacts.attemptId, 'attempt:2');
     assert.equal(handedOff.decisionPacket.evidenceJudgments.dispositions.length, 1);
     assert.equal(handedOff.decisionPacket.evidenceJudgments.dispositions[0].attemptId, 'attempt:1');
-    assert.equal(handedOff.hostAction.developerDecisionBrief.evidenceHistory.length, 1);
+    assert.equal(handedOff.hostAction.developerDecisionBrief.details.evidenceHistory.length, 1);
     assert.equal(
-      handedOff.hostAction.developerDecisionBrief.evidenceHistory[0].resolution.actualRoute,
+      handedOff.hostAction.developerDecisionBrief.details.evidenceHistory[0].resolution.actualRoute,
       'revise-verification',
     );
     assert.ok(handedOff.decisionPacket.attention.some((item: { codes: string[] }) =>
