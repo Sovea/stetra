@@ -726,6 +726,13 @@ An input-bearing Authoring Packet may include:
 - structural field requirements and outstanding obligations;
 - a one-shot stdin binding for the exact command.
 
+The public Host boundary can consume that binding with `submitHostAction`. It
+accepts the current projected action (or its explicitly selected Human-decision
+continuation), the completed document, and an explicit project root. It invokes
+the CLI parser with in-memory stdin and validates the exact stage, task, packet,
+and command shape; it does not use a shell, PTY, temporary file, or synthesized
+task command. Canonical lifecycle validation remains in the CLI and Core.
+
 Projection reduces reading, identity copying, and schema-error cost. It does not
 persist a mode, create lifecycle state, choose semantic values, hide an
 adoption-changing condition, or become authority. Canonical artifacts remain
@@ -743,17 +750,20 @@ receipt bind the exact packet fingerprint, so context reduction cannot silently
 change the challenged evidence boundary.
 
 At the Handoff boundary, Dynamic Host Projection also derives an ephemeral
-Developer Decision Brief from the canonical Decision Packet. It is the Host's
-required delivery surface: separate delivery/evidence/recommendation/adoption
-states; explicitly labelled Agent interpretations of intended and actual
-system meaning; Agent-authored condition and Challenge conclusions with exact
-counter-evidence; structurally aggregated decision issues;
-consequence-directed review questions; explicitly labelled Runtime
-observations; and the pending Human decision. Attention is aggregated only by
-its exact protocol group and required resolution, never by repository or text
-heuristics, while all canonical IDs and references remain in the JSON surface.
-The primary Human rendering can therefore omit machine IDs without weakening
-traceability. The brief adds no artifact or authority. The projected
+Developer Decision Brief from the canonical Decision Packet. Its `primary`
+projection is the Host's required Human delivery surface: separate
+delivery/evidence/recommendation/adoption states; explicitly labelled Agent
+interpretations of intended and actual system meaning; Agent-authored Condition
+and Challenge findings beside separate assurance fulfillment; structurally
+aggregated blockers; consequence-directed review focus; explicitly labelled
+Runtime observations; and the pending Human decision. The primary projection
+uses semantic statements and omits opaque protocol IDs. Its `details` projection
+retains canonical IDs, exact references, Attention aggregation, evidence
+history, and inspection pointers. Attention is aggregated only by its exact
+protocol group and required resolution, never by repository or text heuristics.
+Traceability therefore remains machine-exact without forcing protocol identity
+noise into the developer's main summary. The brief adds no artifact or
+authority. The projected
 decision command is explicitly a continuation that requires a new exact Human
 Event; Handoff presentation and Human decision recording cannot collapse into
 one Host turn.

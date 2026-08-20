@@ -69,31 +69,32 @@ description: Preserve developer understanding and decision authority while a cod
 
 # Stetra
 
-Use this for a production change from exact intent to informed adoption.
-${host} owns investigation, implementation, diagnosis, repair, challenge, and
-handoff. The developer owns goals, long-lived tradeoffs, exceptions, and the
-final decision. Runtime owns only facts it collects.
+Use this for a production change from exact intent to informed adoption. ${host}
+owns engineering; the developer owns goals, long-lived tradeoffs, exceptions,
+and adoption;
+Runtime owns only facts it collects.
 
 Read [references/change.md](references/change.md) before prepare, then follow
-each **hostAction**. Load a named reference; do not reread an unchanged page in
-one continuous context. Projection adds no state or authority. Fill a projected
-**draft** by its requirements and send it through the exact **inputBinding**.
-Exact developer events are Human authority; interpretations are Agent judgment.
+each **hostAction**. Load its named reference; do not reread an unchanged page
+in one context. Fill the projected **draft** by its requirements and send it
+through the exact **inputBinding**. Exact
+developer events are Human authority; interpretations are Agent judgment.
 
 Before responding, run **stetra change guard-final . --task <task-id> --json**.
 If its exact prior Action remains in context, pass
 **--known-action-fingerprint <sha256>**; **actionUnchanged** means reuse it.
 Obey **disposition**. This skill does not claim native Host enforcement.
 
-**hostAction.developerDecisionBrief** owns the final cognitive handoff. Preserve
-every required reference and decision state, contrast intended and actual
+**hostAction.developerDecisionBrief.primary** owns the concise final cognitive
+handoff. Its prose-facing surface intentionally omits opaque protocol IDs;
+**details** retains every exact reference for inspection and continuation.
+Preserve every decision-changing primary item, contrast intended and actual
 meaning, state adoption is pending, ask for the decision, and stop. Execute
 **decisionContinuation** only after a new developer message supplies it.
 
 Keep Human authority, Agent judgment, Runtime facts, and adoption separate.
-Passing evidence is not adoption. Never invent facts, hide Attention, or treat
-focus as permission. Preserve paths, IDs, enums, commands, numeric facts,
-quoted events, and every adoption-changing surface.
+Passing is not adoption. Never invent facts or hide adoption-changing surfaces;
+preserve exact paths, IDs, enums, commands, numeric facts, and quoted events.
 `;
 }
 
@@ -413,26 +414,28 @@ unrepresentable change remains. Otherwise use request-correction, defer, or
 reject; only a later exact Human decision may accept exceptions.
 
 For every input-bearing action, serialize the completed draft and provide those
-bytes as stdin to the exact argv in one process. A Host API should bind stdin
-directly. If it cannot, use a temporary input outside the project worktree and
-delete it after the command; never add task-authoring files to the repository.
+bytes as stdin to the exact argv in one process. A native integration should use
+**submitHostAction** from **@sovea/stetra/host**; it binds the completed document
+directly to the projected command without a shell, PTY, temporary file, or argv
+reconstruction. A thin Host may execute the exact argv with stdin attached at
+process creation. Never add task-authoring files to the repository.
 
 ~~~sh
 stetra change handoff . --task <task-id> --input - --json
 ~~~
 
-The returned **hostAction.developerDecisionBrief** is the delivery surface for
-the developer. It distinguishes delivery state, evidence state, Agent
-recommendation, and Human adoption; labels intended and actual system meaning as
-Agent judgment; preserves every Condition and Obligation finding beside its
-separate Runtime assurance result, including
-each Challenge conclusion and exact counter-evidence; labels collected change
-and check data as Runtime observations; and turns Attention into decision
-issues with relevant review questions. Attention with the same exact protocol
-group and required resolution shares one issue while retaining the union of all
-underlying Attention IDs, codes, and references. This is structural grouping,
-not inferred semantic similarity. Prior evidence diagnosis and recovery routes
-remain visible in **evidenceHistory**.
+The returned **hostAction.developerDecisionBrief.primary** is the delivery
+surface for the developer. It distinguishes delivery state, evidence state,
+Agent recommendation, and Human adoption; labels intended and actual system
+meaning as Agent judgment; places every Condition and Obligation finding beside
+its separate Runtime assurance result, including Challenge counter-evidence;
+labels collected change and check data as Runtime observations; and presents
+only decision-changing blockers and review focus. It contains statements rather
+than opaque protocol IDs. **developerDecisionBrief.details** retains canonical
+IDs, exact Attention aggregation, recovery history, and detail-section pointers
+for inspection and machine continuation. Attention with the same exact protocol
+group and required resolution shares one issue. This is structural grouping,
+not inferred semantic similarity.
 Present that brief as the final task summary even when another active workflow
 has its own completion template. Do not collapse, rename, or omit any item named
 by **presentationRequirements**. Compact Runtime evidence is supporting detail,

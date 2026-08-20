@@ -44,13 +44,14 @@ try {
   await verifyReleaseInstallation(consumer, expectedVersion);
   const hostSurfacePath = join(consumer, 'host-surface.mjs');
   writeFileSync(hostSurfacePath, [
-    "import { guardFinalResponse, HostChallengeLifecycle, runCli } from '@sovea/stetra/host';",
+    "import { guardFinalResponse, HostChallengeLifecycle, runCli, submitHostAction } from '@sovea/stetra/host';",
     "const execution = await runCli(['--version'], { interactive: false, color: false });",
     "const lifecycle = new HostChallengeLifecycle('release-smoke');",
     'process.stdout.write(JSON.stringify({',
     '  guardType: typeof guardFinalResponse,',
     '  lifecycleType: typeof lifecycle.observeStart,',
     '  runType: typeof runCli,',
+    '  submitType: typeof submitHostAction,',
     '  version: execution.output,',
     '}));',
     '',
@@ -59,6 +60,7 @@ try {
     guardType: 'function',
     lifecycleType: 'function',
     runType: 'function',
+    submitType: 'function',
     version: expectedVersion,
   });
 
@@ -125,11 +127,15 @@ try {
     delivery: { maxRepairAttempts: 1 },
     checks: [{
       key: 'fixture-check', rationale: 'Exercise the packed CLI check runner.',
-      argv: [
-        process.execPath,
-        '-e',
-        "const ok=require('node:fs').readFileSync('src/example.ts','utf8').includes('value = 2');process.stdout.write('fixture-check-stdout\\n');process.stderr.write('fixture-check-stderr\\n');process.exit(ok ? 0 : 1)",
-      ],
+      execution: {
+        preparation: [],
+        assertion: { argv: [
+          process.execPath,
+          '-e',
+          "const ok=require('node:fs').readFileSync('src/example.ts','utf8').includes('value = 2');process.stdout.write('fixture-check-stdout\\n');process.stderr.write('fixture-check-stderr\\n');process.exit(ok ? 0 : 1)",
+        ] },
+      },
+      executionInputs: [],
       baseline: { mode: 'unknown' },
       verifierSelectors: [
         { kind: 'file', path: 'package.json', role: 'command-definition' },
@@ -193,12 +199,18 @@ try {
     collected.hostAction.challengeExecutionRequest.bindsTo.challengeExecutionPacketFingerprint,
     /^sha256:[0-9a-f]{64}$/,
   );
-  const challengeDraft = structuredClone(collected.hostAction.challengeExecutionPacket.draft);
+  const challengeRound = structuredClone(collected.hostAction.challengeExecutionPacket.draft);
+  const challengeDraft = challengeRound.results[0];
+  const challengeCase = collected.hostAction.challengeExecutionPacket.cases[0];
   challengeDraft.falsificationAttempt = 'Inspected whether the passing command depends on the changed export.';
   challengeDraft.observedResult = 'The packed command observes value 2 in a Host-observed separate context.';
   challengeDraft.supportingEvidence = [{
     statement: 'The current Runtime check supports the bounded export observation.',
-    references: challengeDraft.evidence.checks.map((id) => ({ kind: 'check', id })),
+    provenance: 'runtime-fact',
+    reproduction: 'runtime-recorded',
+    references: challengeCase.evidence.checks.map((check) => ({
+      kind: 'check', id: check.definitionId,
+    })),
   }];
   challengeDraft.evidenceCoverage = {
     status: 'sufficient',
@@ -212,7 +224,7 @@ try {
     taskId: prepared.taskId,
     request: collected.hostAction.challengeExecutionRequest,
     challengeExecutionPacket: collected.hostAction.challengeExecutionPacket,
-    challenge: challengeDraft,
+    challenge: challengeRound,
   }, null, 2)}\n`, 'utf8');
   const trustedChallengePath = join(consumer, 'trusted-challenge.mjs');
   writeFileSync(trustedChallengePath, [
@@ -243,7 +255,7 @@ try {
     "  'change', 'challenge', input.project, '--task', input.taskId, '--input', '-', '--json',",
     '], {',
     '  interactive: false, color: false,',
-    '  input: Readable.from([JSON.stringify(stopped.challenge)]),',
+    '  input: Readable.from([JSON.stringify(stopped.round)]),',
     '  hostAttestations: {',
     "    provenance: 'evaluation-runner',",
     '    async evaluatePolicies() { return []; },',
@@ -256,7 +268,7 @@ try {
   const challenged = runJson(process.execPath, [trustedChallengePath, challengePath], consumer, {
     shell: false,
   });
-  assert.equal(challenged.challenge.independence, 'host-attested');
+  assert.equal(challenged.challenges[0].independence, 'host-attested');
   assert.equal(challenged.hostAction.kind, 'author-handoff');
   assert.ok(!challenged.hostAction.authoringPacket.outstandingObligations.some(
     (item) => item.code === 'direct-human-review-required',
@@ -287,13 +299,17 @@ try {
     conclusion.summary = 'The current evidence supports the bounded condition.';
   }
   handoffDraft.importantSystemEffects = ['The export is now 2.'];
-  for (const question of handoffDraft.reviewQuestions) {
-    question.question = 'Does the changed verifier still distinguish the intended exported value?';
-    question.evidence = [
+  const condition = challenged.hostAction.authoringPacket.referenceCatalog.conditions[0];
+  handoffDraft.reviewQuestions.push({
+    conditionIds: [condition.id],
+    obligationIds: condition.obligationIds,
+    question: 'Does the changed verifier still distinguish the intended exported value?',
+    adoptionImpact: 'A verifier that misses the export boundary could support an unsafe adoption.',
+    evidence: [
       ...changedFileIds.map((id) => ({ kind: 'changed-file', id })),
       ...checkIds.map((id) => ({ kind: 'check', id })),
-    ];
-  }
+    ],
+  });
   handoffDraft.recommendation = {
     action: 'accept',
     rationale: 'Current facts and the Host-attested Challenge support adoption review.',
@@ -307,11 +323,12 @@ try {
   assert.deepEqual(handedOff.decisionPacket.decision.adoption, { authority: 'human', status: 'pending' });
   assert.equal(handedOff.hostAction.kind, 'present-handoff-and-await-human-decision');
   assert.equal(handedOff.hostAction.command, undefined);
-  assert.equal(handedOff.hostAction.developerDecisionBrief.decisionState.adoption, 'pending');
-  assert.equal(handedOff.hostAction.developerDecisionBrief.changeMeaning.authority, 'agent-judgment');
-  assert.equal(handedOff.hostAction.developerDecisionBrief.runtimeEvidence.authority, 'runtime-fact');
-  assert.equal(handedOff.hostAction.developerDecisionBrief.requestedDecision.authority, 'human-decision');
-  assert.equal(handedOff.hostAction.developerDecisionBrief.decisionIssues.length > 0, true);
+  assert.equal(handedOff.hostAction.developerDecisionBrief.primary.decisionState.adoption, 'pending');
+  assert.equal(handedOff.hostAction.developerDecisionBrief.primary.changeMeaning.authority, 'agent-judgment');
+  assert.equal(handedOff.hostAction.developerDecisionBrief.primary.runtimeEvidence.authority, 'runtime-fact');
+  assert.equal(handedOff.hostAction.developerDecisionBrief.primary.requestedDecision.authority, 'human-decision');
+  assert.equal(handedOff.hostAction.developerDecisionBrief.primary.blockers.length > 0, true);
+  assert.equal(handedOff.hostAction.developerDecisionBrief.details.decisionIssues.length > 0, true);
   assert.equal(handedOff.hostAction.decisionContinuation.requiresNewHumanEvent, true);
 
   const decisionPath = join(temporary, 'decision.json');

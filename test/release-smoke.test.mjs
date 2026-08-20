@@ -74,12 +74,15 @@ try {
     baselineVerification: (() => {
       const value = {
         capturedAt: timestamp, preCheck: summary('baseline'), postCheck: summary('baseline'),
+        preCheckExecutionInputs: [], postCheckExecutionInputs: [],
         checkInducedChanges: [], checks: [],
       };
       return { fingerprint: stableFingerprint(value), ...value };
     })(),
+    preCheckExecutionInputs: [], currentExecutionInputs: [],
     changeFingerprint: stableFingerprint([changedFile]),
-    changedFiles: [changedFile], checkInducedChanges: [], checks: [], checkComparisons: [], verifierMutations: [],
+    changedFiles: [changedFile], checkInducedChanges: [], checks: [], checkComparisons: [],
+    evidenceConcerns: [], verifierMutations: [],
     environment: {
       platform: process.platform, architecture: process.arch, cwdFingerprint: sha256('consumer'),
       executables: [], toolchains: [{ name: 'node', version: process.version }],
@@ -123,10 +126,13 @@ function collectionFingerprint(bundle) {
     protocol: bundle.protocol, schemaVersion: bundle.schemaVersion,
     effectiveContractId: bundle.effectiveContractId, attemptId: bundle.attemptId,
     baseline: bundle.baseline, preCheck: bundle.preCheck, current: bundle.current,
+    preCheckExecutionInputs: bundle.preCheckExecutionInputs,
+    currentExecutionInputs: bundle.currentExecutionInputs,
     baselineVerification: bundle.baselineVerification,
     changeFingerprint: bundle.changeFingerprint, changedFiles: bundle.changedFiles,
     checkInducedChanges: bundle.checkInducedChanges, checks: bundle.checks,
     checkComparisons: bundle.checkComparisons,
+    evidenceConcerns: bundle.evidenceConcerns,
     verifierMutations: bundle.verifierMutations, environment: bundle.environment,
     patch: bundle.patch ?? null, provenance: bundle.provenance,
   });

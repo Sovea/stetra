@@ -55,7 +55,13 @@ An input-bearing action also returns:
 
 Serialize the completed draft and attach it to the exact argv process at
 creation time. Do not start an interactive process and then attempt to type the
-document. A temporary fallback input must live outside the worktree.
+document. Native integrations should call `submitHostAction` from
+`@sovea/stetra/host` with the current action, completed document, and explicit
+project root. It validates the projected command and packet binding, then calls
+the CLI parser with a one-shot in-memory stdin stream—without a shell, PTY,
+temporary file, or reconstructed task command. A thin Host may execute the exact
+argv with stdin attached at process creation; any unavoidable file fallback
+must remain outside the worktree.
 Challenge uses the smaller `challengeExecutionPacket`, but its input binding
 still names that packet's exact `draft`. The fresh-context Agent and the action
 command exchange only the completed Challenge Round. A trusted controlling
@@ -68,20 +74,20 @@ stage-specific rather than a universal copy of all task facts. Use
 changing task state.
 
 After a current Handoff is evaluated, `hostAction` changes role. It returns a
-transient `developerDecisionBrief` containing the four separate delivery,
-evidence, Agent-recommendation, and Human-adoption states; the Agent's
-interpretation of intended outcome and actual system meaning; every Agent
-condition conclusion; direct-cause decision issues; linked review questions;
-explicitly labelled Runtime observations; and diagnosis and recovery routes
-from earlier Attempts. Decision issues with the same exact protocol group and
-required resolution are projected once while retaining the union of every
-underlying Attention ID, code, and reference. This is structural aggregation,
-not a judgment based on paths, keywords, commands, or repository content.
-Detailed evidence references, logs, and
-immutable artifacts remain available through `change explain`; they are not
-copied into the primary brief. The accompanying `presentationRequirements`
-names every condition, aggregated issue, and question that the Host must
-preserve in its final cognitive handoff.
+transient `developerDecisionBrief` with two projections. `primary` is the
+developer-facing decision surface: four separate delivery, evidence,
+Agent-recommendation, and Human-adoption states; intended versus actual system
+meaning; every Agent finding beside its separate assurance result;
+decision-changing blockers and review focus; and compact Runtime observations.
+It uses semantic statements and deliberately omits opaque protocol IDs.
+`details` preserves canonical IDs, exact Attention aggregation, recovery
+history, all Review Questions, and detail-section pointers for inspection and
+machine continuation. Decision issues with the same exact protocol group and
+required resolution are projected once; this is structural aggregation, not a
+judgment based on paths, keywords, commands, or repository content. Full logs
+and immutable artifacts remain available through `change explain`. The
+accompanying `presentationRequirements` derives from `details` so concise Human
+presentation cannot weaken exact continuation or traceability.
 
 The Human decision command is not the current action at that point. It appears
 under `decisionContinuation` with `requiresNewHumanEvent: true`. The Host
@@ -107,8 +113,9 @@ Action. The brief appears only inside `hostAction`, avoiding a second copy in
 the same JSON response. Generated skills instruct this call but do not claim that a
 Markdown file enforces a Host hook. A native Host integration may enforce the
 same command at its final-response boundary. The published
-`@sovea/stetra/host` subpath exposes `runCli`, `guardFinalResponse`, exact Host
-projection types, and the `HostAttestationProvider` boundary for that purpose.
+`@sovea/stetra/host` subpath exposes `runCli`, `submitHostAction`,
+`guardFinalResponse`, exact Host projection types, and the
+`HostAttestationProvider` boundary for that purpose.
 Importing it grants no authority by itself: only an embedding process that
 actually controls tools, contexts, and the response boundary may report
 enforcement or independent-context provenance.
@@ -652,15 +659,7 @@ bound to the Obligation without being mislabeled or duplicated as support.
   ],
   "importantSystemEffects": [],
   "residualUnknowns": [],
-  "reviewQuestions": [
-    {
-      "conditionIds": ["condition:exact"],
-      "obligationIds": ["obligation:exact"],
-      "question": "What should the developer inspect directly?",
-      "adoptionImpact": "Which wrong decision this can prevent.",
-      "evidence": [{ "kind": "patch" }]
-    }
-  ],
+  "reviewQuestions": [],
   "recommendation": {
     "action": "accept",
     "rationale": "Agent recommendation, not Human adoption.",
@@ -680,6 +679,11 @@ commands, dependencies, or repository text.
 Every missing, adverse, or unverified required Challenge also requires a Review
 Question bound to the exact affected Obligation; a broad Condition-only
 question cannot discharge it.
+The projected draft starts with no Review Questions. The Agent adds them only
+when direct inspection can change adoption judgment, including required
+adoption-critical coverage and unresolved assurance. One question may cover
+multiple related Conditions or Obligations through exact targets; Runtime does
+not accept mechanically generated one-question-per-condition noise.
 
 The Decision Packet labels Agent conclusions as `agentFinding` and places a
 separate Runtime-derived `assurance` result beside every Obligation. Assurance
@@ -688,8 +692,10 @@ trigger and Host attestation, and pending Human review. Missing or unverified
 assurance stays visible without being recast as a semantic contradiction.
 
 The final Developer Decision Brief preserves each related Challenge conclusion
-and its exact counter-evidence under the affected Obligation. A Challenge is not
-reduced to an outcome label before the developer makes the adoption decision.
+and its counter-evidence provenance under the affected Obligation. The primary
+surface omits opaque IDs; the details surface retains exact references. A
+Challenge is not reduced to an outcome label before the developer makes the
+adoption decision.
 
 Agent recommendation cannot exceed the current evidence. `accept` is rejected
 when any Condition or Obligation is not supported, a residual unknown remains,

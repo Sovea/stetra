@@ -7,6 +7,8 @@ import { Readable } from 'node:stream';
 import test from 'node:test';
 
 import { formatCliOutput, runCli } from '../src/cli.ts';
+import { submitHostAction } from '../src/host.ts';
+import type { HostAction } from '../src/workflow/host-action.ts';
 
 test('Commander exposes the initial lifecycle without obsolete repair/finalize commands', async () => {
   const help = await runCli(['change', '--help']);
@@ -55,22 +57,30 @@ test('CLI JSON mode executes compact prepare, baseline-aware collect, layered ha
       changedFiles: Array<{ path: string }>;
       checks: Array<{ definitionId: string; status: string }>;
       checkComparisons: Array<{ relation: string }>;
+      hostAction: HostAction;
     };
     assert.equal(collected.status, 'facts-collected');
     assert.deepEqual(collected.changedFiles.map((file) => file.path), ['source.txt']);
     assert.equal(collected.checks[0].status, 'passed');
     assert.equal(collected.checkComparisons[0].relation, 'baseline-unknown');
     assert.match(formatCliOutput({ ...collectExecution, json: false, color: false }), /Checks:/);
+    assert.deepEqual(
+      (collected.hostAction.authoringPacket?.draft as { reviewQuestions: unknown[] }).reviewQuestions,
+      [],
+    );
 
-    const handoffExecution = await runCli([
-      'change', 'handoff', root, '--task', prepared.taskId, '--input', '-', '--json',
-    ], { input: jsonStream(handoffDocument(
-      prepared.taskContract.adoptionConditions[0].id,
-      prepared.taskContract.adoptionConditions[0].evidenceObligations[0].id,
-      collected.checks[0].definitionId,
-    )) });
+    const handoffExecution = await submitHostAction({
+      action: collected.hostAction,
+      projectRoot: root,
+      document: handoffDocument(
+        prepared.taskContract.adoptionConditions[0].id,
+        prepared.taskContract.adoptionConditions[0].evidenceObligations[0].id,
+        collected.checks[0].definitionId,
+      ),
+    });
     const handedOff = handoffExecution.output as {
       status: string;
+      hostAction: HostAction;
       decisionPacket: {
         semanticContract: { desiredOutcome: string };
         decision: { adoption: { status: string } };
@@ -90,17 +100,26 @@ test('CLI JSON mode executes compact prepare, baseline-aware collect, layered ha
       assert.equal(removedDuplicate in handedOff.decisionPacket, false);
     }
     assert.equal('attention' in handedOff, false);
+    const decisionBrief = handedOff.hostAction.developerDecisionBrief!;
+    assert.equal(decisionBrief.primary.conditions[0].statement, 'The fixture check passes.');
+    assert.equal(decisionBrief.details.conditions[0].id.startsWith('condition:'), true);
+    assert.equal(decisionBrief.primary.reviewFocus.length, 0);
     const humanHandoff = formatCliOutput({ ...handoffExecution, json: false, color: false });
     assert.match(humanHandoff, /Decision state/);
     assert.match(humanHandoff, /Agent interpretation/);
-    assert.match(humanHandoff, /Account of the actual system change:/);
+    assert.match(humanHandoff, /Actual system meaning:/);
     assert.match(humanHandoff, /Runtime observations/);
     assert.match(humanHandoff, /Human adoption: pending/);
     assert.match(humanHandoff, /Developer decision required:/);
+    assert.doesNotMatch(humanHandoff, /(?:condition|obligation|decision-issue):/);
+    assert.doesNotMatch(humanHandoff, /sha256:/);
 
-    const decisionExecution = await runCli([
-      'change', 'decide', root, '--task', prepared.taskId, '--input', '-', '--json',
-    ], { input: jsonStream(decisionDocument()) });
+    assert.ok(handedOff.hostAction.decisionContinuation);
+    const decisionExecution = await submitHostAction({
+      action: handedOff.hostAction.decisionContinuation,
+      projectRoot: root,
+      document: decisionDocument(),
+    });
     const decided = decisionExecution.output as {
       status: string; decisionStatus: string; externalEffects: Record<string, boolean>;
     };
@@ -189,6 +208,24 @@ test('unsupported input is rejected without migration or compatibility state', a
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
+});
+
+test('programmatic Host submission rejects actions without an input binding', async () => {
+  await assert.rejects(
+    submitHostAction({
+      action: {
+        kind: 'implement-and-collect', reference: 'delivery',
+        executionRequirements: {
+          context: 'continuous', targetWorktree: 'read-write', stetraState: 'read-write',
+          workspace: 'target', externalEffects: 'contract-policy',
+        },
+        command: { argv: ['stetra', 'change', 'collect', '.', '--task', 'task:test', '--json'] },
+      },
+      projectRoot: process.cwd(),
+      document: {},
+    }),
+    (error: unknown) => (error as { code?: string }).code === 'INVALID_INPUT',
+  );
 });
 
 function createRepository(): string {

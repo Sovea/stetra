@@ -51,6 +51,7 @@ export async function verifyReleaseInstallation(installationRoot, expectedVersio
     'guardFinalResponse',
     'normalizeCliError',
     'runCli',
+    'submitHostAction',
   ]);
 
   return {

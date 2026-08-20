@@ -74,6 +74,7 @@ assert.deepEqual(
     'guardFinalResponse',
     'normalizeCliError',
     'runCli',
+    'submitHostAction',
   ],
   'The Host subpath must stay narrow and explicit.',
 );

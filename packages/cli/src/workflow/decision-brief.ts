@@ -11,48 +11,53 @@ import type {
 import { HUMAN_DECISION_ACTIONS, type TaskProjection } from '../schemas/delegation.ts';
 import { stableFingerprint } from '../protocol.ts';
 
-export interface DeveloperDecisionBrief {
-  primary: DeveloperDecisionPrimary;
-  details: DeveloperDecisionDetails;
-}
-
 export interface DeveloperDecisionPrimary {
-  decisionState: DeveloperDecisionDetails['decisionState'];
-  changeMeaning: DeveloperDecisionDetails['changeMeaning'];
-  recommendation: DeveloperDecisionDetails['recommendation'];
+  decisionState: {
+    delivery: TaskProjection['deliveryStatus'];
+    evidence: HandoffEvaluation['status'];
+    recommendation: DecisionPacket['decision']['recommendation']['action'];
+    adoption: HandoffEvaluation['adoption']['status'];
+  };
+  changeMeaning: {
+    authority: 'agent-judgment';
+    intendedOutcome: string;
+    actualSystemMeaning: string;
+    importantSystemEffects: string[];
+  };
+  recommendation: DecisionPacket['decision']['recommendation'];
   conditions: Array<{
     statement: string;
     criticality: 'material' | 'adoption-critical';
     finding: {
-      status: DeveloperDecisionDetails['conditions'][number]['status'];
+      status: DecisionPacket['conditions'][number]['agentFinding']['status'];
       summary: string;
     };
     obligations: Array<{
       statement: string;
       finding: {
-        status: DeveloperDecisionDetails['conditions'][number]['obligations'][number]['status'];
+        status: DecisionPacket['conditions'][number]['obligations'][number]['agentFinding']['status'];
         conclusion: string;
       };
       assurance: {
-        status: DeveloperDecisionDetails['conditions'][number]['obligations'][number]['assurance']['status'];
+        status: DecisionPacket['conditions'][number]['obligations'][number]['assurance']['status'];
         gaps: Array<{
-          kind: DeveloperDecisionDetails['conditions'][number]['obligations'][number]['assurance']['strategies'][number]['kind'];
-          reason: DeveloperDecisionDetails['conditions'][number]['obligations'][number]['assurance']['strategies'][number]['reason'];
+          kind: DecisionPacket['conditions'][number]['obligations'][number]['assurance']['strategies'][number]['kind'];
+          reason: DecisionPacket['conditions'][number]['obligations'][number]['assurance']['strategies'][number]['reason'];
         }>;
       };
       evidenceBoundary: {
         failureHypothesis: string;
         observedResult: string;
-        coverage: DeveloperDecisionDetails['conditions'][number]['obligations'][number]['evidenceBoundary']['coverage'];
+        coverage: DecisionPacket['conditions'][number]['obligations'][number]['agentFinding']['evidenceCoverage'];
         supportingEvidenceCount: number;
         counterEvidenceCount: number;
         challengeFindings: Array<{
-          outcome: DeveloperDecisionDetails['conditions'][number]['obligations'][number]['evidenceBoundary']['challengeFindings'][number]['outcome'];
+          outcome: DecisionPacket['evidenceJudgments']['challenges'][number]['outcome'];
           conclusion: string;
           counterEvidence: Array<{
             statement: string;
-            provenance: DeveloperDecisionDetails['conditions'][number]['obligations'][number]['evidenceBoundary']['challengeFindings'][number]['counterEvidence'][number]['provenance'];
-            reproduction: DeveloperDecisionDetails['conditions'][number]['obligations'][number]['evidenceBoundary']['challengeFindings'][number]['counterEvidence'][number]['reproduction'];
+            provenance: DecisionPacket['evidenceJudgments']['challenges'][number]['counterEvidence'][number]['provenance'];
+            reproduction: DecisionPacket['evidenceJudgments']['challenges'][number]['counterEvidence'][number]['reproduction'];
           }>;
         }>;
       };
@@ -77,8 +82,18 @@ export interface DeveloperDecisionPrimary {
   }>;
   runtimeEvidence: {
     authority: 'runtime-fact';
-    changedFiles: DeveloperDecisionDetails['runtimeEvidence']['changedFiles'];
-    checks: Array<Omit<DeveloperDecisionDetails['runtimeEvidence']['checks'][number], 'definitionId'>>;
+    changedFiles: Array<{
+      path: string;
+      operation: DecisionPacket['runtimeFacts']['changedFiles'][number]['operation'];
+      representation: DecisionPacket['runtimeFacts']['changedFiles'][number]['representation'];
+    }>;
+    checks: Array<{
+      argv: string[];
+      status: DecisionPacket['runtimeFacts']['checks'][number]['latestAttempt']['status'];
+      termination: DecisionPacket['runtimeFacts']['checks'][number]['latestAttempt']['termination'];
+      baselineRelation: DecisionPacket['runtimeFacts']['checks'][number]['baselineRelation'];
+      attemptCount: number;
+    }>;
   };
   requestedDecision: {
     authority: 'human-decision';
@@ -122,7 +137,7 @@ export interface DeveloperDecisionDetails {
         counterEvidenceCount: number;
         challengeFindings: Array<{
           id: string;
-          outcome: string;
+          outcome: DecisionPacket['evidenceJudgments']['challenges'][number]['outcome'];
           conclusion: string;
           counterEvidence: DecisionPacket['evidenceJudgments']['challenges'][number]['counterEvidence'];
         }>;
@@ -170,6 +185,11 @@ export interface DeveloperDecisionDetails {
     }>;
   };
   detailSections: DecisionPacket['detailSections'];
+}
+
+export interface DeveloperDecisionBrief {
+  primary: DeveloperDecisionPrimary;
+  details: DeveloperDecisionDetails;
 }
 
 export interface DeveloperDecisionIssue {

@@ -82,6 +82,7 @@ import {
   guardFinalResponse,
   HostChallengeLifecycle,
   runCli,
+  submitHostAction,
   type HostAttestationProvider,
 } from '@sovea/stetra/host';
 
@@ -103,12 +104,24 @@ await runCli(['change', 'collect', '.', '--task', taskId, '--json'], {
   interactive: false,
 });
 
+const authored = await submitHostAction({
+  action: currentHostAction,
+  document: completedProjectedDraft,
+  projectRoot: '.',
+  hostAttestations: attestations,
+});
+
 const guard = await guardFinalResponse({
   projectRoot: '.',
   taskId,
   hostAttestations: attestations,
 });
 ```
+
+`submitHostAction` accepts an input-bearing action, or an explicitly selected
+`decisionContinuation` after a new developer decision. It attaches the document
+to the projected command through one in-memory stdin stream without a shell,
+PTY, temporary file, or reconstructed task command.
 
 When `hostAction.challengeExecutionRequest` is present, the embedding Host
 starts exactly one `stetra-challenger` context and calls

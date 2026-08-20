@@ -12,6 +12,10 @@ export {
   type ChallengeRunStopObservation,
 } from './host/challenge-lifecycle.ts';
 export {
+  submitHostAction,
+  type SubmitHostActionOptions,
+} from './host/submission.ts';
+export {
   CliError,
   normalizeCliError,
   type CliErrorCode,
@@ -39,7 +43,11 @@ export type {
   ChallengeRoundDocumentDraft,
 } from './workflow/challenge-projection.ts';
 export type { ChallengeRoundDocument, HostChallengeRunReceipt } from './schemas/delegation.ts';
-export type { DeveloperDecisionBrief } from './workflow/decision-brief.ts';
+export type {
+  DeveloperDecisionBrief,
+  DeveloperDecisionDetails,
+  DeveloperDecisionPrimary,
+} from './workflow/decision-brief.ts';
 export type {
   ChallengeExecutionRequest,
   HostExecutionRequirements,

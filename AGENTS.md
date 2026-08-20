@@ -239,8 +239,10 @@ record `enforced`. Required unenforced policy pauses for exact Human resolution.
 
 The Host writes Handoff only after inspecting complete current facts. The Agent
 supplies a system-meaning summary, exactly one conclusion per Evidence
-Obligation and Condition, important effects, residual unknowns, consequence-
-directed Review Questions, and a recommendation distinct from adoption.
+Obligation and Condition, important effects, residual unknowns, only those
+consequence-directed Review Questions that can change adoption judgment, and a
+recommendation distinct from adoption. The projected draft begins with no
+Review Questions; required coverage may be consolidated across exact targets.
 
 Each Obligation conclusion includes exact evidence, counterevidence,
 falsification attempt, and supported, partial, contradicted, or unknown status.
@@ -274,10 +276,20 @@ Every input-bearing Host Action may provide a transient Authoring Packet with:
 - structural field requirements and outstanding obligations;
 - an exact one-shot stdin command binding.
 
+Native Hosts should use the public `submitHostAction` boundary to attach the
+completed document directly to that binding without a shell, PTY, temporary
+file, or reconstructed command. Thin Hosts must still attach stdin at process
+creation and never write authoring input inside the worktree.
+
 CLI generates boilerplate identities. Projection is derived output: it is not
 persisted, does not add a mode, cannot recommend a semantic choice, and cannot
 hide an adoption-changing fact. Canonical detail remains available through
 `change explain`.
+
+The final Developer Decision Brief has a semantic, ID-free `primary` projection
+for Human presentation and an exact `details` projection for traceability and
+machine continuation. Do not leak opaque IDs into the primary narrative or drop
+exact references from details.
 
 ## State and persistence
 
