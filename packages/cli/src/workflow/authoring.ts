@@ -325,7 +325,14 @@ export function handoffAuthoringPacket(input: {
     {
     inputKind: 'handoff',
     draft: {
-      summary: '',
+      actualChange: {
+        behavior: '',
+        mechanism: [''],
+        preservedInvariants: [],
+        failureAndRecovery: [],
+        importantEffects: [],
+        materialTradeoffs: [],
+      },
       obligationConclusions: obligations.map((obligation) => ({
         obligationId: obligation.id,
         status: '',
@@ -361,15 +368,18 @@ export function handoffAuthoringPacket(input: {
         status: '',
         summary: '',
       })),
-      importantSystemEffects: [],
       residualUnknowns: [],
       reviewQuestions: [],
       recommendation: { action: '', rationale: '', caveats: [] },
     },
     fieldRequirements: [
       textRequirement(
-        'draft.summary', 'agent-judgment',
-        'Summarize what the actual collected change means for the system.',
+        'draft.actualChange.behavior', 'agent-judgment',
+        'State the user-visible or system-visible behavior the collected implementation now produces.',
+      ),
+      textRequirement(
+        'draft.actualChange.mechanism[0]', 'agent-judgment',
+        'Name the concrete implementation mechanism or code path that produces the behavior.',
       ),
       ...obligations.flatMap((obligation, index) => [
         choiceRequirement(

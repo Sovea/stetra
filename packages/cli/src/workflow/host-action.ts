@@ -4,6 +4,7 @@ import type {
   HandoffStatus,
   MaterialDecisionForkInput,
   TaskMeaningInput,
+  DecisionPacket,
 } from '@sovea/stetra-core';
 
 import type { AuthoringPacket } from './authoring.ts';
@@ -89,7 +90,7 @@ export interface HostAction {
   presentationRequirements?: {
     leadWithDecisionState: true;
     requiredConditionIds: string[];
-    requiredDecisionIssueIds: string[];
+    requiredAttentionIds: string[];
     requiredReviewQuestionIds: string[];
     prohibitImpliedAdoption: true;
   };
@@ -277,6 +278,7 @@ export function handoffHostAction(
   taskId: string,
   brief: DeveloperDecisionBrief,
   packet: AuthoringPacket,
+  decisionPacket?: DecisionPacket,
 ): HostAction {
   const continuation = inputAction(
     'present-handoff-and-await-human-decision', 'handoff', 'decide', taskId, packet,
@@ -288,10 +290,9 @@ export function handoffHostAction(
     developerDecisionBrief: brief,
     presentationRequirements: {
       leadWithDecisionState: true,
-      requiredConditionIds: brief.details.conditions.map((condition) => condition.id),
-      requiredDecisionIssueIds: brief.details.decisionIssues.map((issue) => issue.id),
-      requiredReviewQuestionIds: [...new Set(brief.details.decisionIssues.flatMap((issue) =>
-        issue.reviewQuestions.map((question) => question.id)))].sort(),
+      requiredConditionIds: decisionPacket?.conditions.map((condition) => condition.id) ?? [],
+      requiredAttentionIds: decisionPacket?.attention.map((item) => item.id) ?? [],
+      requiredReviewQuestionIds: decisionPacket?.reviewQuestions.map((question) => question.id) ?? [],
       prohibitImpliedAdoption: true,
     },
     decisionContinuation: {

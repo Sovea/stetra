@@ -1035,6 +1035,7 @@ export async function evaluateDelegationHandoff(options: {
         handoff: handoff!,
         evaluation: evaluation!,
       }),
+      packet!,
     ),
   };
 }
@@ -1646,6 +1647,7 @@ function currentTaskHostAction(task: LoadedTask, challengeAttestationAvailable =
         handoff,
         evaluation,
       }),
+      packet,
     );
   }
   const currentDispositionPath = currentAttempt.evidenceDispositionPaths.at(-1);
@@ -2019,11 +2021,8 @@ function buildDecisionPacket(
       resolutions,
       ...(decision ? { humanDecision: decision } : {}),
     },
-    systemMeaning: {
-      summary: handoff.summary,
-      importantSystemEffects: handoff.importantSystemEffects,
-      residualUnknowns: handoff.residualUnknowns,
-    },
+    actualChange: handoff.actualChange,
+    residualUnknowns: handoff.residualUnknowns,
     conditions: contract.adoptionConditions.map((condition) => ({
       id: condition.id,
       key: condition.key,

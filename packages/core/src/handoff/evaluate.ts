@@ -508,8 +508,8 @@ function validateHandoff(
   }
   exact(value, [
     'protocol', 'schemaVersion', 'handoffId', 'handoffFingerprint', 'effectiveContractId',
-    'attemptId', 'factCollectionId', 'summary', 'obligationConclusions',
-    'conditionConclusions', 'importantSystemEffects', 'residualUnknowns',
+    'attemptId', 'factCollectionId', 'actualChange', 'obligationConclusions',
+    'conditionConclusions', 'residualUnknowns',
     'reviewQuestions', 'recommendation',
   ], '', issues);
   if (value.protocol !== contract.protocol || value.schemaVersion !== contract.schemaVersion) {
@@ -521,7 +521,7 @@ function validateHandoff(
     || value.factCollectionId !== facts.factCollectionId) {
     issues.push(issue('handoff-binding-invalid', '$', 'Handoff is not bound to the current contract, Attempt, and facts.', 'Regenerate it from the current Authoring Packet.'));
   }
-  text(value.summary, 'summary', issues);
+  const actualChange = validateActualChange(value.actualChange, issues);
   const challengeIds = new Set(challenges.map((item) => item.id));
   const obligationConclusions = validateObligationConclusions(
     value.obligationConclusions, contract, facts, challenges,
@@ -530,7 +530,6 @@ function validateHandoff(
   const conditionConclusions = validateConditionConclusions(
     value.conditionConclusions, contract, obligationConclusions, issues,
   );
-  const importantSystemEffects = texts(value.importantSystemEffects, 'importantSystemEffects', issues);
   const unknowns = validateUnknowns(value.residualUnknowns, contract, facts, challengeIds, issues);
   const reviewQuestions = validateReviewQuestions(value.reviewQuestions, contract, facts, challengeIds, issues);
   validateReviewCoverage(
@@ -549,14 +548,45 @@ function validateHandoff(
   if (issues.length) throw new HandoffValidationError(issues);
   return {
     ...value,
-    summary: value.summary.trim(),
+    actualChange: actualChange!,
     obligationConclusions,
     conditionConclusions,
-    importantSystemEffects,
     residualUnknowns: unknowns,
     reviewQuestions,
     recommendation: recommendation!,
   };
+}
+
+function validateActualChange(
+  value: unknown,
+  issues: HandoffValidationIssue[],
+): CognitiveHandoff['actualChange'] | undefined {
+  const before = issues.length;
+  if (!isRecord(value)) {
+    issues.push(issue('actual-change-invalid', 'actualChange', 'Actual change must be an object.', 'Describe the implemented system behavior and mechanism.'));
+    return undefined;
+  }
+  exact(value, [
+    'behavior', 'mechanism', 'preservedInvariants', 'failureAndRecovery',
+    'importantEffects', 'materialTradeoffs',
+  ], 'actualChange', issues);
+  text(value.behavior, 'actualChange.behavior', issues);
+  const mechanism = texts(value.mechanism, 'actualChange.mechanism', issues);
+  if (!mechanism.length) {
+    issues.push(issue('actual-change-mechanism-required', 'actualChange.mechanism', 'Actual change requires at least one implementation mechanism.', 'Name the code path or design mechanism that produces the behavior.'));
+  }
+  const preservedInvariants = texts(value.preservedInvariants, 'actualChange.preservedInvariants', issues);
+  const failureAndRecovery = texts(value.failureAndRecovery, 'actualChange.failureAndRecovery', issues);
+  const importantEffects = texts(value.importantEffects, 'actualChange.importantEffects', issues);
+  const materialTradeoffs = texts(value.materialTradeoffs, 'actualChange.materialTradeoffs', issues);
+  return issues.length === before ? {
+    behavior: String(value.behavior).trim(),
+    mechanism,
+    preservedInvariants,
+    failureAndRecovery,
+    importantEffects,
+    materialTradeoffs,
+  } : undefined;
 }
 
 function validateObligationConclusions(

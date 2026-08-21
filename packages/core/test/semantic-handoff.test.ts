@@ -1066,7 +1066,14 @@ function handoffFor(
     effectiveContractId: contract.effectiveContractId,
     attemptId: facts.attemptId,
     factCollectionId: facts.factCollectionId,
-    summary: 'The implementation updates the requested behavior.',
+    actualChange: {
+      behavior: 'The implementation updates the requested behavior.',
+      mechanism: ['The new branch reuses the existing compatibility path.'],
+      preservedInvariants: ['Existing callers retain their public behavior.'],
+      failureAndRecovery: [],
+      importantEffects: ['Public behavior changes only at the requested boundary.'],
+      materialTradeoffs: [],
+    },
     obligationConclusions: obligations.map((obligation) => {
       const challenge = challengeByObligation.get(obligation.id);
       return {
@@ -1100,7 +1107,6 @@ function handoffFor(
       summary: status === 'supported'
         ? 'All declared evidence obligations are supported.' : 'Evidence remains unresolved.',
     })),
-    importantSystemEffects: ['Public behavior changes only at the requested boundary.'],
     residualUnknowns: status === 'supported' ? [] : [{
       conditionIds: contract.adoptionConditions.map((item) => item.id),
       obligationIds: obligations.map((item) => item.id),

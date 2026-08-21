@@ -308,8 +308,9 @@ test('final-response guard exposes the current workflow action without writing s
     collected = await collect(root, prepared.taskId);
 
     const handoffDraft = structuredClone(collected.hostAction.authoringPacket.draft);
-    handoffDraft.summary = 'The routine fixture now contains the requested current implementation.';
-    handoffDraft.importantSystemEffects = ['The fixture text changed.'];
+    handoffDraft.actualChange.behavior = 'The routine fixture now contains the requested current implementation.';
+    handoffDraft.actualChange.mechanism = ['The fixture text is replaced directly.'];
+    handoffDraft.actualChange.importantEffects = ['The fixture text changed.'];
     handoffDraft.recommendation = {
       action: 'accept', rationale: 'The exact current facts match the routine change.', caveats: [],
     };
@@ -698,7 +699,11 @@ test('required Challenge remains preferred after evidence diagnosis', async () =
     const condition = prepared.taskContract.adoptionConditions[0];
     const obligation = condition.evidenceObligations[0];
     const prematureHandoff = {
-      summary: 'The failed observation remains unresolved.',
+      actualChange: {
+        behavior: 'The failed observation remains unresolved.',
+        mechanism: ['The implementation changes the selected verifier surface.'],
+        preservedInvariants: [], failureAndRecovery: [], importantEffects: [], materialTradeoffs: [],
+      },
       obligationConclusions: [{
         obligationId: obligation.id,
         status: 'unknown',
@@ -720,7 +725,6 @@ test('required Challenge remains preferred after evidence diagnosis', async () =
         status: 'unknown',
         summary: 'The adoption condition remains unresolved.',
       }],
-      importantSystemEffects: [],
       residualUnknowns: [],
       reviewQuestions: [{
         conditionIds: [condition.id],
@@ -845,7 +849,11 @@ test('a Human correction creates a successor Attempt and preserves the prior dec
     const condition = prepared.taskContract.adoptionConditions[0];
     const obligation = condition.evidenceObligations[0];
     const handedOff = await handoff(root, prepared.taskId, {
-      summary: 'The first implementation is ready for review.',
+      actualChange: {
+        behavior: 'The first implementation is ready for review.',
+        mechanism: ['The fixture source is updated directly.'],
+        preservedInvariants: [], failureAndRecovery: [], importantEffects: [], materialTradeoffs: [],
+      },
       obligationConclusions: [{
         obligationId: obligation.id,
         status: 'supported',
@@ -865,7 +873,7 @@ test('a Human correction creates a successor Attempt and preserves the prior dec
       conditionConclusions: [{
         conditionId: condition.id, status: 'supported', summary: 'The obligation is supported.',
       }],
-      importantSystemEffects: [], residualUnknowns: [], reviewQuestions: [],
+      residualUnknowns: [], reviewQuestions: [],
       recommendation: { action: 'accept', rationale: 'The bounded evidence is current.', caveats: [] },
     });
     assert.equal(handedOff.status, 'handoff-ready');
@@ -887,7 +895,7 @@ test('a Human correction creates a successor Attempt and preserves the prior dec
       recommendation: 'accept', adoption: 'pending',
     });
     assert.equal(
-      handedOff.hostAction.developerDecisionBrief.primary.changeMeaning.actualSystemMeaning,
+      handedOff.hostAction.developerDecisionBrief.primary.changeMeaning.actualChange.behavior,
       'The first implementation is ready for review.',
     );
     assert.equal(
@@ -990,7 +998,8 @@ test('a thin Host runs the bounded Challenger but preserves unverified direct re
     ));
     assert.deepEqual(collected.verifierSurfaces.map((item: { path: string }) => item.path), ['source.txt']);
     const draft = structuredClone(challenged.hostAction.authoringPacket.draft);
-    draft.summary = 'The implementation passes its changed verifier, but Host-attested independence is unavailable.';
+    draft.actualChange.behavior = 'The implementation passes its changed verifier, but Host-attested independence is unavailable.';
+    draft.actualChange.mechanism = ['The implementation and verifier surface change together.'];
     for (const conclusion of draft.obligationConclusions) {
       conclusion.status = 'supported';
       conclusion.evidenceCoverage = {
@@ -1041,23 +1050,14 @@ test('a thin Host runs the bounded Challenger but preserves unverified direct re
     assert.equal(handedOff.decisionPacket.conditions[0].obligations[0].agentFinding.status, 'supported');
     assert.equal(handedOff.decisionPacket.conditions[0].obligations[0].evidencePath.status, 'unverified');
     assert.equal(handedOff.hostAction.developerDecisionBrief.primary.conditions[0].obligations[0].evidencePath.status, 'unverified');
-    const issue = handedOff.hostAction.developerDecisionBrief.details.decisionIssues.find(
+    const issue = handedOff.hostAction.developerDecisionBrief.primary.blockers.find(
       (item: { codes: string[] }) => item.codes.includes('challenge-independence-unverified'),
     );
     assert.deepEqual(issue.codes, ['challenge-independence-unverified', 'direct-review-required']);
-    assert.equal(issue.attentionIds.length, 2);
-    assert.deepEqual(issue.conditionIds, [condition.id]);
-    assert.deepEqual(issue.obligationIds, [obligation.id]);
+    assert.deepEqual(issue.affectedConditions, [condition.statement]);
     assert.equal(issue.reviewQuestions.length, 1);
-    const exceptionTargets = handedOff.hostAction.developerDecisionBrief.details.requestedDecision
-      .acceptanceRequiresExceptionsFor;
     assert.deepEqual(
-      exceptionTargets.find((target: { decisionIssueId: string }) =>
-        target.decisionIssueId === issue.id),
-      { decisionIssueId: issue.id, attentionIds: issue.attentionIds },
-    );
-    assert.deepEqual(
-      exceptionTargets.flatMap((target: { attentionIds: string[] }) => target.attentionIds).sort(),
+      handedOff.hostAction.presentationRequirements.requiredAttentionIds.sort(),
       handedOff.decisionPacket.attention.map((item: { id: string }) => item.id).sort(),
     );
   } finally {
@@ -1087,7 +1087,8 @@ test('unavailable fresh-context execution can degrade to an honest limited hando
     const handoffDraft = structuredClone(explained.authoringPacket.draft);
     const condition = prepared.taskContract.adoptionConditions[0];
     const obligation = condition.evidenceObligations[0];
-    handoffDraft.summary = 'Runtime facts are current, while the independent Challenge remains unavailable.';
+    handoffDraft.actualChange.behavior = 'Runtime facts are current, while the independent Challenge remains unavailable.';
+    handoffDraft.actualChange.mechanism = ['The implementation follows the changed fixture path.'];
     handoffDraft.obligationConclusions[0].status = 'unknown';
     handoffDraft.obligationConclusions[0].evidenceCoverage = {
       status: 'insufficient',
@@ -1242,7 +1243,8 @@ test('a bounded Challenge Execution Packet completes the persisted challenge-to-
     assert.ok(challenged.hostAction.authoringPacket.shapeCatalog['residual-unknown'].length);
 
     const handoffDraft = structuredClone(challenged.hostAction.authoringPacket.draft);
-    handoffDraft.summary = 'The changed verifier and implementation are ready for bounded review.';
+    handoffDraft.actualChange.behavior = 'The changed verifier and implementation are ready for bounded review.';
+    handoffDraft.actualChange.mechanism = ['The implementation follows the changed verifier path.'];
     for (const conclusion of handoffDraft.obligationConclusions) {
       conclusion.status = 'supported';
       conclusion.evidenceCoverage = {
@@ -1639,7 +1641,8 @@ test('an adverse Challenge preserves its exact counter-evidence through Handoff 
     assert.deepEqual(handoffDraft.obligationConclusions[0].counterEvidence, [{
       kind: 'challenge', id: challenged.challenges[0].id,
     }]);
-    handoffDraft.summary = 'The implementation behavior is partly supported, with a persistent-verification gap.';
+    handoffDraft.actualChange.behavior = 'The implementation behavior is partly supported, with a persistent-verification gap.';
+    handoffDraft.actualChange.mechanism = ['The implementation updates the fixture while generated verification remains stale.'];
     handoffDraft.obligationConclusions[0].status = 'partial';
     handoffDraft.obligationConclusions[0].evidenceCoverage = {
       status: 'insufficient',
@@ -1673,9 +1676,8 @@ test('an adverse Challenge preserves its exact counter-evidence through Handoff 
     assert.equal(recorded.counterEvidence[0].provenance, 'repository-inspection');
     assert.equal(recorded.counterEvidence[0].reproduction, 'agent-reported');
     assert.deepEqual(recorded.counterEvidence[0].references, [{ kind: 'check', id: checkId }]);
-    const finding = handedOff.hostAction.developerDecisionBrief
-      .details.conditions[0].obligations[0].evidenceBoundary.challengeFindings[0];
-    assert.equal(finding.id, challenged.challenges[0].id);
+    const finding = handedOff.hostAction.developerDecisionBrief.primary
+      .conditions[0].obligations[0].evidenceBoundary.challengeFindings[0];
     assert.equal(finding.outcome, 'partial');
     assert.equal(finding.conclusion, challengeDraft.conclusion);
     assert.equal(finding.counterEvidence[0].statement, counterStatement);
@@ -1750,7 +1752,8 @@ test('verification revision preserves history and completes handoff against curr
     assert.equal(stored.projection.verificationRevisionIds.length, 1);
 
     const handoffDraft = structuredClone(second.hostAction.authoringPacket.draft);
-    handoffDraft.summary = 'The rebound verification passed against the current implementation.';
+    handoffDraft.actualChange.behavior = 'The rebound verification passed against the current implementation.';
+    handoffDraft.actualChange.mechanism = ['The revised command executes the same bounded fixture assertion.'];
     for (const conclusion of handoffDraft.obligationConclusions) {
       conclusion.status = 'supported';
       conclusion.evidenceCoverage = {
@@ -1786,9 +1789,9 @@ test('verification revision preserves history and completes handoff against curr
     assert.equal(handedOff.decisionPacket.runtimeFacts.attemptId, 'attempt:2');
     assert.equal(handedOff.decisionPacket.evidenceJudgments.dispositions.length, 1);
     assert.equal(handedOff.decisionPacket.evidenceJudgments.dispositions[0].attemptId, 'attempt:1');
-    assert.equal(handedOff.hostAction.developerDecisionBrief.details.evidenceHistory.length, 1);
+    assert.equal(handedOff.decisionPacket.evidenceJudgments.dispositions.length, 1);
     assert.equal(
-      handedOff.hostAction.developerDecisionBrief.details.evidenceHistory[0].resolution.actualRoute,
+      handedOff.decisionPacket.evidenceJudgments.dispositions[0].route,
       'revise-verification',
     );
     assert.ok(handedOff.decisionPacket.attention.some((item: { codes: string[] }) =>

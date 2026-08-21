@@ -71,10 +71,16 @@ export interface CognitiveHandoff extends ProtocolEnvelope {
   effectiveContractId: string;
   attemptId: string;
   factCollectionId: string;
-  summary: string;
+  actualChange: {
+    behavior: string;
+    mechanism: string[];
+    preservedInvariants: string[];
+    failureAndRecovery: string[];
+    importantEffects: string[];
+    materialTradeoffs: string[];
+  };
   obligationConclusions: EvidenceObligationConclusion[];
   conditionConclusions: AdoptionConditionConclusion[];
-  importantSystemEffects: string[];
   residualUnknowns: ResidualUnknown[];
   reviewQuestions: ReviewQuestion[];
   recommendation: AgentRecommendation;
@@ -241,11 +247,8 @@ export interface DecisionPacket extends ProtocolEnvelope {
     humanDecision?: HumanDecision;
     resolutions: HumanResolution[];
   };
-  systemMeaning: {
-    summary: string;
-    importantSystemEffects: string[];
-    residualUnknowns: ResidualUnknown[];
-  };
+  actualChange: CognitiveHandoff['actualChange'];
+  residualUnknowns: ResidualUnknown[];
   conditions: Array<{
     id: string;
     key: string;

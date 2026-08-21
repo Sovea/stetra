@@ -114,9 +114,9 @@ test('host actions route the initial lifecycle with executable task argv', () =>
   ]);
   assert.deepEqual(handoff.presentationRequirements, {
     leadWithDecisionState: true,
-    requiredConditionIds: ['condition:test'],
-    requiredDecisionIssueIds: ['decision-issue:test'],
-    requiredReviewQuestionIds: ['review:test'],
+    requiredConditionIds: [],
+    requiredAttentionIds: [],
+    requiredReviewQuestionIds: [],
     prohibitImpliedAdoption: true,
   });
   assert.equal(resolutionHostAction('task-id', packet('resolution')).authoringPacket?.inputKind, 'resolution');
@@ -357,53 +357,23 @@ function challengePacket(): ChallengeExecutionPacket {
 }
 
 function brief(): DeveloperDecisionBrief {
-  const details: DeveloperDecisionBrief['details'] = {
-    decisionState: {
-      delivery: 'implementation-complete', evidence: 'needs-attention',
-      recommendation: 'defer', adoption: 'pending',
-    },
-    changeMeaning: {
-      authority: 'agent-judgment', intendedOutcome: 'Requested outcome.',
-      actualSystemMeaning: 'Actual change.',
-      importantSystemEffects: [],
-    },
-    recommendation: {
-      action: 'defer', rationale: 'Review the unresolved verification issue.', caveats: [],
-    },
-    conditions: [{
-      authority: 'agent-judgment',
-      id: 'condition:test', statement: 'Condition.', criticality: 'material',
-      status: 'partial', summary: 'Partially supported.', obligations: [],
-    }],
-    decisionIssues: [{
-      id: 'decision-issue:test', attentionIds: ['attention:test'],
-      codes: ['verification-nonpassing'], group: 'verification', resolutions: ['inspect'],
-      references: {}, conditionIds: ['condition:test'], obligationIds: [],
-      residualUnknowns: [], reviewQuestions: [{
-        id: 'review:test', conditionIds: ['condition:test'], obligationIds: [],
-        question: 'Inspect?', adoptionImpact: 'Changes adoption.', evidence: [],
-      }],
-    }],
-    reviewQuestions: [{
-      id: 'review:test', conditionIds: ['condition:test'], obligationIds: [],
-      question: 'Inspect?', adoptionImpact: 'Changes adoption.', evidence: [],
-    }],
-    evidenceHistory: [],
-    runtimeEvidence: { authority: 'runtime-fact', changedFiles: [], checks: [] },
-    requestedDecision: {
-      authority: 'human-decision',
-      actions: ['accepted', 'correction-requested', 'rejected', 'deferred'],
-      acceptanceRequiresExceptionsFor: [{
-        decisionIssueId: 'decision-issue:test', attentionIds: ['attention:test'],
-      }],
-    },
-    detailSections: ['contract'],
-  };
   return {
     primary: {
-      decisionState: details.decisionState,
-      changeMeaning: details.changeMeaning,
-      recommendation: details.recommendation,
+      decisionState: {
+        delivery: 'implementation-complete', evidence: 'needs-attention',
+        recommendation: 'defer', adoption: 'pending',
+      },
+      changeMeaning: {
+        authority: 'agent-judgment', intendedOutcome: 'Requested outcome.',
+        actualChange: {
+          behavior: 'Actual change.', mechanism: ['Mechanism.'], preservedInvariants: [],
+          failureAndRecovery: [], importantEffects: [], materialTradeoffs: [],
+        },
+      },
+      recommendation: {
+        action: 'defer', rationale: 'Review the unresolved verification issue.', caveats: [],
+      },
+      priorHumanResolutions: [],
       conditions: [{
         statement: 'Condition.', criticality: 'material',
         finding: { status: 'partial', summary: 'Partially supported.' }, obligations: [],
@@ -424,7 +394,6 @@ function brief(): DeveloperDecisionBrief {
         acceptanceExceptionIssueCount: 1,
       },
     },
-    details,
   };
 }
 

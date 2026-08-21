@@ -25,10 +25,14 @@ export interface DeveloperDecisionPrimary {
   changeMeaning: {
     authority: 'agent-judgment';
     intendedOutcome: string;
-    actualSystemMeaning: string;
-    importantSystemEffects: string[];
+    actualChange: DecisionPacket['actualChange'];
   };
   recommendation: DecisionPacket['decision']['recommendation'];
+  priorHumanResolutions: Array<{
+    target: DecisionPacket['decision']['resolutions'][number]['interpretation']['target']['kind'];
+    action: DecisionPacket['decision']['resolutions'][number]['interpretation']['action'];
+    reason: string;
+  }>;
   conditions: Array<{
     statement: string;
     criticality: 'material' | 'adoption-critical';
@@ -106,7 +110,7 @@ export interface DeveloperDecisionPrimary {
   };
 }
 
-export interface DeveloperDecisionDetails {
+interface DeveloperDecisionDetails {
   decisionState: {
     delivery: DerivedTaskState['deliveryStatus'];
     evidence: HandoffEvaluation['status'];
@@ -116,10 +120,10 @@ export interface DeveloperDecisionDetails {
   changeMeaning: {
     authority: 'agent-judgment';
     intendedOutcome: string;
-    actualSystemMeaning: string;
-    importantSystemEffects: string[];
+    actualChange: DecisionPacket['actualChange'];
   };
   recommendation: DecisionPacket['decision']['recommendation'];
+  priorHumanResolutions: DecisionPacket['decision']['resolutions'];
   conditions: Array<{
     authority: 'agent-judgment';
     id: string;
@@ -193,7 +197,6 @@ export interface DeveloperDecisionDetails {
 
 export interface DeveloperDecisionBrief {
   primary: DeveloperDecisionPrimary;
-  details: DeveloperDecisionDetails;
 }
 
 export interface DeveloperDecisionIssue {
@@ -205,7 +208,7 @@ export interface DeveloperDecisionIssue {
   references: HandoffAttentionItem['references'];
   conditionIds: string[];
   obligationIds: string[];
-  residualUnknowns: DecisionPacket['systemMeaning']['residualUnknowns'];
+  residualUnknowns: DecisionPacket['residualUnknowns'];
   reviewQuestions: ReviewQuestion[];
 }
 
@@ -264,7 +267,7 @@ export function buildDeveloperDecisionBrief(input: {
       references: group.references,
       conditionIds: target.conditionIds,
       obligationIds: target.obligationIds,
-      residualUnknowns: input.packet.systemMeaning.residualUnknowns.filter((unknown) =>
+      residualUnknowns: input.packet.residualUnknowns.filter((unknown) =>
         overlaps(unknown.conditionIds, conditionIds) || overlaps(unknown.obligationIds, obligationIds)),
       reviewQuestions: input.packet.reviewQuestions.filter((question) =>
         questionMatchesTarget(question, target)),
@@ -281,10 +284,10 @@ export function buildDeveloperDecisionBrief(input: {
     changeMeaning: {
       authority: 'agent-judgment',
       intendedOutcome: input.packet.semanticContract.desiredOutcome,
-      actualSystemMeaning: input.packet.systemMeaning.summary,
-      importantSystemEffects: input.packet.systemMeaning.importantSystemEffects,
+      actualChange: input.packet.actualChange,
     },
     recommendation: input.packet.decision.recommendation,
+    priorHumanResolutions: input.packet.decision.resolutions,
     conditions: input.packet.conditions.map((condition) => ({
       authority: 'agent-judgment',
       id: condition.id,
@@ -358,7 +361,7 @@ export function buildDeveloperDecisionBrief(input: {
     },
     detailSections: input.packet.detailSections,
   };
-  return { primary: primaryBrief(details), details };
+  return { primary: primaryBrief(details) };
 }
 
 function primaryBrief(details: DeveloperDecisionDetails): DeveloperDecisionPrimary {
@@ -368,6 +371,11 @@ function primaryBrief(details: DeveloperDecisionDetails): DeveloperDecisionPrima
     decisionState: details.decisionState,
     changeMeaning: details.changeMeaning,
     recommendation: details.recommendation,
+    priorHumanResolutions: details.priorHumanResolutions.map((resolution) => ({
+      target: resolution.interpretation.target.kind,
+      action: resolution.interpretation.action,
+      reason: resolution.interpretation.reason,
+    })),
     conditions: details.conditions.map((condition) => ({
       statement: condition.statement,
       criticality: condition.criticality,

@@ -45,7 +45,6 @@ export type {
 export type { ChallengeRoundDocument, HostChallengeRunReceipt } from './schemas/delegation.ts';
 export type {
   DeveloperDecisionBrief,
-  DeveloperDecisionDetails,
   DeveloperDecisionPrimary,
 } from './workflow/decision-brief.ts';
 export type {

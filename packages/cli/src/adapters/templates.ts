@@ -407,9 +407,10 @@ Attempt, fact-collection, and fingerprint identities; do not author machine fact
 Fill the exact **hostAction.authoringPacket.draft**; it already contains current
 immutable IDs and outstanding obligations. **fieldRequirements** lists the
 allowed conclusion/recommendation values; each **shapeRef** resolves to one
-reusable variant set in **shapeCatalog** without selecting an answer. The handoff contains a decision
-summary, exactly one Agent finding per Evidence Obligation and condition,
-important system effects, residual unknowns,
+reusable variant set in **shapeCatalog** without selecting an answer. The handoff contains an
+actual-change model covering behavior, mechanism, preserved invariants,
+failure/recovery behavior, important effects, and material tradeoffs; exactly one
+Agent finding per Evidence Obligation and condition; residual unknowns;
 consequence-directed review questions, and an Agent recommendation. Evidence is
 an array of exact references such as **{"kind":"check","id":"..."}** or
 **{"kind":"patch"}**. Every Obligation finding states the concrete
@@ -419,10 +420,10 @@ bounded conclusion; preserve every uncovered aspect as a concrete gap and keep
 the conclusion below supported. Runtime checks this declaration but does not
 infer semantic coverage from the repository. Do not repeat Runtime facts as
 Agent prose or create one review item per changed
-file. Runtime separately derives assurance fulfillment for each declared
+file. Runtime separately derives the state of each declared evidence path;
 strategy; a missing or unverified Challenge does not rewrite the Agent finding.
 Recommend **accept** only when every Condition and Obligation finding is
-supported, every required assurance strategy is fulfilled, checks pass, and
+supported, every required evidence path is complete, checks pass, and
 no adoption-changing unknown, required Host-policy gap, exhausted repair, or
 unrepresentable change remains. Otherwise use request-correction, defer, or
 reject; only a later exact Human decision may accept exceptions.
@@ -440,14 +441,15 @@ stetra change handoff . --task <task-id> --input - --json
 
 The returned **hostAction.developerDecisionBrief.primary** is the delivery
 surface for the developer. It distinguishes delivery state, evidence state,
-Agent recommendation, and Human adoption; labels intended and actual system
-meaning as Agent judgment; places every Condition and Obligation finding beside
-its separate Runtime assurance result, including Challenge counter-evidence;
+Agent recommendation, and Human adoption; labels the actual behavior,
+implementation mechanism, preserved invariants, failure/recovery behavior,
+effects, and tradeoffs as Agent judgment; places every Condition and Obligation finding beside
+its separate evidence-path state, including Challenge counter-evidence;
 labels collected change and check data as Runtime observations; and presents
 only decision-changing blockers and review focus. It contains statements rather
-than opaque protocol IDs. **developerDecisionBrief.details** retains canonical
-IDs, exact Attention aggregation, recovery history, and detail-section pointers
-for inspection and machine continuation. Attention with the same exact protocol
+than opaque protocol IDs. The canonical **decisionPacket** and **change explain**
+surfaces retain exact IDs, Attention, recovery history, and detail pointers for
+inspection and machine continuation. Attention with the same exact protocol
 group and required resolution shares one issue. This is structural grouping,
 not inferred semantic similarity.
 Present that brief as the final task summary even when another active workflow

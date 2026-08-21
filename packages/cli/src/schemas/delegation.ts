@@ -355,7 +355,14 @@ export const HostChallengeRunReceiptSchema = z.strictObject({
 });
 
 export const CognitiveHandoffDocumentSchema = z.strictObject({
-  summary: NonEmptyStringSchema,
+  actualChange: z.strictObject({
+    behavior: NonEmptyStringSchema,
+    mechanism: z.array(NonEmptyStringSchema).min(1),
+    preservedInvariants: z.array(NonEmptyStringSchema),
+    failureAndRecovery: z.array(NonEmptyStringSchema),
+    importantEffects: z.array(NonEmptyStringSchema),
+    materialTradeoffs: z.array(NonEmptyStringSchema),
+  }),
   obligationConclusions: z.array(z.strictObject({
     obligationId: StableIdSchema,
     status: z.enum(CONCLUSION_STATUSES),
@@ -373,7 +380,6 @@ export const CognitiveHandoffDocumentSchema = z.strictObject({
     status: z.enum(CONCLUSION_STATUSES),
     summary: NonEmptyStringSchema,
   })),
-  importantSystemEffects: z.array(NonEmptyStringSchema),
   residualUnknowns: z.array(z.strictObject({
     conditionIds: z.array(StableIdSchema),
     obligationIds: z.array(StableIdSchema),

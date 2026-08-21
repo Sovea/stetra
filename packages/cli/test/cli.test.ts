@@ -91,7 +91,7 @@ test('CLI JSON mode executes compact prepare, baseline-aware collect, layered ha
     assert.equal(handedOff.decisionPacket.semanticContract.desiredOutcome, 'Change the CLI fixture.');
     assert.deepEqual(Object.keys(handedOff.decisionPacket), [
       'protocol', 'schemaVersion', 'humanEvents', 'semanticContract', 'decision',
-      'systemMeaning', 'conditions', 'attention', 'reviewQuestions', 'runtimeFacts',
+      'actualChange', 'residualUnknowns', 'conditions', 'attention', 'reviewQuestions', 'runtimeFacts',
       'evidenceJudgments', 'detailSections',
     ]);
     for (const removedDuplicate of [
@@ -102,12 +102,12 @@ test('CLI JSON mode executes compact prepare, baseline-aware collect, layered ha
     assert.equal('attention' in handedOff, false);
     const decisionBrief = handedOff.hostAction.developerDecisionBrief!;
     assert.equal(decisionBrief.primary.conditions[0].statement, 'The fixture check passes.');
-    assert.equal(decisionBrief.details.conditions[0].id.startsWith('condition:'), true);
+    assert.equal(handedOff.hostAction.presentationRequirements.requiredConditionIds[0].startsWith('condition:'), true);
     assert.equal(decisionBrief.primary.reviewFocus.length, 0);
     const humanHandoff = formatCliOutput({ ...handoffExecution, json: false, color: false });
     assert.match(humanHandoff, /Decision state/);
     assert.match(humanHandoff, /Agent interpretation/);
-    assert.match(humanHandoff, /Actual system meaning:/);
+    assert.match(humanHandoff, /Actual behavior:/);
     assert.match(humanHandoff, /Runtime observations/);
     assert.match(humanHandoff, /Human adoption: pending/);
     assert.match(humanHandoff, /Developer decision required:/);
@@ -285,7 +285,14 @@ function prepareDocument() {
 
 function handoffDocument(conditionId: string, obligationId: string, definitionId: string) {
   return {
-    summary: 'The CLI fixture changed.',
+    actualChange: {
+      behavior: 'The CLI fixture changed.',
+      mechanism: ['The fixture source is updated directly.'],
+      preservedInvariants: ['Human adoption remains explicit.'],
+      failureAndRecovery: [],
+      importantEffects: ['Fixture behavior changed.'],
+      materialTradeoffs: [],
+    },
     obligationConclusions: [{
       obligationId, status: 'supported',
       evidence: [{ kind: 'check', id: definitionId }],
@@ -303,7 +310,6 @@ function handoffDocument(conditionId: string, obligationId: string, definitionId
     conditionConclusions: [{
       conditionId, status: 'supported', summary: 'The check passed.',
     }],
-    importantSystemEffects: ['Fixture behavior changed.'],
     residualUnknowns: [], reviewQuestions: [],
     recommendation: { action: 'accept', rationale: 'Evidence is current.', caveats: [] },
   };

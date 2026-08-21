@@ -152,16 +152,36 @@ function appendDeveloperDecisionBrief(
       }
     }
   }
+  if (Array.isArray(brief.priorHumanResolutions) && brief.priorHumanResolutions.length) {
+    lines.push('', colors.bold('Prior developer resolutions'));
+    for (const resolution of brief.priorHumanResolutions) {
+      if (!isRecord(resolution)) continue;
+      lines.push(
+        `${colors.cyan('•')} ${String(resolution.target ?? 'unknown')} — ${String(resolution.action ?? 'unknown')}`,
+        `  ${String(resolution.reason ?? '')}`,
+      );
+    }
+  }
   if (isRecord(brief.changeMeaning)) {
+    const actual = isRecord(brief.changeMeaning.actualChange)
+      ? brief.changeMeaning.actualChange : {};
     lines.push(
       '',
       colors.bold('Agent interpretation'),
       `${colors.bold('Intended outcome:')} ${String(brief.changeMeaning.intendedOutcome ?? '')}`,
-      `${colors.bold('Actual system meaning:')} ${String(brief.changeMeaning.actualSystemMeaning ?? '')}`,
+      `${colors.bold('Actual behavior:')} ${String(actual.behavior ?? '')}`,
     );
-    if (Array.isArray(brief.changeMeaning.importantSystemEffects)) {
-      for (const effect of brief.changeMeaning.importantSystemEffects) {
-        lines.push(`${colors.cyan('•')} ${String(effect)}`);
+    for (const [label, field] of [
+      ['Mechanism', 'mechanism'],
+      ['Preserved', 'preservedInvariants'],
+      ['Failure / recovery', 'failureAndRecovery'],
+      ['Important effect', 'importantEffects'],
+      ['Tradeoff', 'materialTradeoffs'],
+    ] as const) {
+      if (Array.isArray(actual[field])) {
+        for (const item of actual[field]) {
+          lines.push(`${colors.cyan('•')} ${label}: ${String(item)}`);
+        }
       }
     }
   }
