@@ -511,7 +511,11 @@ test('a non-passing check requires an explicit fact-bound route and environment 
     assert.equal(diagnosed.task.repairCount, 0);
     const stored = readDelegationTask(root, prepared.taskId);
     assert.equal(stored.projection.attempts.length, 1);
-    assert.match(stored.projection.attempts[0].evidenceDispositionPath ?? '', /evidence-disposition\.json$/);
+    assert.equal(stored.projection.attempts[0].evidenceDispositionPaths.length, 1);
+    assert.match(
+      stored.projection.attempts[0].evidenceDispositionPaths[0] ?? '',
+      /evidence-disposition-[a-f0-9]{64}\.json$/,
+    );
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -669,7 +673,7 @@ test('material diagnosis and critical unknowns route from explicit semantics rat
   }
 });
 
-test('diagnosis-to-handoff preserves thin-Host direct review and places failed checks in counter-evidence', async () => {
+test('required Challenge cannot be bypassed by diagnosis-to-handoff or premature Handoff input', async () => {
   const root = createRepository();
   try {
     const prepared = await prepare(root, prepareDocument({
@@ -685,18 +689,95 @@ test('diagnosis-to-handoff preserves thin-Host direct review and places failed c
     input.routeRationale = 'Keep the non-passing environment observation visible in direct Human review.';
     const diagnosed = await diagnose(root, prepared.taskId, input);
 
-    assert.equal(diagnosed.hostAction.kind, 'author-handoff');
-    assert.ok(diagnosed.hostAction.authoringPacket.outstandingObligations.some(
-      (item: { code: string }) => item.code === 'direct-human-review-required',
-    ));
-    assert.ok(!diagnosed.hostAction.authoringPacket.outstandingObligations.some(
-      (item: { code: string }) => item.code === 'required-challenge-missing',
-    ));
-    const conclusion = diagnosed.hostAction.authoringPacket.draft.obligationConclusions[0];
-    assert.deepEqual(conclusion.evidence, []);
-    assert.deepEqual(conclusion.counterEvidence, [{
-      kind: 'check', id: collected.checks[0].definitionId,
-    }]);
+    assert.equal(diagnosed.hostAction.kind, 'perform-independent-challenge');
+    const condition = prepared.taskContract.adoptionConditions[0];
+    const obligation = condition.evidenceObligations[0];
+    const prematureHandoff = {
+      summary: 'The failed observation remains unresolved.',
+      obligationConclusions: [{
+        obligationId: obligation.id,
+        status: 'unknown',
+        evidence: [],
+        evidenceCoverage: {
+          status: 'insufficient',
+          rationale: 'The current check is non-passing.',
+          gaps: ['Independent challenge remains pending.'],
+        },
+        falsification: {
+          attempt: 'Inspected the current non-passing check.',
+          observedResult: 'The check did not establish the intended behavior.',
+        },
+        counterEvidence: [{ kind: 'check', id: collected.checks[0].definitionId }],
+        conclusion: 'The obligation remains unresolved.',
+      }],
+      conditionConclusions: [{
+        conditionId: condition.id,
+        status: 'unknown',
+        summary: 'The adoption condition remains unresolved.',
+      }],
+      importantSystemEffects: [],
+      residualUnknowns: [],
+      reviewQuestions: [{
+        conditionIds: [condition.id],
+        obligationIds: [obligation.id],
+        question: 'Does the changed behavior satisfy the intended boundary?',
+        adoptionImpact: condition.adoptionRationale,
+        evidence: [{ kind: 'check', id: collected.checks[0].definitionId }],
+      }],
+      recommendation: {
+        action: 'defer',
+        rationale: 'The required independent challenge remains pending.',
+        caveats: ['The current check is non-passing.'],
+      },
+    };
+    await assert.rejects(
+      handoff(root, prepared.taskId, prematureHandoff),
+      /required Challenge obligations remain pending/,
+    );
+
+    const challengeDraft = structuredClone(
+      diagnosed.hostAction.challengeExecutionPacket.draft.results[0],
+    );
+    challengeDraft.falsificationAttempt = 'Inspected the failed observation in a separate but unattested context.';
+    challengeDraft.observedResult = 'The current frozen check remains non-passing.';
+    challengeDraft.counterEvidence = [{
+      statement: 'The current frozen check does not support the bounded adoption condition.',
+      provenance: 'runtime-fact',
+      reproduction: 'runtime-recorded',
+      references: [{ kind: 'check', id: collected.checks[0].definitionId }],
+    }];
+    challengeDraft.evidenceCoverage = {
+      status: 'insufficient',
+      rationale: 'The non-passing observation cannot establish the expected behavior.',
+      gaps: ['A supporting current observation remains unavailable.'],
+    };
+    challengeDraft.outcome = 'unknown';
+    challengeDraft.conclusion = 'The bounded obligation remains unresolved.';
+    const challenged = await challenge(root, prepared.taskId, challengeDraft);
+    assert.equal(challenged.hostAction.kind, 'diagnose-collected-evidence');
+
+    const adverseDiagnosis = structuredClone(challenged.hostAction.authoringPacket.draft);
+    adverseDiagnosis.semanticImpact = 'none';
+    adverseDiagnosis.proposedRoute = 'handoff';
+    adverseDiagnosis.routeRationale = 'Keep the non-passing observations visible for direct review.';
+    for (const entry of adverseDiagnosis.entries) {
+      const challengeEntry = entry.source.kind === 'challenge';
+      Object.assign(entry, {
+        cause: challengeEntry ? 'unknown' : 'environment',
+        diagnosis: challengeEntry
+          ? 'The challenge did not resolve the bounded condition.'
+          : 'The current environment observation remains non-passing.',
+        falsificationAttempt: 'Reviewed the exact observation and its evidence coverage.',
+        repositoryChangeCanAlterObservation: false,
+        changeSurface: 'none',
+        expectedDifferentObservation: 'A supporting current observation would resolve the gap.',
+        intendedChanges: [],
+      });
+    }
+    const readyForHandoff = await diagnose(root, prepared.taskId, adverseDiagnosis);
+    assert.equal(readyForHandoff.hostAction.kind, 'author-handoff');
+    const stored = readDelegationTask(root, prepared.taskId);
+    assert.equal(stored.projection.attempts[0].evidenceDispositionPaths.length, 2);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

@@ -288,6 +288,7 @@ export async function prepareDelegationTask(options: {
       trigger: 'initial' as const,
       deliveryStatus: 'waiting-for-implementation' as const,
       createdAt,
+      evidenceDispositionPaths: [],
     };
     const projection: TaskProjection = {
       protocol: DELEGATION_PROTOCOL,
@@ -775,12 +776,15 @@ export async function diagnoseCollectedEvidence(options: {
         dispositionId: stableFingerprint(dispositionProjection),
         ...dispositionProjection,
       };
-      const dispositionRelative = `${attemptDirectory(current.attemptId)}/evidence-disposition.json`;
+      const dispositionRelative = `${attemptDirectory(current.attemptId)}/evidence-disposition-${disposition.dispositionId.slice('sha256:'.length)}.json`;
       const dispositionPath = taskArtifactPath(task.taskDirectory, dispositionRelative);
       writeImmutableJson(dispositionPath, disposition);
       const currentWithDisposition = {
         ...current,
-        evidenceDispositionPath: projectRelativePath(task.projectRoot, dispositionPath),
+        evidenceDispositionPaths: [
+          ...current.evidenceDispositionPaths,
+          projectRelativePath(task.projectRoot, dispositionPath),
+        ],
         ...(budgetExhausted ? { deliveryStatus: 'exhausted' as const } : {}),
       };
       const cleared = clearPostCollectionArtifacts(task.projection);
@@ -815,6 +819,7 @@ export async function diagnoseCollectedEvidence(options: {
         trigger: 'delivery-repair' as const,
         deliveryStatus: 'repairing' as const,
         createdAt,
+        evidenceDispositionPaths: [],
       };
       writeImmutableJson(attemptPath, successor);
       return {
@@ -838,37 +843,6 @@ export async function diagnoseCollectedEvidence(options: {
       };
     },
   });
-  const currentContract = readContract(transitioned);
-  const currentFacts = route === 'repair-delivery' ? undefined : readCurrentFacts(transitioned);
-  const challenges = route === 'repair-delivery' ? [] : readCurrentChallenges(transitioned);
-  const required = currentFacts
-    ? requiredChallengeObligationIds(currentContract, currentFacts) : [];
-  const challengeAttestationAvailable = Boolean(options.hostAttestations?.consumeChallengeRun);
-  const packet = route === 'ask-human'
-    ? resolutionAuthoringPacket({
-        task: transitioned.projection,
-        contract: currentContract,
-        ...(currentFacts ? { facts: currentFacts } : {}),
-      })
-    : route === 'revise-verification' && currentFacts
-      ? verificationRevisionAuthoringPacket({
-          task: transitioned.projection,
-          contract: currentContract,
-          facts: currentFacts,
-        })
-    : route === 'challenge' && currentFacts
-      ? challengeExecutionPacket({
-          task: transitioned.projection, contract: currentContract, facts: currentFacts,
-          completedObligationIds: completedChallengeObligationIds(challenges),
-          requiredObligationIds: required,
-        })
-      : route === 'handoff' && currentFacts
-        ? handoffAuthoringPacket({
-            task: transitioned.projection, contract: currentContract, facts: currentFacts,
-            challenges, requiredObligationIds: required,
-            challengeAttestationAvailable,
-          })
-        : undefined;
   return {
     protocol: DELEGATION_PROTOCOL,
     schemaVersion: DELEGATION_SCHEMA_VERSION,
@@ -879,7 +853,10 @@ export async function diagnoseCollectedEvidence(options: {
     disposition: disposition!,
     ...(successorAttemptId ? { successorAttemptId } : {}),
     task: compactTask(transitioned.projection),
-    hostAction: diagnosisHostAction(route!, transitioned.taskId, packet),
+    hostAction: currentTaskHostAction(
+      transitioned,
+      Boolean(options.hostAttestations?.consumeChallengeRun),
+    ),
   };
 }
 
@@ -1081,6 +1058,16 @@ export async function evaluateDelegationHandoff(options: {
         throw usageError('Facts changed while handoff was being authored; collect again.');
       }
       const challenges = readCurrentChallenges(task);
+      const requiredChallengeIds = requiredChallengeObligationIds(contract, currentFacts);
+      const pendingChallengeIds = pendingChallengeObligationIds(
+        requiredChallengeIds,
+        challenges,
+      );
+      if (pendingChallengeIds.length) {
+        throw usageError(
+          `Cognitive Handoff cannot be recorded while required Challenge obligations remain pending: ${pendingChallengeIds.join(', ')}. Follow the current perform-independent-challenge action first.`,
+        );
+      }
       handoff = materializeHandoff(source, contract, currentFacts);
       try {
         evaluation = evaluateHandoff({
@@ -1340,6 +1327,7 @@ export async function resolveHumanChoice(options: {
           trigger: 'correction' as const,
           deliveryStatus: 'repairing' as const,
           createdAt: new Date().toISOString(),
+          evidenceDispositionPaths: [],
         };
         const attemptRelative = `${attemptDirectory(successorAttemptId)}/attempt.json`;
         const attemptAbsolute = taskArtifactPath(task.taskDirectory, attemptRelative);
@@ -1531,6 +1519,7 @@ export async function reviseVerificationPlan(options: {
         trigger: 'verification-revision' as const,
         deliveryStatus: 'waiting-for-implementation' as const,
         createdAt: new Date().toISOString(),
+        evidenceDispositionPaths: [],
       };
       const contractRevision = task.projection.contractRevision + 1;
       revisionRecord = materializeVerificationRevision(
@@ -1796,24 +1785,33 @@ function currentTaskHostAction(task: LoadedTask, challengeAttestationAvailable =
       }),
     );
   }
-  const disposition = currentAttempt.evidenceDispositionPath
+  const currentDispositionPath = currentAttempt.evidenceDispositionPaths.at(-1);
+  const disposition = currentDispositionPath
     ? readJsonArtifact<EvidenceDisposition>(
-        resolve(task.projectRoot, currentAttempt.evidenceDispositionPath),
+        resolve(task.projectRoot, currentDispositionPath),
         `Evidence disposition for ${currentAttempt.attemptId}`,
       )
     : undefined;
   const required = requiredChallengeObligationIds(contract, facts);
   const pending = pendingChallengeObligationIds(required, challenges);
   if (disposition) {
-    const packet = disposition.route === 'revise-verification'
-      ? verificationRevisionAuthoringPacket({ task: task.projection, contract, facts })
-      : disposition.route === 'challenge'
-        ? challengeExecutionPacket({
-            task: task.projection, contract, facts,
-            completedObligationIds: completedChallengeObligationIds(challenges),
-            requiredObligationIds: required,
-          })
-        : disposition.route === 'handoff'
+    if (disposition.route === 'revise-verification') {
+      return diagnosisHostAction(
+        disposition.route,
+        task.taskId,
+        verificationRevisionAuthoringPacket({ task: task.projection, contract, facts }),
+      );
+    }
+    if (pending.length > 0) {
+      return challengeHostAction(task.taskId, true, challengeExecutionPacket({
+        task: task.projection,
+        contract,
+        facts,
+        completedObligationIds: completedChallengeObligationIds(challenges),
+        requiredObligationIds: required,
+      }));
+    }
+    const packet = disposition.route === 'handoff'
           ? handoffAuthoringPacket({
               task: task.projection, contract, facts, challenges,
               requiredObligationIds: required,
@@ -2016,22 +2014,22 @@ function readVerificationRevisions(task: LoadedTask): unknown[] {
 }
 
 function readEvidenceDispositions(task: LoadedTask): EvidenceDisposition[] {
-  return task.projection.attempts.flatMap((attempt) => {
-    if (!attempt.evidenceDispositionPath) return [];
-    return [readJsonArtifact<EvidenceDisposition>(
-      resolve(task.projectRoot, attempt.evidenceDispositionPath),
-      `Evidence disposition for ${attempt.attemptId}`,
-    )];
-  });
+  return task.projection.attempts.flatMap((attempt) =>
+    attempt.evidenceDispositionPaths.map((path, index) =>
+      readJsonArtifact<EvidenceDisposition>(
+        resolve(task.projectRoot, path),
+        `Evidence disposition ${index + 1} for ${attempt.attemptId}`,
+      )));
 }
 
 function readCurrentEvidenceDisposition(task: LoadedTask): EvidenceDisposition | undefined {
   const current = task.projection.attempts.find((attempt) =>
     attempt.attemptId === task.projection.currentAttemptId);
-  if (!current?.evidenceDispositionPath) return undefined;
+  const currentPath = current?.evidenceDispositionPaths.at(-1);
+  if (!currentPath) return undefined;
   return readJsonArtifact<EvidenceDisposition>(
-    resolve(task.projectRoot, current.evidenceDispositionPath),
-    `Evidence disposition for ${current.attemptId}`,
+    resolve(task.projectRoot, currentPath),
+    `Evidence disposition for ${task.projection.currentAttemptId}`,
   );
 }
 
@@ -2584,6 +2582,13 @@ function validateEvidenceDispositionInput(
   }
   if (source.proposedRoute === 'repair-delivery' && !hasRepositoryRepair) {
     throw inputError('Delivery repair requires at least one explicit production or verification-surface change.');
+  }
+  if (source.proposedRoute === 'challenge') {
+    const required = requiredChallengeObligationIds(contract, facts);
+    const pending = pendingChallengeObligationIds(required, challenges);
+    if (!pending.length) {
+      throw inputError('Independent Challenge requires at least one current pending Evidence Obligation.');
+    }
   }
 }
 

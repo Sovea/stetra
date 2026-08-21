@@ -452,7 +452,7 @@ export const AttemptProjectionSchema = z.strictObject({
   ]),
   createdAt: z.iso.datetime(),
   factCollectionId: Sha256Schema.optional(),
-  evidenceDispositionPath: SafeRepositoryPathSchema.optional(),
+  evidenceDispositionPaths: z.array(SafeRepositoryPathSchema),
 });
 
 export const TaskProjectionSchema = z.strictObject({
