@@ -70,7 +70,7 @@ export interface InitializeProjectOptions {
 }
 
 const MANIFEST_PATH = '.stetra/manifest.json';
-const TEMPLATE_REVISION = 4;
+const TEMPLATE_REVISION = 1;
 const DOC_MARKERS = {
   start: '<!-- stetra:begin -->',
   end: '<!-- stetra:end -->',

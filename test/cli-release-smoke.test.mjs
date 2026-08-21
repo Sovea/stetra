@@ -124,7 +124,7 @@ try {
       }],
     }],
     hostPolicyRequirements: [],
-    delivery: { maxRepairAttempts: 1 },
+    executionBudget: { checkTimeoutMs: 300_000, maxDeliveryRepairs: 1 },
     checks: [{
       key: 'fixture-check', rationale: 'Exercise the packed CLI check runner.',
       execution: {
@@ -147,7 +147,7 @@ try {
   assert.equal(prepared.status, 'prepared');
   assert.equal(prepared.taskContract.understanding.desiredOutcome.value, 'Change the exported fixture value with current facts.');
   const taskProjection = JSON.parse(readFileSync(prepared.details.taskPath, 'utf8'));
-  assert.equal(taskProjection.workflow, 'cognitive-adoption');
+  assert.equal(taskProjection.protocol, 'cognitive-adoption');
   assert.equal(taskProjection.packageIdentity.core.version, expectedVersion);
   const guardPath = join(consumer, 'host-guard.mjs');
   writeFileSync(guardPath, [
@@ -280,7 +280,14 @@ try {
     .map((file) => file.id);
   const checkIds = challenged.hostAction.authoringPacket.referenceCatalog.checks
     .map((check) => check.definitionId);
-  handoffDraft.summary = 'The packed fixture now exports value 2 instead of value 1.';
+  handoffDraft.actualChange = {
+    behavior: 'The packed fixture now exports value 2 instead of value 1.',
+    mechanism: ['The public export is changed at its source definition.'],
+    preservedInvariants: ['Human adoption remains explicit.'],
+    failureAndRecovery: [],
+    importantEffects: ['Consumers now observe the value 2.'],
+    materialTradeoffs: [],
+  };
   for (const conclusion of handoffDraft.obligationConclusions) {
     conclusion.status = 'supported';
     conclusion.falsification = {
@@ -298,7 +305,6 @@ try {
     conclusion.status = 'supported';
     conclusion.summary = 'The current evidence supports the bounded condition.';
   }
-  handoffDraft.importantSystemEffects = ['The export is now 2.'];
   const condition = challenged.hostAction.authoringPacket.referenceCatalog.conditions[0];
   handoffDraft.reviewQuestions.push({
     conditionIds: [condition.id],
@@ -319,7 +325,7 @@ try {
   const handedOff = runInstalledCli(['change', 'handoff', project, '--task', prepared.taskId, '--input', handoffPath, '--json']);
   assert.equal(handedOff.status, 'needs-attention');
   assert.equal(handedOff.decisionPacket.runtimeFacts.checks[0].latestAttempt.status, 'passed');
-  assert.equal(handedOff.decisionPacket.systemMeaning.summary, 'The packed fixture now exports value 2 instead of value 1.');
+  assert.equal(handedOff.decisionPacket.actualChange.behavior, 'The packed fixture now exports value 2 instead of value 1.');
   assert.deepEqual(handedOff.decisionPacket.decision.adoption, { authority: 'human', status: 'pending' });
   assert.equal(handedOff.hostAction.kind, 'present-handoff-and-await-human-decision');
   assert.equal(handedOff.hostAction.command, undefined);
@@ -328,7 +334,7 @@ try {
   assert.equal(handedOff.hostAction.developerDecisionBrief.primary.runtimeEvidence.authority, 'runtime-fact');
   assert.equal(handedOff.hostAction.developerDecisionBrief.primary.requestedDecision.authority, 'human-decision');
   assert.equal(handedOff.hostAction.developerDecisionBrief.primary.blockers.length > 0, true);
-  assert.equal(handedOff.hostAction.developerDecisionBrief.details.decisionIssues.length > 0, true);
+  assert.equal(handedOff.hostAction.presentationRequirements.requiredAttentionIds.length > 0, true);
   assert.equal(handedOff.hostAction.decisionContinuation.requiresNewHumanEvent, true);
 
   const decisionPath = join(temporary, 'decision.json');
@@ -354,11 +360,10 @@ try {
   assert.equal('contract' in artifactIndex, false);
 
   const status = runInstalledCli(['status', project, '--json']);
+  assert.equal(status.status, 'ready');
   assert.equal(status.controlPlane.kind, 'cli');
   assert.equal(status.installation.status, 'current');
-  const doctor = runInstalledCli(['doctor', project, '--strict', '--json']);
-  assert.equal(doctor.status, 'ok');
-  assert.equal(doctor.worktree, 'supported');
+  assert.deepEqual(status.worktree, { status: 'supported' });
 
   const legacy = run(process.execPath, [cliEntrypoint, 'change', 'finalize'], consumer, {
     shell: false, expectStatus: 2,

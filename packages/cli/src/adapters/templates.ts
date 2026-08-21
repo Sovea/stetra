@@ -383,7 +383,7 @@ output fingerprint. Runtime materializes one Challenge artifact per result,
 all bound to the same Round and Host context. Without a trusted provider, a
 thin Host submits the same bare Challenge Round. It must not manufacture a
 receipt: Runtime records the result as **unverified**, prevents it from
-fulfilling trusted Challenge assurance, blocks Agent acceptance advice, and
+completing the trusted Challenge evidence path, blocks Agent acceptance advice, and
 adds direct Human review without rewriting the Agent finding. Partial,
 contradicted, or unknown Challenge evidence still caps the related Agent
 finding. A partial,
@@ -420,8 +420,8 @@ bounded conclusion; preserve every uncovered aspect as a concrete gap and keep
 the conclusion below supported. Runtime checks this declaration but does not
 infer semantic coverage from the repository. Do not repeat Runtime facts as
 Agent prose or create one review item per changed
-file. Runtime separately derives the state of each declared evidence path;
-strategy; a missing or unverified Challenge does not rewrite the Agent finding.
+file. Runtime separately derives the state of each declared evidence strategy;
+a missing or unverified Challenge does not rewrite the Agent finding.
 Recommend **accept** only when every Condition and Obligation finding is
 supported, every required evidence path is complete, checks pass, and
 no adoption-changing unknown, required Host-policy gap, exhausted repair, or

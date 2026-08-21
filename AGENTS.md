@@ -122,17 +122,18 @@ operational recovery, not diagnosis or implementation repair. Every
 state-changing Host route must have an executable successor; do not introduce a
 prose-only recovery dead end.
 
-The current Delivery Plan persists only the fixed lifecycle and repair budget.
-Do not add plan questions, arbitrary nodes, reads, writes, expected outputs,
-generic consumers, or failure prose without an implemented consumer and
-evidence that the extra structure improves a real task.
+The current implementation has no persisted Delivery Plan. It compiles the
+fixed lifecycle and execution budget directly. Do not add a plan object,
+arbitrary nodes, reads, writes, expected outputs, generic consumers, or failure
+prose without an implemented consumer and evidence that the extra structure
+improves a real task.
 
 ## Prepare and Semantic Contract
 
-Prepare accepts one explicit `prepareRequestId`, one exact developer event,
+Prepare accepts one explicit `prepareRequestId`, exact developer events,
 separate Agent-authored task meaning, optional exact repository-evidence
-windows, zero or more Conditions, Host policy requirements, a bounded repair
-count, and explicit checks or a concrete no-command rationale. Each Check
+windows, zero or more Conditions, Host policy requirements, an explicit
+execution budget, and explicit checks or a concrete no-command rationale. Each Check
 separates ordered preparation commands from its assertion and may name exact
 local execution inputs whose state must remain inspectable even when Git
 ignores them.
@@ -141,9 +142,10 @@ Routine work may have no Condition. Every declared Condition has a material or
 adoption-critical consequence, adoption rationale, exact basis, and at least
 one Falsifiable Evidence Obligation. Every Obligation states a bounded
 sub-conclusion, a plausible failure hypothesis, and exact Runtime-check,
-repository-inspection, independent-Challenge, or direct-Human-review strategy.
-Adoption-critical Conditions require independent Challenge or direct Human
-review.
+repository-inspection, or independent-Challenge strategy. Adoption-critical
+Conditions require an independent Challenge. Direct Human review is a visible
+consequence of missing, unavailable, unverified, or adverse evidence, not an
+evidence strategy that completes the Obligation.
 
 Runtime generates canonical Human Event, Condition, Obligation, Verifier,
 Definition, Contract, Verification Plan, and effective identities. Focus paths
@@ -229,7 +231,10 @@ A programmatic Host or Evaluator may attest a fresh independent context only
 when it controls that boundary. Generated Markdown Adapters are thin skills and
 cannot do so. Thin Hosts route the unresolved failure hypothesis into direct
 Human review; a manually submitted thin-context Challenge remains unverified.
-Missing, adverse, or unverified Challenge evidence caps related conclusions.
+Missing or adverse Challenge evidence caps related conclusions. Unverified
+Host independence remains a separate evidence-path gap: it blocks Agent
+acceptance advice and requires direct review without rewriting an otherwise
+bounded Agent finding.
 
 Host policy requirement, Host capability, and enforcement attestation remain
 separate. Thin instructions are `instruction-only`; only a trusted provider may
@@ -238,8 +243,9 @@ record `enforced`. Required unenforced policy pauses for exact Human resolution.
 ## Cognitive Handoff and Human decision
 
 The Host writes Handoff only after inspecting complete current facts. The Agent
-supplies a system-meaning summary, exactly one conclusion per Evidence
-Obligation and Condition, important effects, residual unknowns, only those
+supplies the actual behavior, implementation mechanism, preserved invariants,
+failure/recovery behavior, important effects, material tradeoffs, exactly one
+conclusion per Evidence Obligation and Condition, residual unknowns, only those
 consequence-directed Review Questions that can change adoption judgment, and a
 recommendation distinct from adoption. The projected draft begins with no
 Review Questions; required coverage may be consolidated across exact targets.
@@ -286,10 +292,11 @@ persisted, does not add a mode, cannot recommend a semantic choice, and cannot
 hide an adoption-changing fact. Canonical detail remains available through
 `change explain`.
 
-The final Developer Decision Brief has a semantic, ID-free `primary` projection
-for Human presentation and an exact `details` projection for traceability and
-machine continuation. Do not leak opaque IDs into the primary narrative or drop
-exact references from details.
+The final Developer Decision Brief has one semantic, ID-free `primary`
+projection for Human presentation. The canonical Decision Packet and named
+`change explain` sections retain exact IDs, references, evidence history, and
+machine continuation. Do not leak opaque IDs into the primary narrative or
+duplicate canonical detail inside the brief.
 
 ## State and persistence
 
@@ -307,6 +314,8 @@ append-only source and `task.json` is a rebuildable projection. One task owns
 its Contracts, baselines, Verification Revisions, Attempts, Fact Bundles,
 Evidence Dispositions, Challenges, Handoffs, Resolutions, Decisions, logs, and
 patches. It is never authoritative for another task.
+The projection stores immutable artifact identities; paths derived from those
+identities remain storage implementation details.
 
 The initial persisted schema has no translator, alias, dual read/write, or
 migration path. Do not add one unless explicitly requested.

@@ -91,7 +91,7 @@ Stetra should own:
 
 - exact delegation semantics and material-fork handling;
 - acceptance conditions and falsifiable evidence strategies;
-- bounded delivery-plan contracts and next-action semantics;
+- bounded execution budgets and next-action semantics;
 - progress, failure classification, repair, revision, and escalation control;
 - repository, verification, execution, and environment facts;
 - assurance coverage, independent challenge, and direct-review obligations;
@@ -246,7 +246,7 @@ The long-term governance lifecycle remains stable:
 ```text
 Align
   -> Compile Semantic and Acceptance Contract
-  -> Compile Delivery Plan
+  -> Compile bounded delivery strategy
   -> Execute / Observe / Repair
   -> Assure
   -> Cognitive Handoff
@@ -368,8 +368,8 @@ Contract states, for every material or adoption-critical criterion:
 - its exact Human Event or repository-evidence basis;
 - its adoption consequence and rationale;
 - the plausible wrong implementation that matters;
-- its Runtime checks, repository inspection, independent Challenge, or direct
-  Human-review strategy;
+- its Runtime checks, repository inspection, or independent Challenge
+  strategy, plus any resulting direct Human-review obligation;
 - the claim and review surfaces that consume the result.
 
 The initial implementation represents this through Adoption Conditions and
@@ -394,7 +394,8 @@ Runtime may enforce:
 ```text
 contradicted obligation -> condition cannot be supported
 partial or unknown obligation -> condition cannot be unqualified support
-missing required challenge -> related conclusion cannot be supported
+missing required challenge -> evidence path remains incomplete and Agent
+                              acceptance advice is blocked
 supported challenge with counter-evidence -> invalid challenge document
 ```
 
@@ -421,9 +422,10 @@ Runtime plan validation should detect incompatible parallel writes,
 unauthorized external effects, missing consumers, unenforced budgets, missing
 critical evidence paths, and attempts to lower compiled assurance.
 
-The current Delivery Plan intentionally contains only the fixed lifecycle and
-repair budget. It must not accumulate speculative fields before a consumer and
-measured benefit exist.
+The current implementation has no persisted Delivery Plan. Its fixed lifecycle
+and execution budget are compiled directly from explicit input. A future Plan
+IR must not accumulate fields before a concrete consumer and measured benefit
+exist.
 
 ### Fact Spine
 
@@ -503,12 +505,13 @@ parallel execution graph.
 
 A required Challenge is a Runtime-derived successor obligation, not an Agent
 route preference. Diagnosis may recommend Handoff, but cannot advance past an
-outstanding required Challenge. Handoff input is rejected until the current
-obligation has either a bound Challenge result or an exact Human resolution
-substituting direct review because a fresh Host context is unavailable. The
-latter never becomes independent evidence: it preserves the missing-Challenge
-Attention, prevents Agent acceptance advice, and moves the frozen failure
-hypothesis into direct Human review.
+outstanding required Challenge. Normal Handoff is blocked while the current
+obligation lacks a Challenge result. When a fresh Host context is unavailable,
+Runtime projects a bounded Handoff draft instead of accepting a substitute
+Challenge. That path preserves missing-Challenge Attention, prevents Agent
+acceptance advice, caps evidence coverage, and moves the frozen failure
+hypothesis into direct Human review. No Human event or alternate Agent can make
+the missing evidence complete.
 
 Thin Host projection minimizes the spawn boundary without inventing a global
 current task. The Challenge request carries a short exact dispatch prompt with
@@ -542,20 +545,20 @@ predecessor.
 The Cognitive Handoff is a decision surface, not a transcript or generated
 summary archive. It communicates:
 
-- what the actual system change means;
+- the actual behavior, implementation mechanism, preserved invariants,
+  failure/recovery behavior, important effects, and material tradeoffs;
 - one Agent-authored evidence-bounded finding per Obligation and Condition;
-- one separately derived Runtime assurance-fulfillment view for every declared
+- one separately derived Runtime evidence-path view for every declared
   evidence strategy;
-- important system effects;
 - residual unknowns and next actions;
 - consequence-directed Review Questions;
 - an Agent recommendation distinct from Human adoption.
 
-Agent finding and assurance fulfillment answer different questions. A finding
-states what the Agent concludes from evidence. Fulfillment states whether the
+Agent findings and evidence paths answer different questions. A finding states
+what the Agent concludes from evidence. An evidence path states whether the
 declared process boundary was mechanically satisfied, remains pending, was
 unavailable, or was not triggered. A missing or unverified independent
-Challenge therefore remains a separate assurance gap rather than silently
+Challenge therefore remains a separate evidence-path gap rather than silently
 downgrading an otherwise bounded Agent finding. It still blocks Agent
 acceptance advice and directs Human review. An adverse Challenge constrains the
 finding because it is counterevidence, not merely a missing process step.
@@ -568,7 +571,8 @@ adoption error. Neither should create one generic item per changed file.
 ### Human Resolution, Decision, and Decision Continuity
 
 Human Resolution closes material mid-task choices such as semantic impact,
-verification relaxation, Host-policy gaps, or correction continuation. Human
+Host-policy gaps, or correction continuation. Verification relaxation carries
+its own exact Human authorization. Human
 Decision records accepted, correction-requested, rejected, or deferred for the
 exact Handoff and facts. Acceptance with Attention needs an explicit exception
 for each current item.
@@ -770,13 +774,13 @@ At the Handoff boundary, Dynamic Host Projection also derives an ephemeral
 Developer Decision Brief from the canonical Decision Packet. Its `primary`
 projection is the Host's required Human delivery surface: separate
 delivery/evidence/recommendation/adoption states; explicitly labelled Agent
-interpretations of intended and actual system meaning; Agent-authored Condition
-and Challenge findings beside separate assurance fulfillment; structurally
+interpretations of intended meaning and the actual-change model; Agent-authored
+Condition and Challenge findings beside separate evidence-path states; structurally
 aggregated blockers; consequence-directed review focus; explicitly labelled
 Runtime observations; and the pending Human decision. The primary projection
-uses semantic statements and omits opaque protocol IDs. Its `details` projection
-retains canonical IDs, exact references, Attention aggregation, evidence
-history, and inspection pointers. Attention is aggregated only by its exact
+uses semantic statements and omits opaque protocol IDs. The canonical Decision
+Packet and named inspection sections retain IDs, exact references, Attention,
+evidence history, and artifact detail. Attention is aggregated only by its exact
 protocol group and required resolution, never by repository or text heuristics.
 Traceability therefore remains machine-exact without forcing protocol identity
 noise into the developer's main summary. The brief adds no artifact or
@@ -872,7 +876,8 @@ It includes:
   bounded diagnosis while immutable prior Challenge history remains visible;
 - task-specific Authoring Packets, bounded Challenge Execution Packets, and
   executable Host actions;
-- evidence-bounded Cognitive Handoff, Attention, Review Questions, and exact
+- an explicit actual-change model, evidence-bounded Cognitive Handoff,
+  Attention, Review Questions, and exact
   current-task Human decisions, including rejection of Agent acceptance advice
   that exceeds current evidence;
 - a published programmatic Host facade for attestation injection and the

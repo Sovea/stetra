@@ -51,7 +51,7 @@ try {
     materialDecisionForks: [],
     conditions: [],
     hostPolicyRequirements: [],
-    delivery: { maxRepairAttempts: 1 },
+    executionBudget: { checkTimeoutMs: 300_000, maxDeliveryRepairs: 1 },
     noCommandRationale: 'The isolated Core smoke has no repository command surface.',
   });
   assert.equal(compiled.status, 'delegation-compiled');
@@ -62,18 +62,17 @@ try {
     after: { kind: 'file', contentDigest: sha256('after'), mode: '100644' },
     representation: 'text',
   };
-  const timestamp = '2026-08-10T12:00:00.000Z';
   const summary = (name) => ({
-    head: null, fingerprint: sha256(name), entryCount: 1, capturedAt: timestamp,
+    head: null, fingerprint: sha256(name), entryCount: 1,
   });
   const bundleBase = {
     protocol: 'cognitive-adoption', schemaVersion: '1',
     effectiveContractId: contract.effectiveContractId,
-    attemptId: 'attempt:1', collectedAt: timestamp,
+    attemptId: 'attempt:1',
     baseline: summary('baseline'), preCheck: summary('current'), current: summary('current'),
     baselineVerification: (() => {
       const value = {
-        capturedAt: timestamp, preCheck: summary('baseline'), postCheck: summary('baseline'),
+        preCheck: summary('baseline'), postCheck: summary('baseline'),
         preCheckExecutionInputs: [], postCheckExecutionInputs: [],
         checkInducedChanges: [], checks: [],
       };
@@ -84,24 +83,27 @@ try {
     changedFiles: [changedFile], checkInducedChanges: [], checks: [], checkComparisons: [],
     evidenceConcerns: [], verifierMutations: [],
     environment: {
-      platform: process.platform, architecture: process.arch, cwdFingerprint: sha256('consumer'),
-      executables: [], toolchains: [{ name: 'node', version: process.version }],
-      lockfiles: [], environmentVariableNames: [],
+      platform: process.platform, architecture: process.arch, executables: [],
     },
     patch: { path: 'change.patch', digest: sha256('patch'), byteLength: 5 },
     provenance: { collector: 'stetra-cli', cliVersion: expectedVersion, coreVersion: expectedVersion },
   };
   const factCollectionId = collectionFingerprint(bundleBase);
-  const withCollection = { ...bundleBase, factCollectionId };
-  const factBundle = { ...withCollection, bundleFingerprint: stableFingerprint(withCollection) };
+  const factBundle = { ...bundleBase, factCollectionId };
   const handoffProjection = {
     protocol: 'cognitive-adoption', schemaVersion: '1', handoffId: 'handoff:smoke',
     effectiveContractId: contract.effectiveContractId,
     attemptId: factBundle.attemptId, factCollectionId,
-    summary: 'The isolated consumer exposes the Cognitive Adoption kernel.',
+    actualChange: {
+      behavior: 'The isolated consumer exposes the Cognitive Adoption kernel.',
+      mechanism: ['The two public Core operations remain the complete runtime surface.'],
+      preservedInvariants: ['Human adoption remains separate from Agent recommendation.'],
+      failureAndRecovery: [],
+      importantEffects: ['Two public operations remain.'],
+      materialTradeoffs: [],
+    },
     obligationConclusions: [],
     conditionConclusions: [],
-    importantSystemEffects: ['Two public operations remain.'],
     residualUnknowns: [], reviewQuestions: [],
     recommendation: { action: 'accept', rationale: 'The installed API matches the contract.', caveats: [] },
   };
@@ -112,7 +114,7 @@ try {
   const evaluation = core.evaluateHandoff({
     protocol: 'cognitive-adoption', schemaVersion: '1', contract, factBundle,
     currentWorktreeFingerprint: factBundle.current.fingerprint,
-    challenges: [], evidenceDispositions: [], hostPolicyEvaluations: [],
+    challenges: [], hostPolicyEvaluations: [],
     deliveryExhausted: false, verificationRevised: false, handoff,
   });
   assert.equal(evaluation.status, 'handoff-ready');
