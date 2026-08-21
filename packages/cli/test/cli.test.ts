@@ -11,6 +11,9 @@ import { submitHostAction } from '../src/host.ts';
 import type { HostAction } from '../src/workflow/host-action.ts';
 
 test('Commander exposes the initial lifecycle without obsolete repair/finalize commands', async () => {
+  const rootHelp = String((await runCli(['--help'])).output);
+  assert.match(rootHelp, /\bstatus\b/);
+  assert.doesNotMatch(rootHelp, /\bdoctor\b/);
   const help = await runCli(['change', '--help']);
   const text = String(help.output);
   for (const command of [
@@ -22,6 +25,51 @@ test('Commander exposes the initial lifecycle without obsolete repair/finalize c
   assert.doesNotMatch(text, /\brepair \[options\]/);
   assert.doesNotMatch(text, /finalize/);
   await assert.rejects(runCli(['change', 'repair']), /unknown command/);
+});
+
+test('status validates both the generated adapter and Git worktree', async () => {
+  const root = createRepository();
+  try {
+    const absent = await runCli(['status', root, '--json']);
+    assert.equal(absent.exitCode, 2);
+    assert.deepEqual(absent.output, {
+      protocol: 'cognitive-adoption',
+      schemaVersion: '1',
+      status: 'needs-attention',
+      command: 'status',
+      version: '0.0.1',
+      issues: [{
+        code: 'host-adapter-absent',
+        message: 'Run `stetra init .` to install a generated Host adapter.',
+      }],
+      installation: {
+        status: 'absent',
+        protocol: 'cognitive-adoption',
+        schemaVersion: '1',
+        projectRoot: root,
+        manifestPath: join(root, '.stetra', 'manifest.json'),
+        adapters: [],
+        artifacts: [],
+      },
+      worktree: { status: 'supported' },
+      controlPlane: { kind: 'cli', protocol: 'cognitive-adoption', schemaVersion: '1' },
+      paths: {
+        manifest: join(root, '.stetra', 'manifest.json'),
+        tasks: join(root, '.stetra', 'tasks'),
+      },
+    });
+    const initialized = await runCli([
+      'init', root, '--adapter', 'codex', '--yes', '--json',
+    ]);
+    assert.equal(initialized.exitCode, 0);
+    const ready = await runCli(['status', root, '--json']);
+    assert.equal(ready.exitCode, 0);
+    assert.equal((ready.output as { status: string }).status, 'ready');
+    assert.deepEqual((ready.output as { issues: unknown[] }).issues, []);
+    assert.deepEqual((ready.output as { worktree: unknown }).worktree, { status: 'supported' });
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test('CLI JSON mode executes compact prepare, baseline-aware collect, layered handoff, decide, and events', async () => {
@@ -102,7 +150,7 @@ test('CLI JSON mode executes compact prepare, baseline-aware collect, layered ha
     assert.equal('attention' in handedOff, false);
     const decisionBrief = handedOff.hostAction.developerDecisionBrief!;
     assert.equal(decisionBrief.primary.conditions[0].statement, 'The fixture check passes.');
-    assert.equal(handedOff.hostAction.presentationRequirements.requiredConditionIds[0].startsWith('condition:'), true);
+    assert.equal(handedOff.hostAction.presentationRequirements!.requiredConditionIds[0].startsWith('condition:'), true);
     assert.equal(decisionBrief.primary.reviewFocus.length, 0);
     const humanHandoff = formatCliOutput({ ...handoffExecution, json: false, color: false });
     assert.match(humanHandoff, /Decision state/);

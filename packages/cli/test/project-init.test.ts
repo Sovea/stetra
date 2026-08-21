@@ -62,7 +62,6 @@ test('project init generates the Cognitive Adoption host projection and manifest
     assert.equal(initialized.protocol, 'cognitive-adoption');
     assert.equal(initialized.schemaVersion, '1');
     assert.equal(initialized.adapterProtocolVersion, '1');
-    assert.deepEqual(initialized.readiness, { required: [], recommended: [], optional: [] });
 
     const skillPath = join(root, '.agents', 'skills', 'stetra', 'SKILL.md');
     const challengerAgentPath = join(root, '.codex', 'agents', 'stetra-challenger.toml');
@@ -229,51 +228,6 @@ test('generated Challenger profiles coexist with Trellis agents and hook ownersh
       existsSync(join(root, '.claude', 'agents', 'stetra-challenger.md')),
       true,
     );
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
-});
-
-test('legacy artifacts block init without migration or deletion', () => {
-  const root = mkdtempSync(join(tmpdir(), 'stetra-legacy-'));
-  try {
-    const legacyPath = join(root, '.stetra', 'playbook');
-    mkdirSync(legacyPath, { recursive: true });
-    writeFileSync(join(legacyPath, 'local-augment.yaml'), 'legacy\n', 'utf8');
-    const result = initializeProject({ projectRoot: root, adapters: ['codex'], force: true });
-    assert.equal(result.status, 'blocked');
-    assert.ok(result.artifacts.some((artifact) =>
-      artifact.path === '.stetra/playbook' && artifact.action === 'blocked'));
-    assert.equal(readFileSync(join(legacyPath, 'local-augment.yaml'), 'utf8'), 'legacy\n');
-    assert.equal(existsSync(join(root, '.stetra', 'manifest.json')), false);
-    const inspection = inspectProjectInstallation(root);
-    assert.equal(inspection.status, 'legacy');
-    assert.deepEqual(inspection.legacyArtifacts, ['.stetra/playbook']);
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
-});
-
-test('renamed Resonant Code installation blocks Stetra init without mutation', () => {
-  const root = mkdtempSync(join(tmpdir(), 'stetra-renamed-product-'));
-  try {
-    const oldRunPath = join(root, '.resonant-code', 'runs', 'old-run', 'run.json');
-    mkdirSync(join(root, '.resonant-code', 'runs', 'old-run'), { recursive: true });
-    writeFileSync(oldRunPath, '{"state":"completed"}\n', 'utf8');
-    writeFileSync(
-      join(root, 'AGENTS.md'),
-      '<!-- resonant-code:begin -->\nold generated pointer\n<!-- resonant-code:end -->\n',
-      'utf8',
-    );
-
-    const result = initializeProject({ projectRoot: root, adapters: ['codex'], force: true });
-    assert.equal(result.status, 'blocked');
-    assert.deepEqual(
-      result.artifacts.map((artifact) => artifact.path),
-      ['.resonant-code', 'AGENTS.md'],
-    );
-    assert.equal(readFileSync(oldRunPath, 'utf8'), '{"state":"completed"}\n');
-    assert.equal(existsSync(join(root, '.stetra')), false);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

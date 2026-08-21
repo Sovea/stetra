@@ -4,7 +4,7 @@ import { registerChangeCommands } from './commands/change.ts';
 import { registerInitCommand } from './commands/init.ts';
 import type { CommandEnvironment, GlobalCommandOptions } from './commands/shared.ts';
 import { globalOptions } from './commands/shared.ts';
-import { registerStatusCommands } from './commands/status.ts';
+import { registerStatusCommand } from './commands/status.ts';
 import type { CliExecution } from './presentation/output.ts';
 import type { CliRuntimeContext } from './runtime-context.ts';
 import { PRODUCT_VERSION } from './version.ts';
@@ -69,7 +69,7 @@ contains ANSI formatting.`);
   };
 
   registerInitCommand(program, environment);
-  registerStatusCommands(program, environment, PRODUCT_VERSION);
+  registerStatusCommand(program, environment, PRODUCT_VERSION);
   registerChangeCommands(program, environment, PRODUCT_VERSION);
   return program;
 }
@@ -77,7 +77,7 @@ contains ANSI formatting.`);
 function resultExitCode(command: string, output: unknown): number {
   if (!isRecord(output)) return 0;
   if (command === 'init' && output.status === 'blocked') return 2;
-  if (command === 'doctor' && output.status === 'blocked') return 2;
+  if (command === 'status' && output.status === 'needs-attention') return 2;
   return 0;
 }
 

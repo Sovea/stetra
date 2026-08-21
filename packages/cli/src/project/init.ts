@@ -32,7 +32,6 @@ import { inputError } from '../errors.ts';
 import {
   DELEGATION_PROTOCOL,
 } from '../protocol.ts';
-import { findLegacyArtifacts } from './legacy.ts';
 import {
   HostAdapterSchema,
   ProjectManifestSchema,
@@ -83,36 +82,6 @@ const GITIGNORE_MARKERS = {
 
 export function initializeProject(options: InitializeProjectOptions = {}) {
   const projectRoot = canonicalProjectRoot(options.projectRoot ?? '.');
-  const legacyArtifacts = findLegacyArtifacts(projectRoot);
-  if (legacyArtifacts.length) {
-    return {
-      status: 'blocked',
-      protocol: DELEGATION_PROTOCOL,
-      schemaVersion: MANIFEST_SCHEMA_VERSION,
-      projectRoot,
-      manifestPath: join(projectRoot, MANIFEST_PATH),
-      generatorVersion: PRODUCT_VERSION,
-      adapterProtocolVersion: ADAPTER_PROTOCOL_VERSION,
-      adapters: [],
-      dryRun: Boolean(options.dryRun),
-      force: Boolean(options.force),
-      counts: { create: 0, upgrade: 0, force: 0, unchanged: 0, blocked: legacyArtifacts.length },
-      artifacts: legacyArtifacts.map((path) => ({
-        path,
-        kind: 'legacy',
-        action: 'blocked',
-        reason: 'Archive or remove this legacy artifact explicitly; clean-break initialization never migrates or deletes it.',
-      })),
-      readiness: {
-        required: [{
-          code: 'legacy-artifacts-present',
-          message: `Archive or remove legacy artifacts explicitly: ${legacyArtifacts.join(', ')}.`,
-        }],
-        recommended: [],
-        optional: [],
-      },
-    };
-  }
   const existingManifest = readManifest(projectRoot);
   const requestedAdapters = options.adapters?.length
     ? normalizeAdapters(options.adapters)
@@ -156,9 +125,6 @@ export function initializeProject(options: InitializeProjectOptions = {}) {
   }
 
   const counts = countActions(plan);
-  const required: Array<{ code: string; message: string }> = [];
-  const recommended: Array<{ code: string; message: string }> = [];
-  const optional: Array<{ code: string; message: string }> = [];
   return {
     status: blocked.length ? 'blocked' : options.dryRun ? 'planned' : 'initialized',
     protocol: DELEGATION_PROTOCOL,
@@ -177,29 +143,11 @@ export function initializeProject(options: InitializeProjectOptions = {}) {
       action: item.action,
       ...(item.reason ? { reason: item.reason } : {}),
     })),
-    readiness: {
-      required,
-      recommended,
-      optional,
-    },
   };
 }
 
 export function inspectProjectInstallation(projectRootInput = '.') {
   const projectRoot = canonicalProjectRoot(projectRootInput);
-  const legacyArtifacts = findLegacyArtifacts(projectRoot);
-  if (legacyArtifacts.length) {
-    return {
-      status: 'legacy',
-      protocol: DELEGATION_PROTOCOL,
-      schemaVersion: MANIFEST_SCHEMA_VERSION,
-      projectRoot,
-      manifestPath: join(projectRoot, MANIFEST_PATH),
-      adapters: [],
-      artifacts: legacyArtifacts.map((path) => ({ path, status: 'legacy' as const })),
-      legacyArtifacts,
-    };
-  }
   const manifest = readManifest(projectRoot);
   if (!manifest) {
     return {

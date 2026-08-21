@@ -7,7 +7,7 @@ delivery and Runtime-collected facts to an informed Human decision.
 npm install --global @sovea/stetra
 cd /path/to/project
 stetra init .
-stetra doctor . --strict
+stetra status .
 ```
 
 The initial-version task path is:

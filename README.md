@@ -21,15 +21,9 @@ Initialize Stetra in the repository where the Agent will work:
 ```sh
 cd /path/to/project
 stetra init .
-stetra doctor . --strict
+stetra status .
 ```
 
 Then give the coding task to your Agent as usual. The generated Host adapter
 guides the task from preparation and implementation through collected evidence,
 handoff, and your final decision.
-
-Inspect the installation at any time with:
-
-```sh
-stetra status .
-```

@@ -63,7 +63,6 @@ import {
   stableFingerprint,
   taskIdForPrepareRequest,
 } from '../protocol.ts';
-import { assertNoLegacyArtifacts } from '../project/legacy.ts';
 import {
   ChallengeRoundDocumentSchema,
   CognitiveHandoffDocumentSchema,
@@ -142,7 +141,6 @@ export async function prepareDelegationTask(options: {
   hostAttestations?: HostAttestationProvider;
 }) {
   const projectRoot = canonicalProjectRoot(options.projectRoot);
-  assertNoLegacyArtifacts(projectRoot);
   const source = await readInputDocument(
     projectRoot,
     options.inputPath,
