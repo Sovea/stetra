@@ -283,7 +283,7 @@ export async function prepareDelegationTask(options: {
       parentAttemptId: null,
       effectiveContractId: compiled.contract.effectiveContractId,
       trigger: 'initial' as const,
-      evidenceDispositionPaths: [],
+      evidenceDispositionIds: [],
     };
     const projection: TaskProjection = {
       protocol: DELEGATION_PROTOCOL,
@@ -719,14 +719,14 @@ export async function diagnoseCollectedEvidence(options: {
         dispositionId: stableFingerprint(dispositionProjection),
         ...dispositionProjection,
       };
-      const dispositionRelative = `${attemptDirectory(current.attemptId)}/evidence-disposition-${disposition.dispositionId.slice('sha256:'.length)}.json`;
+      const dispositionRelative = evidenceDispositionPath(current.attemptId, disposition.dispositionId);
       const dispositionPath = taskArtifactPath(task.taskDirectory, dispositionRelative);
       writeImmutableJson(dispositionPath, disposition);
       const currentWithDisposition = {
         ...current,
-        evidenceDispositionPaths: [
-          ...current.evidenceDispositionPaths,
-          projectRelativePath(task.projectRoot, dispositionPath),
+        evidenceDispositionIds: [
+          ...current.evidenceDispositionIds,
+          disposition.dispositionId,
         ],
       };
       const cleared = clearPostCollectionArtifacts(task.projection);
@@ -755,7 +755,7 @@ export async function diagnoseCollectedEvidence(options: {
         parentAttemptId: current.attemptId,
         effectiveContractId: contract.effectiveContractId,
         trigger: 'delivery-repair' as const,
-        evidenceDispositionPaths: [],
+        evidenceDispositionIds: [],
       };
       writeImmutableJson(attemptPath, successor);
       return {
@@ -1218,7 +1218,7 @@ export async function resolveHumanChoice(options: {
           parentAttemptId: current.attemptId,
           effectiveContractId: contract.effectiveContractId,
           trigger: 'correction' as const,
-          evidenceDispositionPaths: [],
+          evidenceDispositionIds: [],
         };
         const attemptRelative = `${attemptDirectory(successorAttemptId)}/attempt.json`;
         const attemptAbsolute = taskArtifactPath(task.taskDirectory, attemptRelative);
@@ -1370,7 +1370,7 @@ export async function reviseVerificationPlan(options: {
         parentAttemptId: current.attemptId,
         effectiveContractId: revisedContract.effectiveContractId,
         trigger: 'verification-revision' as const,
-        evidenceDispositionPaths: [],
+        evidenceDispositionIds: [],
       };
       const contractRevision = task.projection.contractRevision + 1;
       revisionRecord = materializeVerificationRevision(
@@ -1461,7 +1461,7 @@ export function explainDelegationTask(options: {
       ),
     };
   }
-  if (section === 'handoff') {
+  if (section === 'handoff-draft') {
     const contract = readContract(task);
     const facts = readCurrentFacts(task);
     const challenges = readCurrentChallenges(task);
@@ -1518,7 +1518,7 @@ export function explainDelegationTask(options: {
   }
   if (section === 'events') return { ...common, events: task.events };
   if (section !== 'index') {
-    throw usageError('Invalid explain section; use index, action, contract, baseline, plan, attempts, challenge, revision, handoff, decision, or events.');
+    throw usageError('Invalid explain section; use index, action, contract, baseline, handoff-draft, attempts, challenge, revision, handoff, decision, or events.');
   }
   return {
     ...common,
@@ -1526,7 +1526,7 @@ export function explainDelegationTask(options: {
       { name: 'action', available: deriveTaskState(task).decisionStatus === 'pending' },
       { name: 'contract', available: true },
       { name: 'baseline', available: true },
-      { name: 'handoff', available: Boolean(readAttemptFactsIfPresent(task, task.projection.currentAttemptId)) },
+      { name: 'handoff-draft', available: Boolean(readAttemptFactsIfPresent(task, task.projection.currentAttemptId)) },
       { name: 'attempts', available: true, count: task.projection.attempts.length },
       { name: 'challenge', available: task.projection.challengeIds.length > 0, count: task.projection.challengeIds.length },
       { name: 'revision', available: task.projection.verificationRevisionIds.length > 0, count: task.projection.verificationRevisionIds.length },
@@ -1648,10 +1648,13 @@ function currentTaskHostAction(task: LoadedTask, challengeAttestationAvailable =
       packet,
     );
   }
-  const currentDispositionPath = currentAttempt.evidenceDispositionPaths.at(-1);
-  const disposition = currentDispositionPath
+  const currentDispositionId = currentAttempt.evidenceDispositionIds.at(-1);
+  const disposition = currentDispositionId
     ? readJsonArtifact<EvidenceDisposition>(
-        resolve(task.projectRoot, currentDispositionPath),
+        taskArtifactPath(
+          task.taskDirectory,
+          evidenceDispositionPath(currentAttempt.attemptId, currentDispositionId),
+        ),
         `Evidence disposition for ${currentAttempt.attemptId}`,
       )
     : undefined;
@@ -1899,9 +1902,9 @@ function readVerificationRevisions(task: LoadedTask): unknown[] {
 
 function readEvidenceDispositions(task: LoadedTask): EvidenceDisposition[] {
   return task.projection.attempts.flatMap((attempt) =>
-    attempt.evidenceDispositionPaths.map((path, index) =>
+    attempt.evidenceDispositionIds.map((id, index) =>
       readJsonArtifact<EvidenceDisposition>(
-        resolve(task.projectRoot, path),
+        taskArtifactPath(task.taskDirectory, evidenceDispositionPath(attempt.attemptId, id)),
         `Evidence disposition ${index + 1} for ${attempt.attemptId}`,
       )));
 }
@@ -1909,10 +1912,10 @@ function readEvidenceDispositions(task: LoadedTask): EvidenceDisposition[] {
 function readCurrentEvidenceDisposition(task: LoadedTask): EvidenceDisposition | undefined {
   const current = task.projection.attempts.find((attempt) =>
     attempt.attemptId === task.projection.currentAttemptId);
-  const currentPath = current?.evidenceDispositionPaths.at(-1);
-  if (!currentPath) return undefined;
+  const currentId = current?.evidenceDispositionIds.at(-1);
+  if (!current || !currentId) return undefined;
   return readJsonArtifact<EvidenceDisposition>(
-    resolve(task.projectRoot, currentPath),
+    taskArtifactPath(task.taskDirectory, evidenceDispositionPath(current.attemptId, currentId)),
     `Evidence disposition for ${task.projection.currentAttemptId}`,
   );
 }
@@ -2911,6 +2914,10 @@ function attemptDirectory(attemptId: string): string {
 
 function factsPath(attemptId: string, collectionId: string): string {
   return `${attemptDirectory(attemptId)}/facts/${collectionId.slice('sha256:'.length)}.json`;
+}
+
+function evidenceDispositionPath(attemptId: string, dispositionId: string): string {
+  return `${attemptDirectory(attemptId)}/evidence-dispositions/${dispositionId.slice('sha256:'.length)}.json`;
 }
 
 function challengePath(id: string): string {

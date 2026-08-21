@@ -120,7 +120,7 @@ export function registerChangeCommands(
     .description('Regenerate the current action or inspect durable workflow artifacts')
     .argument('[project-root]', 'Git worktree root', '.')
     .requiredOption('--task <id>', 'task ID returned by prepare')
-    .option('--section <name>', 'index, action, contract, baseline, plan, attempts, challenge, revision, handoff, decision, or events', 'index')
+    .option('--section <name>', 'index, action, contract, baseline, handoff-draft, attempts, challenge, revision, handoff, decision, or events', 'index')
     .action((projectRoot: string, options: ExplainOptions, command: Command) => {
       environment.emit('change explain', explainDelegationTask({
         projectRoot,

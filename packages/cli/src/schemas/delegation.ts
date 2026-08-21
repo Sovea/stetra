@@ -460,7 +460,7 @@ export const AttemptProjectionSchema = z.strictObject({
   effectiveContractId: Sha256Schema,
   trigger: z.enum(['initial', 'delivery-repair', 'correction', 'verification-revision']),
   factCollectionId: Sha256Schema.optional(),
-  evidenceDispositionPaths: z.array(SafeRepositoryPathSchema),
+  evidenceDispositionIds: z.array(Sha256Schema),
 });
 
 export const TaskProjectionSchema = z.strictObject({

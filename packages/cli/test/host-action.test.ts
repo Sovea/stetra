@@ -149,7 +149,7 @@ test('collection routes timeout, diagnosis, required challenge, and ordinary han
   );
   assert.deepEqual(
     challenge.limitedHandoff!.command.argv.slice(-3),
-    ['--section', 'handoff', '--json'],
+    ['--section', 'handoff-draft', '--json'],
   );
   assert.equal(challenge.limitedHandoff!.preservesChallengeGap, true);
   const failed = factFixture('failed');

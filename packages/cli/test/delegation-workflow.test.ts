@@ -512,10 +512,10 @@ test('a non-passing check requires an explicit fact-bound route and environment 
     assert.equal(diagnosed.task.repairCount, 0);
     const stored = readDelegationTask(root, prepared.taskId);
     assert.equal(stored.projection.attempts.length, 1);
-    assert.equal(stored.projection.attempts[0].evidenceDispositionPaths.length, 1);
+    assert.equal(stored.projection.attempts[0].evidenceDispositionIds.length, 1);
     assert.match(
-      stored.projection.attempts[0].evidenceDispositionPaths[0] ?? '',
-      /evidence-disposition-[a-f0-9]{64}\.json$/,
+      stored.projection.attempts[0].evidenceDispositionIds[0] ?? '',
+      /^sha256:[a-f0-9]{64}$/,
     );
   } finally {
     rmSync(root, { recursive: true, force: true });
@@ -783,7 +783,7 @@ test('required Challenge remains preferred after evidence diagnosis', async () =
     const readyForHandoff = await diagnose(root, prepared.taskId, adverseDiagnosis);
     assert.equal(readyForHandoff.hostAction.kind, 'author-handoff');
     const stored = readDelegationTask(root, prepared.taskId);
-    assert.equal(stored.projection.attempts[0].evidenceDispositionPaths.length, 2);
+    assert.equal(stored.projection.attempts[0].evidenceDispositionIds.length, 2);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -1079,7 +1079,7 @@ test('unavailable fresh-context execution can degrade to an honest limited hando
     const explained = explainDelegationTask({
       projectRoot: root,
       taskId: prepared.taskId,
-      section: 'handoff',
+      section: 'handoff-draft',
     }) as any;
     assert.ok(explained.authoringPacket.outstandingObligations.some(
       (item: { code: string }) => item.code === 'direct-human-review-required',

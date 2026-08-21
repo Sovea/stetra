@@ -399,7 +399,7 @@ function challengeInputAction(
     limitedHandoff: {
       when: 'fresh-challenger-context-unavailable',
       command: {
-        argv: ['stetra', 'change', 'explain', '.', '--task', taskId, '--section', 'handoff', '--json'],
+        argv: ['stetra', 'change', 'explain', '.', '--task', taskId, '--section', 'handoff-draft', '--json'],
       },
       preservesChallengeGap: true,
     },

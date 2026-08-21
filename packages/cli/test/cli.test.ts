@@ -162,6 +162,11 @@ test('CLI JSON mode executes compact prepare, baseline-aware collect, layered ha
     assert.doesNotMatch(humanHandoff, /(?:condition|obligation|decision-issue):/);
     assert.doesNotMatch(humanHandoff, /sha256:/);
 
+    const handoffDetail = (await runCli([
+      'change', 'explain', root, '--task', prepared.taskId, '--section', 'handoff', '--json',
+    ])).output as { handoff: { actualChange: { behavior: string } } };
+    assert.equal(handoffDetail.handoff.actualChange.behavior, 'The CLI fixture changed.');
+
     assert.ok(handedOff.hostAction.decisionContinuation);
     const decisionExecution = await submitHostAction({
       action: handedOff.hostAction.decisionContinuation,
@@ -196,7 +201,7 @@ test('CLI JSON mode executes compact prepare, baseline-aware collect, layered ha
     assert.equal(index.section, 'index');
     assert.equal(index.availableSections.find((item) => item.name === 'events')?.count, 4);
     assert.equal(index.artifactIndex.attempts.length, 1);
-    for (const expanded of ['contract', 'plan', 'attempts', 'challenges', 'events']) {
+    for (const expanded of ['contract', 'attempts', 'challenges', 'events']) {
       assert.equal(Object.hasOwn(index, expanded), false);
     }
     await assert.rejects(
