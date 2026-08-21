@@ -8,12 +8,16 @@ import type {
   TaskContract,
 } from '@sovea/stetra-core';
 
-import { HUMAN_DECISION_ACTIONS, type TaskProjection } from '../schemas/delegation.ts';
+import {
+  HUMAN_DECISION_ACTIONS,
+  type DerivedTaskState,
+  type TaskProjection,
+} from '../schemas/delegation.ts';
 import { stableFingerprint } from '../protocol.ts';
 
 export interface DeveloperDecisionPrimary {
   decisionState: {
-    delivery: TaskProjection['deliveryStatus'];
+    delivery: DerivedTaskState['deliveryStatus'];
     evidence: HandoffEvaluation['status'];
     recommendation: DecisionPacket['decision']['recommendation']['action'];
     adoption: HandoffEvaluation['adoption']['status'];
@@ -38,11 +42,11 @@ export interface DeveloperDecisionPrimary {
         status: DecisionPacket['conditions'][number]['obligations'][number]['agentFinding']['status'];
         conclusion: string;
       };
-      assurance: {
-        status: DecisionPacket['conditions'][number]['obligations'][number]['assurance']['status'];
+      evidencePath: {
+        status: DecisionPacket['conditions'][number]['obligations'][number]['evidencePath']['status'];
         gaps: Array<{
-          kind: DecisionPacket['conditions'][number]['obligations'][number]['assurance']['strategies'][number]['kind'];
-          reason: DecisionPacket['conditions'][number]['obligations'][number]['assurance']['strategies'][number]['reason'];
+          kind: DecisionPacket['conditions'][number]['obligations'][number]['evidencePath']['strategies'][number]['kind'];
+          reason: DecisionPacket['conditions'][number]['obligations'][number]['evidencePath']['strategies'][number]['reason'];
         }>;
       };
       evidenceBoundary: {
@@ -104,7 +108,7 @@ export interface DeveloperDecisionPrimary {
 
 export interface DeveloperDecisionDetails {
   decisionState: {
-    delivery: TaskProjection['deliveryStatus'];
+    delivery: DerivedTaskState['deliveryStatus'];
     evidence: HandoffEvaluation['status'];
     recommendation: DecisionPacket['decision']['recommendation']['action'];
     adoption: HandoffEvaluation['adoption']['status'];
@@ -128,7 +132,7 @@ export interface DeveloperDecisionDetails {
       statement: string;
       status: DecisionPacket['conditions'][number]['obligations'][number]['agentFinding']['status'];
       conclusion: string;
-      assurance: DecisionPacket['conditions'][number]['obligations'][number]['assurance'];
+      evidencePath: DecisionPacket['conditions'][number]['obligations'][number]['evidencePath'];
       evidenceBoundary: {
         failureHypothesis: string;
         observedResult: string;
@@ -206,7 +210,7 @@ export interface DeveloperDecisionIssue {
 }
 
 export function buildDeveloperDecisionBrief(input: {
-  task: TaskProjection;
+  task: TaskProjection & DerivedTaskState;
   contract: TaskContract;
   packet: DecisionPacket;
   evaluation: HandoffEvaluation;
@@ -293,7 +297,7 @@ export function buildDeveloperDecisionBrief(input: {
         statement: obligation.statement,
         status: obligation.agentFinding.status,
         conclusion: obligation.agentFinding.conclusion,
-        assurance: obligation.assurance,
+        evidencePath: obligation.evidencePath,
         evidenceBoundary: {
           failureHypothesis: obligation.falsification.failureHypothesis,
           observedResult: obligation.agentFinding.falsification.observedResult,
@@ -371,10 +375,10 @@ function primaryBrief(details: DeveloperDecisionDetails): DeveloperDecisionPrima
       obligations: condition.obligations.map((obligation) => ({
         statement: obligation.statement,
         finding: { status: obligation.status, conclusion: obligation.conclusion },
-        assurance: {
-          status: obligation.assurance.status,
-          gaps: obligation.assurance.strategies
-            .filter((strategy) => !['satisfied', 'not-required'].includes(strategy.status))
+        evidencePath: {
+          status: obligation.evidencePath.status,
+          gaps: obligation.evidencePath.strategies
+            .filter((strategy) => !['completed', 'not-triggered'].includes(strategy.status))
             .map((strategy) => ({ kind: strategy.kind, reason: strategy.reason })),
         },
         evidenceBoundary: {

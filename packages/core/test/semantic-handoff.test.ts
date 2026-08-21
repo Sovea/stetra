@@ -391,7 +391,7 @@ test('changed acceptance surface triggers every related fact-triggered obligatio
     handoff: supportedFinding,
   });
   assert.ok(supportedFinding.obligationConclusions.every((item) => item.status === 'supported'));
-  assert.ok(pendingEvaluation.assuranceFulfillment.every((item) => item.status === 'pending'));
+  assert.ok(pendingEvaluation.evidencePaths.every((item) => item.status === 'pending'));
   const handoff = handoffFor(contract, facts, [], 'partial');
   const evaluation = evaluateHandoff({
     ...envelope, contract, factBundle: facts,
@@ -674,9 +674,9 @@ test('an unverified required challenge does not rewrite the Agent finding', () =
     deliveryExhausted: false, verificationRevised: false, handoff,
   });
   assert.equal(handoff.obligationConclusions[0].status, 'supported');
-  assert.equal(evaluation.assuranceFulfillment[0].status, 'unsatisfied');
+  assert.equal(evaluation.evidencePaths[0].status, 'unverified');
   assert.equal(
-    evaluation.assuranceFulfillment[0].strategies.find((item) =>
+    evaluation.evidencePaths[0].strategies.find((item) =>
       item.kind === 'independent-challenge')?.reason,
     'challenge-independence-unverified',
   );

@@ -148,7 +148,7 @@ export function initializeTask(input: {
       eventId: randomUUID(),
       type: 'task-prepared',
       actor: 'runtime',
-      occurredAt: projection.createdAt,
+      occurredAt: new Date().toISOString(),
       priorRevision: 0,
       resultingRevision: 1,
       artifactRefs: input.artifacts.map((artifact) =>
@@ -179,8 +179,8 @@ export function loadTask(projectRootInput: string, taskIdInput: string): LoadedT
   }
   const events = readEvents(eventsPath, taskId);
   const projection = events.at(-1)!.projection;
-  if (projection.projectRoot !== projectRoot || projection.taskId !== taskId) {
-    throw new Error('Task identity or project root does not match its storage location.');
+  if (projection.taskId !== taskId) {
+    throw new Error('Task identity does not match its storage location.');
   }
   const taskPath = join(taskDirectory, 'task.json');
   const cached = existsSync(taskPath) ? readJson(taskPath, 'task projection') : undefined;
@@ -237,7 +237,6 @@ export async function transitionTask(input: {
     const occurredAt = new Date().toISOString();
     const projection = parseArtifact(TaskProjectionSchema, {
       ...mutation.projection,
-      updatedAt: occurredAt,
       revision: current.projection.revision + 1,
     }, 'resulting task projection');
     const event = parseArtifact(TaskEventSchema, {
@@ -285,7 +284,6 @@ export function commitStagedTaskTransition(input: {
     const occurredAt = new Date().toISOString();
     const projection = parseArtifact(TaskProjectionSchema, {
       ...input.projection,
-      updatedAt: occurredAt,
       revision: current.projection.revision + 1,
     }, 'resulting task projection');
     const event = parseArtifact(TaskEventSchema, {

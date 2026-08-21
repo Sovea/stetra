@@ -88,8 +88,8 @@ export type {
 } from './facts/types.ts';
 export type {
   AdoptionConditionConclusion,
-  AssuranceFulfillmentStatus,
-  AssuranceStrategyFulfillment,
+  EvidencePathStatus,
+  EvidencePathState,
   AgentRecommendation,
   CognitiveHandoff,
   ConclusionStatus,
@@ -106,7 +106,8 @@ export type {
   HandoffValidationIssue,
   HostPolicyEvaluation,
   HumanDecision,
-  ObligationAssuranceFulfillment,
+  HumanResolution,
+  ObligationEvidencePaths,
   HumanDecisionAction,
   HumanDecisionException,
   RecommendationAction,

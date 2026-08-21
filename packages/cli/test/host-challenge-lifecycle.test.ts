@@ -258,7 +258,7 @@ test('Host Challenge lifecycle does not let output repair erase authored counter
     mayRetry: false,
     issues: [{
       path: 'results.0.counterEvidence',
-      message: 'must preserve the counter-evidence authored before structural repair',
+        message: 'must preserve the semantically material finding authored before structural repair',
     }],
   });
 });
@@ -358,13 +358,6 @@ function requestFixture(character: string): ChallengeExecutionRequest {
       serialization: 'json',
       schema: 'challenge-round-document',
       source: 'challengeExecutionPacket.draft',
-    },
-    contextRetrieval: {
-      command: {
-        argv: ['stetra', 'change', 'explain', '.', '--task', 'task:test', '--section', 'action', '--json'],
-      },
-      expectedAction: 'perform-independent-challenge',
-      verifyRequestId: digest(character),
     },
     dispatchPrompt: `Stetra task: task:test\nChallenge request: ${digest(character)}`,
   };

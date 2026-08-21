@@ -112,7 +112,7 @@ test('project init generates the Cognitive Adoption host projection and manifest
     assert.match(delivery, /fieldRequirements/);
     assert.match(challenge, /fresh Host context/);
     assert.match(challenge, /challengeExecutionRequest\.dispatchPrompt/);
-    assert.match(challenge, /continue-with-direct-human-review/);
+    assert.match(challenge, /hostAction\.limitedHandoff/);
     assert.match(challenge, /Challenge output remains Agent judgment/);
     assert.match(challenge, /canonical\s+identities, not paths/);
     assert.match(skill, /developerDecisionBrief\.primary.*owns the concise final cognitive/s);

@@ -17,7 +17,6 @@ export const HUMAN_DECISION_ACTIONS = ['accepted', 'correction-requested', 'reje
 export const VERIFICATION_REVISION_KINDS = ['execution-rebinding', 'verification-plan'] as const;
 export const HUMAN_RESOLUTION_ACTIONS = [
   'continue-current-contract',
-  'continue-with-direct-human-review',
   'request-correction',
   'abort',
 ] as const;
@@ -260,7 +259,7 @@ const ChallengeEvidenceReferenceSchema = z.union([
   }),
 ]);
 
-const ChallengeEvidenceItemSchema = z.strictObject({
+export const ChallengeEvidenceItemSchema = z.strictObject({
   statement: NonEmptyStringSchema,
   provenance: z.enum([
     'runtime-fact', 'repository-inspection', 'challenger-execution', 'reasoned-counterexample',
@@ -291,7 +290,7 @@ const ChallengeEvidenceItemSchema = z.strictObject({
   }
 });
 
-const EvidenceCoverageAssessmentSchema = z.discriminatedUnion('status', [
+export const EvidenceCoverageAssessmentSchema = z.discriminatedUnion('status', [
   z.strictObject({
     status: z.literal('sufficient'),
     rationale: NonEmptyStringSchema,
@@ -425,7 +424,6 @@ export const HumanResolutionDocumentSchema = z.strictObject({
     z.strictObject({ kind: z.literal('semantic-impact'), dispositionId: Sha256Schema }),
     z.strictObject({ kind: z.literal('correction'), decisionId: StableIdSchema }),
     z.strictObject({ kind: z.literal('host-policy'), requirementId: StableIdSchema }),
-    z.strictObject({ kind: z.literal('challenge'), requestId: Sha256Schema }),
   ]),
   action: z.enum(HUMAN_RESOLUTION_ACTIONS),
   reason: NonEmptyStringSchema,
@@ -449,26 +447,12 @@ const PendingResolutionSchema = z.discriminatedUnion('kind', [
   z.strictObject({ kind: z.literal('host-policy'), targetId: StableIdSchema }),
 ]);
 
-const ChallengeSubstitutionSchema = z.strictObject({
-  resolutionId: StableIdSchema,
-  requestId: Sha256Schema,
-  effectiveContractId: Sha256Schema,
-  attemptId: StableIdSchema,
-  factCollectionId: Sha256Schema,
-  obligationIds: z.array(StableIdSchema).min(1),
-});
-
 export const AttemptProjectionSchema = z.strictObject({
   attemptId: StableIdSchema,
   ordinal: z.number().int().positive(),
   parentAttemptId: StableIdSchema.nullable(),
   effectiveContractId: Sha256Schema,
   trigger: z.enum(['initial', 'delivery-repair', 'correction', 'verification-revision']),
-  deliveryStatus: z.enum([
-    'waiting-for-implementation', 'implementing', 'repairing',
-    'implementation-complete', 'exhausted',
-  ]),
-  createdAt: z.iso.datetime(),
   factCollectionId: Sha256Schema.optional(),
   evidenceDispositionPaths: z.array(SafeRepositoryPathSchema),
 });
@@ -479,10 +463,6 @@ export const TaskProjectionSchema = z.strictObject({
   taskId: z.uuid(),
   prepareRequestId: StableIdSchema,
   prepareInputFingerprint: Sha256Schema,
-  workflow: z.literal('cognitive-adoption'),
-  projectRoot: NonEmptyStringSchema,
-  createdAt: z.iso.datetime(),
-  updatedAt: z.iso.datetime(),
   revision: z.number().int().positive(),
   contractRevision: z.number().int().positive(),
   packageIdentity: PackageIdentitySchema,
@@ -494,30 +474,14 @@ export const TaskProjectionSchema = z.strictObject({
     maxDeliveryRepairs: z.number().int().min(0).max(5),
   }),
   currentAttemptId: StableIdSchema,
-  deliveryStatus: z.enum([
-    'waiting-for-implementation', 'implementing', 'repairing',
-    'implementation-complete', 'exhausted',
-  ]),
-  evidenceStatus: z.enum([
-    'not-collected', 'awaiting-evidence-judgment', 'incomplete',
-    'needs-attention', 'facts-stale', 'handoff-ready',
-  ]),
-  decisionStatus: z.enum([
-    'pending', 'correction-requested', 'accepted', 'rejected', 'deferred', 'aborted',
-  ]),
-  repairCount: z.number().int().nonnegative(),
   attempts: z.array(AttemptProjectionSchema).min(1),
   challengeIds: z.array(StableIdSchema),
-  challengeSubstitutions: z.array(ChallengeSubstitutionSchema),
+  humanResolutionIds: z.array(StableIdSchema),
   hostPolicyEvaluations: z.array(HostPolicyEvaluationSchema),
-  resolvedHostPolicyIds: z.array(StableIdSchema),
-  verificationRevised: z.boolean(),
   verificationRevisionIds: z.array(StableIdSchema),
   pendingResolution: PendingResolutionSchema.optional(),
   currentHandoffId: StableIdSchema.optional(),
-  currentHandoffFingerprint: Sha256Schema.optional(),
   decisionId: StableIdSchema.optional(),
-  terminalAt: z.iso.datetime().optional(),
 });
 
 export const TaskEventSchema = z.strictObject({
@@ -529,7 +493,7 @@ export const TaskEventSchema = z.strictObject({
   type: z.enum([
     'task-prepared', 'facts-collected', 'timeout-retried', 'evidence-diagnosed',
     'challenge-recorded', 'handoff-evaluated', 'decision-recorded',
-    'human-resolution-recorded', 'contract-revised', 'verification-revised',
+    'human-resolution-recorded', 'verification-revised',
   ]),
   actor: z.enum(['human', 'agent', 'runtime']),
   occurredAt: z.iso.datetime(),
@@ -550,3 +514,10 @@ export type VerificationRevisionDocument = z.infer<typeof VerificationRevisionDo
 export type HumanResolutionDocument = z.infer<typeof HumanResolutionDocumentSchema>;
 export type TaskProjection = z.infer<typeof TaskProjectionSchema>;
 export type TaskEvent = z.infer<typeof TaskEventSchema>;
+
+export interface DerivedTaskState {
+  deliveryStatus: 'waiting-for-implementation' | 'repairing' | 'implementation-complete' | 'exhausted';
+  evidenceStatus: 'not-collected' | 'awaiting-evidence-judgment' | 'incomplete' | 'needs-attention' | 'handoff-ready' | 'facts-stale';
+  decisionStatus: 'pending' | 'correction-requested' | 'accepted' | 'rejected' | 'deferred' | 'aborted';
+  repairCount: number;
+}

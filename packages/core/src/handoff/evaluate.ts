@@ -51,7 +51,7 @@ export function evaluateHandoff(input: EvaluateHandoffInput): HandoffEvaluation 
       attemptId: input.factBundle.attemptId,
       factCollectionId: input.factBundle.factCollectionId,
       requiredChallengeObligationIds: [],
-      assuranceFulfillment: [],
+      evidencePaths: [],
       attention: [],
       adoption: { authority: 'human', status: 'pending' },
     };
@@ -69,7 +69,7 @@ export function evaluateHandoff(input: EvaluateHandoffInput): HandoffEvaluation 
     requiredChallengeObligationIds,
   );
   const attention = deriveAttention(input, handoff, requiredChallengeObligationIds);
-  const assuranceFulfillment = deriveAssuranceFulfillment(
+  const evidencePaths = deriveEvidencePaths(
     input,
     handoff,
     requiredChallengeObligationIds,
@@ -78,7 +78,7 @@ export function evaluateHandoff(input: EvaluateHandoffInput): HandoffEvaluation 
     input,
     handoff,
     requiredChallengeObligationIds,
-    assuranceFulfillment,
+    evidencePaths,
   );
   const decision = input.decision
     ? validateDecision(input.decision, handoff, input.contract, input.factBundle, attention)
@@ -90,7 +90,7 @@ export function evaluateHandoff(input: EvaluateHandoffInput): HandoffEvaluation 
     attemptId: input.factBundle.attemptId,
     factCollectionId: input.factBundle.factCollectionId,
     requiredChallengeObligationIds,
-    assuranceFulfillment,
+    evidencePaths,
     attention,
     adoption: decision
       ? { authority: 'human', status: decision.interpretation.action, decisionId: decision.decisionId }
@@ -1152,7 +1152,7 @@ function validateRecommendationConsistency(
   input: EvaluateHandoffInput,
   handoff: CognitiveHandoff,
   requiredChallengeObligationIds: string[],
-  assuranceFulfillment: HandoffEvaluation['assuranceFulfillment'],
+  evidencePaths: HandoffEvaluation['evidencePaths'],
 ): void {
   if (handoff.recommendation.action !== 'accept') return;
   const blockers = new Set<string>();
@@ -1173,8 +1173,8 @@ function validateRecommendationConsistency(
   if (input.challenges.some((item) => item.outcome !== 'supported')) {
     blockers.add('challenge-adverse');
   }
-  if (assuranceFulfillment.some((item) => item.status !== 'satisfied')) {
-    blockers.add('assurance-unfulfilled');
+  if (evidencePaths.some((item) => item.status !== 'completed')) {
+    blockers.add('evidence-path-incomplete');
   }
   for (const obligationId of requiredChallengeObligationIds) {
     const challenges = input.challenges.filter((item) =>
@@ -1200,11 +1200,11 @@ function validateRecommendationConsistency(
   )]);
 }
 
-function deriveAssuranceFulfillment(
+function deriveEvidencePaths(
   input: EvaluateHandoffInput,
   handoff: CognitiveHandoff,
   requiredChallengeObligationIds: string[],
-): HandoffEvaluation['assuranceFulfillment'] {
+): HandoffEvaluation['evidencePaths'] {
   const requiredChallenges = new Set(requiredChallengeObligationIds);
   const definitions = input.contract.verificationPlan.mode === 'checks'
     ? input.contract.verificationPlan.definitions : [];
@@ -1225,7 +1225,7 @@ function deriveAssuranceFulfillment(
         return {
           strategyIndex,
           kind: strategy.kind,
-          status: unavailable ? 'unsatisfied' as const : 'satisfied' as const,
+          status: unavailable ? 'unavailable' as const : 'completed' as const,
           reason: unavailable ? 'check-unavailable' as const : 'current-check-observed' as const,
           references,
         };
@@ -1234,7 +1234,7 @@ function deriveAssuranceFulfillment(
         return {
           strategyIndex,
           kind: strategy.kind,
-          status: 'satisfied' as const,
+          status: 'completed' as const,
           reason: 'repository-evidence-cited' as const,
           references: [...finding.evidence, ...finding.counterEvidence]
             .filter((item) => item.kind === 'repository-evidence'
@@ -1246,7 +1246,7 @@ function deriveAssuranceFulfillment(
           return {
             strategyIndex,
             kind: strategy.kind,
-            status: 'not-required' as const,
+            status: 'not-triggered' as const,
             reason: 'challenge-not-triggered' as const,
             references: [],
           };
@@ -1266,7 +1266,7 @@ function deriveAssuranceFulfillment(
         return {
           strategyIndex,
           kind: strategy.kind,
-          status: attested ? 'satisfied' as const : 'unsatisfied' as const,
+          status: attested ? 'completed' as const : 'unverified' as const,
           reason: attested
             ? 'challenge-host-attested' as const
             : 'challenge-independence-unverified' as const,
@@ -1275,11 +1275,13 @@ function deriveAssuranceFulfillment(
       }
       throw new Error('Unsupported evidence strategy.');
     });
-    const status = strategies.some((item) => item.status === 'unsatisfied')
-      ? 'unsatisfied' as const
+    const status = strategies.some((item) => item.status === 'unavailable')
+      ? 'unavailable' as const
+      : strategies.some((item) => item.status === 'unverified')
+        ? 'unverified' as const
       : strategies.some((item) => item.status === 'pending')
         ? 'pending' as const
-        : 'satisfied' as const;
+        : 'completed' as const;
     return { obligationId: obligation.id, status, strategies };
   });
 }

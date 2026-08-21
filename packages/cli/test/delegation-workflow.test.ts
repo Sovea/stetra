@@ -668,12 +668,17 @@ test('material diagnosis and critical unknowns route from explicit semantics rat
     });
     assert.equal(resolved.hostAction.kind, 'author-handoff');
     assert.equal(readDelegationTask(materialRoot, prepared.taskId).projection.pendingResolution, undefined);
+    const guarded = await guardFinalResponse({
+      projectRoot: materialRoot,
+      taskId: prepared.taskId,
+    });
+    assert.equal(guarded.hostAction?.kind, 'author-handoff');
   } finally {
     rmSync(materialRoot, { recursive: true, force: true });
   }
 });
 
-test('required Challenge cannot be bypassed by diagnosis-to-handoff or premature Handoff input', async () => {
+test('required Challenge remains preferred after evidence diagnosis', async () => {
   const root = createRepository();
   try {
     const prepared = await prepare(root, prepareDocument({
@@ -730,10 +735,7 @@ test('required Challenge cannot be bypassed by diagnosis-to-handoff or premature
         caveats: ['The current check is non-passing.'],
       },
     };
-    await assert.rejects(
-      handoff(root, prepared.taskId, prematureHandoff),
-      /required Challenge obligations remain pending/,
-    );
+    assert.equal(diagnosed.hostAction.kind, 'perform-independent-challenge');
 
     const challengeDraft = structuredClone(
       diagnosed.hostAction.challengeExecutionPacket.draft.results[0],
@@ -826,7 +828,7 @@ test('required Host policies pause prepare until every explicit requirement is r
     });
     assert.equal(second.hostAction.kind, 'implement-and-collect');
     const stored = readDelegationTask(root, prepared.taskId);
-    assert.equal(stored.projection.resolvedHostPolicyIds.length, 2);
+    assert.equal(stored.projection.humanResolutionIds.length, 2);
     assert.equal(stored.projection.pendingResolution, undefined);
   } finally {
     rmSync(root, { recursive: true, force: true });
@@ -914,7 +916,6 @@ test('a Human correction creates a successor Attempt and preserves the prior dec
     assert.equal(resolved.successorAttemptId, 'attempt:2');
     assert.equal(resolved.hostAction.kind, 'implement-and-collect');
     const stored = readDelegationTask(root, prepared.taskId);
-    assert.equal(stored.projection.decisionStatus, 'pending');
     assert.equal(stored.projection.attempts[1].trigger, 'correction');
     assert.equal(stored.projection.attempts[1].parentAttemptId, 'attempt:1');
     assert.equal(stored.projection.decisionId, undefined);
@@ -1038,8 +1039,8 @@ test('a thin Host runs the bounded Challenger but preserves unverified direct re
       item.codes.includes('challenge-independence-unverified')));
     assert.equal(handedOff.decisionPacket.conditions[0].agentFinding.status, 'supported');
     assert.equal(handedOff.decisionPacket.conditions[0].obligations[0].agentFinding.status, 'supported');
-    assert.equal(handedOff.decisionPacket.conditions[0].obligations[0].assurance.status, 'unsatisfied');
-    assert.equal(handedOff.hostAction.developerDecisionBrief.primary.conditions[0].obligations[0].assurance.status, 'unsatisfied');
+    assert.equal(handedOff.decisionPacket.conditions[0].obligations[0].evidencePath.status, 'unverified');
+    assert.equal(handedOff.hostAction.developerDecisionBrief.primary.conditions[0].obligations[0].evidencePath.status, 'unverified');
     const issue = handedOff.hostAction.developerDecisionBrief.details.decisionIssues.find(
       (item: { codes: string[] }) => item.codes.includes('challenge-independence-unverified'),
     );
@@ -1064,7 +1065,7 @@ test('a thin Host runs the bounded Challenger but preserves unverified direct re
   }
 });
 
-test('only an exact Human event may substitute direct review for unavailable fresh-context Challenge execution', async () => {
+test('unavailable fresh-context execution can degrade to an honest limited handoff', async () => {
   const root = createRepository();
   try {
     const prepared = await prepare(root, prepareDocument({
@@ -1074,21 +1075,19 @@ test('only an exact Human event may substitute direct review for unavailable fre
     }));
     const collected = await collect(root, prepared.taskId);
     assert.equal(collected.hostAction.kind, 'perform-independent-challenge');
-    const fallback = structuredClone(collected.hostAction.directReviewFallback.draft);
-    fallback.humanEvent.content = 'This Host cannot start a fresh Challenger context; I will inspect the failure hypothesis directly.';
-    fallback.reason = 'Preserve the assurance gap and route its exact boundary to my Review Map.';
-
-    const resolved = await resolve(root, prepared.taskId, fallback);
-    assert.equal(resolved.hostAction.kind, 'author-handoff');
-    assert.ok(resolved.hostAction.authoringPacket.outstandingObligations.some(
+    assert.equal(collected.hostAction.limitedHandoff.preservesChallengeGap, true);
+    const explained = explainDelegationTask({
+      projectRoot: root,
+      taskId: prepared.taskId,
+      section: 'handoff',
+    }) as any;
+    assert.ok(explained.authoringPacket.outstandingObligations.some(
       (item: { code: string }) => item.code === 'direct-human-review-required',
     ));
-    assert.equal(readDelegationTask(root, prepared.taskId).projection.challengeSubstitutions.length, 1);
-
-    const handoffDraft = structuredClone(resolved.hostAction.authoringPacket.draft);
+    const handoffDraft = structuredClone(explained.authoringPacket.draft);
     const condition = prepared.taskContract.adoptionConditions[0];
     const obligation = condition.evidenceObligations[0];
-    handoffDraft.summary = 'Runtime facts are current, while independent Challenge remains replaced by direct review.';
+    handoffDraft.summary = 'Runtime facts are current, while the independent Challenge remains unavailable.';
     handoffDraft.obligationConclusions[0].status = 'unknown';
     handoffDraft.obligationConclusions[0].evidenceCoverage = {
       status: 'insufficient',
@@ -1099,7 +1098,7 @@ test('only an exact Human event may substitute direct review for unavailable fre
       attempt: 'Preserved the unexecuted independent Challenge boundary for direct review.',
       observedResult: 'No Host-attested independent observation is available.',
     };
-    handoffDraft.obligationConclusions[0].conclusion = 'The independent assurance obligation remains unknown.';
+    handoffDraft.obligationConclusions[0].conclusion = 'The independent evidence path remains unknown.';
     handoffDraft.conditionConclusions[0].status = 'unknown';
     handoffDraft.conditionConclusions[0].summary = 'The adoption condition requires direct Human inspection.';
     handoffDraft.reviewQuestions = [{
@@ -1111,20 +1110,13 @@ test('only an exact Human event may substitute direct review for unavailable fre
     }];
     handoffDraft.recommendation = {
       action: 'defer',
-      rationale: 'Independent assurance was explicitly replaced by pending direct review.',
+      rationale: 'The missing independent evidence path requires direct review.',
       caveats: ['No fresh-context Challenge result exists.'],
     };
     const handedOff = await handoff(root, prepared.taskId, handoffDraft);
     assert.equal(handedOff.status, 'needs-attention');
     assert.ok(handedOff.decisionPacket.attention.some((item: { codes: string[] }) =>
       item.codes.includes('challenge-missing')));
-
-    const wrongRequest = structuredClone(fallback);
-    wrongRequest.target.requestId = `sha256:${'0'.repeat(64)}`;
-    await assert.rejects(
-      resolve(root, prepared.taskId, wrongRequest),
-      /exact current Challenge Execution Request/,
-    );
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

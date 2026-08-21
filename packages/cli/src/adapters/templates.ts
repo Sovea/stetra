@@ -392,12 +392,10 @@ normal evidence-diagnosis packet. Diagnose its exact Challenge source and
 choose bounded repair, verification revision, Human resolution, or Handoff;
 do not send the same adverse finding to another Challenger.
 
-If the Host cannot create the required fresh context, do not silently continue
-or let the Implementer impersonate the Challenger. Present
-**hostAction.directReviewFallback** to the developer. Only a new exact Human
-message may authorize its **continue-with-direct-human-review** action. Runtime
-then permits Handoff while preserving the missing Challenge as an adoption
-blocker and requiring a concrete direct-review question.
+If the Host cannot create the required fresh context, do not let the
+Implementer impersonate the Challenger. Use **hostAction.limitedHandoff** to
+retrieve a bounded Handoff draft. It keeps the missing Challenge visible,
+forbids a supported conclusion, and requires a concrete direct-review question.
 `;
 
 const HANDOFF_REFERENCE = `# Author the Cognitive Handoff and obtain a Human decision

@@ -181,10 +181,10 @@ function appendDeveloperDecisionBrief(
           `  ${colors.cyan('↳')} ${String(obligation.statement ?? '')} — ${String(obligation.finding.status ?? 'unknown')}`,
           `    ${String(obligation.finding.conclusion ?? '')}`,
         );
-        if (isRecord(obligation.assurance)) {
-          lines.push(`    Assurance fulfillment: ${String(obligation.assurance.status ?? 'unknown')}`);
-          if (Array.isArray(obligation.assurance.gaps)) {
-            for (const gap of obligation.assurance.gaps) {
+        if (isRecord(obligation.evidencePath)) {
+          lines.push(`    Evidence path: ${String(obligation.evidencePath.status ?? 'unknown')}`);
+          if (Array.isArray(obligation.evidencePath.gaps)) {
+            for (const gap of obligation.evidencePath.gaps) {
               if (isRecord(gap)) lines.push(`    Assurance gap: ${String(gap.kind)} — ${String(gap.reason)}`);
             }
           }

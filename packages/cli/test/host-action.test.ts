@@ -148,13 +148,10 @@ test('collection routes timeout, diagnosis, required challenge, and ordinary han
     new RegExp(`^Challenge request: ${challenge.challengeExecutionRequest!.requestId}$`, 'm'),
   );
   assert.deepEqual(
-    challenge.challengeExecutionRequest!.contextRetrieval.command.argv.slice(0, 4),
-    ['stetra', 'change', 'explain', '.'],
+    challenge.limitedHandoff!.command.argv.slice(-3),
+    ['--section', 'handoff', '--json'],
   );
-  assert.equal(
-    challenge.directReviewFallback!.draft.target.requestId,
-    challenge.challengeExecutionRequest!.requestId,
-  );
+  assert.equal(challenge.limitedHandoff!.preservesChallengeGap, true);
   const failed = factFixture('failed');
   assert.equal(collectedHostAction({
     ...common, facts: failed, pendingChallengeObligationIds: [],

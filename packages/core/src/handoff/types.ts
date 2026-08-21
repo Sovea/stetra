@@ -101,6 +101,21 @@ export interface HumanDecision extends ProtocolEnvelope {
   handoffFingerprint: string;
 }
 
+export interface HumanResolution extends ProtocolEnvelope {
+  resolutionId: string;
+  effectiveContractId: string;
+  humanEvent: HumanEvent;
+  interpretation: {
+    basisHumanEventId: string;
+    target:
+      | { kind: 'semantic-impact'; dispositionId: string }
+      | { kind: 'correction'; decisionId: string }
+      | { kind: 'host-policy'; requirementId: string };
+    action: 'continue-current-contract' | 'request-correction' | 'abort';
+    reason: string;
+  };
+}
+
 export type HandoffAttentionCode =
   | 'verification-nonpassing'
   | 'baseline-expectation-mismatch'
@@ -154,16 +169,17 @@ export interface HostPolicyEvaluation {
   attestationId?: string;
 }
 
-export type AssuranceFulfillmentStatus =
-  | 'satisfied'
-  | 'unsatisfied'
+export type EvidencePathStatus =
+  | 'completed'
+  | 'unavailable'
+  | 'unverified'
   | 'pending'
-  | 'not-required';
+  | 'not-triggered';
 
-export interface AssuranceStrategyFulfillment {
+export interface EvidencePathState {
   strategyIndex: number;
   kind: EvidenceObligation['strategies'][number]['kind'];
-  status: AssuranceFulfillmentStatus;
+  status: EvidencePathStatus;
   reason:
     | 'current-check-observed'
     | 'check-unavailable'
@@ -171,16 +187,14 @@ export interface AssuranceStrategyFulfillment {
     | 'challenge-not-triggered'
     | 'challenge-pending'
     | 'challenge-host-attested'
-    | 'challenge-independence-unverified'
-    | 'human-review-pending'
-    | 'human-decision-recorded';
+    | 'challenge-independence-unverified';
   references: HandoffEvidenceReference[];
 }
 
-export interface ObligationAssuranceFulfillment {
+export interface ObligationEvidencePaths {
   obligationId: string;
-  status: 'satisfied' | 'unsatisfied' | 'pending';
-  strategies: AssuranceStrategyFulfillment[];
+  status: 'completed' | 'unavailable' | 'unverified' | 'pending';
+  strategies: EvidencePathState[];
 }
 
 export interface EvaluateHandoffInput extends ProtocolEnvelope {
@@ -202,7 +216,7 @@ export interface HandoffEvaluation extends ProtocolEnvelope {
   attemptId: string;
   factCollectionId: string;
   requiredChallengeObligationIds: string[];
-  assuranceFulfillment: ObligationAssuranceFulfillment[];
+  evidencePaths: ObligationEvidencePaths[];
   attention: HandoffAttentionItem[];
   adoption: {
     authority: 'human';
@@ -225,6 +239,7 @@ export interface DecisionPacket extends ProtocolEnvelope {
     recommendation: AgentRecommendation;
     adoption: HandoffEvaluation['adoption'];
     humanDecision?: HumanDecision;
+    resolutions: HumanResolution[];
   };
   systemMeaning: {
     summary: string;
@@ -243,7 +258,7 @@ export interface DecisionPacket extends ProtocolEnvelope {
       statement: string;
       falsification: EvidenceObligation['falsification'];
       agentFinding: EvidenceObligationConclusion;
-      assurance: ObligationAssuranceFulfillment;
+      evidencePath: ObligationEvidencePaths;
       challengeIds: string[];
     }>;
   }>;
