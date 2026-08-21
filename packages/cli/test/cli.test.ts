@@ -90,7 +90,7 @@ test('CLI JSON mode executes compact prepare, baseline-aware collect, layered ha
     assert.equal(handedOff.decisionPacket.decision.adoption.status, 'pending');
     assert.equal(handedOff.decisionPacket.semanticContract.desiredOutcome, 'Change the CLI fixture.');
     assert.deepEqual(Object.keys(handedOff.decisionPacket), [
-      'protocol', 'schemaVersion', 'authority', 'semanticContract', 'decision',
+      'protocol', 'schemaVersion', 'humanEvents', 'semanticContract', 'decision',
       'systemMeaning', 'conditions', 'attention', 'reviewQuestions', 'runtimeFacts',
       'evidenceJudgments', 'detailSections',
     ]);
@@ -269,7 +269,7 @@ function prepareDocument() {
       }],
     }],
     hostPolicyRequirements: [],
-    delivery: { maxRepairAttempts: 1 },
+    executionBudget: { checkTimeoutMs: 300_000, maxDeliveryRepairs: 1 },
     checks: [{
       key: 'test', rationale: 'Exercise the fixture.',
       execution: {

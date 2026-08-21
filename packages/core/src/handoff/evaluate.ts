@@ -69,24 +69,20 @@ export function evaluateHandoff(input: EvaluateHandoffInput): HandoffEvaluation 
     requiredChallengeObligationIds,
   );
   const attention = deriveAttention(input, handoff, requiredChallengeObligationIds);
-  const pendingAssurance = deriveAssuranceFulfillment(
+  const assuranceFulfillment = deriveAssuranceFulfillment(
     input,
     handoff,
     requiredChallengeObligationIds,
-    false,
   );
   validateRecommendationConsistency(
     input,
     handoff,
     requiredChallengeObligationIds,
-    pendingAssurance,
+    assuranceFulfillment,
   );
   const decision = input.decision
     ? validateDecision(input.decision, handoff, input.contract, input.factBundle, attention)
     : undefined;
-  const assuranceFulfillment = decision
-    ? deriveAssuranceFulfillment(input, handoff, requiredChallengeObligationIds, true)
-    : pendingAssurance;
   return {
     ...ENVELOPE,
     status: attention.length ? 'needs-attention' : 'handoff-ready',
@@ -97,7 +93,7 @@ export function evaluateHandoff(input: EvaluateHandoffInput): HandoffEvaluation 
     assuranceFulfillment,
     attention,
     adoption: decision
-      ? { authority: 'human', status: decision.action, decisionId: decision.decisionId }
+      ? { authority: 'human', status: decision.interpretation.action, decisionId: decision.decisionId }
       : { authority: 'human', status: 'pending' },
   };
 }
@@ -241,7 +237,7 @@ function validateChallenges(input: EvaluateHandoffInput): void {
   const changedFileIds = new Set(input.factBundle.changedFiles.map((item) => item.id));
   const definitionIds = new Set(input.factBundle.checks.map((item) => item.definitionId));
   const evidenceIds = new Set(input.contract.repositoryEvidence.map((item) => item.id));
-  const eventIds = new Set(input.contract.authority.developerEvents.map((item) => item.id));
+  const eventIds = new Set(input.contract.humanEvents.map((item) => item.id));
   const challengeIds = new Set<string>();
   const issues: HandoffValidationIssue[] = [];
   for (const [index, challenge] of input.challenges.entries()) {
@@ -933,8 +929,7 @@ function validateReviewCoverage(
         && (!obligationChallenges.length
           || obligationChallenges.some((item) => item.outcome !== 'supported')
           || obligationChallenges.some((item) => item.independence !== 'host-attested'));
-      const requires = obligation.strategies.some((strategy) => strategy.kind === 'human-review')
-        || obligationConclusion?.status !== 'supported'
+      const requires = obligationConclusion?.status !== 'supported'
         || unknownObligations.has(obligation.id)
         || unresolvedChallenge
         || obligationChallenges.some((item) => item.outcome !== 'supported')
@@ -985,7 +980,7 @@ function validateEvidence(
     'changed-file': new Set(facts.changedFiles.map((item) => item.id)),
     check: new Set(facts.checks.map((item) => item.definitionId)),
     'repository-evidence': new Set(contract.repositoryEvidence.map((item) => item.id)),
-    'human-event': new Set(contract.authority.developerEvents.map((item) => item.id)),
+    'human-event': new Set(contract.humanEvents.map((item) => item.id)),
     challenge: challengeIds,
   };
   const output: HandoffEvidenceReference[] = [];
@@ -1113,8 +1108,7 @@ function deriveAttention(
       && (!challenges.length
         || challenges.some((item) => item.outcome !== 'supported')
         || challenges.some((item) => item.independence !== 'host-attested'));
-    if (unresolvedChallenge
-      || obligation.strategies.some((strategy) => strategy.kind === 'human-review')) {
+    if (unresolvedChallenge) {
       items.push(attention('obligation', ['direct-review-required'], references, 'inspect'));
     }
   }
@@ -1210,7 +1204,6 @@ function deriveAssuranceFulfillment(
   input: EvaluateHandoffInput,
   handoff: CognitiveHandoff,
   requiredChallengeObligationIds: string[],
-  humanDecisionRecorded: boolean,
 ): HandoffEvaluation['assuranceFulfillment'] {
   const requiredChallenges = new Set(requiredChallengeObligationIds);
   const definitions = input.contract.verificationPlan.mode === 'checks'
@@ -1280,15 +1273,7 @@ function deriveAssuranceFulfillment(
           references: challenges.map((item) => ({ kind: 'challenge' as const, id: item.id })),
         };
       }
-      return {
-        strategyIndex,
-        kind: strategy.kind,
-        status: humanDecisionRecorded ? 'satisfied' as const : 'pending' as const,
-        reason: humanDecisionRecorded
-          ? 'human-decision-recorded' as const
-          : 'human-review-pending' as const,
-        references: [],
-      };
+      throw new Error('Unsupported evidence strategy.');
     });
     const status = strategies.some((item) => item.status === 'unsatisfied')
       ? 'unsatisfied' as const
@@ -1313,27 +1298,28 @@ function validateDecision(
     || decision.factCollectionId !== facts.factCollectionId
     || decision.handoffId !== handoff.handoffId
     || decision.handoffFingerprint !== handoff.handoffFingerprint
-    || !['accepted', 'correction-requested', 'rejected', 'deferred'].includes(decision.action)
-    || !isNonEmptyString(decision.reason)
-    || !Array.isArray(decision.exceptions)
+    || decision.interpretation?.basisHumanEventId !== decision.humanEvent?.id
+    || !['accepted', 'correction-requested', 'rejected', 'deferred'].includes(decision.interpretation?.action)
+    || !isNonEmptyString(decision.interpretation?.reason)
+    || !Array.isArray(decision.interpretation?.exceptions)
     || !isStableId(decision.humanEvent?.id)
     || !['decision', 'correction'].includes(decision.humanEvent?.kind)
     || !isNonEmptyString(decision.humanEvent?.content)
     || decision.humanEvent.contentFingerprint !== sha256(decision.humanEvent.content)) {
     throw new HandoffValidationError([issue('decision-invalid', 'decision', 'Human Decision is invalid or stale.', 'Bind the exact decision to the current handoff.')]);
   }
-  if ((decision.action === 'correction-requested') !== (decision.humanEvent.kind === 'correction')) {
+  if ((decision.interpretation.action === 'correction-requested') !== (decision.humanEvent.kind === 'correction')) {
     throw new HandoffValidationError([issue('decision-event-kind-invalid', 'decision.humanEvent.kind', 'Correction requests require correction events; all other decisions require decision events.', 'Preserve the exact developer event with the matching kind.')]);
   }
   const attentionIds = new Set(attention.map((item) => item.id));
-  if (new Set(decision.exceptions.map((item) => item.attentionId)).size !== decision.exceptions.length
-    || decision.exceptions.some((item) => !attentionIds.has(item.attentionId) || !isNonEmptyString(item.rationale))) {
-    throw new HandoffValidationError([issue('decision-exception-invalid', 'decision.exceptions', 'Decision exceptions must uniquely reference current Attention.', 'Reference exact current Attention ids with rationale.')]);
+  if (new Set(decision.interpretation.exceptions.map((item) => item.attentionId)).size !== decision.interpretation.exceptions.length
+    || decision.interpretation.exceptions.some((item) => !attentionIds.has(item.attentionId) || !isNonEmptyString(item.rationale))) {
+    throw new HandoffValidationError([issue('decision-exception-invalid', 'decision.interpretation.exceptions', 'Decision exceptions must uniquely reference current Attention.', 'Reference exact current Attention ids with rationale.')]);
   }
-  if (decision.action === 'accepted'
-    && stableFingerprint(decision.exceptions.map((item) => item.attentionId).sort())
+  if (decision.interpretation.action === 'accepted'
+    && stableFingerprint(decision.interpretation.exceptions.map((item) => item.attentionId).sort())
       !== stableFingerprint([...attentionIds].sort())) {
-    throw new HandoffValidationError([issue('decision-exception-coverage-missing', 'decision.exceptions', 'Acceptance must cover every current Attention item.', 'Name every current Attention id and exact rationale.')]);
+    throw new HandoffValidationError([issue('decision-exception-coverage-missing', 'decision.interpretation.exceptions', 'Acceptance must cover every current Attention item.', 'Name every current Attention id and exact rationale.')]);
   }
   return decision;
 }

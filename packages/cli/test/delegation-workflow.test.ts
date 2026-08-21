@@ -1870,7 +1870,10 @@ function prepareDocument(options: {
       }],
     }],
     hostPolicyRequirements: [],
-    delivery: { maxRepairAttempts: options.maxRepairAttempts ?? 2 },
+    executionBudget: {
+      checkTimeoutMs: 300_000,
+      maxDeliveryRepairs: options.maxRepairAttempts ?? 2,
+    },
     checks: [{
       key: 'test', rationale: 'Observe the fixture.',
       execution: {

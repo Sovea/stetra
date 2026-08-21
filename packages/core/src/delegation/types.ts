@@ -84,9 +84,6 @@ export type EvidenceObligationStrategyInput =
   | {
       kind: 'independent-challenge';
       policy: ChallengePolicy;
-    }
-  | {
-      kind: 'human-review';
     };
 
 export interface EvidenceObligationInput {
@@ -171,8 +168,9 @@ export interface CompileDelegationInput extends ProtocolEnvelope {
   repositoryEvidence?: RepositoryEvidenceInput[];
   conditions: AdoptionConditionInput[];
   hostPolicyRequirements: HostPolicyRequirementInput[];
-  delivery: {
-    maxRepairAttempts: number;
+  executionBudget: {
+    checkTimeoutMs: number;
+    maxDeliveryRepairs: number;
   };
   checks?: VerificationDefinitionInput[];
   noCommandRationale?: string;
@@ -187,7 +185,10 @@ export interface VerificationRevisionInput extends ProtocolEnvelope {
     equivalenceClaim: string;
     checks?: VerificationDefinitionInput[];
     noCommandRationale?: string;
-    humanAuthorization?: ExactHumanEventInput;
+    humanAuthorization?: {
+      humanEvent: ExactHumanEventInput;
+      interpretation: string;
+    };
   };
 }
 
@@ -195,11 +196,6 @@ export interface VerifierRef {
   kind: RepositorySelectorKind;
   path: string;
   role: VerifierRefRole;
-}
-
-export interface LogicalVerifier {
-  verifierId: string;
-  key: string;
 }
 
 export interface VerificationDefinition {
@@ -250,9 +246,6 @@ export type EvidenceObligationStrategy =
   | {
       kind: 'independent-challenge';
       policy: ChallengePolicy;
-    }
-  | {
-      kind: 'human-review';
     };
 
 export interface EvidenceObligation {
@@ -263,8 +256,6 @@ export interface EvidenceObligation {
   falsification: EvidenceObligationFalsification;
   strategies: EvidenceObligationStrategy[];
 }
-
-export interface MaterializedInterpretation extends AgentInterpretation {}
 
 export interface MaterialDecisionFork {
   id: string;
@@ -279,7 +270,7 @@ export interface MaterialDecisionFork {
   resolution: {
     humanEventId: string;
     selectedAlternativeKey?: string;
-    decisionInterpretation: MaterializedInterpretation;
+    decisionInterpretation: AgentInterpretation;
   };
 }
 
@@ -303,21 +294,12 @@ export interface HostPolicyRequirement {
   basis: InterpretationBasis;
 }
 
-export interface DeliveryPlan {
-  planId: string;
-  maxRepairAttempts: number;
-  lifecycle: readonly ['implement', 'collect', 'judge-evidence', 'resolve', 'handoff', 'decide'];
-}
-
 export type VerificationPlan =
   | {
-      verificationPlanId: string;
       mode: 'checks';
-      verifiers: LogicalVerifier[];
       definitions: VerificationDefinition[];
     }
   | {
-      verificationPlanId: string;
       mode: 'no-command';
       rationale: string;
     };
@@ -326,31 +308,31 @@ export interface TaskContract extends ProtocolEnvelope {
   semanticContractId: string;
   verificationPlanId: string;
   effectiveContractId: string;
-  authority: {
-    developerEvents: HumanEvent[];
-    providerTrustBoundary: 'host-supplied-event-not-runtime-authenticated';
-  };
+  humanEvents: HumanEvent[];
   understanding: {
-    desiredOutcome: MaterializedInterpretation;
-    constraints: MaterializedInterpretation[];
-    nonGoals: MaterializedInterpretation[];
-    focus: MaterializedInterpretation[];
+    desiredOutcome: AgentInterpretation;
+    constraints: AgentInterpretation[];
+    nonGoals: AgentInterpretation[];
+    focus: AgentInterpretation[];
   };
   repositoryEvidence: RepositoryEvidence[];
   materialDecisions: MaterialDecisionFork[];
   adoptionConditions: AdoptionCondition[];
   hostPolicyRequirements: HostPolicyRequirement[];
-  plan: DeliveryPlan;
-  authorization: {
-    standingAuthorization: string;
-    escalationBoundary: string[];
-    focusPathsArePermissions: false;
-  };
   verificationPlan: VerificationPlan;
 }
 
+export interface ExecutionBudget {
+  checkTimeoutMs: number;
+  maxDeliveryRepairs: number;
+}
+
 export type DelegationCompileResult =
-  | (ProtocolEnvelope & { status: 'delegation-compiled'; contract: TaskContract })
+  | (ProtocolEnvelope & {
+      status: 'delegation-compiled';
+      contract: TaskContract;
+      executionBudget?: ExecutionBudget;
+    })
   | (ProtocolEnvelope & {
       status: 'semantic-decision-required';
       forks: MaterialDecisionForkInput[];

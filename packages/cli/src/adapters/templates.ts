@@ -162,7 +162,7 @@ export const DELEGATION_PREPARE_EXAMPLE = {
     }],
   }],
   hostPolicyRequirements: [],
-  delivery: { maxRepairAttempts: 2 },
+  executionBudget: { checkTimeoutMs: 300000, maxDeliveryRepairs: 2 },
   checks: [{
     key: 'test',
     rationale: 'decision-relevant observation',

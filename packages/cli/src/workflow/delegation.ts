@@ -37,7 +37,6 @@ import {
   usageError,
 } from '../errors.ts';
 import {
-  DEFAULT_CHECK_TIMEOUT_MS,
   runFrozenChecks,
 } from '../facts/checks.ts';
 import { collectExecutionEnvironment } from '../facts/environment.ts';
@@ -177,7 +176,7 @@ export async function prepareDelegationTask(options: {
     ...(repositoryEvidence.length ? { repositoryEvidence } : {}),
     conditions: source.conditions,
     hostPolicyRequirements: source.hostPolicyRequirements,
-    delivery: source.delivery,
+    executionBudget: source.executionBudget,
     ...(source.checks ? { checks: source.checks } : {}),
     ...(source.noCommandRationale ? { noCommandRationale: source.noCommandRationale } : {}),
   };
@@ -249,7 +248,7 @@ export async function prepareDelegationTask(options: {
       projectRoot,
       executions: taskStartDefinitions.map((definition) => ({
         definition,
-        timeoutMs: DEFAULT_CHECK_TIMEOUT_MS,
+        timeoutMs: source.executionBudget.checkTimeoutMs,
       })),
       outputDirectory: join(workspace.taskDirectory, 'baseline-checks'),
       recordedOutputDirectory: join(workspace.finalTaskDirectory, 'baseline-checks'),
@@ -309,7 +308,7 @@ export async function prepareDelegationTask(options: {
       semanticContractId: compiled.contract.semanticContractId,
       verificationPlanId: compiled.contract.verificationPlanId,
       effectiveContractId: compiled.contract.effectiveContractId,
-      planId: compiled.contract.plan.planId,
+      executionBudget: compiled.executionBudget!,
       currentAttemptId: attempt.attemptId,
       deliveryStatus: 'waiting-for-implementation',
       evidenceStatus: 'not-collected',
@@ -333,7 +332,6 @@ export async function prepareDelegationTask(options: {
       projection,
       artifacts: [
         { relativePath: contractPath(1), value: compiled.contract },
-        { relativePath: planPath(1), value: compiled.contract.plan },
         { relativePath: baselinePath(1), value: baseline },
         { relativePath: baselineVerificationPath(1), value: baselineVerification },
         { relativePath: `${attemptDirectory(attempt.attemptId)}/attempt.json`, value: attempt },
@@ -533,7 +531,7 @@ export async function collectDelegationFacts(options: {
         delete (factsBase as Partial<FactBundle>).factCollectionId;
         delete (factsBase as Partial<FactBundle>).bundleFingerprint;
       } else {
-        const timeoutMs = options.timeoutMs ?? DEFAULT_CHECK_TIMEOUT_MS;
+        const timeoutMs = options.timeoutMs ?? task.projection.executionBudget.checkTimeoutMs;
         const preCheck = await captureGitWorktree(task.projectRoot, {
           objectDirectory,
           alternateObjectDirectories: [durableObjectDirectory],
@@ -763,7 +761,7 @@ export async function diagnoseCollectedEvidence(options: {
       validateEvidenceDispositionInput(source, contract, facts, readCurrentChallenges(task));
       route = source.proposedRoute;
       const budgetExhausted = route === 'repair-delivery'
-        && task.projection.repairCount >= contract.plan.maxRepairAttempts;
+        && task.projection.repairCount >= task.projection.executionBudget.maxDeliveryRepairs;
       if (budgetExhausted) route = 'handoff';
       const dispositionProjection = {
         protocol: DELEGATION_PROTOCOL,
@@ -1230,16 +1228,16 @@ export async function recordHumanDecision(options: {
       const evaluationAbsolute = taskArtifactPath(task.taskDirectory, evaluationRelative);
       writeImmutableJson(decisionAbsolute, decision);
       writeImmutableJson(evaluationAbsolute, evaluation);
-      const terminal = decision.action === 'accepted'
-        || decision.action === 'rejected'
-        || decision.action === 'deferred';
+      const terminal = decision.interpretation.action === 'accepted'
+        || decision.interpretation.action === 'rejected'
+        || decision.interpretation.action === 'deferred';
       return {
         projection: {
           ...task.projection,
           evidenceStatus: evaluation.status,
-          decisionStatus: decision.action,
+          decisionStatus: decision.interpretation.action,
           decisionId: decision.decisionId,
-          ...(decision.action === 'correction-requested' ? {
+          ...(decision.interpretation.action === 'correction-requested' ? {
             pendingResolution: {
               kind: 'correction' as const,
               targetId: decision.decisionId,
@@ -1600,7 +1598,6 @@ export async function reviseVerificationPlan(options: {
       );
       const artifacts = [
         { relativePath: contractPath(contractRevision), value: revisedContract },
-        { relativePath: planPath(contractRevision), value: revisedContract.plan },
         { relativePath: baselinePath(contractRevision), value: priorBaseline },
         { relativePath: baselineVerificationPath(contractRevision), value: baselineVerification },
         { relativePath: verificationRevisionPath(revisionRecord.revisionId), value: revisionRecord },
@@ -1686,7 +1683,6 @@ export function explainDelegationTask(options: {
       ),
     };
   }
-  if (section === 'plan') return { ...common, plan: readContract(task).plan };
   if (section === 'attempts') {
     return {
       ...common,
@@ -1736,7 +1732,6 @@ export function explainDelegationTask(options: {
       { name: 'action', available: task.projection.decisionStatus === 'pending' },
       { name: 'contract', available: true },
       { name: 'baseline', available: true },
-      { name: 'plan', available: true },
       { name: 'attempts', available: true, count: task.projection.attempts.length },
       { name: 'challenge', available: task.projection.challengeIds.length > 0, count: task.projection.challengeIds.length },
       { name: 'revision', available: task.projection.verificationRevisionIds.length > 0, count: task.projection.verificationRevisionIds.length },
@@ -2160,13 +2155,19 @@ function materializeDecision(
     protocol: DELEGATION_PROTOCOL,
     schemaVersion: DELEGATION_SCHEMA_VERSION,
     decisionId: `decision:${randomUUID()}`,
-    ...source,
     humanEvent: {
       id: generatedHumanEventId(source.humanEvent, source.action === 'correction-requested'
         ? 'correction' : 'decision'),
       kind: source.action === 'correction-requested' ? 'correction' as const : 'decision' as const,
       ...source.humanEvent,
       contentFingerprint: sha256(source.humanEvent.content),
+    },
+    interpretation: {
+      basisHumanEventId: generatedHumanEventId(source.humanEvent, source.action === 'correction-requested'
+        ? 'correction' : 'decision'),
+      action: source.action,
+      reason: source.reason,
+      exceptions: source.exceptions,
     },
     effectiveContractId: contract.effectiveContractId,
     attemptId: facts.attemptId,
@@ -2190,7 +2191,7 @@ function buildDecisionPacket(
   return {
     protocol: DELEGATION_PROTOCOL,
     schemaVersion: DELEGATION_SCHEMA_VERSION,
-    authority: contract.authority,
+    humanEvents: contract.humanEvents,
     semanticContract: {
       semanticContractId: contract.semanticContractId,
       effectiveContractId: contract.effectiveContractId,
@@ -2344,7 +2345,7 @@ function validateChallengeReferences(
   assertReferences(source.evidence.repositoryEvidence, contract.repositoryEvidence.map((item) => item.id), 'repository evidence');
   assertReferences(
     source.evidence.humanEvents,
-    contract.authority.developerEvents.map((item) => item.id),
+    contract.humanEvents.map((item) => item.id),
     'Human Event',
   );
   if (source.evidence.patch && !facts.patch) throw inputError('Challenge selected a patch that does not exist.');
@@ -2799,7 +2800,7 @@ function contractWorkPacket(contract: TaskContract) {
     verificationPlanId: contract.verificationPlanId,
     effectiveContractId: contract.effectiveContractId,
     authority: {
-      developerEventIds: contract.authority.developerEvents.map((item) => item.id),
+      developerEventIds: contract.humanEvents.map((item) => item.id),
       repositoryEvidenceIds: contract.repositoryEvidence.map((evidence) => evidence.id),
     },
     understanding: {
@@ -2811,7 +2812,6 @@ function contractWorkPacket(contract: TaskContract) {
     materialDecisions: contract.materialDecisions,
     adoptionConditions: contract.adoptionConditions,
     hostPolicyRequirements: contract.hostPolicyRequirements,
-    plan: contract.plan,
     verificationPlan: contract.verificationPlan,
   };
 }
@@ -2895,20 +2895,24 @@ function materializeResolution(
 ) {
   const kind = source.target.kind === 'correction' || source.action === 'request-correction'
     ? 'correction' as const : 'exception' as const;
+  const humanEvent = {
+    id: generatedHumanEventId(source.humanEvent, kind),
+    kind,
+    ...source.humanEvent,
+    contentFingerprint: sha256(source.humanEvent.content),
+  };
   return {
     protocol: DELEGATION_PROTOCOL,
     schemaVersion: DELEGATION_SCHEMA_VERSION,
     resolutionId: `resolution:${randomUUID()}`,
     effectiveContractId: contract.effectiveContractId,
-    humanEvent: {
-      id: generatedHumanEventId(source.humanEvent, kind),
-      kind,
-      ...source.humanEvent,
-      contentFingerprint: sha256(source.humanEvent.content),
+    humanEvent,
+    interpretation: {
+      basisHumanEventId: humanEvent.id,
+      target: source.target,
+      action: source.action,
+      reason: source.reason,
     },
-    target: source.target,
-    action: source.action,
-    reason: source.reason,
     ...(challengeBinding ? { challengeBinding } : {}),
   };
 }
@@ -2935,10 +2939,13 @@ function materializeVerificationRevision(
     },
     ...(source.humanAuthorization ? {
       humanAuthorization: {
-        id: generatedHumanEventId(source.humanAuthorization, 'exception'),
-        kind: 'exception' as const,
-        ...source.humanAuthorization,
-        contentFingerprint: sha256(source.humanAuthorization.content),
+        humanEvent: {
+          id: generatedHumanEventId(source.humanAuthorization.humanEvent, 'exception'),
+          kind: 'exception' as const,
+          ...source.humanAuthorization.humanEvent,
+          contentFingerprint: sha256(source.humanAuthorization.humanEvent.content),
+        },
+        interpretation: source.humanAuthorization.interpretation,
       },
     } : {}),
   };
@@ -2974,18 +2981,15 @@ function assertStoredContractFingerprints(contract: TaskContract): void {
   const semanticProjection = {
     protocol: contract.protocol,
     schemaVersion: contract.schemaVersion,
-    authority: contract.authority,
+    humanEvents: contract.humanEvents,
     understanding: contract.understanding,
     repositoryEvidence: contract.repositoryEvidence,
     materialDecisions: contract.materialDecisions,
     adoptionConditions: contract.adoptionConditions,
     hostPolicyRequirements: contract.hostPolicyRequirements,
-    authorization: contract.authorization,
   };
-  const { verificationPlanId: _verificationPlanId, ...verificationProjection } = contract.verificationPlan;
   if (contract.semanticContractId !== stableFingerprint(semanticProjection)
-    || contract.verificationPlanId !== stableFingerprint(verificationProjection)
-    || contract.verificationPlanId !== contract.verificationPlan.verificationPlanId
+    || contract.verificationPlanId !== stableFingerprint(contract.verificationPlan)
     || contract.effectiveContractId !== stableFingerprint({
       semanticContractId: contract.semanticContractId,
       verificationPlanId: contract.verificationPlanId,
@@ -3009,10 +3013,6 @@ function verificationCommands(definition: VerificationDefinition): Array<{
 
 function contractPath(revision: number): string {
   return `contracts/${revision}.json`;
-}
-
-function planPath(revision: number): string {
-  return `contracts/${revision}.plan.json`;
 }
 
 function baselinePath(revision: number): string {

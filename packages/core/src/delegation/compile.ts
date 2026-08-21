@@ -19,12 +19,11 @@ import type {
   AdoptionConditionInput,
   CompileDelegationInput,
   DelegationCompileResult,
-  DeliveryPlan,
+  ExecutionBudget,
   EvidenceObligation,
   EvidenceObligationStrategy,
   HostPolicyRequirement,
   HostPolicyRequirementInput,
-  LogicalVerifier,
   MaterialDecisionFork,
   MaterialDecisionForkInput,
   RepositoryEvidenceInput,
@@ -73,7 +72,7 @@ export function compileDelegation(
   const issues: ValidationIssue[] = [];
   rejectExtraKeys(source, [
     'protocol', 'schemaVersion', 'developerEvents', 'task', 'materialDecisionForks', 'repositoryEvidence',
-    'conditions', 'hostPolicyRequirements', 'delivery', 'checks', 'noCommandRationale',
+    'conditions', 'hostPolicyRequirements', 'executionBudget', 'checks', 'noCommandRationale',
   ], '', issues);
 
   const developerEvents = validateDeveloperEvents(source.developerEvents, issues);
@@ -110,7 +109,7 @@ export function compileDelegation(
     task?.understanding.desiredOutcome.basis,
     issues,
   );
-  const plan = validateDelivery(source.delivery, issues);
+  const executionBudget = validateExecutionBudget(source.executionBudget, issues);
   const noCommandRationale = source.noCommandRationale;
   if (noCommandRationale !== undefined && !isNonEmptyString(noCommandRationale)) {
     issues.push(issue(
@@ -125,7 +124,7 @@ export function compileDelegation(
     ));
   }
 
-  if (issues.length || !developerEvents.length || !task || !materialDecisions || !plan) {
+  if (issues.length || !developerEvents.length || !task || !materialDecisions || !executionBudget) {
     return { ...ENVELOPE, status: 'authority-invalid', issues };
   }
   if (materialDecisions.unresolved.length) {
@@ -144,44 +143,30 @@ export function compileDelegation(
     };
   }
 
-  const authorization = {
-    standingAuthorization: 'Necessary local reversible inspection, edits, verification, diagnosis, and bounded repair inside the compiled task meaning.',
-    escalationBoundary: [
-      'A material choice changes the desired outcome, a constraint, compatibility, ownership, public behavior, or another long-lived tradeoff.',
-      'An external or irreversible effect is required.',
-      'An exact exception or verification relaxation is required.',
-      'Collected evidence indicates material semantic drift.',
-    ],
-    focusPathsArePermissions: false as const,
-  };
   const semanticProjection = {
     ...ENVELOPE,
-    authority: {
-      developerEvents: developerEvents.map((item) => item.event),
-      providerTrustBoundary: 'host-supplied-event-not-runtime-authenticated' as const,
-    },
+    humanEvents: developerEvents.map((item) => item.event),
     understanding: task.understanding,
     repositoryEvidence: evidence.map(({ key: _key, ...item }) => item),
     materialDecisions: materialDecisions.resolved,
     adoptionConditions: conditions,
     hostPolicyRequirements,
-    authorization,
   };
   const semanticContractId = stableFingerprint(semanticProjection);
   const verificationPlan = buildVerificationPlan(definitions, noCommandRationale);
+  const verificationPlanId = stableFingerprint(verificationPlan);
   const effectiveContractId = stableFingerprint({
     semanticContractId,
-    verificationPlanId: verificationPlan.verificationPlanId,
+    verificationPlanId,
   });
   const contract: TaskContract = {
     ...semanticProjection,
     semanticContractId,
-    verificationPlanId: verificationPlan.verificationPlanId,
+    verificationPlanId,
     effectiveContractId,
-    plan,
     verificationPlan,
   };
-  return { ...ENVELOPE, status: 'delegation-compiled', contract };
+  return { ...ENVELOPE, status: 'delegation-compiled', contract, executionBudget };
 }
 
 function compileVerificationRevision(input: VerificationRevisionInput): DelegationCompileResult {
@@ -278,7 +263,8 @@ function compileVerificationRevision(input: VerificationRevisionInput): Delegati
   if (issues.length) return { ...ENVELOPE, status: 'authority-invalid', issues };
 
   const verificationPlan = buildVerificationPlan(definitions, input.revision.noCommandRationale);
-  if (verificationPlan.verificationPlanId === input.priorContract.verificationPlanId) {
+  const verificationPlanId = stableFingerprint(verificationPlan);
+  if (verificationPlanId === input.priorContract.verificationPlanId) {
     return {
       ...ENVELOPE,
       status: 'authority-invalid',
@@ -287,14 +273,14 @@ function compileVerificationRevision(input: VerificationRevisionInput): Delegati
   }
   const effectiveContractId = stableFingerprint({
     semanticContractId: input.priorContract.semanticContractId,
-    verificationPlanId: verificationPlan.verificationPlanId,
+    verificationPlanId,
   });
   return {
     ...ENVELOPE,
     status: 'delegation-compiled',
     contract: {
       ...input.priorContract,
-      verificationPlanId: verificationPlan.verificationPlanId,
+      verificationPlanId,
       effectiveContractId,
       verificationPlan,
     },
@@ -311,20 +297,17 @@ export function validateCompiledContract(contract: TaskContract): void {
   const semanticProjection = {
     protocol: contract.protocol,
     schemaVersion: contract.schemaVersion,
-    authority: contract.authority,
+    humanEvents: contract.humanEvents,
     understanding: contract.understanding,
     repositoryEvidence: contract.repositoryEvidence,
     materialDecisions: contract.materialDecisions,
     adoptionConditions: contract.adoptionConditions,
     hostPolicyRequirements: contract.hostPolicyRequirements,
-    authorization: contract.authorization,
   };
   if (contract.semanticContractId !== stableFingerprint(semanticProjection)) {
     throw new Error('evaluateHandoff Semantic Contract fingerprint does not match its content.');
   }
-  const { verificationPlanId: _ignored, ...verificationProjection } = contract.verificationPlan;
-  if (contract.verificationPlanId !== stableFingerprint(verificationProjection)
-    || contract.verificationPlanId !== contract.verificationPlan.verificationPlanId) {
+  if (contract.verificationPlanId !== stableFingerprint(contract.verificationPlan)) {
     throw new Error('evaluateHandoff Verification Plan fingerprint does not match its content.');
   }
   if (contract.effectiveContractId !== stableFingerprint({
@@ -714,9 +697,8 @@ function validateConditions(
       : [];
     if (criticality === 'adoption-critical' && obligations.length
       && !obligations.some((obligation) => obligation.strategies.some((strategy) =>
-        (strategy.kind === 'independent-challenge' && strategy.policy === 'required')
-        || strategy.kind === 'human-review'))) {
-      issues.push(issue('critical-condition-review-required', `${path}.evidenceObligations`, 'Adoption-critical conditions require a required independent challenge or direct Human review strategy.'));
+        strategy.kind === 'independent-challenge' && strategy.policy === 'required'))) {
+      issues.push(issue('critical-condition-challenge-required', `${path}.evidenceObligations`, 'Adoption-critical conditions require a required independent challenge.'));
     }
     if (issues.length !== before || !key || !conditionId || !statement || !rationale || !criticality || !basis || !obligations.length) continue;
     output.push({
@@ -868,11 +850,6 @@ function validateObligationStrategies(
       }
       continue;
     }
-    if (candidate.kind === 'human-review') {
-      rejectExtraKeys(candidate, ['kind'], itemPath, issues);
-      if (issues.length === before) output.push({ kind: 'human-review' });
-      continue;
-    }
     issues.push(issue('evidence-strategy-kind-invalid', `${itemPath}.kind`, 'Evidence strategy kind is invalid.'));
   }
   const identities = output.map((item) => stableFingerprint(item));
@@ -997,16 +974,22 @@ function validateRevisionHumanAuthorization(
 ): void {
   const path = 'revision.humanAuthorization';
   if (!isRecord(value)) {
-    issues.push(issue('verification-revision-human-authorization-invalid', path, 'Human authorization must be an exact event object.'));
+    issues.push(issue('verification-revision-human-authorization-invalid', path, 'Human authorization must bind an exact event to an explicit interpretation.'));
     return;
   }
-  rejectExtraKeys(value, ['content', 'provider', 'nativeId'], path, issues);
-  normalized(value.content, `${path}.content`, issues);
-  if (value.provider !== undefined && !isNonEmptyString(value.provider)) {
-    issues.push(issue('verification-revision-human-provider-invalid', `${path}.provider`, 'Provider must be non-empty.'));
+  rejectExtraKeys(value, ['humanEvent', 'interpretation'], path, issues);
+  normalized(value.interpretation, `${path}.interpretation`, issues);
+  if (!isRecord(value.humanEvent)) {
+    issues.push(issue('verification-revision-human-event-invalid', `${path}.humanEvent`, 'Human event must be an exact event object.'));
+    return;
   }
-  if (value.nativeId !== undefined && !isNonEmptyString(value.nativeId)) {
-    issues.push(issue('verification-revision-human-native-id-invalid', `${path}.nativeId`, 'Native id must be non-empty.'));
+  rejectExtraKeys(value.humanEvent, ['content', 'provider', 'nativeId'], `${path}.humanEvent`, issues);
+  normalized(value.humanEvent.content, `${path}.humanEvent.content`, issues);
+  if (value.humanEvent.provider !== undefined && !isNonEmptyString(value.humanEvent.provider)) {
+    issues.push(issue('verification-revision-human-provider-invalid', `${path}.humanEvent.provider`, 'Provider must be non-empty.'));
+  }
+  if (value.humanEvent.nativeId !== undefined && !isNonEmptyString(value.humanEvent.nativeId)) {
+    issues.push(issue('verification-revision-human-native-id-invalid', `${path}.humanEvent.nativeId`, 'Native id must be non-empty.'));
   }
 }
 
@@ -1103,40 +1086,38 @@ function validateBasis(
   } : undefined;
 }
 
-function validateDelivery(value: unknown, issues: ValidationIssue[]): DeliveryPlan | undefined {
+function validateExecutionBudget(value: unknown, issues: ValidationIssue[]): ExecutionBudget | undefined {
   const before = issues.length;
   if (!isRecord(value)) {
-    issues.push(issue('delivery-invalid', 'delivery', 'Delivery settings must be an object.'));
+    issues.push(issue('execution-budget-invalid', 'executionBudget', 'Execution budget must be an object.'));
     return undefined;
   }
-  rejectExtraKeys(value, ['maxRepairAttempts'], 'delivery', issues);
-  if (!Number.isInteger(value.maxRepairAttempts) || Number(value.maxRepairAttempts) < 0
-    || Number(value.maxRepairAttempts) > 5) {
-    issues.push(issue('repair-budget-invalid', 'delivery.maxRepairAttempts', 'Maximum repair attempts must be an integer from 0 through 5.'));
+  rejectExtraKeys(value, ['checkTimeoutMs', 'maxDeliveryRepairs'], 'executionBudget', issues);
+  if (!Number.isInteger(value.checkTimeoutMs) || Number(value.checkTimeoutMs) < 1_000
+    || Number(value.checkTimeoutMs) > 3_600_000) {
+    issues.push(issue('check-timeout-budget-invalid', 'executionBudget.checkTimeoutMs', 'Check timeout must be an integer from 1000 through 3600000 milliseconds.'));
+  }
+  if (!Number.isInteger(value.maxDeliveryRepairs) || Number(value.maxDeliveryRepairs) < 0
+    || Number(value.maxDeliveryRepairs) > 5) {
+    issues.push(issue('repair-budget-invalid', 'executionBudget.maxDeliveryRepairs', 'Maximum delivery repairs must be an integer from 0 through 5.'));
   }
   if (issues.length !== before) return undefined;
-  const projection = {
-    maxRepairAttempts: Number(value.maxRepairAttempts),
-    lifecycle: ['implement', 'collect', 'judge-evidence', 'resolve', 'handoff', 'decide'] as const,
+  return {
+    checkTimeoutMs: Number(value.checkTimeoutMs),
+    maxDeliveryRepairs: Number(value.maxDeliveryRepairs),
   };
-  return { planId: stableFingerprint(projection), ...projection };
 }
 
 function buildVerificationPlan(
   definitions: VerificationDefinition[],
   noCommandRationale: unknown,
 ): VerificationPlan {
-  const projection = definitions.length
+  return definitions.length
     ? {
         mode: 'checks' as const,
-        verifiers: definitions.map((definition): LogicalVerifier => ({
-          verifierId: definition.verifierId,
-          key: definition.key,
-        })),
         definitions,
       }
     : { mode: 'no-command' as const, rationale: String(noCommandRationale).trim() };
-  return { verificationPlanId: stableFingerprint(projection), ...projection };
 }
 
 function interpretation(

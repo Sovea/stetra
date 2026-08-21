@@ -88,14 +88,17 @@ export interface HumanDecisionException {
 export interface HumanDecision extends ProtocolEnvelope {
   decisionId: string;
   humanEvent: HumanEvent;
-  action: HumanDecisionAction;
+  interpretation: {
+    basisHumanEventId: string;
+    action: HumanDecisionAction;
+    reason: string;
+    exceptions: HumanDecisionException[];
+  };
   effectiveContractId: string;
   attemptId: string;
   factCollectionId: string;
   handoffId: string;
   handoffFingerprint: string;
-  reason: string;
-  exceptions: HumanDecisionException[];
 }
 
 export type HandoffAttentionCode =
@@ -209,7 +212,7 @@ export interface HandoffEvaluation extends ProtocolEnvelope {
 }
 
 export interface DecisionPacket extends ProtocolEnvelope {
-  authority: TaskContract['authority'];
+  humanEvents: TaskContract['humanEvents'];
   semanticContract: {
     semanticContractId: string;
     effectiveContractId: string;

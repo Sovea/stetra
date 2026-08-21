@@ -187,7 +187,7 @@ export function challengeExecutionPacket(input: {
         },
         exactDeveloperEvents: {
           authority: 'human-event' as const,
-          events: input.contract.authority.developerEvents.filter((event) =>
+          events: input.contract.humanEvents.filter((event) =>
             exactDeveloperEventIds.has(event.id)),
         },
       },

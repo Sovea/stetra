@@ -33,14 +33,15 @@ test('prepare separates semantic, verification, and effective identities', () =>
   assert.equal(first.contract.semanticContractId, second.contract.semanticContractId);
   assert.equal(first.contract.verificationPlanId, second.contract.verificationPlanId);
   assert.equal(first.contract.effectiveContractId, second.contract.effectiveContractId);
-  assert.match(first.contract.authority.developerEvents[0].id, /^event:/);
-  assert.deepEqual(first.contract.plan.lifecycle, [
-    'implement', 'collect', 'judge-evidence', 'resolve', 'handoff', 'decide',
-  ]);
+  assert.match(first.contract.humanEvents[0].id, /^event:/);
+  assert.deepEqual(first.executionBudget, {
+    checkTimeoutMs: 300_000,
+    maxDeliveryRepairs: 2,
+  });
   assert.match(first.contract.adoptionConditions[0].id, /^condition:/);
   assert.match(first.contract.adoptionConditions[0].evidenceObligations[0].id, /^obligation:/);
   if (first.contract.verificationPlan.mode !== 'checks') return;
-  assert.match(first.contract.verificationPlan.verifiers[0].verifierId, /^verifier:/);
+  assert.match(first.contract.verificationPlan.definitions[0].verifierId, /^verifier:/);
   assert.match(first.contract.verificationPlan.definitions[0].definitionId, /^sha256:/);
 });
 
@@ -89,11 +90,11 @@ test('resolved material decisions bind the exact later Human event to final task
   const result = compileDelegation(input);
   assert.equal(result.status, 'delegation-compiled');
   if (result.status !== 'delegation-compiled') return;
-  assert.equal(result.contract.authority.developerEvents.length, 2);
+  assert.equal(result.contract.humanEvents.length, 2);
   assert.equal(result.contract.materialDecisions[0].resolution.selectedAlternativeKey, 'strict');
   assert.equal(
     result.contract.materialDecisions[0].resolution.humanEventId,
-    result.contract.authority.developerEvents[1].id,
+    result.contract.humanEvents[1].id,
   );
 
   input.task.basis.developerEventKeys = ['request'];
@@ -124,7 +125,7 @@ test('an evidence obligation freezes a complete discriminating falsification des
     item.path === 'conditions[0].evidenceObligations[0].falsification.scenario'));
 });
 
-test('adoption-critical semantics require challenge or direct Human review', () => {
+test('adoption-critical semantics require an independent challenge', () => {
   const input = criticalInput();
   input.conditions[0].evidenceObligations[0].strategies = [{
     kind: 'runtime-check', checkKeys: ['suite'],
@@ -132,7 +133,7 @@ test('adoption-critical semantics require challenge or direct Human review', () 
   const result = compileDelegation(input);
   assert.equal(result.status, 'authority-invalid');
   if (result.status === 'authority-invalid') {
-    assert.ok(result.issues.some((item) => item.code === 'critical-condition-review-required'));
+    assert.ok(result.issues.some((item) => item.code === 'critical-condition-challenge-required'));
   }
 
   const factTriggeredOnly = criticalInput();
@@ -144,7 +145,7 @@ test('adoption-critical semantics require challenge or direct Human review', () 
   assert.equal(factTriggeredResult.status, 'authority-invalid');
   if (factTriggeredResult.status !== 'authority-invalid') return;
   assert.ok(factTriggeredResult.issues.some((item) =>
-    item.code === 'critical-condition-review-required'));
+    item.code === 'critical-condition-challenge-required'));
 });
 
 test('unsupported schema versions are rejected without a migration path', () => {
@@ -254,7 +255,10 @@ test('verification relaxation requires exact Human authority', () => {
     ...revision,
     revision: {
       ...revision.revision,
-      humanAuthorization: { content: 'Proceed without reconstructing the original baseline.' },
+      humanAuthorization: {
+        humanEvent: { content: 'Proceed without reconstructing the original baseline.' },
+        interpretation: 'The developer authorizes the stated baseline relaxation.',
+      },
     },
   });
   assert.equal(authorized.status, 'delegation-compiled');
@@ -842,7 +846,7 @@ function criticalInput(policy: 'required' | 'fact-triggered' = 'required'): Comp
       }],
     }],
     hostPolicyRequirements: [],
-    delivery: { maxRepairAttempts: 2 },
+    executionBudget: { checkTimeoutMs: 300_000, maxDeliveryRepairs: 2 },
     checks: [{
       key: 'suite',
       rationale: 'Exercises the public behavior.',
@@ -1187,16 +1191,19 @@ function decisionFor(
     humanEvent: {
       id: 'event:decision', kind: 'decision', content, contentFingerprint: digest(content),
     },
-    action: 'accepted',
+    interpretation: {
+      basisHumanEventId: 'event:decision',
+      action: 'accepted',
+      reason: content,
+      exceptions: attentionIds.map((attentionId) => ({
+        attentionId, rationale: 'Accepted knowingly.',
+      })),
+    },
     effectiveContractId: contract.effectiveContractId,
     attemptId: facts.attemptId,
     factCollectionId: facts.factCollectionId,
     handoffId: handoff.handoffId,
     handoffFingerprint: handoff.handoffFingerprint,
-    reason: content,
-    exceptions: attentionIds.map((attentionId) => ({
-      attentionId, rationale: 'Accepted knowingly.',
-    })),
   };
 }
 

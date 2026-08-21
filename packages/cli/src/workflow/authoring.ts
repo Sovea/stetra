@@ -50,7 +50,7 @@ export interface AuthoringPacket {
   semanticContext: {
     exactDeveloperEvents: {
       authority: 'human-event';
-      events: TaskContract['authority']['developerEvents'];
+      events: TaskContract['humanEvents'];
     };
     agentInterpretation: {
       authority: 'agent-judgment';
@@ -596,7 +596,7 @@ function packetBase(
     semanticContext: {
       exactDeveloperEvents: {
         authority: 'human-event',
-        events: contract.authority.developerEvents,
+        events: contract.humanEvents,
       },
       agentInterpretation: {
         authority: 'agent-judgment',

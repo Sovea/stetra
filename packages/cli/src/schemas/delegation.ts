@@ -153,7 +153,6 @@ const EvidenceObligationStrategySchema = z.discriminatedUnion('kind', [
     kind: z.literal('independent-challenge'),
     policy: z.enum(['required', 'fact-triggered']),
   }),
-  z.strictObject({ kind: z.literal('human-review') }),
 ]);
 
 const FalsificationDesignSchema = z.strictObject({
@@ -202,8 +201,9 @@ export const DelegationPrepareDocumentSchema = z.strictObject({
   repositoryEvidence: z.array(EvidenceWindowSchema).optional(),
   conditions: z.array(AdoptionConditionSchema),
   hostPolicyRequirements: z.array(HostPolicyRequirementSchema),
-  delivery: z.strictObject({
-    maxRepairAttempts: z.number().int().min(0).max(5),
+  executionBudget: z.strictObject({
+    checkTimeoutMs: z.number().int().min(1_000).max(3_600_000),
+    maxDeliveryRepairs: z.number().int().min(0).max(5),
   }),
   checks: z.array(VerificationDefinitionSchema).optional(),
   noCommandRationale: NonEmptyStringSchema.optional(),
@@ -413,7 +413,10 @@ export const VerificationRevisionDocumentSchema = z.strictObject({
   equivalenceClaim: NonEmptyStringSchema,
   checks: z.array(VerificationDefinitionSchema).optional(),
   noCommandRationale: NonEmptyStringSchema.optional(),
-  humanAuthorization: HumanEventInputSchema.optional(),
+  humanAuthorization: z.strictObject({
+    humanEvent: HumanEventInputSchema,
+    interpretation: NonEmptyStringSchema,
+  }).optional(),
 });
 
 export const HumanResolutionDocumentSchema = z.strictObject({
@@ -486,7 +489,10 @@ export const TaskProjectionSchema = z.strictObject({
   semanticContractId: Sha256Schema,
   verificationPlanId: Sha256Schema,
   effectiveContractId: Sha256Schema,
-  planId: Sha256Schema,
+  executionBudget: z.strictObject({
+    checkTimeoutMs: z.number().int().min(1_000).max(3_600_000),
+    maxDeliveryRepairs: z.number().int().min(0).max(5),
+  }),
   currentAttemptId: StableIdSchema,
   deliveryStatus: z.enum([
     'waiting-for-implementation', 'implementing', 'repairing',

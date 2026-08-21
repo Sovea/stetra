@@ -35,7 +35,7 @@ test('Challenge projection contains one exact obligation and only its explicit e
     ['Exact target request.'],
   );
   assert.ok(!packet.cases[0].target.exactDeveloperEvents.events.some((item) =>
-    item.id === contract.authority.developerEvents.find((event) =>
+    item.id === contract.humanEvents.find((event) =>
       event.content === 'Unrelated developer context.')!.id));
   assert.deepEqual(packet.cases[0].evidence.checks.map((item) => item.definitionId), [targetDefinition.definitionId]);
   assert.ok(!packet.cases[0].evidence.checks.some((item) => item.definitionId === otherDefinition.definitionId));
@@ -168,7 +168,7 @@ function contractFixture(): TaskContract {
       },
     ],
     hostPolicyRequirements: [],
-    delivery: { maxRepairAttempts: 1 },
+    executionBudget: { checkTimeoutMs: 300_000, maxDeliveryRepairs: 1 },
     checks: [
       check('target-check', 'test/target.test.ts'),
       check('other-check', 'test/other.test.ts'),

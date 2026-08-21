@@ -101,9 +101,6 @@ function appendContract(lines: string[], contract: JsonObject, colors: Colors): 
       if (isRecord(condition)) lines.push(`${colors.cyan('•')} ${String(condition.id)} [${String(condition.criticality)}] — ${String(condition.statement)}`);
     }
   }
-  if (isRecord(contract.plan)) {
-    lines.push(`${colors.bold('Delivery:')} repair budget ${String(contract.plan.maxRepairAttempts)}`);
-  }
 }
 
 function appendDecisionLayerFallback(lines: string[], packet: JsonObject, colors: Colors): void {
