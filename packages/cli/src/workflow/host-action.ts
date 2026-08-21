@@ -51,6 +51,12 @@ export interface ChallengeExecutionRequest {
     schema: 'challenge-round-document';
     source: 'challengeExecutionPacket.draft';
   };
+  contextRetrieval: {
+    command: { argv: string[] };
+    expectedAction: 'perform-independent-challenge';
+    verifyRequestId: string;
+  };
+  dispatchPrompt: string;
 }
 
 export interface HostAction {
@@ -79,6 +85,17 @@ export interface HostAction {
   authoringPacket?: AuthoringPacket;
   challengeExecutionPacket?: ChallengeExecutionPacket;
   challengeExecutionRequest?: ChallengeExecutionRequest;
+  directReviewFallback?: {
+    when: 'fresh-challenger-context-unavailable';
+    requiresNewHumanEvent: true;
+    command: { argv: string[] };
+    draft: {
+      humanEvent: { content: string };
+      target: { kind: 'challenge'; requestId: string };
+      action: 'continue-with-direct-human-review';
+      reason: string;
+    };
+  };
   developerDecisionBrief?: DeveloperDecisionBrief;
   presentationRequirements?: {
     leadWithDecisionState: true;
@@ -363,6 +380,17 @@ function challengeInputAction(
       source: 'challengeExecutionPacket.draft' as const,
     },
   };
+  const requestId = stableFingerprint(requestBody);
+  const contextCommand = {
+    argv: ['stetra', 'change', 'explain', '.', '--task', taskId, '--section', 'action', '--json'],
+  };
+  const dispatchPrompt = [
+    `Stetra task: ${taskId}`,
+    `Challenge request: ${requestId}`,
+    `Load the exact current action with: ${contextCommand.argv.join(' ')}`,
+    'Verify hostAction.kind is perform-independent-challenge and its challengeExecutionRequest.requestId matches this request.',
+    'Use that action\'s exact challengeExecutionPacket and return only its completed Challenge Round JSON.',
+  ].join('\n');
   return {
     kind: 'perform-independent-challenge',
     reference: 'challenge',
@@ -378,8 +406,30 @@ function challengeInputAction(
     },
     challengeExecutionPacket,
     challengeExecutionRequest: {
-      requestId: stableFingerprint(requestBody),
+      requestId,
       ...requestBody,
+      contextRetrieval: {
+        command: contextCommand,
+        expectedAction: 'perform-independent-challenge',
+        verifyRequestId: requestId,
+      },
+      dispatchPrompt,
+    },
+    directReviewFallback: {
+      when: 'fresh-challenger-context-unavailable',
+      requiresNewHumanEvent: true,
+      command: {
+        argv: ['stetra', 'change', 'resolve', '.', '--task', taskId, '--input', '-', '--json'],
+      },
+      draft: {
+        humanEvent: { content: '' },
+        target: {
+          kind: 'challenge',
+          requestId,
+        },
+        action: 'continue-with-direct-human-review',
+        reason: '',
+      },
     },
   };
 }

@@ -390,6 +390,11 @@ repository verifier gaps may use delivery repair. Environment and frozen
 verification-definition gaps may revise verification. Unknown may challenge,
 hand off, or ask the developer. Material semantic impact must ask the developer.
 Explicit routing is documented in [Architecture](architecture.md).
+`proposedRoute` records the Agent's engineering judgment; it does not override
+the compiled Assurance Plan. After diagnosis, Runtime derives the actual next
+action again. A proposed Handoff therefore still returns
+`perform-independent-challenge` while any exact required Challenge Obligation
+remains outstanding.
 
 A `baseline-expectation-mismatch` describes a disagreement between the
 declared before/current expectation and Runtime observation. It cannot by
@@ -472,6 +477,20 @@ execution workspace, forbids external effects and fan-out, and allows one
 structured-output repair. The isolated workspace permits repository tests to
 write their normal fixtures and caches without modifying the target. Generated
 thin profiles remain read-only fallbacks and cannot attest this isolation.
+
+The request also contains `dispatchPrompt` and `contextRetrieval`. Pass the
+dispatch prompt verbatim to the named child. It contains the task ID, request
+ID, and this exact retrieval command:
+
+```sh
+stetra change explain . --task <task-id> --section action --json
+```
+
+The child continues only when the returned action is
+`perform-independent-challenge` and its request ID matches. It then consumes
+that action's exact packet. This pull-based boundary avoids copying a large
+packet through the spawn prompt and works without project-global current-task
+state or run discovery.
 
 The transient `challengeExecutionPacket` is a deterministic projection for one
 Fact Collection's outstanding Evidence Obligations. It contains:
@@ -620,6 +639,16 @@ rewrite the Agent's semantic finding merely because Host independence is
 unverified. A native Adapter or Evaluator that observes both lifecycle
 boundaries may instead submit the verified Receipt.
 
+If the Host cannot create a fresh Challenger context, it must not silently
+skip the action or let the Implementer impersonate the Challenger. The action's
+`directReviewFallback` projects an exact `change resolve` input. Only a new
+developer message may authorize `continue-with-direct-human-review` for that
+request. Runtime binds the resolution to the current Contract, Attempt, Fact
+Collection, request, and Obligation IDs. Handoff then remains possible, while
+the absent independent Challenge stays visible as an adoption blocker and a
+concrete direct-review requirement. Agent-authored Host-unavailable claims have
+no authority.
+
 ## Handoff
 
 The packet prepopulates current IDs and evidence references. The Agent fills:
@@ -706,6 +735,9 @@ change is unrepresentable. The Agent must use `request-correction`, `defer`, or
 explicit exceptions.
 
 Worktree edits after collection return `facts-stale` before handoff parsing.
+Handoff input is also rejected before evaluation while a current required
+Challenge is neither recorded nor explicitly substituted by an exact Human
+direct-review resolution.
 
 The successful result contains one normalized `decisionPacket`: exact Human
 authority, compact Semantic Contract, Agent recommendation and system meaning,

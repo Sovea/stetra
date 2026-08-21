@@ -10,8 +10,12 @@ export type HostWorkflowReference = typeof HOST_WORKFLOW_REFERENCES[number];
 const CHALLENGER_INSTRUCTIONS = `You are the Stetra Independent Challenger for one bounded Evidence Obligation.
 
 Use only the current Challenge Execution Request and its exact Challenge
-Execution Packet. The packet is complete for this bounded role: do not load the
-general Stetra skill or its workflow reference pages. Inspect the named target,
+Execution Packet. When the dispatch prompt contains **Stetra task** and
+**Challenge request**, run its exact context-retrieval command first. Continue
+only when the returned hostAction is **perform-independent-challenge** and its
+requestId matches the dispatch prompt. Use that action's packet; do not scan
+other runs or infer a current task. The packet is complete for this bounded
+role: do not load the general Stetra skill or its workflow reference pages. Inspect the named target,
 exact Human-event basis, current repository, and Runtime evidence, then actively
 test the frozen failure hypothesis. Do not broaden the task. If the packet is
 structurally insufficient, report partial or unknown instead of recovering
@@ -311,6 +315,11 @@ const CHALLENGE_REFERENCE = `# Challenge a falsifiable Evidence Obligation
 When **hostAction.challengeExecutionRequest** is present, dispatch exactly its
 **stetra-challenger** profile in one fresh Host context. Do not perform the
 Challenge in the Implementer context and do not substitute another Agent role.
+Pass **challengeExecutionRequest.dispatchPrompt** verbatim as the child prompt.
+It contains only exact task/request identity and an exact read-only context
+retrieval command. The child verifies the current request before loading the
+packet, so the parent does not need to copy a large JSON packet through the
+spawn boundary.
 The request binds the task, effective contract, Attempt, fact collection, and
 exact Challenge Execution Packet fingerprint; it forbids mutation and parallel
 fan-out.
@@ -319,7 +328,7 @@ obligation relies on a verifier acceptance surface changed by the patch. The
 route uses only explicit obligation/verifier/mutation relationships. Never infer
 it from filenames, test names, error text, or diff shape.
 
-Pass **hostAction.challengeExecutionPacket** to that fresh context. It contains
+The retrieved **hostAction.challengeExecutionPacket** contains
 one case for every outstanding Evidence Obligation. Each case contains its
 target Condition, exact Human-event basis, and only explicitly related Checks,
 Repository Evidence, and Verifier mutations. Shared evidence contains one
@@ -382,6 +391,13 @@ contradicted, or unknown Challenge returns to the Implementer through the
 normal evidence-diagnosis packet. Diagnose its exact Challenge source and
 choose bounded repair, verification revision, Human resolution, or Handoff;
 do not send the same adverse finding to another Challenger.
+
+If the Host cannot create the required fresh context, do not silently continue
+or let the Implementer impersonate the Challenger. Present
+**hostAction.directReviewFallback** to the developer. Only a new exact Human
+message may authorize its **continue-with-direct-human-review** action. Runtime
+then permits Handoff while preserving the missing Challenge as an adoption
+blocker and requiring a concrete direct-review question.
 `;
 
 const HANDOFF_REFERENCE = `# Author the Cognitive Handoff and obtain a Human decision

@@ -15,7 +15,12 @@ export const CONCLUSION_STATUSES = ['supported', 'partial', 'contradicted', 'unk
 export const RECOMMENDATION_ACTIONS = ['accept', 'request-correction', 'reject', 'defer'] as const;
 export const HUMAN_DECISION_ACTIONS = ['accepted', 'correction-requested', 'rejected', 'deferred'] as const;
 export const VERIFICATION_REVISION_KINDS = ['execution-rebinding', 'verification-plan'] as const;
-export const HUMAN_RESOLUTION_ACTIONS = ['continue-current-contract', 'request-correction', 'abort'] as const;
+export const HUMAN_RESOLUTION_ACTIONS = [
+  'continue-current-contract',
+  'continue-with-direct-human-review',
+  'request-correction',
+  'abort',
+] as const;
 
 export const StableIdSchema = z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/);
 export const Sha256Schema = z.string().regex(/^sha256:[a-f0-9]{64}$/);
@@ -417,6 +422,7 @@ export const HumanResolutionDocumentSchema = z.strictObject({
     z.strictObject({ kind: z.literal('semantic-impact'), dispositionId: Sha256Schema }),
     z.strictObject({ kind: z.literal('correction'), decisionId: StableIdSchema }),
     z.strictObject({ kind: z.literal('host-policy'), requirementId: StableIdSchema }),
+    z.strictObject({ kind: z.literal('challenge'), requestId: Sha256Schema }),
   ]),
   action: z.enum(HUMAN_RESOLUTION_ACTIONS),
   reason: NonEmptyStringSchema,
@@ -439,6 +445,15 @@ const PendingResolutionSchema = z.discriminatedUnion('kind', [
   z.strictObject({ kind: z.literal('correction'), targetId: StableIdSchema }),
   z.strictObject({ kind: z.literal('host-policy'), targetId: StableIdSchema }),
 ]);
+
+const ChallengeSubstitutionSchema = z.strictObject({
+  resolutionId: StableIdSchema,
+  requestId: Sha256Schema,
+  effectiveContractId: Sha256Schema,
+  attemptId: StableIdSchema,
+  factCollectionId: Sha256Schema,
+  obligationIds: z.array(StableIdSchema).min(1),
+});
 
 export const AttemptProjectionSchema = z.strictObject({
   attemptId: StableIdSchema,
@@ -487,6 +502,7 @@ export const TaskProjectionSchema = z.strictObject({
   repairCount: z.number().int().nonnegative(),
   attempts: z.array(AttemptProjectionSchema).min(1),
   challengeIds: z.array(StableIdSchema),
+  challengeSubstitutions: z.array(ChallengeSubstitutionSchema),
   hostPolicyEvaluations: z.array(HostPolicyEvaluationSchema),
   resolvedHostPolicyIds: z.array(StableIdSchema),
   verificationRevised: z.boolean(),

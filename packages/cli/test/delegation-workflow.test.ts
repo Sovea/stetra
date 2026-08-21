@@ -1064,6 +1064,72 @@ test('a thin Host runs the bounded Challenger but preserves unverified direct re
   }
 });
 
+test('only an exact Human event may substitute direct review for unavailable fresh-context Challenge execution', async () => {
+  const root = createRepository();
+  try {
+    const prepared = await prepare(root, prepareDocument({
+      baseline: 'unknown',
+      argv: [process.execPath, '-e', 'process.exit(0)'],
+      critical: true,
+    }));
+    const collected = await collect(root, prepared.taskId);
+    assert.equal(collected.hostAction.kind, 'perform-independent-challenge');
+    const fallback = structuredClone(collected.hostAction.directReviewFallback.draft);
+    fallback.humanEvent.content = 'This Host cannot start a fresh Challenger context; I will inspect the failure hypothesis directly.';
+    fallback.reason = 'Preserve the assurance gap and route its exact boundary to my Review Map.';
+
+    const resolved = await resolve(root, prepared.taskId, fallback);
+    assert.equal(resolved.hostAction.kind, 'author-handoff');
+    assert.ok(resolved.hostAction.authoringPacket.outstandingObligations.some(
+      (item: { code: string }) => item.code === 'direct-human-review-required',
+    ));
+    assert.equal(readDelegationTask(root, prepared.taskId).projection.challengeSubstitutions.length, 1);
+
+    const handoffDraft = structuredClone(resolved.hostAction.authoringPacket.draft);
+    const condition = prepared.taskContract.adoptionConditions[0];
+    const obligation = condition.evidenceObligations[0];
+    handoffDraft.summary = 'Runtime facts are current, while independent Challenge remains replaced by direct review.';
+    handoffDraft.obligationConclusions[0].status = 'unknown';
+    handoffDraft.obligationConclusions[0].evidenceCoverage = {
+      status: 'insufficient',
+      rationale: 'The current check does not replace the frozen independent falsification attempt.',
+      gaps: ['The developer must inspect the failure hypothesis directly.'],
+    };
+    handoffDraft.obligationConclusions[0].falsification = {
+      attempt: 'Preserved the unexecuted independent Challenge boundary for direct review.',
+      observedResult: 'No Host-attested independent observation is available.',
+    };
+    handoffDraft.obligationConclusions[0].conclusion = 'The independent assurance obligation remains unknown.';
+    handoffDraft.conditionConclusions[0].status = 'unknown';
+    handoffDraft.conditionConclusions[0].summary = 'The adoption condition requires direct Human inspection.';
+    handoffDraft.reviewQuestions = [{
+      conditionIds: [condition.id],
+      obligationIds: [obligation.id],
+      question: 'Does the implementation survive the frozen failure hypothesis?',
+      adoptionImpact: condition.adoptionRationale,
+      evidence: [{ kind: 'check', id: collected.checks[0].definitionId }],
+    }];
+    handoffDraft.recommendation = {
+      action: 'defer',
+      rationale: 'Independent assurance was explicitly replaced by pending direct review.',
+      caveats: ['No fresh-context Challenge result exists.'],
+    };
+    const handedOff = await handoff(root, prepared.taskId, handoffDraft);
+    assert.equal(handedOff.status, 'needs-attention');
+    assert.ok(handedOff.decisionPacket.attention.some((item: { codes: string[] }) =>
+      item.codes.includes('challenge-missing')));
+
+    const wrongRequest = structuredClone(fallback);
+    wrongRequest.target.requestId = `sha256:${'0'.repeat(64)}`;
+    await assert.rejects(
+      resolve(root, prepared.taskId, wrongRequest),
+      /exact current Challenge Execution Request/,
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('a tree verifier selector detects a changed descendant and triggers challenge', async () => {
   const root = createRepository();
   try {

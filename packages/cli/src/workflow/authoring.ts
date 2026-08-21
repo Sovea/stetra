@@ -293,6 +293,7 @@ export function handoffAuthoringPacket(input: {
   facts: FactBundle;
   challenges: IndependentChallenge[];
   requiredObligationIds: string[];
+  challengeSubstitutedObligationIds?: string[];
   challengeAttestationAvailable?: boolean;
 }): AuthoringPacket {
   const challengeByObligation = new Map(input.challenges.flatMap((challenge) =>
@@ -462,7 +463,9 @@ export function handoffAuthoringPacket(input: {
           targetId: condition.id,
           requiredAction: 'Add consequence-directed Review Map coverage for this condition. One question may cover multiple related conditions or obligations when its exact targets and adoption impact are explicit.',
         })),
-      ...input.requiredObligationIds.filter((id) => !challengeByObligation.has(id)).map((id) => ({
+      ...input.requiredObligationIds.filter((id) =>
+        !challengeByObligation.has(id)
+        && !input.challengeSubstitutedObligationIds?.includes(id)).map((id) => ({
         code: input.challengeAttestationAvailable === false
           ? 'direct-human-review-required'
           : 'required-challenge-missing',
@@ -470,6 +473,11 @@ export function handoffAuthoringPacket(input: {
         requiredAction: input.challengeAttestationAvailable === false
           ? 'The current Host cannot attest a fresh challenger context. Keep the conclusion below supported and give the developer a concrete direct-review question.'
           : 'Complete and record the required challenge before claiming support.',
+      })),
+      ...(input.challengeSubstitutedObligationIds ?? []).map((id) => ({
+        code: 'direct-human-review-required',
+        targetId: id,
+        requiredAction: 'The developer explicitly substituted direct review for unavailable fresh-context Challenge execution. Keep the conclusion below supported and ask one concrete question that tests the frozen failure hypothesis.',
       })),
       ...input.requiredObligationIds.filter((id) => {
         const challenge = challengeByObligation.get(id);
@@ -533,6 +541,8 @@ export function resolutionAuthoringPacket(input: {
   facts?: FactBundle;
 }): AuthoringPacket {
   const pending = input.task.pendingResolution;
+  const pendingResolutionActions = HUMAN_RESOLUTION_ACTIONS.filter((action) =>
+    action !== 'continue-with-direct-human-review');
   const base = packetBase(input.task, input.contract, input.facts, [], [], [], {
     inputKind: 'resolution',
     draft: {
@@ -542,7 +552,7 @@ export function resolutionAuthoringPacket(input: {
       reason: '',
     },
     fieldRequirements: [choiceRequirement(
-      'draft.action', 'human-decision', HUMAN_RESOLUTION_ACTIONS,
+      'draft.action', 'human-decision', pendingResolutionActions,
       'Normalize the developer\'s exact mid-task resolution without altering the prefilled target.',
     ), textRequirement(
       'draft.humanEvent.content', 'human-decision',

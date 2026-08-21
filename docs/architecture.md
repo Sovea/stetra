@@ -501,6 +501,23 @@ packet as self-contained, but those files alone do not confer attestation. This
 binder is not a subagent scheduler, generic role registry, transcript store, or
 parallel execution graph.
 
+A required Challenge is a Runtime-derived successor obligation, not an Agent
+route preference. Diagnosis may recommend Handoff, but cannot advance past an
+outstanding required Challenge. Handoff input is rejected until the current
+obligation has either a bound Challenge result or an exact Human resolution
+substituting direct review because a fresh Host context is unavailable. The
+latter never becomes independent evidence: it preserves the missing-Challenge
+Attention, prevents Agent acceptance advice, and moves the frozen failure
+hypothesis into direct Human review.
+
+Thin Host projection minimizes the spawn boundary without inventing a global
+current task. The Challenge request carries a short exact dispatch prompt with
+task and request identity plus an exact read-only retrieval command. The child
+loads the current action, verifies the request identity, and then consumes its
+bound packet. It never scans active runs or infers task identity. Host-native
+hooks may reinforce this dispatch, but optional or untrusted hooks cannot be
+the source of lifecycle truth or independence attestation.
+
 ### Attempt and Verification lineage
 
 Completed, rejected, and superseded artifacts remain immutable. Implementation

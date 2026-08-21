@@ -138,9 +138,23 @@ test('collection routes timeout, diagnosis, required challenge, and ordinary han
   assert.equal(collectedHostAction({
     ...common, pendingChallengeObligationIds: [],
   }).kind, 'author-handoff');
-  assert.equal(collectedHostAction({
+  const challenge = collectedHostAction({
     ...common, pendingChallengeObligationIds: ['obligation:test'],
-  }).kind, 'perform-independent-challenge');
+  });
+  assert.equal(challenge.kind, 'perform-independent-challenge');
+  assert.match(challenge.challengeExecutionRequest!.dispatchPrompt, /^Stetra task: task-id/m);
+  assert.match(
+    challenge.challengeExecutionRequest!.dispatchPrompt,
+    new RegExp(`^Challenge request: ${challenge.challengeExecutionRequest!.requestId}$`, 'm'),
+  );
+  assert.deepEqual(
+    challenge.challengeExecutionRequest!.contextRetrieval.command.argv.slice(0, 4),
+    ['stetra', 'change', 'explain', '.'],
+  );
+  assert.equal(
+    challenge.directReviewFallback!.draft.target.requestId,
+    challenge.challengeExecutionRequest!.requestId,
+  );
   const failed = factFixture('failed');
   assert.equal(collectedHostAction({
     ...common, facts: failed, pendingChallengeObligationIds: [],

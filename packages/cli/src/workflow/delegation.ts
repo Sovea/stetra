@@ -317,6 +317,7 @@ export async function prepareDelegationTask(options: {
       repairCount: 0,
       attempts: [attempt],
       challengeIds: [],
+      challengeSubstitutions: [],
       hostPolicyEvaluations,
       resolvedHostPolicyIds: [],
       verificationRevised: false,
@@ -657,7 +658,11 @@ export async function collectDelegationFacts(options: {
   const currentContract = readContract(transitioned);
   const collectedChallenges = readCurrentChallenges(transitioned);
   const requiredChallenges = requiredChallengeObligationIds(currentContract, collectedFacts);
-  const pendingChallenges = pendingChallengeObligationIds(requiredChallenges, collectedChallenges);
+  const pendingChallenges = pendingChallengeObligationIds(
+    requiredChallenges,
+    collectedChallenges,
+    currentChallengeSubstitutionObligationIds(transitioned, collectedFacts),
+  );
   const challengeAttestationAvailable = Boolean(options.hostAttestations?.consumeChallengeRun);
   return {
     protocol: DELEGATION_PROTOCOL,
@@ -981,7 +986,11 @@ export async function recordChallenge(options: {
   const transitionedFacts = readCurrentFacts(transitioned);
   const challenges = readCurrentChallenges(transitioned);
   const required = requiredChallengeObligationIds(transitionedContract, transitionedFacts);
-  const pending = pendingChallengeObligationIds(required, challenges);
+  const pending = pendingChallengeObligationIds(
+    required,
+    challenges,
+    currentChallengeSubstitutionObligationIds(transitioned, transitionedFacts),
+  );
   const challengeAttestationAvailable = Boolean(options.hostAttestations?.consumeChallengeRun);
   const adverse = recordedChallenges.some((item) => item.outcome !== 'supported');
   const performAnotherChallenge = !adverse && pending.length > 0;
@@ -1062,6 +1071,7 @@ export async function evaluateDelegationHandoff(options: {
       const pendingChallengeIds = pendingChallengeObligationIds(
         requiredChallengeIds,
         challenges,
+        currentChallengeSubstitutionObligationIds(task, currentFacts),
       );
       if (pendingChallengeIds.length) {
         throw usageError(
@@ -1293,10 +1303,69 @@ export async function resolveHumanChoice(options: {
     actor: 'human',
     mutate(task) {
       const pending = task.projection.pendingResolution;
+      const contract = readContract(task);
+      if (source.target.kind === 'challenge') {
+        if (pending) {
+          throw usageError('A Challenge direct-review substitution cannot replace another pending Human decision.');
+        }
+        if (source.action !== 'continue-with-direct-human-review' && source.action !== 'abort') {
+          throw inputError('A Challenge resolution must choose direct Human review or abort.');
+        }
+        const action = currentTaskHostAction(
+          task,
+          Boolean(options.hostAttestations?.consumeChallengeRun),
+        );
+        if (action?.kind !== 'perform-independent-challenge'
+          || action.challengeExecutionRequest?.requestId !== source.target.requestId
+          || !action.challengeExecutionPacket) {
+          throw usageError('Human Challenge resolution must target the exact current Challenge Execution Request.');
+        }
+        const facts = readCurrentFacts(task);
+        resolution = materializeResolution(source, contract, {
+          attemptId: facts.attemptId,
+          factCollectionId: facts.factCollectionId,
+          obligationIds: action.challengeExecutionPacket.cases.flatMap((item) =>
+            item.draft.obligationIds),
+        });
+        const resolutionRelative = resolutionPath(resolution.resolutionId);
+        const resolutionAbsolute = taskArtifactPath(task.taskDirectory, resolutionRelative);
+        writeImmutableJson(resolutionAbsolute, resolution);
+        const artifactRefs = [projectRelativePath(task.projectRoot, resolutionAbsolute)];
+        if (source.action === 'abort') {
+          return {
+            projection: {
+              ...task.projection,
+              decisionStatus: 'aborted' as const,
+              terminalAt: new Date().toISOString(),
+            },
+            artifactRefs,
+          };
+        }
+        return {
+          projection: {
+            ...task.projection,
+            challengeSubstitutions: [
+              ...task.projection.challengeSubstitutions,
+              {
+                resolutionId: resolution.resolutionId,
+                requestId: source.target.requestId,
+                effectiveContractId: contract.effectiveContractId,
+                attemptId: facts.attemptId,
+                factCollectionId: facts.factCollectionId,
+                obligationIds: unique(action.challengeExecutionPacket.cases.flatMap((item) =>
+                  item.draft.obligationIds)),
+              },
+            ],
+          },
+          artifactRefs,
+        };
+      }
       if (!pending || !resolutionTargetMatches(source, pending)) {
         throw usageError('Human Resolution must target the exact currently pending decision.');
       }
-      const contract = readContract(task);
+      if (source.action === 'continue-with-direct-human-review') {
+        throw inputError('Direct Human review is valid only for the exact current Challenge request.');
+      }
       resolution = materializeResolution(source, contract);
       const resolutionRelative = resolutionPath(resolution.resolutionId);
       const resolutionAbsolute = taskArtifactPath(task.taskDirectory, resolutionRelative);
@@ -1397,7 +1466,8 @@ export async function resolveHumanChoice(options: {
       const facts = readCurrentFacts(transitioned);
       const challenges = readCurrentChallenges(transitioned);
       const required = requiredChallengeObligationIds(contract, facts);
-      const pending = pendingChallengeObligationIds(required, challenges);
+      const substituted = currentChallengeSubstitutionObligationIds(transitioned, facts);
+      const pending = pendingChallengeObligationIds(required, challenges, substituted);
       const needsChallenge = pending.length > 0;
       const challengeAttestationAvailable = Boolean(options.hostAttestations?.consumeChallengeRun);
       const performChallenge = needsChallenge;
@@ -1410,6 +1480,7 @@ export async function resolveHumanChoice(options: {
         : handoffAuthoringPacket({
             task: transitioned.projection, contract, facts, challenges,
             requiredObligationIds: required,
+            challengeSubstitutedObligationIds: substituted,
             challengeAttestationAvailable,
           });
       hostAction = challengeHostAction(transitioned.taskId, performChallenge, packet);
@@ -1793,7 +1864,8 @@ function currentTaskHostAction(task: LoadedTask, challengeAttestationAvailable =
       )
     : undefined;
   const required = requiredChallengeObligationIds(contract, facts);
-  const pending = pendingChallengeObligationIds(required, challenges);
+  const substituted = currentChallengeSubstitutionObligationIds(task, facts);
+  const pending = pendingChallengeObligationIds(required, challenges, substituted);
   if (disposition) {
     if (disposition.route === 'revise-verification') {
       return diagnosisHostAction(
@@ -1815,6 +1887,7 @@ function currentTaskHostAction(task: LoadedTask, challengeAttestationAvailable =
           ? handoffAuthoringPacket({
               task: task.projection, contract, facts, challenges,
               requiredObligationIds: required,
+              challengeSubstitutedObligationIds: substituted,
               challengeAttestationAvailable,
             })
           : undefined;
@@ -1842,6 +1915,7 @@ function currentTaskHostAction(task: LoadedTask, challengeAttestationAvailable =
     handoffPacket: handoffAuthoringPacket({
       task: task.projection, contract, facts, challenges,
       requiredObligationIds: required,
+      challengeSubstitutedObligationIds: substituted,
       challengeAttestationAvailable,
     }),
     pendingChallengeObligationIds: pending,
@@ -2643,9 +2717,24 @@ function requiredChallengeObligationIds(contract: TaskContract, facts: FactBundl
 function pendingChallengeObligationIds(
   requiredObligationIds: string[],
   challenges: IndependentChallenge[],
+  substitutedObligationIds: string[] = [],
 ): string[] {
-  const covered = new Set(challenges.flatMap((challenge) => challenge.obligationIds));
+  const covered = new Set([
+    ...challenges.flatMap((challenge) => challenge.obligationIds),
+    ...substitutedObligationIds,
+  ]);
   return requiredObligationIds.filter((id) => !covered.has(id));
+}
+
+function currentChallengeSubstitutionObligationIds(
+  task: LoadedTask,
+  facts: FactBundle,
+): string[] {
+  return unique(task.projection.challengeSubstitutions
+    .filter((item) => item.effectiveContractId === task.projection.effectiveContractId
+      && item.attemptId === facts.attemptId
+      && item.factCollectionId === facts.factCollectionId)
+    .flatMap((item) => item.obligationIds));
 }
 
 function completedChallengeObligationIds(challenges: IndependentChallenge[]): string[] {
@@ -2795,7 +2884,15 @@ async function materializeHostPolicyEvaluations(
   return parsed;
 }
 
-function materializeResolution(source: HumanResolutionDocument, contract: TaskContract) {
+function materializeResolution(
+  source: HumanResolutionDocument,
+  contract: TaskContract,
+  challengeBinding?: {
+    attemptId: string;
+    factCollectionId: string;
+    obligationIds: string[];
+  },
+) {
   const kind = source.target.kind === 'correction' || source.action === 'request-correction'
     ? 'correction' as const : 'exception' as const;
   return {
@@ -2812,6 +2909,7 @@ function materializeResolution(source: HumanResolutionDocument, contract: TaskCo
     target: source.target,
     action: source.action,
     reason: source.reason,
+    ...(challengeBinding ? { challengeBinding } : {}),
   };
 }
 
@@ -2857,6 +2955,7 @@ function resolutionTargetMatches(
   source: HumanResolutionDocument,
   pending: NonNullable<TaskProjection['pendingResolution']>,
 ): boolean {
+  if (source.target.kind === 'challenge') return false;
   if (source.target.kind !== pending.kind) return false;
   const targetId = source.target.kind === 'semantic-impact'
     ? source.target.dispositionId

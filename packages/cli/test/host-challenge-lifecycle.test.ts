@@ -359,6 +359,14 @@ function requestFixture(character: string): ChallengeExecutionRequest {
       schema: 'challenge-round-document',
       source: 'challengeExecutionPacket.draft',
     },
+    contextRetrieval: {
+      command: {
+        argv: ['stetra', 'change', 'explain', '.', '--task', 'task:test', '--section', 'action', '--json'],
+      },
+      expectedAction: 'perform-independent-challenge',
+      verifyRequestId: digest(character),
+    },
+    dispatchPrompt: `Stetra task: task:test\nChallenge request: ${digest(character)}`,
   };
 }
 
