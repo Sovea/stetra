@@ -21,7 +21,6 @@ export interface WorktreeSummary {
   head: string | null;
   fingerprint: string;
   entryCount: number;
-  capturedAt: string;
 }
 
 export interface FileContentFact {
@@ -69,7 +68,6 @@ export interface VerificationInputSelectorFact {
 
 export interface VerificationInputSnapshot {
   definitionId: string;
-  capturedAt: string;
   inputs: VerificationInputSelectorFact[];
   fingerprint: string;
 }
@@ -85,7 +83,6 @@ export interface CheckStepAttemptFact {
   role: 'preparation' | 'assertion';
   key?: string;
   argv: string[];
-  startedAt: string;
   durationMs: number;
   timeoutMs: number;
   status: CheckStatus;
@@ -98,7 +95,6 @@ export interface CheckStepAttemptFact {
 
 export interface CheckAttemptFact {
   attempt: number;
-  startedAt: string;
   durationMs: number;
   timeoutMs: number;
   status: CheckStatus;
@@ -132,7 +128,6 @@ export interface BaselineCheckFact {
 
 export interface BaselineVerificationFact {
   fingerprint: string;
-  capturedAt: string;
   preCheck: WorktreeSummary;
   postCheck: WorktreeSummary;
   preCheckExecutionInputs: VerificationInputSnapshot[];
@@ -219,35 +214,18 @@ export interface PatchFact {
 export interface ExecutableEnvironmentFact {
   command: string;
   resolvedPath: string | null;
-  version: string | null;
-}
-
-export interface ToolchainEnvironmentFact {
-  name: string;
-  version: string;
-}
-
-export interface LockfileEnvironmentFact {
-  path: string;
-  digest: string;
 }
 
 export interface ExecutionEnvironment {
   platform: string;
   architecture: string;
-  cwdFingerprint: string;
   executables: ExecutableEnvironmentFact[];
-  toolchains: ToolchainEnvironmentFact[];
-  lockfiles: LockfileEnvironmentFact[];
-  environmentVariableNames: string[];
 }
 
 export interface FactBundle extends ProtocolEnvelope {
   factCollectionId: string;
-  bundleFingerprint: string;
   effectiveContractId: string;
   attemptId: string;
-  collectedAt: string;
   baseline: WorktreeSummary;
   preCheck: WorktreeSummary;
   current: WorktreeSummary;

@@ -34,12 +34,8 @@ export function validateFactBundle(bundle: FactBundle, contract: TaskContract): 
     throw new Error('evaluateHandoff Fact Bundle attempt id is invalid.');
   }
   if (!isSha256(bundle.factCollectionId)
-    || !isSha256(bundle.bundleFingerprint)
     || !isSha256(bundle.changeFingerprint)) {
     throw new Error('evaluateHandoff Fact Bundle identities are invalid.');
-  }
-  if (!isIsoTimestamp(bundle.collectedAt)) {
-    throw new Error('evaluateHandoff Fact Bundle collectedAt is invalid.');
   }
   validateWorktreeSummary(bundle.baseline, 'baseline');
   validateWorktreeSummary(bundle.preCheck, 'preCheck');
@@ -77,13 +73,10 @@ export function validateFactBundle(bundle: FactBundle, contract: TaskContract): 
   if (bundle.factCollectionId !== factCollectionId(bundle)) {
     throw new Error('evaluateHandoff Fact Bundle collection identity does not match its machine facts.');
   }
-  if (bundle.bundleFingerprint !== factBundleFingerprint(bundle)) {
-    throw new Error('evaluateHandoff Fact Bundle fingerprint does not match its content.');
-  }
 }
 
 export function factCollectionId(
-  bundle: Omit<FactBundle, 'factCollectionId' | 'bundleFingerprint'>,
+  bundle: Omit<FactBundle, 'factCollectionId'>,
 ): string {
   return stableFingerprint({
     protocol: bundle.protocol,
@@ -113,7 +106,7 @@ function validateBaselineVerification(
   baseline: BaselineVerificationFact,
   contract: TaskContract,
 ): void {
-  if (!baseline || !isSha256(baseline.fingerprint) || !isIsoTimestamp(baseline.capturedAt)) {
+  if (!baseline || !isSha256(baseline.fingerprint)) {
     throw new Error('evaluateHandoff baseline verification identity is invalid.');
   }
   validateWorktreeSummary(baseline.preCheck, 'baselineVerification.preCheck');
@@ -238,13 +231,6 @@ function latestStatus(check: CheckFact): CheckAttemptFact['status'] {
   return latest.status;
 }
 
-export function factBundleFingerprint(
-  bundle: Omit<FactBundle, 'bundleFingerprint'> | FactBundle,
-): string {
-  const { bundleFingerprint: _ignored, ...projection } = bundle as FactBundle;
-  return stableFingerprint(projection);
-}
-
 export function checkDefinitionFingerprint(definition: VerificationDefinition): string {
   return stableFingerprint(definition);
 }
@@ -253,8 +239,7 @@ function validateWorktreeSummary(summary: WorktreeSummary, name: string): void {
   if (!summary || (summary.head !== null && !isNonEmptyString(summary.head))
     || !isSha256(summary.fingerprint)
     || !Number.isInteger(summary.entryCount)
-    || summary.entryCount < 0
-    || !isIsoTimestamp(summary.capturedAt)) {
+    || summary.entryCount < 0) {
     throw new Error(`evaluateHandoff Fact Bundle ${name} worktree summary is invalid.`);
   }
 }
@@ -326,7 +311,6 @@ function validateCheckAttempts(
   const checkId = definition.definitionId;
   for (const [index, attempt] of attempts.entries()) {
     if (attempt.attempt !== index + 1
-      || !isIsoTimestamp(attempt.startedAt)
       || !Number.isInteger(attempt.durationMs)
       || attempt.durationMs < 0
       || !Number.isInteger(attempt.timeoutMs)
@@ -419,7 +403,6 @@ function validateAttemptSteps(
     if (!frozen || step.stepId !== frozen.stepId || step.role !== frozen.role
       || step.key !== ('key' in frozen ? frozen.key : undefined)
       || stableFingerprint(step.argv) !== stableFingerprint(frozen.argv)
-      || !isIsoTimestamp(step.startedAt)
       || !Number.isInteger(step.durationMs) || step.durationMs < 0
       || step.timeoutMs !== timeoutMs
       || !['passed', 'failed', 'unavailable'].includes(step.status)
@@ -463,7 +446,6 @@ function validateDefinitionInputSnapshot(
   name: string,
 ): void {
   if (!snapshot || snapshot.definitionId !== definition.definitionId
-    || !isIsoTimestamp(snapshot.capturedAt)
     || !Array.isArray(snapshot.inputs)
     || snapshot.inputs.length !== definition.executionInputs.length
     || !isSha256(snapshot.fingerprint)) {
@@ -589,38 +571,13 @@ function validateEnvironment(environment: ExecutionEnvironment): void {
   if (!environment
     || !isNonEmptyString(environment.platform)
     || !isNonEmptyString(environment.architecture)
-    || !isSha256(environment.cwdFingerprint)
-    || !Array.isArray(environment.executables)
-    || !Array.isArray(environment.toolchains)
-    || !Array.isArray(environment.lockfiles)
-    || !Array.isArray(environment.environmentVariableNames)) {
+    || !Array.isArray(environment.executables)) {
     throw new Error('evaluateHandoff execution environment is invalid.');
   }
   for (const executable of environment.executables) {
     if (!isNonEmptyString(executable.command)
-      || (executable.resolvedPath !== null && !isNonEmptyString(executable.resolvedPath))
-      || (executable.version !== null && !isNonEmptyString(executable.version))) {
+      || (executable.resolvedPath !== null && !isNonEmptyString(executable.resolvedPath))) {
       throw new Error('evaluateHandoff executable environment fact is invalid.');
     }
   }
-  for (const toolchain of environment.toolchains) {
-    if (!isNonEmptyString(toolchain.name) || !isNonEmptyString(toolchain.version)) {
-      throw new Error('evaluateHandoff toolchain environment fact is invalid.');
-    }
-  }
-  for (const lockfile of environment.lockfiles) {
-    if (!isSafeRepositoryPath(lockfile.path) || !isSha256(lockfile.digest)) {
-      throw new Error('evaluateHandoff lockfile environment fact is invalid.');
-    }
-  }
-  if (environment.environmentVariableNames.some((name) =>
-    !/^[A-Za-z_][A-Za-z0-9_]*$/.test(name))) {
-    throw new Error('evaluateHandoff environment variable names are invalid.');
-  }
-}
-
-function isIsoTimestamp(value: unknown): value is string {
-  return typeof value === 'string'
-    && Number.isFinite(Date.parse(value))
-    && new Date(value).toISOString() === value;
 }

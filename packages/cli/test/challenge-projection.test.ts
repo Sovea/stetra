@@ -199,14 +199,13 @@ function factsFixture(
   ];
   return {
     protocol: 'cognitive-adoption', schemaVersion: '1',
-    factCollectionId: digest('collection'), bundleFingerprint: digest('bundle'),
+    factCollectionId: digest('collection'),
     effectiveContractId: contract.effectiveContractId, attemptId: 'attempt:1',
-    collectedAt: '2026-08-17T00:00:00.000Z',
     baseline: worktree('baseline'), preCheck: worktree('pre-check'), current: worktree('current'),
     preCheckExecutionInputs: [targetDefinition, otherDefinition].map(executionInputSnapshot),
     currentExecutionInputs: [targetDefinition, otherDefinition].map(executionInputSnapshot),
     baselineVerification: {
-      fingerprint: digest('baseline-verification'), capturedAt: '2026-08-17T00:00:00.000Z',
+      fingerprint: digest('baseline-verification'),
       preCheck: worktree('baseline'), postCheck: worktree('baseline'),
       preCheckExecutionInputs: [targetDefinition, otherDefinition].map(executionInputSnapshot),
       postCheckExecutionInputs: [targetDefinition, otherDefinition].map(executionInputSnapshot),
@@ -228,8 +227,7 @@ function factsFixture(
       mutation(otherDefinition, 'file:unrelated', 'src/unrelated.ts'),
     ],
     environment: {
-      platform: 'linux', architecture: 'x64', cwdFingerprint: digest('cwd'),
-      executables: [], toolchains: [], lockfiles: [], environmentVariableNames: [],
+      platform: 'linux', architecture: 'x64', executables: [],
     },
     patch: { path: '.stetra/tasks/task/patch.diff', digest: digest('patch'), byteLength: 64 },
     provenance: { collector: 'stetra-cli', cliVersion: '0.0.1', coreVersion: '0.0.1' },
@@ -279,7 +277,7 @@ function checkFact(definition: VerificationDefinition): FactBundle['checks'][num
     assertionArgv: definition.execution.assertion.argv,
     definitionFingerprint: digest(`definition-${definition.key}`),
     attempts: [{
-      attempt: 1, startedAt: '2026-08-17T00:00:00.000Z', durationMs: 10,
+      attempt: 1, durationMs: 10,
       timeoutMs: 1_000, status: 'passed', termination: { kind: 'exit', exitCode: 0 },
       observedPhase: 'assertion',
       outcomeFingerprint: digest(`outcome-${definition.key}`),
@@ -288,7 +286,6 @@ function checkFact(definition: VerificationDefinition): FactBundle['checks'][num
         stepId: definition.execution.assertion.stepId,
         role: 'assertion',
         argv: definition.execution.assertion.argv,
-        startedAt: '2026-08-17T00:00:00.000Z',
         durationMs: 10,
         timeoutMs: 1_000,
         status: 'passed',
@@ -309,7 +306,6 @@ function checkFact(definition: VerificationDefinition): FactBundle['checks'][num
 function executionInputSnapshot(definition: VerificationDefinition) {
   return {
     definitionId: definition.definitionId,
-    capturedAt: '2026-08-17T00:00:00.000Z',
     inputs: [],
     fingerprint: digest(`inputs-${definition.key}`),
   };
@@ -333,7 +329,6 @@ function mutation(
 function worktree(label: string) {
   return {
     head: null, fingerprint: digest(label), entryCount: 3,
-    capturedAt: '2026-08-17T00:00:00.000Z',
   };
 }
 

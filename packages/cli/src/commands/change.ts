@@ -1,7 +1,6 @@
 import { Command, InvalidArgumentError } from 'commander';
 import type { Readable } from 'node:stream';
 
-import { DEFAULT_CHECK_TIMEOUT_MS } from '../facts/checks.ts';
 import {
   collectDelegationFacts,
   diagnoseCollectedEvidence,
@@ -52,7 +51,7 @@ export function registerChangeCommands(
 
   change
     .command('prepare')
-    .description('Compile the Task Contract, plan, first Attempt, and Git baseline')
+    .description('Compile the Task Contract, first Attempt, and Git baseline')
     .argument('[project-root]', 'Git worktree root', '.')
     .option('--input <path>', 'Task Contract input JSON path, or - for stdin', '-')
     .action(async (projectRoot: string, options: InputOptions, command: Command) => {
@@ -72,7 +71,7 @@ export function registerChangeCommands(
     .requiredOption('--task <id>', 'task ID returned by prepare')
     .option(
       '--timeout-ms <milliseconds>',
-      `initial timeout for each check; defaults to ${DEFAULT_CHECK_TIMEOUT_MS} ms`,
+      'initial timeout for each check; defaults to the prepared task execution budget',
       parseTimeout,
     )
     .option(

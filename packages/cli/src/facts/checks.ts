@@ -22,8 +22,6 @@ import { sha256, stableFingerprint } from '../protocol.ts';
 import { captureVerificationInputs } from './execution-inputs.ts';
 
 export const MAX_CHECK_LOG_BYTES = 1024 * 1024;
-export const DEFAULT_CHECK_TIMEOUT_MS = 300_000;
-
 export interface FrozenCheckExecution {
   definition: VerificationDefinition;
   timeoutMs: number;
@@ -68,7 +66,6 @@ async function runFrozenCheck(input: {
     );
   }
   const attemptNumber = previousAttempts.length + 1;
-  const startedAt = new Date().toISOString();
   const startedMs = performance.now();
   const beforePreparation = captureVerificationInputs(input.projectRoot, [definition])[0];
   const steps: CheckStepAttemptFact[] = [];
@@ -103,7 +100,6 @@ async function runFrozenCheck(input: {
     : terminal.reason;
   const attempt: CheckAttemptFact = {
     attempt: attemptNumber,
-    startedAt,
     durationMs,
     timeoutMs: input.timeoutMs,
     status,
@@ -170,7 +166,6 @@ async function runCheckStep(input: {
   const stdoutHash = createHash('sha256');
   const stderrHash = createHash('sha256');
   const [file, ...args] = step.argv;
-  const startedAt = new Date().toISOString();
   const startedMs = performance.now();
   const result = await runStreamingCommand({
     file,
@@ -224,7 +219,6 @@ async function runCheckStep(input: {
     role: step.role,
     ...(step.key ? { key: step.key } : {}),
     argv: [...step.argv],
-    startedAt,
     durationMs,
     timeoutMs: input.timeoutMs,
     status,

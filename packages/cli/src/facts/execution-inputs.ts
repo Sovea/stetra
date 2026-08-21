@@ -51,7 +51,6 @@ function captureDefinitionInputs(
   };
   return {
     ...projection,
-    capturedAt: new Date().toISOString(),
     fingerprint: stableFingerprint(projection),
   };
 }

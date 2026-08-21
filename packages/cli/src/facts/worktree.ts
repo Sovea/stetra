@@ -38,7 +38,6 @@ export interface WorktreeEntry {
 
 export interface WorktreeSnapshot {
   source: 'git-worktree-tree';
-  capturedAt: string;
   head: string | null;
   treeId: string;
   entries: WorktreeEntry[];
@@ -135,7 +134,6 @@ export async function captureGitWorktree(
     const projection = { head, treeId, entries };
     return {
       source: 'git-worktree-tree',
-      capturedAt: new Date().toISOString(),
       ...projection,
       fingerprint: stableFingerprint(projection),
     };
@@ -257,7 +255,6 @@ export function summarizeWorktree(snapshot: WorktreeSnapshot): WorktreeSummary {
     head: snapshot.head,
     fingerprint: snapshot.fingerprint,
     entryCount: snapshot.entries.length,
-    capturedAt: snapshot.capturedAt,
   };
 }
 
@@ -269,8 +266,7 @@ export function assertWorktreeSnapshot(value: unknown, label: string): asserts v
   if (snapshot.source !== 'git-worktree-tree'
     || (snapshot.head !== null && typeof snapshot.head !== 'string')
     || !GIT_OBJECT_ID_PATTERN.test(snapshot.treeId)
-    || !Array.isArray(snapshot.entries)
-    || typeof snapshot.capturedAt !== 'string') {
+    || !Array.isArray(snapshot.entries)) {
     throw new Error(`Invalid ${label} worktree snapshot; rerun prepare.`);
   }
   const ordered = [...snapshot.entries].sort((left, right) => left.path.localeCompare(right.path));

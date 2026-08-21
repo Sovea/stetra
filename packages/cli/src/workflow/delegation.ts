@@ -261,7 +261,6 @@ export async function prepareDelegationTask(options: {
       definitions,
     );
     const baselineProjection = {
-      capturedAt: new Date().toISOString(),
       preCheck: summarizeWorktree(preBaselineCheck),
       postCheck: summarizeWorktree(baseline),
       preCheckExecutionInputs: preBaselineExecutionInputs,
@@ -464,7 +463,7 @@ export async function collectDelegationFacts(options: {
         task.taskDirectory,
         checksRelative,
       );
-      let factsBase: Omit<FactBundle, 'factCollectionId' | 'bundleFingerprint'>;
+      let factsBase: Omit<FactBundle, 'factCollectionId'>;
       let newArtifactRefs: string[] = [];
 
       if (retries.length) {
@@ -517,7 +516,6 @@ export async function collectDelegationFacts(options: {
         );
         factsBase = {
           ...priorFacts,
-          collectedAt: new Date().toISOString(),
           checks,
           currentExecutionInputs: afterRetryExecutionInputs,
           checkComparisons: compareChecksToBaseline(priorFacts.baselineVerification, checks),
@@ -529,7 +527,6 @@ export async function collectDelegationFacts(options: {
           environment: collectExecutionEnvironment(task.projectRoot, definitions),
         };
         delete (factsBase as Partial<FactBundle>).factCollectionId;
-        delete (factsBase as Partial<FactBundle>).bundleFingerprint;
       } else {
         const timeoutMs = options.timeoutMs ?? task.projection.executionBudget.checkTimeoutMs;
         const preCheck = await captureGitWorktree(task.projectRoot, {
@@ -574,7 +571,6 @@ export async function collectDelegationFacts(options: {
           schemaVersion: DELEGATION_SCHEMA_VERSION,
           effectiveContractId: currentContract.effectiveContractId,
           attemptId: currentAttempt.attemptId,
-          collectedAt: new Date().toISOString(),
           baseline: summarizeWorktree(baseline),
           preCheck: summarizeWorktree(preCheck),
           current: summarizeWorktree(worktree.current),
@@ -603,11 +599,7 @@ export async function collectDelegationFacts(options: {
       }
 
       const collectionId = factCollectionId(factsBase);
-      const withCollection = { ...factsBase, factCollectionId: collectionId };
-      const facts: FactBundle = {
-        ...withCollection,
-        bundleFingerprint: stableFingerprint(withCollection),
-      };
+      const facts: FactBundle = { ...factsBase, factCollectionId: collectionId };
       const factsRelative = factsPath(currentAttempt.attemptId, collectionId);
       const factsAbsolute = taskArtifactPath(stagedArtifactsDirectory, factsRelative);
       const publishedFactsAbsolute = taskArtifactPath(task.taskDirectory, factsRelative);
@@ -1560,7 +1552,6 @@ export async function reviseVerificationPlan(options: {
       const priorBaseline = readBaseline(task);
       const baselineSummary = summarizeWorktree(priorBaseline);
       const baselineProjection = {
-        capturedAt: new Date().toISOString(),
         preCheck: baselineSummary,
         postCheck: baselineSummary,
         preCheckExecutionInputs: captureVerificationInputs(task.projectRoot, definitions),
@@ -2435,17 +2426,13 @@ function assertFactBundleIdentity(bundle: FactBundle, effectiveContractId: strin
   if (bundle.effectiveContractId !== effectiveContractId || bundle.attemptId !== attemptId) {
     throw new Error('Fact Bundle is bound to another contract or Attempt.');
   }
-  const { factCollectionId: _collection, bundleFingerprint: _bundle, ...base } = bundle;
+  const { factCollectionId: _collection, ...base } = bundle;
   if (bundle.factCollectionId !== factCollectionId(base)) {
     throw new Error('Collected machine facts changed after collection.');
   }
-  const { bundleFingerprint: _ignored, ...projection } = bundle;
-  if (bundle.bundleFingerprint !== stableFingerprint(projection)) {
-    throw new Error('Fact Bundle fingerprint does not match its content.');
-  }
 }
 
-function factCollectionId(bundle: Omit<FactBundle, 'factCollectionId' | 'bundleFingerprint'>): string {
+function factCollectionId(bundle: Omit<FactBundle, 'factCollectionId'>): string {
   return stableFingerprint({
     protocol: bundle.protocol,
     schemaVersion: bundle.schemaVersion,
@@ -2781,7 +2768,6 @@ function compactCheckFact(check: CheckFact) {
 function summarizeBaselineVerification(fact: BaselineVerificationFact) {
   return {
     fingerprint: fact.fingerprint,
-    capturedAt: fact.capturedAt,
     checkInducedChanges: fact.checkInducedChanges.map((file) => ({
       path: file.path,
       operation: file.operation,

@@ -17,7 +17,6 @@ import {
 } from '../src/index.ts';
 import {
   checkDefinitionFingerprint,
-  factBundleFingerprint,
   factCollectionId as collectionFingerprint,
 } from '../src/facts/validate.ts';
 
@@ -913,7 +912,6 @@ function factBundle(
   const baselineStatus = options.baselineStatus ?? 'passed';
   const implementationBaseline = worktree('baseline-post');
   const baselineWithoutFingerprint = {
-    capturedAt: '2026-08-11T00:00:00.000Z',
     preCheck: worktree('baseline-pre'),
     postCheck: implementationBaseline,
     preCheckExecutionInputs: contract.verificationPlan.definitions.map((definition) =>
@@ -938,7 +936,6 @@ function factBundle(
     ...envelope,
     effectiveContractId: contract.effectiveContractId,
     attemptId: 'attempt:1',
-    collectedAt: '2026-08-11T00:01:00.000Z',
     baseline: implementationBaseline,
     preCheck: worktree('current-pre'),
     current: worktree('current-post'),
@@ -987,14 +984,12 @@ function factBundle(
           matchedBy: 'current-path' as const,
         })) : [],
     environment: {
-      platform: 'linux', architecture: 'x64', cwdFingerprint: digest('cwd'),
-      executables: [], toolchains: [], lockfiles: [], environmentVariableNames: [],
+      platform: 'linux', architecture: 'x64', executables: [],
     },
     provenance: { collector: 'stetra-cli' as const, cliVersion: '0.0.1', coreVersion: '0.0.1' },
   };
   const factCollectionId = collectionFingerprint(base);
-  const withCollection = { ...base, factCollectionId };
-  return { ...withCollection, bundleFingerprint: factBundleFingerprint(withCollection) };
+  return { ...base, factCollectionId };
 }
 
 function checkFact(
@@ -1009,7 +1004,6 @@ function checkFact(
     definitionFingerprint: checkDefinitionFingerprint(definition),
     attempts: [{
       attempt: 1,
-      startedAt: '2026-08-11T00:00:30.000Z',
       durationMs: 12,
       timeoutMs: 1000,
       status,
@@ -1026,7 +1020,6 @@ function checkFact(
         stepId: definition.execution.assertion.stepId,
         role: 'assertion' as const,
         argv: [...definition.execution.assertion.argv],
-        startedAt: '2026-08-11T00:00:30.000Z',
         durationMs: 12,
         timeoutMs: 1000,
         status,
@@ -1054,7 +1047,6 @@ function executionInputSnapshot(
   const projection = { definitionId: definition.definitionId, inputs: [] };
   return {
     ...projection,
-    capturedAt: '2026-08-11T00:00:20.000Z',
     fingerprint: fingerprint(projection),
   };
 }
@@ -1217,7 +1209,6 @@ function worktree(seed: string) {
     head: null,
     fingerprint: digest(seed),
     entryCount: 0,
-    capturedAt: '2026-08-11T00:00:00.000Z',
   };
 }
 
