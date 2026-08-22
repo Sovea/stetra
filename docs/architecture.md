@@ -437,8 +437,8 @@ believes it means. It includes:
 - immutable Verification Definitions and ordered Check Attempts;
 - explicit preparation/assertion boundaries and declared local execution-input
   snapshots, including named ignored generated surfaces;
-- timeout budgets, structured termination, bounded logs, and complete-stream
-  digests;
+- initial timeout budgets, explicit task-wide per-Verifier retry limits,
+  structured termination, bounded logs, and complete-stream digests;
 - declared command-definition and verifier-surface mutations, using explicit
   exact-file or repository-tree selectors and concrete matched files;
 - mechanical baseline/current relations and explicit evidence concerns derived
@@ -490,15 +490,18 @@ programmatic Host integration or Evaluator that controls the relevant boundary
 may record enforcement. Missing capability must degrade to a valid smaller
 strategy or a visible Human decision, never a fabricated guarantee.
 
-The initial Host boundary exposes one deliberately narrow lifecycle binder for
-Independent Challenge. Runtime derives a task- and fact-bound execution request;
+The initial Host boundary exposes one deliberately narrow lifecycle binder and
+execution helper for Independent Challenge. Runtime derives a task- and
+fact-bound execution request;
 Runtime also projects one bounded Challenge Execution Packet containing one
 separate case for every outstanding Evidence Obligation and only each case's
 explicit evidence relations. One Fact Collection therefore starts one named
 read-only Challenger context rather than one context per Obligation. The Host
 observes that Challenger's start and stop, binds the packet and exact Round
 output, and verifies the single-use receipt when recording all results
-atomically. Generated Codex and Claude profiles constrain the role and treat the
+atomically. A native Adapter uses that helper to start one session, enforce the
+projected repair limit, submit only receipt-bound output, and close the child
+context. Generated Codex and Claude profiles constrain the role and treat the
 packet as self-contained, but those files alone do not confer attestation. This
 binder is not a subagent scheduler, generic role registry, transcript store, or
 parallel execution graph.
@@ -699,6 +702,12 @@ explicit full refresh, or valid monotonic timeout retry is required for another
 observation. Time, command names, repository shape, and output text do not
 participate in this decision.
 
+Timeout retry authority is frozen in the task execution budget. A bounded
+policy sets both the largest retry duration and the total retry count for each
+logical Verifier across the whole task. Attempt succession and Verification
+Definition revision preserve that count; they do not create a fresh retry
+allowance.
+
 ## Baseline, verification revision, and evidence judgment
 
 The Git worktree baseline is not a baseline test result. A task-start check runs
@@ -742,7 +751,7 @@ An input-bearing Authoring Packet may include:
 
 - current task, Contract, Attempt, Fact Bundle, and revision bindings;
 - the exact Human Event beside separately labeled Agent interpretation;
-- a directly fillable draft;
+- a directly fillable draft whose Handoff targets use readable frozen keys;
 - canonical reference catalogs;
 - structural field requirements and outstanding obligations;
 - a one-shot stdin binding for the exact command.
@@ -753,6 +762,10 @@ continuation), the completed document, and an explicit project root. It invokes
 the CLI parser with in-memory stdin and validates the exact stage, task, packet,
 and command shape; it does not use a shell, PTY, temporary file, or synthesized
 task command. Canonical lifecycle validation remains in the CLI and Core.
+
+The CLI resolves Handoff Condition and Obligation keys to canonical identities
+before Core evaluation and persistence. This removes opaque identity copying
+without guessing semantic equivalence or weakening exact references to facts.
 
 Projection reduces reading, identity copying, and schema-error cost. It does not
 persist a mode, create lifecycle state, choose semantic values, hide an
@@ -775,7 +788,7 @@ Developer Decision Brief from the canonical Decision Packet. Its `primary`
 projection is the Host's required Human delivery surface: separate
 delivery/evidence/recommendation/adoption states; explicitly labelled Agent
 interpretations of intended meaning and the actual-change model; Agent-authored
-Condition and Challenge findings beside separate evidence-path states; structurally
+Condition findings with compact separate evidence-path states; structurally
 aggregated blockers; consequence-directed review focus; explicitly labelled
 Runtime observations; and the pending Human decision. The primary projection
 uses semantic statements and omits opaque protocol IDs. The canonical Decision
@@ -783,8 +796,10 @@ Packet and named inspection sections retain IDs, exact references, Attention,
 evidence history, and artifact detail. Attention is aggregated only by its exact
 protocol group and required resolution, never by repository or text heuristics.
 Traceability therefore remains machine-exact without forcing protocol identity
-noise into the developer's main summary. The brief adds no artifact or
-authority. The projected
+noise into the developer's main summary. A single exact details command
+reconstructs the canonical Decision Packet for deeper evidence boundaries,
+Challenge counterevidence, and history. The brief adds no artifact or authority.
+The projected
 decision command is explicitly a continuation that requires a new exact Human
 Event; Handoff presentation and Human decision recording cannot collapse into
 one Host turn.

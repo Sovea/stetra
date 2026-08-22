@@ -117,8 +117,8 @@ prepare -> Agent implementation -> collect
         -> Cognitive Handoff -> exact Human Decision
 ```
 
-`change explain` is on-demand inspection. A timeout retry is same-Attempt
-operational recovery, not diagnosis or implementation repair. Every
+`change explain` is on-demand inspection. A timeout retry is operational
+recovery, not diagnosis or implementation repair. Every
 state-changing Host route must have an executable successor; do not introduce a
 prose-only recovery dead end.
 
@@ -181,8 +181,10 @@ truth or adoption. Completed failure, non-timeout unavailability, timeout,
 signal termination, and spawn failure remain distinct. Direct Host execution
 cannot replace a frozen Runtime Attempt.
 
-A timeout retry may append only after the latest Attempt timed out, with an
-unchanged worktree and a larger budget. It preserves all earlier Attempts.
+A timeout retry may append only after the latest observation timed out, with an
+unchanged worktree and a larger budget. Its maximum duration and task-wide
+per-Verifier retry count are frozen at Prepare; Attempt succession and
+Definition revision do not reset them. It preserves all earlier Check Attempts.
 
 Prepare and Collect hold a project-worktree lease only while observing or
 executing against the shared worktree. The lease is recovered only after the

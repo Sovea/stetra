@@ -64,7 +64,9 @@ Every stage derives a structured `hostAction` containing:
 An Authoring Packet binds the current task, revision, Contract, Attempt, and
 Fact Collection. It contains a directly fillable `draft`, exact reference
 catalogs, outstanding obligations, and field requirements. Runtime supplies
-boilerplate identity; the Agent supplies interpretation and judgment. The
+boilerplate identity; the Agent supplies interpretation and judgment. Handoff
+uses readable Condition and Obligation keys in its input and resolves them to
+canonical IDs before persistence. The
 packet is transient projection, not authority, an artifact, or lifecycle state.
 
 Input-bearing actions use a one-shot stdin binding. A native Host calls
@@ -86,7 +88,8 @@ Prepare input supplies:
 - optional Adoption Conditions with falsifiable Evidence Obligations;
 - explicit Host-policy requirements;
 - explicit verification commands or a concrete no-command rationale; and
-- `executionBudget.checkTimeoutMs` and `executionBudget.maxDeliveryRepairs`.
+- `executionBudget.checkTimeoutMs`, `executionBudget.maxDeliveryRepairs`, and an
+  explicit disabled or bounded `executionBudget.timeoutRetry` policy.
 
 Focus paths guide investigation and review. They are not write permissions or a
 prediction of the final changed files.
@@ -181,9 +184,11 @@ distinct.
 
 If current facts still match the worktree, ordinary Collect returns them without
 rerunning commands or writing state. `--refresh` explicitly replaces the full
-current observation. A same-run timeout retry may append only after an actual
-timeout, with unchanged facts and a larger budget; it never hides the earlier
-attempt.
+current observation. A timeout retry may append only after an actual timeout,
+with unchanged facts and a larger budget; it never hides the earlier attempt.
+Its maximum duration and maximum retry count are frozen at Prepare. The count
+is task-wide per logical Verifier, so delivery repair or Definition revision
+cannot silently reset the operational retry budget.
 
 ## Diagnose and recover
 
@@ -248,6 +253,12 @@ read-only target snapshot and isolated writable execution workspace. The Host,
 not Agent JSON, binds start/stop lifecycle, distinct context identity, exact
 packet and output fingerprints, target protection, external-effect policy, and
 single-use receipt. One Challenge Round returns all case results atomically.
+The short dispatch prompt contains an exact `challenge-request` retrieval
+command and fingerprint rather than claiming that a large packet is attached.
+A native integration can call `executeHostChallenge` from
+`@sovea/stetra/host`; it starts the Host adapter session, binds observations,
+allows only the projected structured-output repair budget, submits the attested
+Round, and closes the child context.
 
 The Challenger preserves the frozen falsification design and labels each
 supporting or counter-evidence item as Runtime-recorded, Agent-reported, or an
@@ -281,6 +292,8 @@ important effects
 material tradeoffs
 ```
 
+Its input identifies Conditions and Obligations by their frozen readable keys;
+Runtime resolves those keys to exact canonical IDs and rejects unknown keys.
 It then concludes every Evidence Obligation and Condition exactly once, records
 the falsification attempt and observed result, preserves counterevidence and
 coverage gaps, lists residual unknowns, asks only consequence-directed review
@@ -308,10 +321,12 @@ The result contains one canonical `decisionPacket`:
 The transient `developerDecisionBrief.primary` is the concise Human surface. It
 uses semantic statements rather than opaque IDs, leads with the four separate
 delivery/evidence/recommendation/adoption states, explains the actual change,
-shows evidence boundaries and Challenge counterevidence, consolidates only
+summarizes each Condition's findings and evidence-path state, consolidates only
 structurally identical blockers, directs review, and asks for the pending Human
-decision. Exact IDs and history remain in `decisionPacket` and `change explain`;
-there is no duplicate details projection.
+decision. `developerDecisionBrief.details.command` retrieves the canonical
+Decision Packet only when deeper evidence boundaries, Challenge
+counterevidence, exact IDs, or history are needed; it does not duplicate them
+in the primary surface.
 
 ## Decide and correct
 
