@@ -169,6 +169,38 @@ test('a timed-out check waits for force termination when a silent descendant out
   }
 });
 
+test('POSIX reaping lag after force termination still produces a timeout fact', {
+  skip: process.platform === 'win32' ? 'Windows does not expose POSIX process groups.' : false,
+}, async (t) => {
+  const root = mkdtempSync(join(tmpdir(), 'stetra-check-reaping-lag-'));
+  const originalKill = process.kill;
+  t.mock.method(process, 'kill', (pid: number, signal?: NodeJS.Signals | number) => {
+    // kill(-pgid, 0) also observes unreaped zombies. Simulate that kernel-visible
+    // state outliving successful group-directed termination, as it can in a PID
+    // namespace whose init process has not reaped the group yet.
+    if (pid < 0 && signal === 0) return true;
+    return originalKill(pid, signal);
+  });
+  try {
+    const startedAt = performance.now();
+    const timedOut = await run(
+      root,
+      [process.execPath, '-e', 'setInterval(() => {}, 10_000)'],
+      50,
+      'reaping-lag',
+    );
+    const durationMs = performance.now() - startedAt;
+    assert.equal(timedOut.attempts[0].status, 'unavailable');
+    assert.equal(timedOut.attempts[0].termination.kind, 'timeout');
+    assert.ok(
+      durationMs >= 1_000 && durationMs < 3_000,
+      `Expected one bounded force-kill phase, observed ${durationMs} ms.`,
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('bounded logs keep complete-stream digests while persisting only the byte limit', async () => {
   const root = mkdtempSync(join(tmpdir(), 'stetra-check-bounded-'));
   try {

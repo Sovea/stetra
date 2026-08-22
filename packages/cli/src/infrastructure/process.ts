@@ -144,7 +144,10 @@ export async function runStreamingCommand(input: {
     await outputFinished;
     if (timedOut && ownedProcessGroupExists(pid) !== false) {
       await forceCompleted;
-      await waitForOwnedProcessGroupExit(pid);
+      // After group-directed SIGKILL is issued, kill(-pgid, 0) can continue to
+      // observe unreaped zombies. In a nested PID namespace, reaping may depend
+      // on this command returning. Bound output closure separately instead of
+      // turning kernel reaping lag into an unavailable Runtime observation.
     }
     if (outputDrainForced) {
       throw new Error(
@@ -157,17 +160,6 @@ export async function runStreamingCommand(input: {
     if (forceTimer) clearTimeout(forceTimer);
     if (drainTimer) clearTimeout(drainTimer);
     removeSignalForwarding();
-  }
-}
-
-async function waitForOwnedProcessGroupExit(pid: number): Promise<void> {
-  if (process.platform === 'win32') return;
-  const deadline = Date.now() + PROCESS_OUTPUT_DRAIN_MS;
-  while (ownedProcessGroupExists(pid)) {
-    if (Date.now() >= deadline) {
-      throw new Error(`Command process group ${pid} remained alive after forced termination.`);
-    }
-    await new Promise((resolve) => setTimeout(resolve, 10));
   }
 }
 
