@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import {
   existsSync,
@@ -14,6 +14,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Readable } from 'node:stream';
 import test from 'node:test';
+import { fileURLToPath } from 'node:url';
 
 import type {
   DelegationPrepareDocument,
@@ -35,6 +36,12 @@ import {
   resolveHumanChoice,
   reviseVerificationPlan,
 } from '../src/workflow/delegation.ts';
+
+const hangingDescendantFixture = fileURLToPath(
+  new URL('./fixtures/hanging-descendant.mjs', import.meta.url),
+);
+const cliEntrypoint = fileURLToPath(new URL('../src/index.ts', import.meta.url));
+const workspaceRoot = fileURLToPath(new URL('../../..', import.meta.url));
 
 test('prepare publishes no task until baseline observation and immutable artifacts are complete', async () => {
   const root = createRepository();
@@ -193,6 +200,124 @@ test('collect holds the worktree lease while external checks run but does not ho
     assert.equal(collected.status, 'facts-collected');
     assert.equal(existsSync(join(root, '.stetra', 'worktree-operation.lock')), false);
   } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('collect publishes timeout facts, continues later checks, and releases its lease after terminating descendants', async () => {
+  const root = createRepository();
+  const pidPath = join(tmpdir(), `stetra-collect-descendant-${randomUUID()}.pid`);
+  try {
+    const document = prepareDocument({
+      baseline: 'unknown',
+      argv: [process.execPath, hangingDescendantFixture, pidPath],
+    });
+    document.executionBudget.checkTimeoutMs = 1_000;
+    document.checks!.push({
+      key: 'after-timeout',
+      rationale: 'Prove that collection continues after recording a timeout.',
+      execution: {
+        preparation: [],
+        assertion: { argv: [process.execPath, '-e', 'process.exit(0)'] },
+      },
+      executionInputs: [],
+      baseline: { mode: 'unknown' },
+      verifierSelectors: [],
+    });
+    const prepared = await prepare(root, document);
+    const startedAt = performance.now();
+    const collected = await collect(root, prepared.taskId);
+
+    assert.equal(collected.status, 'facts-collected');
+    const timeoutCheck = collected.checks.find(
+      (check: { termination: { kind: string } }) => check.termination.kind === 'timeout',
+    );
+    const passedCheck = collected.checks.find(
+      (check: { status: string }) => check.status === 'passed',
+    );
+    assert.equal(timeoutCheck?.status, 'unavailable');
+    assert.deepEqual(passedCheck?.termination, { kind: 'exit', exitCode: 0 });
+    assert.equal(collected.checks.length, 2);
+    assert.ok(performance.now() - startedAt < 4_000);
+    assert.equal(existsSync(join(root, '.stetra', 'worktree-operation.lock')), false);
+    const descendantPid = Number(readFileSync(pidPath, 'utf8').trim());
+    await waitFor(() => !processExists(descendantPid));
+
+    const stored = readDelegationTask(root, prepared.taskId);
+    assert.equal(stored.projection.attempts[0].factCollectionId, collected.factCollectionId);
+    assert.equal(collected.hostAction.kind, 'retry-timed-out-check');
+
+    const retried = await collectDelegationFacts({
+      projectRoot: root,
+      taskId: prepared.taskId,
+      productVersion: '0.0.1',
+      retryChecks: [{
+        checkId: timeoutCheck.definitionId,
+        timeoutMs: 1_500,
+      }],
+    }) as any;
+    const retriedTimeout = retried.checks.find(
+      (check: { definitionId: string }) => check.definitionId === timeoutCheck.definitionId,
+    );
+    const retainedPass = retried.checks.find(
+      (check: { definitionId: string }) => check.definitionId === passedCheck.definitionId,
+    );
+    assert.equal(retried.collectionMode, 'timeout-retry');
+    assert.equal(retriedTimeout.termination.kind, 'timeout');
+    assert.equal(retriedTimeout.attemptCount, 2);
+    assert.equal(retainedPass.status, 'passed');
+    assert.equal(retainedPass.attemptCount, 1);
+    assert.equal(existsSync(join(root, '.stetra', 'worktree-operation.lock')), false);
+    const retryDescendantPid = Number(readFileSync(pidPath, 'utf8').trim());
+    await waitFor(() => !processExists(retryDescendantPid));
+  } finally {
+    rmSync(pidPath, { force: true });
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('SIGTERM stops the active frozen-check process tree and releases the collection lease', {
+  skip: process.platform === 'win32' ? 'POSIX signal forwarding behavior.' : false,
+}, async () => {
+  const root = createRepository();
+  const pidPath = join(tmpdir(), `stetra-signal-descendant-${randomUUID()}.pid`);
+  let collecting: ReturnType<typeof spawn> | undefined;
+  try {
+    const prepared = await prepare(root, prepareDocument({
+      baseline: 'unknown',
+      argv: [process.execPath, hangingDescendantFixture, pidPath],
+    }));
+    collecting = spawn(process.execPath, [
+      '--import', 'tsx', cliEntrypoint,
+      'change', 'collect', root,
+      '--task', prepared.taskId,
+      '--json',
+    ], {
+      cwd: workspaceRoot,
+      env: { ...process.env, NO_COLOR: '1' },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    let stderr = '';
+    collecting.stderr?.setEncoding('utf8');
+    collecting.stderr?.on('data', (chunk: string) => {
+      stderr += chunk;
+    });
+
+    await waitFor(() =>
+      existsSync(pidPath)
+      && existsSync(join(root, '.stetra', 'worktree-operation.lock')), 5_000);
+    const descendantPid = Number(readFileSync(pidPath, 'utf8').trim());
+    assert.equal(collecting.kill('SIGTERM'), true);
+    const [exitCode, signal] = await waitForChildExit(collecting, stderr);
+
+    assert.equal(exitCode, null);
+    assert.equal(signal, 'SIGTERM');
+    await waitFor(() => !processExists(descendantPid));
+    assert.equal(existsSync(join(root, '.stetra', 'worktree-operation.lock')), false);
+    assert.equal(readDelegationTask(root, prepared.taskId).projection.attempts[0].factCollectionId, undefined);
+  } finally {
+    if (collecting?.exitCode === null && collecting.signalCode === null) collecting.kill('SIGKILL');
+    rmSync(pidPath, { force: true });
     rmSync(root, { recursive: true, force: true });
   }
 });
@@ -2043,10 +2168,36 @@ function git(root: string, args: string[]): void {
   execFileSync('git', ['-C', root, ...args], { stdio: 'pipe' });
 }
 
-async function waitFor(predicate: () => boolean): Promise<void> {
-  const deadline = Date.now() + 2_000;
+async function waitFor(predicate: () => boolean, timeoutMs = 2_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
   while (!predicate()) {
     if (Date.now() >= deadline) throw new Error('Timed out waiting for workflow state.');
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
+}
+
+function processExists(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code !== 'ESRCH';
+  }
+}
+
+function waitForChildExit(
+  child: ReturnType<typeof spawn>,
+  stderr: string,
+): Promise<[number | null, NodeJS.Signals | null]> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      child.removeListener('exit', onExit);
+      reject(new Error(`Collect did not stop after SIGTERM. ${stderr}`));
+    }, 5_000);
+    const onExit = (exitCode: number | null, signal: NodeJS.Signals | null) => {
+      clearTimeout(timer);
+      resolve([exitCode, signal]);
+    };
+    child.once('exit', onExit);
+  });
 }
