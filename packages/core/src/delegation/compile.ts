@@ -1092,7 +1092,7 @@ function validateExecutionBudget(value: unknown, issues: ValidationIssue[]): Exe
     issues.push(issue('execution-budget-invalid', 'executionBudget', 'Execution budget must be an object.'));
     return undefined;
   }
-  rejectExtraKeys(value, ['checkTimeoutMs', 'maxDeliveryRepairs'], 'executionBudget', issues);
+  rejectExtraKeys(value, ['checkTimeoutMs', 'maxDeliveryRepairs', 'timeoutRetry'], 'executionBudget', issues);
   if (!Number.isInteger(value.checkTimeoutMs) || Number(value.checkTimeoutMs) < 1_000
     || Number(value.checkTimeoutMs) > 3_600_000) {
     issues.push(issue('check-timeout-budget-invalid', 'executionBudget.checkTimeoutMs', 'Check timeout must be an integer from 1000 through 3600000 milliseconds.'));
@@ -1101,10 +1101,55 @@ function validateExecutionBudget(value: unknown, issues: ValidationIssue[]): Exe
     || Number(value.maxDeliveryRepairs) > 5) {
     issues.push(issue('repair-budget-invalid', 'executionBudget.maxDeliveryRepairs', 'Maximum delivery repairs must be an integer from 0 through 5.'));
   }
+  let timeoutRetry: ExecutionBudget['timeoutRetry'] | undefined;
+  if (!isRecord(value.timeoutRetry)) {
+    issues.push(issue('timeout-retry-budget-invalid', 'executionBudget.timeoutRetry', 'Timeout retry budget must be an object.'));
+  } else if (value.timeoutRetry.mode === 'disabled') {
+    rejectExtraKeys(value.timeoutRetry, ['mode'], 'executionBudget.timeoutRetry', issues);
+    timeoutRetry = { mode: 'disabled' };
+  } else if (value.timeoutRetry.mode === 'bounded') {
+    rejectExtraKeys(
+      value.timeoutRetry,
+      ['mode', 'maxRetriesPerVerifier', 'maxTimeoutMs'],
+      'executionBudget.timeoutRetry',
+      issues,
+    );
+    if (!Number.isInteger(value.timeoutRetry.maxRetriesPerVerifier)
+      || Number(value.timeoutRetry.maxRetriesPerVerifier) < 1
+      || Number(value.timeoutRetry.maxRetriesPerVerifier) > 5) {
+      issues.push(issue(
+        'timeout-retry-count-invalid',
+        'executionBudget.timeoutRetry.maxRetriesPerVerifier',
+        'Maximum timeout retries per logical verifier must be an integer from 1 through 5.',
+      ));
+    }
+    if (!Number.isInteger(value.timeoutRetry.maxTimeoutMs)
+      || Number(value.timeoutRetry.maxTimeoutMs) < 1_000
+      || Number(value.timeoutRetry.maxTimeoutMs) > 3_600_000
+      || Number(value.timeoutRetry.maxTimeoutMs) < Number(value.checkTimeoutMs)) {
+      issues.push(issue(
+        'timeout-retry-maximum-invalid',
+        'executionBudget.timeoutRetry.maxTimeoutMs',
+        'Maximum timeout retry duration must be an integer from the initial check timeout through 3600000 milliseconds.',
+      ));
+    }
+    timeoutRetry = {
+      mode: 'bounded',
+      maxRetriesPerVerifier: Number(value.timeoutRetry.maxRetriesPerVerifier),
+      maxTimeoutMs: Number(value.timeoutRetry.maxTimeoutMs),
+    };
+  } else {
+    issues.push(issue(
+      'timeout-retry-mode-invalid',
+      'executionBudget.timeoutRetry.mode',
+      'Timeout retry mode must be disabled or bounded.',
+    ));
+  }
   if (issues.length !== before) return undefined;
   return {
     checkTimeoutMs: Number(value.checkTimeoutMs),
     maxDeliveryRepairs: Number(value.maxDeliveryRepairs),
+    timeoutRetry: timeoutRetry!,
   };
 }
 

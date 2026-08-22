@@ -193,41 +193,13 @@ function appendDeveloperDecisionBrief(
         `${colors.cyan('•')} ${String(condition.statement ?? '')} — ${String(condition.finding.status ?? 'unknown')}`,
         `  ${String(condition.finding.summary ?? '')}`,
       );
-      if (!Array.isArray(condition.obligations)) continue;
-      for (const obligation of condition.obligations) {
-        if (!isRecord(obligation) || !isRecord(obligation.finding)
-          || !isRecord(obligation.evidenceBoundary)) continue;
+      if (!Array.isArray(condition.evidence)) continue;
+      for (const obligation of condition.evidence) {
+        if (!isRecord(obligation)) continue;
         lines.push(
-          `  ${colors.cyan('↳')} ${String(obligation.statement ?? '')} — ${String(obligation.finding.status ?? 'unknown')}`,
-          `    ${String(obligation.finding.conclusion ?? '')}`,
+          `  ${colors.cyan('↳')} ${String(obligation.statement ?? '')} — ${String(obligation.finding ?? 'unknown')}`,
+          `    Evidence path: ${String(obligation.evidencePath ?? 'unknown')}; counter-evidence: ${String(obligation.counterEvidenceCount ?? 0)}`,
         );
-        if (isRecord(obligation.evidencePath)) {
-          lines.push(`    Evidence path: ${String(obligation.evidencePath.status ?? 'unknown')}`);
-          if (Array.isArray(obligation.evidencePath.gaps)) {
-            for (const gap of obligation.evidencePath.gaps) {
-              if (isRecord(gap)) lines.push(`    Assurance gap: ${String(gap.kind)} — ${String(gap.reason)}`);
-            }
-          }
-        }
-        if (isRecord(obligation.evidenceBoundary.coverage)) {
-          const coverage = obligation.evidenceBoundary.coverage;
-          lines.push(`    Evidence coverage: ${String(coverage.status ?? 'unknown')} — ${String(coverage.rationale ?? '')}`);
-          if (Array.isArray(coverage.gaps)) {
-            for (const gap of coverage.gaps) lines.push(`    Uncovered: ${String(gap)}`);
-          }
-        }
-        const findings = obligation.evidenceBoundary.challengeFindings;
-        if (!Array.isArray(findings)) continue;
-        for (const finding of findings) {
-          if (!isRecord(finding) || !Array.isArray(finding.counterEvidence)) continue;
-          for (const counterEvidence of finding.counterEvidence) {
-            if (isRecord(counterEvidence)) {
-              lines.push(
-                `    Challenge counter-evidence [${String(counterEvidence.provenance ?? 'agent-judgment')}; ${String(counterEvidence.reproduction ?? 'unknown')}]: ${String(counterEvidence.statement ?? '')}`,
-              );
-            }
-          }
-        }
       }
     }
   }

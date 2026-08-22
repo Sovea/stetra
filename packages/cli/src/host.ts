@@ -12,6 +12,12 @@ export {
   type ChallengeRunStopObservation,
 } from './host/challenge-lifecycle.ts';
 export {
+  executeHostChallenge,
+  type ExecuteHostChallengeOptions,
+  type HostChallengerSession,
+  type NativeChallengeHostAdapter,
+} from './host/challenge-execution.ts';
+export {
   submitHostAction,
   type SubmitHostActionOptions,
 } from './host/submission.ts';

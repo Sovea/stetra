@@ -301,6 +301,7 @@ export async function prepareDelegationTask(options: {
       verificationPlanId: compiled.contract.verificationPlanId,
       effectiveContractId: compiled.contract.effectiveContractId,
       executionBudget: compiled.executionBudget!,
+      timeoutRetryUsage: [],
       currentAttemptId: attempt.attemptId,
       attempts: [attempt],
       challengeIds: [],
@@ -452,6 +453,7 @@ export async function collectDelegationFacts(options: {
       );
       let factsBase: Omit<FactBundle, 'factCollectionId'>;
       let newArtifactRefs: string[] = [];
+      let retriedVerifierIds: string[] = [];
 
       if (retries.length) {
         collectionState.mode = 'timeout-retry';
@@ -474,7 +476,13 @@ export async function collectDelegationFacts(options: {
           !== verificationInputSetFingerprint(priorFacts.currentExecutionInputs)) {
           throw usageError('A declared verification execution input changed after collection; run a full collect instead of retrying one check.');
         }
-        const retryPlan = validateTimeoutRetries(retries, definitions, priorFacts.checks);
+        const retryPlan = validateTimeoutRetries(
+          retries,
+          definitions,
+          priorFacts.checks,
+          task,
+        );
+        retriedVerifierIds = retryPlan.map((item) => item.definition.verifierId);
         const retried = await runFrozenChecks({
           projectRoot: task.projectRoot,
           executions: retryPlan.map(({ definition, timeoutMs, previous }) => ({
@@ -618,6 +626,10 @@ export async function collectDelegationFacts(options: {
         projection: {
           ...cleared,
           attempts,
+          timeoutRetryUsage: incrementTimeoutRetryUsage(
+            task.projection.timeoutRetryUsage,
+            retriedVerifierIds,
+          ),
         },
         artifactRefs: unique(newArtifactRefs),
         stagedArtifactsDirectory,
@@ -1431,6 +1443,7 @@ export function explainDelegationTask(options: {
   projectRoot: string;
   taskId: string;
   section?: string;
+  requestId?: string;
   hostAttestations?: HostAttestationProvider;
 }) {
   const task = loadTask(options.projectRoot, options.taskId);
@@ -1459,6 +1472,31 @@ export function explainDelegationTask(options: {
         task,
         Boolean(options.hostAttestations?.consumeChallengeRun),
       ),
+    };
+  }
+  if (section === 'challenge-request') {
+    if (!options.requestId) {
+      throw usageError('challenge-request inspection requires --request <request-id>.');
+    }
+    const hostAction = currentTaskHostAction(
+      task,
+      Boolean(options.hostAttestations?.consumeChallengeRun),
+    );
+    if (
+      !hostAction
+      || hostAction.kind !== 'perform-independent-challenge'
+      || !hostAction.challengeExecutionRequest
+      || !hostAction.challengeExecutionPacket
+      || hostAction.challengeExecutionRequest.requestId !== options.requestId
+    ) {
+      throw usageError('The requested Challenge Execution Request is not the current task action.');
+    }
+    return {
+      ...common,
+      requestId: hostAction.challengeExecutionRequest.requestId,
+      challengeExecutionPacketFingerprint:
+        hostAction.challengeExecutionRequest.bindsTo.challengeExecutionPacketFingerprint,
+      challengeExecutionPacket: hostAction.challengeExecutionPacket,
     };
   }
   if (section === 'handoff-draft') {
@@ -1508,6 +1546,37 @@ export function explainDelegationTask(options: {
         : null,
     };
   }
+  if (section === 'decision-packet') {
+    if (!task.projection.currentHandoffId) {
+      throw usageError('Decision Packet inspection requires a current Cognitive Handoff.');
+    }
+    const contract = readContract(task);
+    const facts = readCurrentFacts(task);
+    const challenges = readCurrentChallenges(task);
+    const handoff = readCurrentHandoff(task);
+    const evaluation = readJsonArtifact<HandoffEvaluation>(
+      taskArtifactPath(task.taskDirectory, handoffEvaluationPath(handoff.handoffId)),
+      'handoff evaluation',
+    );
+    return {
+      ...common,
+      decisionPacket: buildDecisionPacket(
+        contract,
+        facts,
+        readEvidenceDispositions(task),
+        challenges,
+        handoff,
+        evaluation,
+        readHumanResolutions(task),
+        task.projection.decisionId
+          ? readJsonArtifact<HumanDecision>(
+              taskArtifactPath(task.taskDirectory, decisionPath(task.projection.decisionId)),
+              'Human Decision',
+            )
+          : undefined,
+      ),
+    };
+  }
   if (section === 'decision') {
     return {
       ...common,
@@ -1518,12 +1587,19 @@ export function explainDelegationTask(options: {
   }
   if (section === 'events') return { ...common, events: task.events };
   if (section !== 'index') {
-    throw usageError('Invalid explain section; use index, action, contract, baseline, handoff-draft, attempts, challenge, revision, handoff, decision, or events.');
+    throw usageError('Invalid explain section; use index, action, challenge-request, contract, baseline, handoff-draft, attempts, challenge, revision, handoff, decision-packet, decision, or events.');
   }
   return {
     ...common,
     availableSections: [
       { name: 'action', available: deriveTaskState(task).decisionStatus === 'pending' },
+      {
+        name: 'challenge-request',
+        available: currentTaskHostAction(
+          task,
+          Boolean(options.hostAttestations?.consumeChallengeRun),
+        )?.kind === 'perform-independent-challenge',
+      },
       { name: 'contract', available: true },
       { name: 'baseline', available: true },
       { name: 'handoff-draft', available: Boolean(readAttemptFactsIfPresent(task, task.projection.currentAttemptId)) },
@@ -1531,6 +1607,7 @@ export function explainDelegationTask(options: {
       { name: 'challenge', available: task.projection.challengeIds.length > 0, count: task.projection.challengeIds.length },
       { name: 'revision', available: task.projection.verificationRevisionIds.length > 0, count: task.projection.verificationRevisionIds.length },
       { name: 'handoff', available: Boolean(task.projection.currentHandoffId) },
+      { name: 'decision-packet', available: Boolean(task.projection.currentHandoffId) },
       { name: 'decision', available: Boolean(task.projection.decisionId) },
       { name: 'events', available: true, count: task.events.length },
     ],
@@ -1732,6 +1809,7 @@ function currentTaskHostAction(task: LoadedTask, challengeAttestationAvailable =
       challengeAttestationAvailable,
     }),
     pendingChallengeObligationIds: pending,
+    timeoutRetryLimits: timeoutRetryLimits(task, facts),
   });
 }
 
@@ -1944,15 +2022,75 @@ function materializeHandoff(
   contract: TaskContract,
   facts: FactBundle,
 ): CognitiveHandoff {
+  const conditionByKey = new Map(contract.adoptionConditions.map((condition) =>
+    [condition.key, condition] as const));
+  const obligationByKey = new Map(contract.adoptionConditions.flatMap((condition) =>
+    condition.evidenceObligations.map((obligation) => [
+      `${condition.key}\u0000${obligation.key}`,
+      obligation,
+    ] as const)));
+  const conditionId = (key: string, path: string) => {
+    const condition = conditionByKey.get(key);
+    if (!condition) throw inputError(`${path} references unknown Condition key ${key}.`);
+    return condition.id;
+  };
+  const obligationId = (conditionKey: string, obligationKey: string, path: string) => {
+    const obligation = obligationByKey.get(`${conditionKey}\u0000${obligationKey}`);
+    if (!obligation) {
+      throw inputError(`${path} references unknown Evidence Obligation key ${conditionKey}/${obligationKey}.`);
+    }
+    return obligation.id;
+  };
   const projection = {
     protocol: DELEGATION_PROTOCOL,
     schemaVersion: DELEGATION_SCHEMA_VERSION,
     handoffId: `handoff:${randomUUID()}`,
-    ...source,
+    actualChange: source.actualChange,
+    obligationConclusions: source.obligationConclusions.map((conclusion, index) => ({
+      obligationId: obligationId(
+        conclusion.conditionKey,
+        conclusion.obligationKey,
+        `obligationConclusions[${index}]`,
+      ),
+      status: conclusion.status,
+      evidence: conclusion.evidence,
+      evidenceCoverage: conclusion.evidenceCoverage,
+      falsification: conclusion.falsification,
+      counterEvidence: conclusion.counterEvidence,
+      conclusion: conclusion.conclusion,
+    })),
+    conditionConclusions: source.conditionConclusions.map((conclusion, index) => ({
+      conditionId: conditionId(conclusion.conditionKey, `conditionConclusions[${index}]`),
+      status: conclusion.status,
+      summary: conclusion.summary,
+    })),
+    residualUnknowns: source.residualUnknowns.map((unknown, index) => ({
+      conditionIds: unknown.conditionKeys.map((key) =>
+        conditionId(key, `residualUnknowns[${index}].conditionKeys`)),
+      obligationIds: unknown.obligationKeys.map((key) => obligationId(
+        key.conditionKey,
+        key.obligationKey,
+        `residualUnknowns[${index}].obligationKeys`,
+      )),
+      statement: unknown.statement,
+      adoptionImpact: unknown.adoptionImpact,
+      nextAction: unknown.nextAction,
+      evidence: unknown.evidence,
+    })),
     reviewQuestions: source.reviewQuestions.map((question) => ({
       id: `review:${randomUUID()}`,
-      ...question,
+      conditionIds: question.conditionKeys.map((key) =>
+        conditionId(key, 'reviewQuestions[].conditionKeys')),
+      obligationIds: question.obligationKeys.map((key) => obligationId(
+        key.conditionKey,
+        key.obligationKey,
+        'reviewQuestions[].obligationKeys',
+      )),
+      question: question.question,
+      adoptionImpact: question.adoptionImpact,
+      evidence: question.evidence,
     })),
+    recommendation: source.recommendation,
     effectiveContractId: contract.effectiveContractId,
     attemptId: facts.attemptId,
     factCollectionId: facts.factCollectionId,
@@ -2217,6 +2355,7 @@ function validateTimeoutRetries(
   retries: CheckTimeoutRetry[],
   definitions: Extract<TaskContract['verificationPlan'], { mode: 'checks' }>['definitions'],
   previousChecks: CheckFact[],
+  task: LoadedTask,
 ) {
   const definitionsById = new Map(definitions.map((definition) =>
     [definition.definitionId, definition]));
@@ -2237,8 +2376,52 @@ function validateTimeoutRetries(
     if (retry.timeoutMs <= latest.timeoutMs) {
       throw usageError(`Retry timeout for ${retry.checkId} must exceed ${latest.timeoutMs} ms.`);
     }
+    const policy = task.projection.executionBudget.timeoutRetry;
+    if (policy.mode === 'disabled') {
+      throw usageError('Timeout retries are disabled by the prepared task execution budget.');
+    }
+    if (taskTimeoutRetryCount(task, definition.verifierId) >= policy.maxRetriesPerVerifier) {
+      throw usageError(`Logical verifier ${definition.verifierId} exhausted its task-wide timeout retry budget.`);
+    }
+    if (retry.timeoutMs > policy.maxTimeoutMs) {
+      throw usageError(
+        `Retry timeout for ${retry.checkId} must not exceed the task-wide maximum ${policy.maxTimeoutMs} ms.`,
+      );
+    }
     return { definition, previous, timeoutMs: retry.timeoutMs };
   });
+}
+
+function timeoutRetryLimits(task: LoadedTask, facts: FactBundle): Map<string, number> {
+  const policy = task.projection.executionBudget.timeoutRetry;
+  if (policy.mode === 'disabled') return new Map();
+  return new Map(facts.checks.flatMap((check) => {
+    const latest = latestCheckAttempt(check);
+    if (
+      latest.termination.kind !== 'timeout'
+      || latest.status !== 'unavailable'
+      || latest.timeoutMs >= policy.maxTimeoutMs
+      || taskTimeoutRetryCount(task, check.verifierId) >= policy.maxRetriesPerVerifier
+    ) return [];
+    return [[check.definitionId, policy.maxTimeoutMs] as const];
+  }));
+}
+
+function taskTimeoutRetryCount(task: LoadedTask, verifierId: string): number {
+  return task.projection.timeoutRetryUsage.find((item) => item.verifierId === verifierId)?.count ?? 0;
+}
+
+function incrementTimeoutRetryUsage(
+  current: TaskProjection['timeoutRetryUsage'],
+  verifierIds: string[],
+): TaskProjection['timeoutRetryUsage'] {
+  if (!verifierIds.length) return current;
+  const counts = new Map(current.map((item) => [item.verifierId, item.count]));
+  for (const verifierId of verifierIds) {
+    counts.set(verifierId, (counts.get(verifierId) ?? 0) + 1);
+  }
+  return [...counts].map(([verifierId, count]) => ({ verifierId, count }))
+    .sort((left, right) => left.verifierId.localeCompare(right.verifierId));
 }
 
 function assertCheckTimeout(value: number, label: string): void {

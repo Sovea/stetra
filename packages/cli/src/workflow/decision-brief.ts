@@ -40,35 +40,11 @@ export interface DeveloperDecisionPrimary {
       status: DecisionPacket['conditions'][number]['agentFinding']['status'];
       summary: string;
     };
-    obligations: Array<{
+    evidence: Array<{
       statement: string;
-      finding: {
-        status: DecisionPacket['conditions'][number]['obligations'][number]['agentFinding']['status'];
-        conclusion: string;
-      };
-      evidencePath: {
-        status: DecisionPacket['conditions'][number]['obligations'][number]['evidencePath']['status'];
-        gaps: Array<{
-          kind: DecisionPacket['conditions'][number]['obligations'][number]['evidencePath']['strategies'][number]['kind'];
-          reason: DecisionPacket['conditions'][number]['obligations'][number]['evidencePath']['strategies'][number]['reason'];
-        }>;
-      };
-      evidenceBoundary: {
-        failureHypothesis: string;
-        observedResult: string;
-        coverage: DecisionPacket['conditions'][number]['obligations'][number]['agentFinding']['evidenceCoverage'];
-        supportingEvidenceCount: number;
-        counterEvidenceCount: number;
-        challengeFindings: Array<{
-          outcome: DecisionPacket['evidenceJudgments']['challenges'][number]['outcome'];
-          conclusion: string;
-          counterEvidence: Array<{
-            statement: string;
-            provenance: DecisionPacket['evidenceJudgments']['challenges'][number]['counterEvidence'][number]['provenance'];
-            reproduction: DecisionPacket['evidenceJudgments']['challenges'][number]['counterEvidence'][number]['reproduction'];
-          }>;
-        }>;
-      };
+      finding: DecisionPacket['conditions'][number]['obligations'][number]['agentFinding']['status'];
+      evidencePath: DecisionPacket['conditions'][number]['obligations'][number]['evidencePath']['status'];
+      counterEvidenceCount: number;
     }>;
   }>;
   blockers: Array<{
@@ -197,6 +173,10 @@ interface DeveloperDecisionDetails {
 
 export interface DeveloperDecisionBrief {
   primary: DeveloperDecisionPrimary;
+  details: {
+    command: { argv: string[] };
+    sections: DecisionPacket['detailSections'];
+  };
 }
 
 export interface DeveloperDecisionIssue {
@@ -361,7 +341,18 @@ export function buildDeveloperDecisionBrief(input: {
     },
     detailSections: input.packet.detailSections,
   };
-  return { primary: primaryBrief(details) };
+  return {
+    primary: primaryBrief(details),
+    details: {
+      command: {
+        argv: [
+          'stetra', 'change', 'explain', '.', '--task', input.task.taskId,
+          '--section', 'decision-packet', '--json',
+        ],
+      },
+      sections: input.packet.detailSections,
+    },
+  };
 }
 
 function primaryBrief(details: DeveloperDecisionDetails): DeveloperDecisionPrimary {
@@ -380,31 +371,11 @@ function primaryBrief(details: DeveloperDecisionDetails): DeveloperDecisionPrima
       statement: condition.statement,
       criticality: condition.criticality,
       finding: { status: condition.status, summary: condition.summary },
-      obligations: condition.obligations.map((obligation) => ({
+      evidence: condition.obligations.map((obligation) => ({
         statement: obligation.statement,
-        finding: { status: obligation.status, conclusion: obligation.conclusion },
-        evidencePath: {
-          status: obligation.evidencePath.status,
-          gaps: obligation.evidencePath.strategies
-            .filter((strategy) => !['completed', 'not-triggered'].includes(strategy.status))
-            .map((strategy) => ({ kind: strategy.kind, reason: strategy.reason })),
-        },
-        evidenceBoundary: {
-          failureHypothesis: obligation.evidenceBoundary.failureHypothesis,
-          observedResult: obligation.evidenceBoundary.observedResult,
-          coverage: obligation.evidenceBoundary.coverage,
-          supportingEvidenceCount: obligation.evidenceBoundary.supportingEvidenceCount,
-          counterEvidenceCount: obligation.evidenceBoundary.counterEvidenceCount,
-          challengeFindings: obligation.evidenceBoundary.challengeFindings.map((finding) => ({
-            outcome: finding.outcome,
-            conclusion: finding.conclusion,
-            counterEvidence: finding.counterEvidence.map((item) => ({
-              statement: item.statement,
-              provenance: item.provenance,
-              reproduction: item.reproduction,
-            })),
-          })),
-        },
+        finding: obligation.status,
+        evidencePath: obligation.evidencePath.status,
+        counterEvidenceCount: obligation.evidenceBoundary.counterEvidenceCount,
       })),
     })),
     blockers: details.decisionIssues.map((issue) => ({

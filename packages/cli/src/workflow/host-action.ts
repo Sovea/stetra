@@ -52,6 +52,9 @@ export interface ChallengeExecutionRequest {
     schema: 'challenge-round-document';
     source: 'challengeExecutionPacket.draft';
   };
+  contextRetrieval: {
+    command: { argv: string[] };
+  };
   dispatchPrompt: string;
 }
 
@@ -177,14 +180,22 @@ export function collectedHostAction(input: {
   challengePacket?: ChallengeExecutionPacket;
   handoffPacket: AuthoringPacket;
   pendingChallengeObligationIds: string[];
+  timeoutRetryLimits: Map<string, number>;
 }): HostAction {
   const timedOut = input.facts.checks.filter((check) =>
-    latestAttempt(check).termination.kind === 'timeout');
+    latestAttempt(check).termination.kind === 'timeout'
+    && input.timeoutRetryLimits.has(check.definitionId));
   if (timedOut.length) {
     const argv = taskCommand('collect', input.taskId).argv;
     for (const check of timedOut) {
       const latest = latestAttempt(check);
-      argv.splice(-1, 0, '--retry-check', `${check.definitionId}=<integer-greater-than-${latest.timeoutMs}>`);
+      const maximum = input.timeoutRetryLimits.get(check.definitionId)!;
+      argv.splice(
+        -1,
+        0,
+        '--retry-check',
+        `${check.definitionId}=<integer-greater-than-${latest.timeoutMs}-and-at-most-${maximum}>`,
+      );
     }
     return {
       kind: 'retry-timed-out-check',
@@ -371,10 +382,17 @@ function challengeInputAction(
     },
   };
   const requestId = stableFingerprint(requestBody);
+  const contextCommand = {
+    argv: [
+      'stetra', 'change', 'explain', '.', '--task', taskId,
+      '--section', 'challenge-request', '--request', requestId, '--json',
+    ],
+  };
   const dispatchPrompt = [
     `Stetra task: ${taskId}`,
     `Challenge request: ${requestId}`,
-    'Use the attached challengeExecutionPacket exactly as supplied.',
+    `Load the exact current Challenge Execution Packet with: ${contextCommand.argv.join(' ')}`,
+    'Verify that the returned requestId and packet fingerprint match this request before inspecting the repository.',
     `Submit only its completed Challenge Round JSON to: stetra change challenge . --task ${taskId} --input - --json`,
   ].join('\n');
   return {
@@ -394,6 +412,7 @@ function challengeInputAction(
     challengeExecutionRequest: {
       requestId,
       ...requestBody,
+      contextRetrieval: { command: contextCommand },
       dispatchPrompt,
     },
     limitedHandoff: {

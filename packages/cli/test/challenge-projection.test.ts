@@ -168,7 +168,11 @@ function contractFixture(): TaskContract {
       },
     ],
     hostPolicyRequirements: [],
-    executionBudget: { checkTimeoutMs: 300_000, maxDeliveryRepairs: 1 },
+    executionBudget: {
+      checkTimeoutMs: 300_000,
+      maxDeliveryRepairs: 1,
+      timeoutRetry: { mode: 'bounded', maxRetriesPerVerifier: 1, maxTimeoutMs: 900_000 },
+    },
     checks: [
       check('target-check', 'test/target.test.ts'),
       check('other-check', 'test/other.test.ts'),

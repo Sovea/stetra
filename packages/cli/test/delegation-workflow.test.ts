@@ -20,6 +20,7 @@ import type {
   DelegationPrepareDocument,
   EvidenceDispositionDocument,
 } from '../src/schemas/delegation.ts';
+import { executeHostChallenge } from '../src/host/challenge-execution.ts';
 import { HostChallengeLifecycle } from '../src/host/challenge-lifecycle.ts';
 import type { HostAttestationProvider } from '../src/runtime-context.ts';
 import { taskIdForPrepareRequest } from '../src/protocol.ts';
@@ -267,9 +268,32 @@ test('collect publishes timeout facts, continues later checks, and releases its 
     assert.equal(retriedTimeout.attemptCount, 2);
     assert.equal(retainedPass.status, 'passed');
     assert.equal(retainedPass.attemptCount, 1);
+    assert.equal(retried.hostAction.kind, 'diagnose-collected-evidence');
+    assert.deepEqual(readDelegationTask(root, prepared.taskId).projection.timeoutRetryUsage, [{
+      verifierId: retriedTimeout.verifierId,
+      count: 1,
+    }]);
     assert.equal(existsSync(join(root, '.stetra', 'worktree-operation.lock')), false);
     const retryDescendantPid = Number(readFileSync(pidPath, 'utf8').trim());
     await waitFor(() => !processExists(retryDescendantPid));
+
+    const diagnosed = await diagnose(
+      root,
+      prepared.taskId,
+      disposition(timeoutCheck.definitionId, 'implementation'),
+    );
+    assert.equal(diagnosed.successorAttemptId, 'attempt:2');
+    const recollected = await collect(root, prepared.taskId);
+    assert.equal(recollected.checks[0].termination.kind, 'timeout');
+    assert.equal(
+      recollected.hostAction.kind,
+      'diagnose-collected-evidence',
+      'a delivery repair must not reset the task-wide logical-verifier retry budget',
+    );
+    assert.equal(
+      readDelegationTask(root, prepared.taskId).projection.timeoutRetryUsage[0].count,
+      1,
+    );
   } finally {
     rmSync(pidPath, { force: true });
     rmSync(root, { recursive: true, force: true });
@@ -830,7 +854,8 @@ test('required Challenge remains preferred after evidence diagnosis', async () =
         preservedInvariants: [], failureAndRecovery: [], importantEffects: [], materialTradeoffs: [],
       },
       obligationConclusions: [{
-        obligationId: obligation.id,
+        conditionKey: condition.key,
+        obligationKey: obligation.key,
         status: 'unknown',
         evidence: [],
         evidenceCoverage: {
@@ -846,14 +871,14 @@ test('required Challenge remains preferred after evidence diagnosis', async () =
         conclusion: 'The obligation remains unresolved.',
       }],
       conditionConclusions: [{
-        conditionId: condition.id,
+        conditionKey: condition.key,
         status: 'unknown',
         summary: 'The adoption condition remains unresolved.',
       }],
       residualUnknowns: [],
       reviewQuestions: [{
-        conditionIds: [condition.id],
-        obligationIds: [obligation.id],
+        conditionKeys: [condition.key],
+        obligationKeys: [{ conditionKey: condition.key, obligationKey: obligation.key }],
         question: 'Does the changed behavior satisfy the intended boundary?',
         adoptionImpact: condition.adoptionRationale,
         evidence: [{ kind: 'check', id: collected.checks[0].definitionId }],
@@ -973,14 +998,15 @@ test('a Human correction creates a successor Attempt and preserves the prior dec
     const collected = await collect(root, prepared.taskId);
     const condition = prepared.taskContract.adoptionConditions[0];
     const obligation = condition.evidenceObligations[0];
-    const handedOff = await handoff(root, prepared.taskId, {
+    const handoffInput = {
       actualChange: {
         behavior: 'The first implementation is ready for review.',
         mechanism: ['The fixture source is updated directly.'],
         preservedInvariants: [], failureAndRecovery: [], importantEffects: [], materialTradeoffs: [],
       },
       obligationConclusions: [{
-        obligationId: obligation.id,
+        conditionKey: condition.key,
+        obligationKey: obligation.key,
         status: 'supported',
         evidence: [{ kind: 'check', id: collected.checks[0].definitionId }],
         evidenceCoverage: {
@@ -996,11 +1022,18 @@ test('a Human correction creates a successor Attempt and preserves the prior dec
         conclusion: 'The bounded observation supports this obligation.',
       }],
       conditionConclusions: [{
-        conditionId: condition.id, status: 'supported', summary: 'The obligation is supported.',
+        conditionKey: condition.key, status: 'supported', summary: 'The obligation is supported.',
       }],
       residualUnknowns: [], reviewQuestions: [],
       recommendation: { action: 'accept', rationale: 'The bounded evidence is current.', caveats: [] },
-    });
+    };
+    const unknownKeyInput = structuredClone(handoffInput);
+    unknownKeyInput.conditionConclusions[0].conditionKey = 'unknown-condition';
+    await assert.rejects(
+      handoff(root, prepared.taskId, unknownKeyInput),
+      /references unknown Condition key unknown-condition/,
+    );
+    const handedOff = await handoff(root, prepared.taskId, handoffInput);
     assert.equal(handedOff.status, 'handoff-ready');
     assert.equal(handedOff.hostAction.kind, 'present-handoff-and-await-human-decision');
     assert.equal(handedOff.hostAction.command, undefined);
@@ -1031,6 +1064,17 @@ test('a Human correction creates a successor Attempt and preserves the prior dec
     assert.equal(handedOff.hostAction.developerDecisionBrief.primary.requestedDecision.authority, 'human-decision');
     assert.equal(handedOff.hostAction.developerDecisionBrief.primary.conditions[0].finding.status, 'supported');
     assert.deepEqual(handedOff.hostAction.developerDecisionBrief.primary.blockers, []);
+    assert.deepEqual(handedOff.hostAction.developerDecisionBrief.details.command.argv, [
+      'stetra', 'change', 'explain', '.', '--task', prepared.taskId,
+      '--section', 'decision-packet', '--json',
+    ]);
+    const detailedPacket = explainDelegationTask({
+      projectRoot: root, taskId: prepared.taskId, section: 'decision-packet',
+    }) as any;
+    assert.equal(
+      detailedPacket.decisionPacket.conditions[0].id,
+      condition.id,
+    );
     const decided = await decide(root, prepared.taskId, {
       humanEvent: { content: 'Correct the wording without changing the current semantic contract.' },
       action: 'correction-requested',
@@ -1074,6 +1118,30 @@ test('a thin Host runs the bounded Challenger but preserves unverified direct re
       collected.hostAction.challengeExecutionRequest.agentProfile,
       'stetra-challenger',
     );
+    assert.match(
+      collected.hostAction.challengeExecutionRequest.dispatchPrompt,
+      /--section challenge-request --request sha256:/,
+    );
+    const retrieved = explainDelegationTask({
+      projectRoot: root,
+      taskId: prepared.taskId,
+      section: 'challenge-request',
+      requestId: collected.hostAction.challengeExecutionRequest.requestId,
+    }) as any;
+    assert.equal(
+      retrieved.challengeExecutionPacketFingerprint,
+      collected.hostAction.challengeExecutionRequest.bindsTo.challengeExecutionPacketFingerprint,
+    );
+    assert.deepEqual(
+      retrieved.challengeExecutionPacket,
+      collected.hostAction.challengeExecutionPacket,
+    );
+    assert.throws(() => explainDelegationTask({
+      projectRoot: root,
+      taskId: prepared.taskId,
+      section: 'challenge-request',
+      requestId: `sha256:${'0'.repeat(64)}`,
+    }), /not the current task action/);
     const guardedChallenge = await guardFinalResponse({
       projectRoot: root,
       taskId: prepared.taskId,
@@ -1143,7 +1211,8 @@ test('a thin Host runs the bounded Challenger but preserves unverified direct re
       conclusion.summary = 'The Agent finds the bounded condition supported by the cited evidence.';
     }
     draft.reviewQuestions.push({
-      conditionIds: [condition.id], obligationIds: [obligation.id],
+      conditionKeys: [condition.key],
+      obligationKeys: [{ conditionKey: condition.key, obligationKey: obligation.key }],
       question: 'Does the changed verifier reject the stated failure hypothesis?',
       adoptionImpact: condition.adoptionRationale,
       evidence: [{ kind: 'patch' }],
@@ -1174,7 +1243,7 @@ test('a thin Host runs the bounded Challenger but preserves unverified direct re
     assert.equal(handedOff.decisionPacket.conditions[0].agentFinding.status, 'supported');
     assert.equal(handedOff.decisionPacket.conditions[0].obligations[0].agentFinding.status, 'supported');
     assert.equal(handedOff.decisionPacket.conditions[0].obligations[0].evidencePath.status, 'unverified');
-    assert.equal(handedOff.hostAction.developerDecisionBrief.primary.conditions[0].obligations[0].evidencePath.status, 'unverified');
+    assert.equal(handedOff.hostAction.developerDecisionBrief.primary.conditions[0].evidence[0].evidencePath, 'unverified');
     const issue = handedOff.hostAction.developerDecisionBrief.primary.blockers.find(
       (item: { codes: string[] }) => item.codes.includes('challenge-independence-unverified'),
     );
@@ -1228,8 +1297,8 @@ test('unavailable fresh-context execution can degrade to an honest limited hando
     handoffDraft.conditionConclusions[0].status = 'unknown';
     handoffDraft.conditionConclusions[0].summary = 'The adoption condition requires direct Human inspection.';
     handoffDraft.reviewQuestions = [{
-      conditionIds: [condition.id],
-      obligationIds: [obligation.id],
+      conditionKeys: [condition.key],
+      obligationKeys: [{ conditionKey: condition.key, obligationKey: obligation.key }],
       question: 'Does the implementation survive the frozen failure hypothesis?',
       adoptionImpact: condition.adoptionRationale,
       evidence: [{ kind: 'check', id: collected.checks[0].definitionId }],
@@ -1389,8 +1458,10 @@ test('a bounded Challenge Execution Packet completes the persisted challenge-to-
     }
     const condition = prepared.taskContract.adoptionConditions[0];
     handoffDraft.reviewQuestions.push({
-      conditionIds: [condition.id],
-      obligationIds: condition.evidenceObligations.map((item: { id: string }) => item.id),
+      conditionKeys: [condition.key],
+      obligationKeys: condition.evidenceObligations.map((item: { key: string }) => ({
+        conditionKey: condition.key, obligationKey: item.key,
+      })),
       question: 'Does the changed verifier still distinguish the intended behavior?',
       adoptionImpact: condition.adoptionRationale,
       evidence: [
@@ -1408,6 +1479,65 @@ test('a bounded Challenge Execution Packet completes the persisted challenge-to-
     assert.ok(!handedOff.decisionPacket.attention.some((item: { codes: string[] }) =>
       item.codes.includes('challenge-independence-unverified')));
     assert.ok(readDelegationTask(root, prepared.taskId).projection.currentHandoffId);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('a native Host adapter executes, attests, submits, and closes one fresh Challenger context', async () => {
+  const root = createRepository();
+  let closed = false;
+  try {
+    const prepared = await prepare(root, prepareDocument({
+      baseline: 'unknown',
+      argv: [process.execPath, '-e', 'process.exit(0)'],
+      critical: true,
+    }));
+    writeFileSync(join(root, 'source.txt'), 'native challenge path\n', 'utf8');
+    const collected = await collect(root, prepared.taskId);
+    const action = collected.hostAction;
+    assert.equal(action.kind, 'perform-independent-challenge');
+    const round = structuredClone(action.challengeExecutionPacket.draft);
+    const result = round.results[0];
+    result.falsificationAttempt = 'A fresh Host-owned context inspected the exact packet and failure hypothesis.';
+    result.observedResult = 'The bounded failure hypothesis was not observed in the selected evidence.';
+    result.supportingEvidence = [{
+      statement: 'The frozen Runtime check supports the bounded observation.',
+      provenance: 'runtime-fact',
+      reproduction: 'runtime-recorded',
+      references: result.evidence.checks.map((id: string) => ({ kind: 'check', id })),
+    }];
+    markCoverageSufficient(result);
+    result.outcome = 'supported';
+    result.conclusion = 'The independent bounded challenge supports the obligation.';
+
+    const execution = await executeHostChallenge({
+      action,
+      projectRoot: root,
+      parentContextId: 'context:implementer',
+      adapter: {
+        provider: 'evaluation-runner',
+        provenance: 'evaluation-runner',
+        async evaluatePolicies() { return []; },
+        async startChallenge({ request }) {
+          assert.equal(request.dispatchPrompt, action.challengeExecutionRequest.dispatchPrompt);
+          return {
+            challengerContextId: 'context:native-challenger',
+            sourceSnapshotFingerprint: request.bindsTo.worktreeFingerprint,
+            async run(prompt) {
+              assert.equal(prompt, request.dispatchPrompt);
+              return round;
+            },
+            async close() { closed = true; },
+          };
+        },
+      },
+    });
+
+    assert.equal(execution.exitCode, 0);
+    assert.equal((execution.output as any).status, 'challenge-recorded');
+    assert.equal((execution.output as any).challenges[0].independence, 'host-attested');
+    assert.equal(closed, true);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -1783,8 +1913,10 @@ test('an adverse Challenge preserves its exact counter-evidence through Handoff 
     handoffDraft.conditionConclusions[0].summary = 'Persistent protection remains unresolved.';
     const condition = prepared.taskContract.adoptionConditions[0];
     handoffDraft.reviewQuestions.push({
-      conditionIds: [condition.id],
-      obligationIds: condition.evidenceObligations.map((item: { id: string }) => item.id),
+      conditionKeys: [condition.key],
+      obligationKeys: condition.evidenceObligations.map((item: { key: string }) => ({
+        conditionKey: condition.key, obligationKey: item.key,
+      })),
       question: 'Is the missing persistent boundary acceptable for adoption?',
       adoptionImpact: condition.adoptionRationale,
       evidence: [{ kind: 'challenge', id: challenged.challenges[0].id }],
@@ -1801,8 +1933,10 @@ test('an adverse Challenge preserves its exact counter-evidence through Handoff 
     assert.equal(recorded.counterEvidence[0].provenance, 'repository-inspection');
     assert.equal(recorded.counterEvidence[0].reproduction, 'agent-reported');
     assert.deepEqual(recorded.counterEvidence[0].references, [{ kind: 'check', id: checkId }]);
-    const finding = handedOff.hostAction.developerDecisionBrief.primary
-      .conditions[0].obligations[0].evidenceBoundary.challengeFindings[0];
+    const detailed = explainDelegationTask({
+      projectRoot: root, taskId: prepared.taskId, section: 'decision-packet',
+    }) as any;
+    const finding = detailed.decisionPacket.evidenceJudgments.challenges[0];
     assert.equal(finding.outcome, 'partial');
     assert.equal(finding.conclusion, challengeDraft.conclusion);
     assert.equal(finding.counterEvidence[0].statement, counterStatement);
@@ -1898,8 +2032,10 @@ test('verification revision preserves history and completes handoff against curr
     }
     const condition = prepared.taskContract.adoptionConditions[0];
     handoffDraft.reviewQuestions.push({
-      conditionIds: [condition.id],
-      obligationIds: condition.evidenceObligations.map((item: { id: string }) => item.id),
+      conditionKeys: [condition.key],
+      obligationKeys: condition.evidenceObligations.map((item: { key: string }) => ({
+        conditionKey: condition.key, obligationKey: item.key,
+      })),
       question: 'Does the execution rebinding preserve the intended verification boundary?',
       adoptionImpact: condition.adoptionRationale,
       evidence: [{ kind: 'check', id: second.checks[0].definitionId }],
@@ -1951,6 +2087,7 @@ function prepareDocument(options: {
   argv: string[];
   prepareRequestId?: string;
   maxRepairAttempts?: number;
+  timeoutRetry?: DelegationPrepareDocument['executionBudget']['timeoutRetry'];
   critical?: boolean;
   challengePolicy?: 'required' | 'fact-triggered';
   acceptanceSurfaceSelectors?: Array<{ kind: 'file' | 'tree'; path: string }>;
@@ -1993,6 +2130,11 @@ function prepareDocument(options: {
     executionBudget: {
       checkTimeoutMs: 300_000,
       maxDeliveryRepairs: options.maxRepairAttempts ?? 2,
+      timeoutRetry: options.timeoutRetry ?? {
+        mode: 'bounded',
+        maxRetriesPerVerifier: 1,
+        maxTimeoutMs: 900_000,
+      },
     },
     checks: [{
       key: 'test', rationale: 'Observe the fixture.',

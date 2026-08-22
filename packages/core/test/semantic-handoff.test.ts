@@ -36,6 +36,7 @@ test('prepare separates semantic, verification, and effective identities', () =>
   assert.deepEqual(first.executionBudget, {
     checkTimeoutMs: 300_000,
     maxDeliveryRepairs: 2,
+    timeoutRetry: { mode: 'bounded', maxRetriesPerVerifier: 1, maxTimeoutMs: 900_000 },
   });
   assert.match(first.contract.adoptionConditions[0].id, /^condition:/);
   assert.match(first.contract.adoptionConditions[0].evidenceObligations[0].id, /^obligation:/);
@@ -57,6 +58,26 @@ test('routine work may omit conditions but still requires an explicit verificati
 
   const missing = compileDelegation({ ...input, noCommandRationale: undefined });
   assert.equal(missing.status, 'verification-required');
+});
+
+test('prepare freezes an explicit bounded or disabled timeout retry policy', () => {
+  const disabled = criticalInput();
+  disabled.executionBudget.timeoutRetry = { mode: 'disabled' };
+  const compiled = compileDelegation(disabled);
+  assert.equal(compiled.status, 'delegation-compiled');
+  if (compiled.status !== 'delegation-compiled') return;
+  assert.deepEqual(compiled.executionBudget.timeoutRetry, { mode: 'disabled' });
+
+  const invalid = criticalInput();
+  invalid.executionBudget.timeoutRetry = {
+    mode: 'bounded',
+    maxRetriesPerVerifier: 1,
+    maxTimeoutMs: invalid.executionBudget.checkTimeoutMs - 1,
+  };
+  const rejected = compileDelegation(invalid);
+  assert.equal(rejected.status, 'authority-invalid');
+  if (rejected.status !== 'authority-invalid') return;
+  assert.ok(rejected.issues.some((issue) => issue.code === 'timeout-retry-maximum-invalid'));
 });
 
 test('unresolved material decisions block compilation without weakening the task contract', () => {
@@ -845,7 +866,11 @@ function criticalInput(policy: 'required' | 'fact-triggered' = 'required'): Comp
       }],
     }],
     hostPolicyRequirements: [],
-    executionBudget: { checkTimeoutMs: 300_000, maxDeliveryRepairs: 2 },
+    executionBudget: {
+      checkTimeoutMs: 300_000,
+      maxDeliveryRepairs: 2,
+      timeoutRetry: { mode: 'bounded', maxRetriesPerVerifier: 1, maxTimeoutMs: 900_000 },
+    },
     checks: [{
       key: 'suite',
       rationale: 'Exercises the public behavior.',

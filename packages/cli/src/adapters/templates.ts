@@ -91,7 +91,8 @@ Obey **disposition**. This skill does not claim native Host enforcement.
 
 **hostAction.developerDecisionBrief.primary** owns the concise final cognitive
 handoff. Its prose-facing surface intentionally omits opaque protocol IDs;
-**details** retains every exact reference for inspection and continuation.
+**developerDecisionBrief.details.command** retrieves the canonical Handoff and
+evaluation when a primary item needs deeper inspection.
 Preserve every decision-changing primary item, contrast intended and actual
 meaning, state adoption is pending, ask for the decision, and stop. Execute
 **decisionContinuation** only after a new developer message supplies it.
@@ -162,7 +163,11 @@ export const DELEGATION_PREPARE_EXAMPLE = {
     }],
   }],
   hostPolicyRequirements: [],
-  executionBudget: { checkTimeoutMs: 300000, maxDeliveryRepairs: 2 },
+  executionBudget: {
+    checkTimeoutMs: 300000,
+    maxDeliveryRepairs: 2,
+    timeoutRetry: { mode: 'bounded', maxRetriesPerVerifier: 1, maxTimeoutMs: 900000 },
+  },
   checks: [{
     key: 'test',
     rationale: 'decision-relevant observation',
@@ -443,13 +448,14 @@ The returned **hostAction.developerDecisionBrief.primary** is the delivery
 surface for the developer. It distinguishes delivery state, evidence state,
 Agent recommendation, and Human adoption; labels the actual behavior,
 implementation mechanism, preserved invariants, failure/recovery behavior,
-effects, and tradeoffs as Agent judgment; places every Condition and Obligation finding beside
-its separate evidence-path state, including Challenge counter-evidence;
+effects, and tradeoffs as Agent judgment; gives each Condition a compact finding
+and evidence-path summary;
 labels collected change and check data as Runtime observations; and presents
 only decision-changing blockers and review focus. It contains statements rather
-than opaque protocol IDs. The canonical **decisionPacket** and **change explain**
-surfaces retain exact IDs, Attention, recovery history, and detail pointers for
-inspection and machine continuation. Attention with the same exact protocol
+than opaque protocol IDs. **developerDecisionBrief.details.command** retrieves
+the canonical Handoff and evaluation with exact IDs, Attention, evidence
+boundaries, Challenge counter-evidence, recovery history, and detail pointers.
+Attention with the same exact protocol
 group and required resolution shares one issue. This is structural grouping,
 not inferred semantic similarity.
 Present that brief as the final task summary even when another active workflow

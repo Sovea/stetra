@@ -83,7 +83,11 @@ test('CLI JSON mode executes compact prepare, baseline-aware collect, layered ha
       taskId: string;
       taskContract: {
         understanding: { desiredOutcome: { value: string } };
-        adoptionConditions: Array<{ id: string; evidenceObligations: Array<{ id: string }> }>;
+        adoptionConditions: Array<{
+          id: string;
+          key: string;
+          evidenceObligations: Array<{ id: string; key: string }>;
+        }>;
       };
       baselineVerification: { checks: Array<{ mode: string }> };
     };
@@ -121,8 +125,8 @@ test('CLI JSON mode executes compact prepare, baseline-aware collect, layered ha
       action: collected.hostAction,
       projectRoot: root,
       document: handoffDocument(
-        prepared.taskContract.adoptionConditions[0].id,
-        prepared.taskContract.adoptionConditions[0].evidenceObligations[0].id,
+        prepared.taskContract.adoptionConditions[0].key,
+        prepared.taskContract.adoptionConditions[0].evidenceObligations[0].key,
         collected.checks[0].definitionId,
       ),
     });
@@ -322,7 +326,11 @@ function prepareDocument() {
       }],
     }],
     hostPolicyRequirements: [],
-    executionBudget: { checkTimeoutMs: 300_000, maxDeliveryRepairs: 1 },
+    executionBudget: {
+      checkTimeoutMs: 300_000,
+      maxDeliveryRepairs: 1,
+      timeoutRetry: { mode: 'bounded', maxRetriesPerVerifier: 1, maxTimeoutMs: 900_000 },
+    },
     checks: [{
       key: 'test', rationale: 'Exercise the fixture.',
       execution: {
@@ -336,7 +344,7 @@ function prepareDocument() {
   };
 }
 
-function handoffDocument(conditionId: string, obligationId: string, definitionId: string) {
+function handoffDocument(conditionKey: string, obligationKey: string, definitionId: string) {
   return {
     actualChange: {
       behavior: 'The CLI fixture changed.',
@@ -347,7 +355,7 @@ function handoffDocument(conditionId: string, obligationId: string, definitionId
       materialTradeoffs: [],
     },
     obligationConclusions: [{
-      obligationId, status: 'supported',
+      conditionKey, obligationKey, status: 'supported',
       evidence: [{ kind: 'check', id: definitionId }],
       evidenceCoverage: {
         status: 'sufficient',
@@ -361,7 +369,7 @@ function handoffDocument(conditionId: string, obligationId: string, definitionId
       counterEvidence: [], conclusion: 'The bounded observation supports the obligation.',
     }],
     conditionConclusions: [{
-      conditionId, status: 'supported', summary: 'The check passed.',
+      conditionKey, status: 'supported', summary: 'The check passed.',
     }],
     residualUnknowns: [], reviewQuestions: [],
     recommendation: { action: 'accept', rationale: 'Evidence is current.', caveats: [] },

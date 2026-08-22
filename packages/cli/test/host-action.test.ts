@@ -134,6 +134,7 @@ test('collection routes timeout, diagnosis, required challenge, and ordinary han
     diagnosisPacket: packet('diagnosis'),
     challengePacket: challengePacket(),
     handoffPacket: packet('handoff'),
+    timeoutRetryLimits: new Map<string, number>(),
   };
   assert.equal(collectedHostAction({
     ...common, pendingChallengeObligationIds: [],
@@ -160,7 +161,10 @@ test('collection routes timeout, diagnosis, required challenge, and ordinary han
   const timedOut = factFixture('unavailable');
   timedOut.checks[0].attempts[0].termination = { kind: 'timeout' };
   const retry = collectedHostAction({
-    ...common, facts: timedOut, pendingChallengeObligationIds: [],
+    ...common,
+    facts: timedOut,
+    pendingChallengeObligationIds: [],
+    timeoutRetryLimits: new Map([[timedOut.checks[0].definitionId, 9_000]]),
   });
   assert.equal(retry.kind, 'retry-timed-out-check');
   assert.match(retry.command!.argv.join(' '), /integer-greater-than-1000/);
@@ -376,7 +380,7 @@ function brief(): DeveloperDecisionBrief {
       priorHumanResolutions: [],
       conditions: [{
         statement: 'Condition.', criticality: 'material',
-        finding: { status: 'partial', summary: 'Partially supported.' }, obligations: [],
+        finding: { status: 'partial', summary: 'Partially supported.' }, evidence: [],
       }],
       blockers: [{
         group: 'verification', codes: ['verification-nonpassing'], resolutions: ['inspect'],
@@ -393,6 +397,12 @@ function brief(): DeveloperDecisionBrief {
         actions: ['accepted', 'correction-requested', 'rejected', 'deferred'],
         acceptanceExceptionIssueCount: 1,
       },
+    },
+    details: {
+      command: {
+        argv: ['stetra', 'change', 'explain', '.', '--task', 'task:test', '--section', 'decision-packet', '--json'],
+      },
+      sections: ['contract', 'attempts', 'challenge', 'handoff', 'events'],
     },
   };
 }

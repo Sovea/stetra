@@ -171,6 +171,13 @@ export interface CompileDelegationInput extends ProtocolEnvelope {
   executionBudget: {
     checkTimeoutMs: number;
     maxDeliveryRepairs: number;
+    timeoutRetry:
+      | { mode: 'disabled' }
+      | {
+          mode: 'bounded';
+          maxRetriesPerVerifier: number;
+          maxTimeoutMs: number;
+        };
   };
   checks?: VerificationDefinitionInput[];
   noCommandRationale?: string;
@@ -325,6 +332,13 @@ export interface TaskContract extends ProtocolEnvelope {
 export interface ExecutionBudget {
   checkTimeoutMs: number;
   maxDeliveryRepairs: number;
+  timeoutRetry:
+    | { mode: 'disabled' }
+    | {
+        mode: 'bounded';
+        maxRetriesPerVerifier: number;
+        maxTimeoutMs: number;
+      };
 }
 
 export type DelegationCompileResult =

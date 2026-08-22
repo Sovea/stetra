@@ -184,6 +184,15 @@ const HostPolicyRequirementSchema = z.strictObject({
   basis: CompactBasisSchema.optional(),
 });
 
+const TimeoutRetryBudgetSchema = z.discriminatedUnion('mode', [
+  z.strictObject({ mode: z.literal('disabled') }),
+  z.strictObject({
+    mode: z.literal('bounded'),
+    maxRetriesPerVerifier: z.number().int().min(1).max(5),
+    maxTimeoutMs: z.number().int().min(1_000).max(3_600_000),
+  }),
+]);
+
 export const DelegationPrepareDocumentSchema = z.strictObject({
   protocol: z.literal(DELEGATION_PROTOCOL),
   schemaVersion: z.literal(DELEGATION_SCHEMA_VERSION),
@@ -203,6 +212,7 @@ export const DelegationPrepareDocumentSchema = z.strictObject({
   executionBudget: z.strictObject({
     checkTimeoutMs: z.number().int().min(1_000).max(3_600_000),
     maxDeliveryRepairs: z.number().int().min(0).max(5),
+    timeoutRetry: TimeoutRetryBudgetSchema,
   }),
   checks: z.array(VerificationDefinitionSchema).optional(),
   noCommandRationale: NonEmptyStringSchema.optional(),
@@ -364,7 +374,8 @@ export const CognitiveHandoffDocumentSchema = z.strictObject({
     materialTradeoffs: z.array(NonEmptyStringSchema),
   }),
   obligationConclusions: z.array(z.strictObject({
-    obligationId: StableIdSchema,
+    conditionKey: NonEmptyStringSchema,
+    obligationKey: NonEmptyStringSchema,
     status: z.enum(CONCLUSION_STATUSES),
     evidence: z.array(HandoffEvidenceReferenceSchema),
     evidenceCoverage: EvidenceCoverageAssessmentSchema,
@@ -376,21 +387,27 @@ export const CognitiveHandoffDocumentSchema = z.strictObject({
     conclusion: NonEmptyStringSchema,
   })),
   conditionConclusions: z.array(z.strictObject({
-    conditionId: StableIdSchema,
+    conditionKey: NonEmptyStringSchema,
     status: z.enum(CONCLUSION_STATUSES),
     summary: NonEmptyStringSchema,
   })),
   residualUnknowns: z.array(z.strictObject({
-    conditionIds: z.array(StableIdSchema),
-    obligationIds: z.array(StableIdSchema),
+    conditionKeys: z.array(NonEmptyStringSchema),
+    obligationKeys: z.array(z.strictObject({
+      conditionKey: NonEmptyStringSchema,
+      obligationKey: NonEmptyStringSchema,
+    })),
     statement: NonEmptyStringSchema,
     adoptionImpact: NonEmptyStringSchema,
     nextAction: NonEmptyStringSchema,
     evidence: z.array(HandoffEvidenceReferenceSchema),
   })),
   reviewQuestions: z.array(z.strictObject({
-    conditionIds: z.array(StableIdSchema),
-    obligationIds: z.array(StableIdSchema),
+    conditionKeys: z.array(NonEmptyStringSchema),
+    obligationKeys: z.array(z.strictObject({
+      conditionKey: NonEmptyStringSchema,
+      obligationKey: NonEmptyStringSchema,
+    })),
     question: NonEmptyStringSchema,
     adoptionImpact: NonEmptyStringSchema,
     evidence: z.array(HandoffEvidenceReferenceSchema),
@@ -478,7 +495,12 @@ export const TaskProjectionSchema = z.strictObject({
   executionBudget: z.strictObject({
     checkTimeoutMs: z.number().int().min(1_000).max(3_600_000),
     maxDeliveryRepairs: z.number().int().min(0).max(5),
+    timeoutRetry: TimeoutRetryBudgetSchema,
   }),
+  timeoutRetryUsage: z.array(z.strictObject({
+    verifierId: StableIdSchema,
+    count: z.number().int().positive(),
+  })),
   currentAttemptId: StableIdSchema,
   attempts: z.array(AttemptProjectionSchema).min(1),
   challengeIds: z.array(StableIdSchema),

@@ -38,6 +38,7 @@ interface CollectOptions extends TaskOptions {
 
 interface ExplainOptions extends TaskOptions {
   section?: string;
+  request?: string;
 }
 
 export function registerChangeCommands(
@@ -120,12 +121,14 @@ export function registerChangeCommands(
     .description('Regenerate the current action or inspect durable workflow artifacts')
     .argument('[project-root]', 'Git worktree root', '.')
     .requiredOption('--task <id>', 'task ID returned by prepare')
-    .option('--section <name>', 'index, action, contract, baseline, handoff-draft, attempts, challenge, revision, handoff, decision, or events', 'index')
+    .option('--section <name>', 'index, action, challenge-request, contract, baseline, handoff-draft, attempts, challenge, revision, handoff, decision-packet, decision, or events', 'index')
+    .option('--request <sha256>', 'exact Challenge Execution Request identity for challenge-request inspection')
     .action((projectRoot: string, options: ExplainOptions, command: Command) => {
       environment.emit('change explain', explainDelegationTask({
         projectRoot,
         taskId: options.task,
         section: options.section,
+        requestId: options.request,
         hostAttestations: environment.runtime.hostAttestations,
       }), command);
     });

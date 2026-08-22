@@ -74,6 +74,8 @@ export interface AuthoringPacket {
     obligations?: Array<{
       id: string;
       conditionId: string;
+      conditionKey: string;
+      key: string;
       statement: string;
       falsification: TaskContract['adoptionConditions'][number]['evidenceObligations'][number]['falsification'];
     }>;
@@ -299,7 +301,9 @@ export function handoffAuthoringPacket(input: {
     challenge.obligationIds.map((id) => [id, challenge] as const)));
   const checkStatusByDefinition = new Map(input.facts.checks.map((check) =>
     [check.definitionId, latestStatus(check)] as const));
-  const obligations = allObligations(input.contract);
+  const keyedObligations = input.contract.adoptionConditions.flatMap((condition) =>
+    condition.evidenceObligations.map((obligation) => ({ condition, obligation })));
+  const obligations = keyedObligations.map((item) => item.obligation);
   const conclusionValuesByObligation = new Map(obligations.map((obligation) => [
     obligation.id,
     supportedConclusionAllowed(
@@ -333,8 +337,9 @@ export function handoffAuthoringPacket(input: {
         importantEffects: [],
         materialTradeoffs: [],
       },
-      obligationConclusions: obligations.map((obligation) => ({
-        obligationId: obligation.id,
+      obligationConclusions: keyedObligations.map(({ condition, obligation }) => ({
+        conditionKey: condition.key,
+        obligationKey: obligation.key,
         status: '',
         evidence: [
           ...currentDefinitionIds(obligation, input.contract)
@@ -364,7 +369,7 @@ export function handoffAuthoringPacket(input: {
         conclusion: '',
       })),
       conditionConclusions: input.contract.adoptionConditions.map((condition) => ({
-        conditionId: condition.id,
+        conditionKey: condition.key,
         status: '',
         summary: '',
       })),
@@ -479,7 +484,7 @@ export function handoffAuthoringPacket(input: {
           : 'required-challenge-missing',
         targetId: id,
         requiredAction: input.challengeAttestationAvailable === false
-          ? 'The current Host cannot attest a fresh challenger context. Keep the conclusion below supported and give the developer a concrete direct-review question.'
+          ? 'The current Host cannot attest a fresh challenger context. Preserve the Agent finding, mark the evidence path unverified, and give the developer a concrete direct-review question before acceptance.'
           : 'Complete and record the required challenge before claiming support.',
       })),
       ...input.requiredObligationIds.filter((id) => {
@@ -488,7 +493,7 @@ export function handoffAuthoringPacket(input: {
       }).map((id) => ({
         code: 'direct-human-review-required',
         targetId: id,
-        requiredAction: 'The recorded Challenger output has no verified Host lifecycle receipt. Keep the conclusion below supported and direct the developer to inspect the unresolved failure hypothesis.',
+        requiredAction: 'The recorded Challenger output has no verified Host lifecycle receipt. Preserve the Agent finding, keep the evidence path unverified, and direct the developer to inspect the unresolved failure hypothesis before acceptance.',
       })),
     ],
     },
@@ -619,12 +624,15 @@ function packetBase(
         criticality: condition.criticality,
         obligationIds: condition.evidenceObligations.map((item) => item.id),
       })),
-      obligations: allObligations(contract).map((obligation) => ({
-        id: obligation.id,
-        conditionId: obligation.conditionId,
-        statement: obligation.statement,
-        falsification: obligation.falsification,
-      })),
+      obligations: contract.adoptionConditions.flatMap((condition) =>
+        condition.evidenceObligations.map((obligation) => ({
+          id: obligation.id,
+          conditionId: obligation.conditionId,
+          conditionKey: condition.key,
+          key: obligation.key,
+          statement: obligation.statement,
+          falsification: obligation.falsification,
+        }))),
       checks: contract.verificationPlan.mode === 'checks'
         ? contract.verificationPlan.definitions.map((definition) => {
             const fact = factChecks.get(definition.definitionId);
@@ -734,8 +742,11 @@ function handoffEvidenceReferenceShapes(): unknown[] {
 
 function residualUnknownShape() {
   return {
-    conditionIds: ['<exact condition id>'],
-    obligationIds: ['<exact obligation id>'],
+    conditionKeys: ['<referenceCatalog condition key>'],
+    obligationKeys: [{
+      conditionKey: '<referenceCatalog condition key>',
+      obligationKey: '<referenceCatalog obligation key>',
+    }],
     statement: '<what remains unknown>',
     adoptionImpact: '<how the unknown changes adoption>',
     nextAction: '<specific next investigation or decision>',
@@ -745,8 +756,11 @@ function residualUnknownShape() {
 
 function reviewQuestionShape() {
   return {
-    conditionIds: ['<exact condition id>'],
-    obligationIds: ['<exact obligation id>'],
+    conditionKeys: ['<referenceCatalog condition key>'],
+    obligationKeys: [{
+      conditionKey: '<referenceCatalog condition key>',
+      obligationKey: '<referenceCatalog obligation key>',
+    }],
     question: '<consequence-directed review question>',
     adoptionImpact: '<why the answer changes adoption>',
     evidence: [{ kind: '<evidence kind>', id: '<exact referenceCatalog id>' }],

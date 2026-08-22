@@ -117,7 +117,7 @@ test('project init generates the Cognitive Adoption host projection and manifest
     assert.match(skill, /developerDecisionBrief\.primary.*owns the concise final cognitive/s);
     assert.match(handoff, /developerDecisionBrief\.primary/);
     assert.match(handoff, /canonical \*\*decisionPacket\*\*/);
-    assert.doesNotMatch(handoff, /developerDecisionBrief\.details/);
+    assert.match(handoff, /developerDecisionBrief\.details\.command/);
     assert.match(handoff, /Challenge counter-evidence/);
     assert.match(handoff, /submitHostAction/);
     assert.match(handoff, /Do not execute\s+\*\*hostAction\.decisionContinuation\*\*/);
