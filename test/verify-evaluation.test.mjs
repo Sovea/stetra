@@ -380,7 +380,7 @@ function validatePhaseDurations(durations, label) {
   assert.ok(durations && typeof durations === 'object', label);
   for (const field of [
     'investigationAndImplementationMs', 'protocolAuthoringMs', 'schemaCorrectionMs',
-    'challengeMs', 'baselineCheckExecutionMs', 'collectionCheckExecutionMs',
+    'baselineCheckExecutionMs', 'collectionCheckExecutionMs',
     'gitFactCollectionMs', 'activeReviewMs', 'clarificationMs',
     'correctionDecisionMs', 'queueOrWaitMs',
   ]) {

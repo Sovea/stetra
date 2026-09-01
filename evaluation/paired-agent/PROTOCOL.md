@@ -21,8 +21,8 @@ One pair runs the same task twice from the same immutable repository state:
 - `control`: a fresh instance of the coding agent receives the task,
   repository instructions, and ordinary repository tools.
 - `treatment`: a fresh instance of the same agent receives the same inputs and
-  uses the `prepare`, `collect`, optional `repair` and `challenge`, `handoff`,
-  and `decide` lifecycle under the `cognitive-adoption` protocol.
+  uses the `prepare`, `collect`, optional repair or revision, `handoff`, and
+  `decide` lifecycle under the `cognitive-adoption` protocol.
 
 Model/build, Host surface, tool policy, reasoning settings, time limit,
 dependencies, and starting Git state must match. Context, patches, messages,
@@ -152,15 +152,12 @@ source repository or tests. A routine task should require zero schema
 corrections; a conditioned, challenged, or attention-bearing task may require
 at most one. Failure is a product-usability finding, not Agent noncompliance.
 
-Focused Challenger component reruns that apply preregistered candidate patches
-must additionally pass `assertChallengeStagePreflight` from
-`challenge-stage-preflight.mjs` before starting the Challenger. The evaluator
-supplies exact registered and observed values for repository/Stetra identity,
-the clean worktree fingerprint before Prepare, absence of the candidate change
-at that boundary, candidate Patch digest, changed paths, and Check baseline
-relations. Any mismatch makes the component run invalid. This record is
-evaluator-only: it is not a Runtime fact, task artifact, or substitute for an
-effectiveness pair.
+Every run preregisters one wall-clock deadline and communicates the exact
+absolute deadline to both Agents before work starts. The outer evaluator
+enforces it symmetrically and records a timeout as a delivery outcome; an
+undisclosed external kill cannot be attributed to either workflow's ability to
+manage its remaining lifecycle. Stetra does not persist this evaluator limit or
+infer a stage schedule from it.
 
 1. Materialize a clean workspace at the registered state for each condition;
    the workspaces may run sequentially when resources are constrained.
@@ -169,10 +166,10 @@ effectiveness pair.
 4. Preserve initial/final patches, commands, elapsed time, and Agent messages.
 5. Run registered acceptance checks outside the Agent context.
 6. For treatment, preserve the Task Contract, Attempt lineage, every
-   collection, patch, check attempts, Challenges, handoff evaluation, Human
-   Decision, and any stale/recollection transition.
+   collection, patch, check attempts, handoff evaluation, Human Decision, and
+   any stale/recollection transition.
 7. Record harness overhead separately from task and review time. Attribute time
-   by provenance: Host-observed implementation/authoring/challenge, Runtime-
+   by provenance: Host-observed implementation and authoring, Runtime-
    observed check/Git collection, Human-observed active review/clarification,
    and wall-clock queue or wait time.
 8. For historical replay, reveal the sealed reference only after both
