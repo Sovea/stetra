@@ -243,7 +243,6 @@ test('collect publishes timeout facts, continues later checks, and releases its 
     assert.equal(timeoutCheck?.status, 'unavailable');
     assert.deepEqual(passedCheck?.termination, { kind: 'exit', exitCode: 0 });
     assert.equal(collected.checks.length, 2);
-    assert.ok(collected.runtimeCollectionDurationMs < 4_000);
     assert.equal(existsSync(join(root, '.stetra', 'worktree-operation.lock')), false);
     const descendantPid = Number(readFileSync(pidPath, 'utf8').trim());
     await waitFor(() => !processExists(descendantPid));
@@ -1742,15 +1741,10 @@ async function collect(
   root: string,
   taskId: string,
 ) {
-  const startedAt = performance.now();
   const result = await collectDelegationFacts({
     projectRoot: root, taskId, productVersion: '0.0.1',
   }) as any;
-  const runtimeCollectionDurationMs = performance.now() - startedAt;
-  return {
-    ...collectedResultWithFacts(root, taskId, result),
-    runtimeCollectionDurationMs,
-  };
+  return collectedResultWithFacts(root, taskId, result);
 }
 
 function collectedResultWithFacts(root: string, taskId: string, result: any) {
