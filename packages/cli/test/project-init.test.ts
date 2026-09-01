@@ -11,47 +11,51 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 
-import { DELEGATION_PREPARE_EXAMPLE } from '../src/adapters/templates.ts';
+import {
+  delegationPrepareDraft,
+  delegationPrepareGuide,
+} from '../src/adapters/templates.ts';
 import {
   initializeProject,
   inspectProjectInstallation,
 } from '../src/project/init.ts';
-import { DelegationPrepareDocumentSchema } from '../src/schemas/delegation.ts';
 import {
-  compareSemanticVersions,
-  PRODUCT_VERSION,
-} from '../src/version.ts';
+  DelegationPrepareDocumentSchema,
+  type DelegationPrepareDocument,
+} from '../src/schemas/delegation.ts';
 
-test('generated prepare example is schema-valid and uses bounded repository evidence', () => {
-  const parsed = DelegationPrepareDocumentSchema.parse(DELEGATION_PREPARE_EXAMPLE);
-  assert.deepEqual(parsed.repositoryEvidence, [{
-    key: 'relevant-source', path: 'src/example.ts', startLine: 1, endLine: 20,
-  }]);
-  assert.deepEqual(parsed.conditions[0].evidenceObligations.map((obligation) => obligation.key), [
-    'public-path',
-  ]);
+test('generated Prepare draft requires explicit assurance and verification authoring', () => {
+  const draft = delegationPrepareDraft();
+  const parsed = DelegationPrepareDocumentSchema.safeParse(draft);
+  assert.equal(parsed.success, false);
+  assert.deepEqual(draft.repositoryEvidence, []);
+  assert.equal(draft.assurance.kind, 'routine');
+  assert.deepEqual(draft.checks, []);
+  assert.equal(delegationPrepareGuide().schema.included, false);
+  assert.equal('inputSchema' in delegationPrepareGuide(), false);
+  assert.ok(Buffer.byteLength(JSON.stringify(delegationPrepareGuide())) < 4 * 1024);
 });
 
-test('generator versions follow semantic prerelease precedence', () => {
-  const ordered = [
-    '0.0.1-alpha',
-    '0.0.1-alpha.0',
-    '0.0.1-alpha.2',
-    '0.0.1-alpha.10',
-    '0.0.1-beta.0',
-    '0.0.1-rc.0',
-    '0.0.1',
-    '0.1.0-alpha.0',
-  ];
-  for (let index = 1; index < ordered.length; index += 1) {
-    assert.ok(compareSemanticVersions(ordered[index - 1], ordered[index]) < 0);
-    assert.ok(compareSemanticVersions(ordered[index], ordered[index - 1]) > 0);
-  }
-  assert.equal(
-    compareSemanticVersions('0.0.1-alpha.0+build.1', '0.0.1-alpha.0+build.2'),
-    0,
-  );
-  assert.throws(() => compareSemanticVersions('0.0.1-alpha.01', '0.0.1'));
+test('prepare rejects a bounded timeout retry that cannot increase the attempt budget', () => {
+  const draft = delegationPrepareDraft();
+  const input: DelegationPrepareDocument = DelegationPrepareDocumentSchema.parse({
+    ...draft,
+    developerEvents: [{ key: 'request', content: 'Exercise timeout validation.' }],
+    task: { ...draft.task, desiredOutcome: 'Exercise timeout validation.' },
+    assurance: {
+      ...draft.assurance,
+      rationale: 'No material adoption condition is needed for this validation fixture.',
+    },
+    noCommandRationale: 'This validation fixture has no executable behavior.',
+  });
+  if (input.executionBudget.timeoutRetry.mode !== 'bounded') return;
+  input.executionBudget.timeoutRetry.maxTimeoutMs = input.executionBudget.checkTimeoutMs;
+  const parsed = DelegationPrepareDocumentSchema.safeParse(input);
+  assert.equal(parsed.success, false);
+  if (parsed.success) return;
+  assert.ok(parsed.error.issues.some((issue) =>
+    issue.path.join('.') === 'executionBudget.timeoutRetry.maxTimeoutMs'
+    && /must allow more time/.test(issue.message)));
 });
 
 test('project init generates the Cognitive Adoption host projection and manifest', () => {
@@ -61,87 +65,53 @@ test('project init generates the Cognitive Adoption host projection and manifest
     assert.equal(initialized.status, 'initialized');
     assert.equal(initialized.protocol, 'cognitive-adoption');
     assert.equal(initialized.schemaVersion, '1');
-    assert.equal(initialized.adapterProtocolVersion, '1');
-    assert.deepEqual(initialized.readiness, { required: [], recommended: [], optional: [] });
 
     const skillPath = join(root, '.agents', 'skills', 'stetra', 'SKILL.md');
-    const challengerAgentPath = join(root, '.codex', 'agents', 'stetra-challenger.toml');
     const referencesPath = join(root, '.agents', 'skills', 'stetra', 'references');
-    const changePath = join(referencesPath, 'change.md');
-    const deliveryPath = join(referencesPath, 'delivery.md');
-    const challengePath = join(referencesPath, 'challenge.md');
-    const handoffPath = join(referencesPath, 'handoff.md');
     const recoveryPath = join(referencesPath, 'recovery.md');
     assert.equal(existsSync(skillPath), true);
-    assert.equal(existsSync(challengerAgentPath), true);
-    assert.equal(existsSync(changePath), true);
-    assert.equal(existsSync(deliveryPath), true);
-    assert.equal(existsSync(challengePath), true);
-    assert.equal(existsSync(handoffPath), true);
     assert.equal(existsSync(recoveryPath), true);
+    assert.equal(existsSync(join(root, '.codex', 'agents', 'stetra-challenger.toml')), false);
+    assert.equal(existsSync(join(referencesPath, 'change.md')), false);
+    assert.equal(existsSync(join(referencesPath, 'delivery.md')), false);
+    assert.equal(existsSync(join(referencesPath, 'challenge.md')), false);
+    assert.equal(existsSync(join(referencesPath, 'handoff.md')), false);
     assert.equal(existsSync(join(root, '.agents', 'skills', 'stetra', 'references', 'bootstrap.md')), false);
     assert.equal(existsSync(join(root, '.agents', 'skills', 'stetra', 'references', 'context.md')), false);
     const skill = readFileSync(skillPath, 'utf8');
-    const challengerAgent = readFileSync(challengerAgentPath, 'utf8');
-    const change = readFileSync(changePath, 'utf8');
-    const delivery = readFileSync(deliveryPath, 'utf8');
-    const challenge = readFileSync(challengePath, 'utf8');
-    const handoff = readFileSync(handoffPath, 'utf8');
     const recovery = readFileSync(recoveryPath, 'utf8');
-    assert.match(skill, /developer owns goals, long-lived tradeoffs, exceptions/);
-    assert.match(challengerAgent, /name = "stetra-challenger"/);
-    assert.match(challengerAgent, /sandbox_mode = "read-only"/);
-    assert.match(challengerAgent, /Return exactly one JSON Challenge Document/);
-    assert.match(challengerAgent, /Never\s+author request identity, context identity, independence/);
-    assert.match(challengerAgent, /do not load the\s+general Stetra skill/);
-    assert.match(challengerAgent, /challengeExecutionPacket\.draft/);
-    assert.match(challengerAgent, /supported outcome must contain no counterEvidence/);
-    assert.match(skill, /do not reread an\s+unchanged page/);
-    assert.match(change, /change prepare/);
-    assert.match(change, /developerEvent/);
-    assert.match(change, /conditions/);
-    assert.match(change, /verifierSelectors/);
-    assert.match(change, /\{"mode":"unknown"\}/);
-    assert.match(change, /Do not\s+add rationale, expectation, or obligationKeys to unknown/);
-    assert.match(change, /Obligations are independently concludable/);
-    assert.match(change, /persistent verifier protection/);
-    assert.match(delivery, /baseline-to-current change/);
-    assert.match(delivery, /evidence\s+disposition/);
-    assert.match(delivery, /fieldRequirements/);
-    assert.match(challenge, /fresh Host context/);
-    assert.match(challenge, /Challenge output remains Agent judgment/);
-    assert.match(challenge, /canonical identities, not paths/);
-    assert.match(skill, /owns the final\s+cognitive handoff/);
-    assert.match(handoff, /hostAction\.developerDecisionBrief/);
-    assert.match(handoff, /Challenge conclusion and exact counter-evidence/);
-    assert.match(handoff, /Do not execute\s+\*\*hostAction\.decisionContinuation\*\*/);
-    assert.match(handoff, /shapeRef.*resolves to one\s+reusable variant set/s);
-    assert.match(handoff, /accepted\/correction-requested\/rejected\/deferred/);
-    assert.match(skill, /Preserve paths, IDs, enums, commands, numeric facts/);
+    const pointer = readFileSync(join(root, 'AGENTS.md'), 'utf8');
+    assert.match(skill, /developer owns intent, long-lived choices,\s+exceptions, and adoption/);
+    assert.match(skill, /Follow \*\*hostAction\.kind\*\*/);
+    assert.match(skill, /run its \*\*reserve\.argv\*\*/);
+    assert.match(skill, /developerDecisionBrief\.primary/);
+    assert.match(skill, /Do not invoke an interactive\s+input tool for the adoption decision/);
+    assert.match(skill, /thin adapter created an independent Agent context/);
+    assert.match(skill, /stetra input reserve \. --kind prepare --json/);
+    assert.match(skill, /run its exact \*\*submit\.argv\*\*/);
+    assert.match(skill, /Never invoke \*\*stetra host begin\*\*\s+without the projected adapter/);
+    assert.doesNotMatch(skill, /stetra host begin \. --json/);
     assert.match(recovery, /retry-timed-out-check/);
     assert.match(recovery, /resolve-evidence-decision/);
     assert.match(recovery, /revise-verification/);
     assert.ok(
-      Buffer.byteLength(skill) + Buffer.byteLength(change) + Buffer.byteLength(delivery) <= 10_000,
-      'the normal delivery instruction projection must stay within 10 KB',
+      Buffer.byteLength(skill) + Buffer.byteLength(recovery) <= 6_000,
+      'the generated Host instruction surface must stay compact',
     );
-    assert.doesNotMatch(`${change}${delivery}${challenge}${handoff}${recovery}`, /Playbook|RCCL|ready-for-adoption/);
-    assert.doesNotMatch(`${skill}${change}${delivery}${challenge}${handoff}${recovery}`, /presentationLocale|presentationMarkdown/);
+    assert.doesNotMatch(`${skill}${recovery}`, /loadHostActionInput|submitHostAction|executeChallengeHostAction/);
+    assert.doesNotMatch(`${skill}${recovery}`, /presentationLocale|presentationMarkdown/);
+    assert.doesNotMatch(`${skill}${recovery}${pointer}`, /\p{Script=Han}/u);
     const manifest = JSON.parse(readFileSync(join(root, '.stetra', 'manifest.json'), 'utf8'));
+    assert.match(readFileSync(join(root, '.gitignore'), 'utf8'), /\.stetra\/inbox\//);
+    assert.match(readFileSync(join(root, '.gitignore'), 'utf8'), /\.stetra\/host-sessions\//);
     assert.equal(manifest.protocol, 'cognitive-adoption');
     assert.equal(manifest.schemaVersion, '1');
-    assert.equal(manifest.generatorVersion, PRODUCT_VERSION);
-    assert.equal(manifest.adapterProtocolVersion, '1');
     assert.deepEqual(
       manifest.artifacts.map((artifact: { path: string }) => artifact.path),
       [
-        '.agents/skills/stetra/references/challenge.md',
-        '.agents/skills/stetra/references/change.md',
-        '.agents/skills/stetra/references/delivery.md',
-        '.agents/skills/stetra/references/handoff.md',
         '.agents/skills/stetra/references/recovery.md',
         '.agents/skills/stetra/SKILL.md',
-        '.codex/agents/stetra-challenger.toml',
+        '.codex/hooks.json',
         '.gitignore',
         'AGENTS.md',
       ],
@@ -150,7 +120,7 @@ test('project init generates the Cognitive Adoption host projection and manifest
 
     const unchanged = initializeProject({ projectRoot: root, adapters: ['codex'] });
     assert.equal(unchanged.status, 'initialized');
-    assert.equal(unchanged.counts.unchanged, 9);
+    assert.equal(unchanged.counts.unchanged, 5);
 
     writeFileSync(skillPath, `${skill}\nowner note\n`, 'utf8');
     const blocked = initializeProject({ projectRoot: root, adapters: ['codex'] });
@@ -170,25 +140,18 @@ test('installation inspection reports generated adapter drift', () => {
   const root = mkdtempSync(join(tmpdir(), 'stetra-drift-'));
   try {
     initializeProject({ projectRoot: root, adapters: ['claude'] });
-    const challengerAgent = readFileSync(
-      join(root, '.claude', 'agents', 'stetra-challenger.md'),
-      'utf8',
-    );
-    assert.match(challengerAgent, /tools: Read, Grep, Glob/);
-    assert.match(challengerAgent, /permissionMode: plan/);
-    assert.doesNotMatch(challengerAgent, /Bash|Write|Edit|Agent,/);
-    const changePath = join(root, '.claude', 'skills', 'stetra', 'references', 'change.md');
-    rmSync(changePath);
+    const recoveryPath = join(root, '.claude', 'skills', 'stetra', 'references', 'recovery.md');
+    rmSync(recoveryPath);
     const inspection = inspectProjectInstallation(root);
     assert.equal(inspection.status, 'drifted');
     assert.ok(inspection.artifacts.some((artifact) =>
-      artifact.path.endsWith('change.md') && artifact.status === 'missing'));
+      artifact.path.endsWith('recovery.md') && artifact.status === 'missing'));
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
 });
 
-test('generated Challenger profiles coexist with Trellis agents and hook ownership', () => {
+test('generated thin adapters coexist with Trellis agents and hook ownership', () => {
   const root = mkdtempSync(join(tmpdir(), 'stetra-trellis-coexistence-'));
   try {
     const codexHookPath = join(root, '.codex', 'hooks.json');
@@ -197,9 +160,9 @@ test('generated Challenger profiles coexist with Trellis agents and hook ownersh
     const claudeTrellisAgentPath = join(root, '.claude', 'agents', 'trellis-check.md');
     mkdirSync(join(root, '.codex', 'agents'), { recursive: true });
     mkdirSync(join(root, '.claude', 'agents'), { recursive: true });
-    writeFileSync(codexHookPath, '{"hooks":{"SubagentStart":[]}}\n', 'utf8');
+    writeFileSync(codexHookPath, '{\n  // Trellis lifecycle ownership\n  "hooks": { "SubagentStart": [] }\n}\n', 'utf8');
     writeFileSync(codexTrellisAgentPath, 'name = "trellis-check"\n', 'utf8');
-    writeFileSync(claudeSettingsPath, '{"hooks":{"PreToolUse":[]}}\n', 'utf8');
+    writeFileSync(claudeSettingsPath, '{\n  // Trellis lifecycle ownership\n  "hooks": { "PreToolUse": [] }\n}\n', 'utf8');
     writeFileSync(claudeTrellisAgentPath, '---\nname: trellis-check\n---\n', 'utf8');
 
     const initialized = initializeProject({
@@ -207,66 +170,70 @@ test('generated Challenger profiles coexist with Trellis agents and hook ownersh
       adapters: ['codex', 'claude'],
     });
     assert.equal(initialized.status, 'initialized');
-    assert.equal(readFileSync(codexHookPath, 'utf8'), '{"hooks":{"SubagentStart":[]}}\n');
+    const codexHooks = readFileSync(codexHookPath, 'utf8');
+    assert.match(codexHooks, /Trellis lifecycle ownership/);
+    assert.deepEqual(JSON.parse(codexHooks.replace(/\s*\/\/ Trellis lifecycle ownership\n/, '\n')).hooks.SubagentStart, []);
+    assert.match(codexHooks, /stetra host hook --adapter codex --event session-start/);
+    assert.match(codexHooks, /stetra host hook --adapter codex --event stop/);
     assert.equal(readFileSync(codexTrellisAgentPath, 'utf8'), 'name = "trellis-check"\n');
-    assert.equal(readFileSync(claudeSettingsPath, 'utf8'), '{"hooks":{"PreToolUse":[]}}\n');
+    const claudeSettings = readFileSync(claudeSettingsPath, 'utf8');
+    assert.match(claudeSettings, /Trellis lifecycle ownership/);
+    assert.deepEqual(JSON.parse(claudeSettings.replace(/\s*\/\/ Trellis lifecycle ownership\n/, '\n')).hooks.PreToolUse, []);
+    assert.match(claudeSettings, /stetra host hook --adapter claude --event session-start/);
+    assert.match(claudeSettings, /stetra host hook --adapter claude --event stop/);
     assert.equal(
       readFileSync(claudeTrellisAgentPath, 'utf8'),
       '---\nname: trellis-check\n---\n',
     );
+    for (const skillPath of [
+      join(root, '.agents', 'skills', 'stetra', 'SKILL.md'),
+      join(root, '.claude', 'skills', 'stetra', 'SKILL.md'),
+    ]) {
+      const skill = readFileSync(skillPath, 'utf8');
+      assert.match(skill, /stetra input reserve \. --kind prepare --json/);
+      assert.doesNotMatch(skill, /stetra host begin \. --json/);
+    }
     assert.equal(
       existsSync(join(root, '.codex', 'agents', 'stetra-challenger.toml')),
-      true,
+      false,
     );
     assert.equal(
       existsSync(join(root, '.claude', 'agents', 'stetra-challenger.md')),
-      true,
+      false,
     );
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
 });
 
-test('legacy artifacts block init without migration or deletion', () => {
-  const root = mkdtempSync(join(tmpdir(), 'stetra-legacy-'));
+test('project init protects only the Stetra-owned Hook groups from drift', () => {
+  const root = mkdtempSync(join(tmpdir(), 'stetra-hook-drift-'));
   try {
-    const legacyPath = join(root, '.stetra', 'playbook');
-    mkdirSync(legacyPath, { recursive: true });
-    writeFileSync(join(legacyPath, 'local-augment.yaml'), 'legacy\n', 'utf8');
-    const result = initializeProject({ projectRoot: root, adapters: ['codex'], force: true });
-    assert.equal(result.status, 'blocked');
-    assert.ok(result.artifacts.some((artifact) =>
-      artifact.path === '.stetra/playbook' && artifact.action === 'blocked'));
-    assert.equal(readFileSync(join(legacyPath, 'local-augment.yaml'), 'utf8'), 'legacy\n');
-    assert.equal(existsSync(join(root, '.stetra', 'manifest.json')), false);
-    const inspection = inspectProjectInstallation(root);
-    assert.equal(inspection.status, 'legacy');
-    assert.deepEqual(inspection.legacyArtifacts, ['.stetra/playbook']);
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
-});
+    initializeProject({ projectRoot: root, adapters: ['codex'] });
+    const hookPath = join(root, '.codex', 'hooks.json');
+    const document = JSON.parse(readFileSync(hookPath, 'utf8'));
+    document.hooks.Stop[0].hooks[0].timeout = 99;
+    document.hooks.PreToolUse = [{
+      matcher: 'Bash',
+      hooks: [{ type: 'command', command: 'trellis check' }],
+    }];
+    writeFileSync(hookPath, `${JSON.stringify(document, null, 2)}\n`, 'utf8');
 
-test('renamed Resonant Code installation blocks Stetra init without mutation', () => {
-  const root = mkdtempSync(join(tmpdir(), 'stetra-renamed-product-'));
-  try {
-    const oldRunPath = join(root, '.resonant-code', 'runs', 'old-run', 'run.json');
-    mkdirSync(join(root, '.resonant-code', 'runs', 'old-run'), { recursive: true });
-    writeFileSync(oldRunPath, '{"state":"completed"}\n', 'utf8');
-    writeFileSync(
-      join(root, 'AGENTS.md'),
-      '<!-- resonant-code:begin -->\nold generated pointer\n<!-- resonant-code:end -->\n',
-      'utf8',
-    );
+    const blocked = initializeProject({ projectRoot: root, adapters: ['codex'] });
+    assert.equal(blocked.status, 'blocked');
+    assert.ok(blocked.artifacts.some((artifact) =>
+      artifact.path === '.codex/hooks.json' && artifact.action === 'blocked'));
+    assert.equal(JSON.parse(readFileSync(hookPath, 'utf8')).hooks.Stop[0].hooks[0].timeout, 99);
 
-    const result = initializeProject({ projectRoot: root, adapters: ['codex'], force: true });
-    assert.equal(result.status, 'blocked');
-    assert.deepEqual(
-      result.artifacts.map((artifact) => artifact.path),
-      ['.resonant-code', 'AGENTS.md'],
-    );
-    assert.equal(readFileSync(oldRunPath, 'utf8'), '{"state":"completed"}\n');
-    assert.equal(existsSync(join(root, '.stetra')), false);
+    const forced = initializeProject({
+      projectRoot: root,
+      adapters: ['codex'],
+      force: true,
+    });
+    assert.equal(forced.status, 'initialized');
+    const replaced = JSON.parse(readFileSync(hookPath, 'utf8'));
+    assert.equal(replaced.hooks.Stop[0].hooks[0].timeout, 10);
+    assert.equal(replaced.hooks.PreToolUse[0].hooks[0].command, 'trellis check');
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -289,7 +256,7 @@ test('dry-run writes nothing and managed blocks preserve owner content', () => {
   }
 });
 
-test('new manifest rejects unknown fields and newer generators', () => {
+test('the initial manifest rejects every non-current shape without migration', () => {
   const root = mkdtempSync(join(tmpdir(), 'stetra-manifest-'));
   try {
     initializeProject({ projectRoot: root, adapters: ['codex'] });
@@ -298,11 +265,13 @@ test('new manifest rejects unknown fields and newer generators', () => {
     writeFileSync(manifestPath, `${JSON.stringify({ ...manifest, unknown: true })}\n`, 'utf8');
     assert.throws(() => initializeProject({ projectRoot: root }), /unrecognized key|unknown/i);
 
+    const [first, ...rest] = manifest.artifacts;
+    const { generatedHash: _hash, ...invalidArtifact } = first;
     writeFileSync(manifestPath, `${JSON.stringify({
       ...manifest,
-      generatorVersion: '99.0.0-alpha.0',
+      artifacts: [invalidArtifact, ...rest],
     })}\n`, 'utf8');
-    assert.throws(() => initializeProject({ projectRoot: root }), /newer CLI/);
+    assert.throws(() => initializeProject({ projectRoot: root }), /generatedHash/i);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

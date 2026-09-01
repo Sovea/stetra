@@ -82,6 +82,8 @@ export function statusValue(status: string, colors: Colors): string {
       'created',
       'initialized',
       'ok',
+      'ready',
+      'supported',
       'prepared',
       'facts-collected',
       'facts-current',

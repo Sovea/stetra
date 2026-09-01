@@ -42,25 +42,6 @@ try {
   }, null, 2)}\n`, 'utf8');
   run(npmCommand(), ['install', '--ignore-scripts', '--no-audit', '--no-fund'], consumer);
   await verifyReleaseInstallation(consumer, expectedVersion);
-  const hostSurfacePath = join(consumer, 'host-surface.mjs');
-  writeFileSync(hostSurfacePath, [
-    "import { guardFinalResponse, HostChallengeLifecycle, runCli } from '@sovea/stetra/host';",
-    "const execution = await runCli(['--version'], { interactive: false, color: false });",
-    "const lifecycle = new HostChallengeLifecycle('release-smoke');",
-    'process.stdout.write(JSON.stringify({',
-    '  guardType: typeof guardFinalResponse,',
-    '  lifecycleType: typeof lifecycle.observeStart,',
-    '  runType: typeof runCli,',
-    '  version: execution.output,',
-    '}));',
-    '',
-  ].join('\n'), 'utf8');
-  assert.deepEqual(runJson(process.execPath, [hostSurfacePath], consumer, { shell: false }), {
-    guardType: 'function',
-    lifecycleType: 'function',
-    runType: 'function',
-    version: expectedVersion,
-  });
 
   const installedCli = join(consumer, 'node_modules/@sovea/stetra');
   const cliManifest = JSON.parse(readFileSync(join(installedCli, 'package.json'), 'utf8'));
@@ -77,11 +58,12 @@ try {
   assert.equal(initialized.schemaVersion, '1');
   assert.deepEqual(initialized.adapters, ['codex']);
   const references = join(project, '.agents/skills/stetra/references');
-  for (const name of ['change', 'delivery', 'challenge', 'handoff', 'recovery']) {
-    assert.equal(existsSync(join(references, `${name}.md`)), true);
+  assert.equal(existsSync(join(references, 'recovery.md')), true);
+  for (const name of ['change', 'delivery', 'challenge', 'handoff']) {
+    assert.equal(existsSync(join(references, `${name}.md`)), false);
   }
   assert.equal(existsSync(join(references, 'routine.md')), false);
-  assert.match(readFileSync(join(references, 'handoff.md'), 'utf8'), /developerDecisionBrief/);
+  assert.match(readFileSync(join(project, '.agents/skills/stetra/SKILL.md'), 'utf8'), /developerDecisionBrief/);
 
   git(project, ['init', '-q']);
   git(project, ['config', 'user.email', 'release@example.invalid']);
@@ -89,8 +71,7 @@ try {
   git(project, ['add', '.']);
   git(project, ['commit', '-qm', 'initial']);
   const task = 'Change the packed fixture behavior and preserve the Human adoption decision.';
-  const preparePath = join(temporary, 'task-contract.json');
-  writeFileSync(preparePath, `${JSON.stringify({
+  const prepareDocument = {
     protocol: 'cognitive-adoption', schemaVersion: '1',
     prepareRequestId: 'prepare:cli-release-smoke',
     developerEvents: [{ key: 'request', content: task }],
@@ -98,11 +79,11 @@ try {
     task: {
       basis: { developerEventKeys: ['request'], repositoryEvidenceKeys: [] },
       desiredOutcome: 'Change the exported fixture value with current facts.',
-      constraints: ['Human adoption remains explicit.'],
+      constraints: ['Human adoption remains explicit.', `Preserve the large Host input: ${'x'.repeat(40_000)}`],
       nonGoals: [], focus: ['src/example.ts'],
     },
     materialDecisionForks: [],
-    conditions: [{
+    assurance: { kind: 'conditioned', conditions: [{
       key: 'export', statement: 'The packed fixture exports value 2 and its check passes.',
       rationale: 'Consumers observe this exported value.', criticality: 'adoption-critical',
       basis: { developerEventKeys: ['request'], repositoryEvidenceKeys: [] },
@@ -120,173 +101,193 @@ try {
           { kind: 'independent-challenge', policy: 'required' },
         ],
       }],
-    }],
+    }] },
     hostPolicyRequirements: [],
-    delivery: { maxRepairAttempts: 1 },
+    executionBudget: {
+      checkTimeoutMs: 300_000,
+      maxDeliveryRepairs: 1,
+      timeoutRetry: { mode: 'disabled' },
+    },
     checks: [{
       key: 'fixture-check', rationale: 'Exercise the packed CLI check runner.',
-      argv: [
-        process.execPath,
-        '-e',
-        "const ok=require('node:fs').readFileSync('src/example.ts','utf8').includes('value = 2');process.stdout.write('fixture-check-stdout\\n');process.stderr.write('fixture-check-stderr\\n');process.exit(ok ? 0 : 1)",
-      ],
+      execution: {
+        preparation: [],
+        assertion: { argv: [
+          process.execPath,
+          '-e',
+          "const ok=require('node:fs').readFileSync('src/example.ts','utf8').includes('value = 2');process.stdout.write('fixture-check-stdout\\n');process.stderr.write('fixture-check-stderr\\n');process.exit(ok ? 0 : 1)",
+        ] },
+      },
+      executionInputs: [],
       baseline: { mode: 'unknown' },
       verifierSelectors: [
         { kind: 'file', path: 'package.json', role: 'command-definition' },
         { kind: 'file', path: 'src/example.ts', role: 'acceptance-surface' },
       ],
     }],
-  }, null, 2)}\n`, 'utf8');
-  const prepared = runInstalledCli(['change', 'prepare', project, '--input', preparePath, '--json']);
+  };
+  const prepareReservation = runInstalledCli(['input', 'reserve', project, '--json']);
+  assert.equal(prepareReservation.transport, 'owned-file');
+  const preparePath = join(project, prepareReservation.path);
+  writeFileSync(preparePath, `${JSON.stringify(prepareDocument, null, 2)}\n`, 'utf8');
+  const prepared = runInstalledCli([
+    'change', 'prepare', project, '--input', prepareReservation.path, '--json',
+  ]);
   assert.equal(prepared.status, 'prepared');
-  assert.equal(prepared.taskContract.understanding.desiredOutcome.value, 'Change the exported fixture value with current facts.');
-  const taskProjection = JSON.parse(readFileSync(prepared.details.taskPath, 'utf8'));
-  assert.equal(taskProjection.workflow, 'cognitive-adoption');
-  assert.equal(taskProjection.packageIdentity.core.version, expectedVersion);
-  const guardPath = join(consumer, 'host-guard.mjs');
-  writeFileSync(guardPath, [
-    "import { guardFinalResponse } from '@sovea/stetra/host';",
-    'const result = await guardFinalResponse({ projectRoot: process.argv[2], taskId: process.argv[3] });',
-    'process.stdout.write(JSON.stringify(result));',
-    '',
-  ].join('\n'), 'utf8');
-  const preparedGuard = runJson(
-    process.execPath,
-    [guardPath, project, prepared.taskId],
-    consumer,
-    { shell: false },
+  assert.equal(existsSync(preparePath), false);
+  assert.equal('taskContract' in prepared, false);
+  const contractDetail = runInstalledCli([
+    'change', 'explain', project, '--task', prepared.taskId, '--section', 'contract', '--json',
+  ]);
+  assert.equal(
+    contractDetail.contract.understanding.desiredOutcome,
+    'Change the exported fixture value with current facts.',
   );
+  const guard = (knownActionFingerprint) => runInstalledCli([
+    'change', 'guard-final', project, '--task', prepared.taskId,
+    ...(knownActionFingerprint ? ['--known-action-fingerprint', knownActionFingerprint] : []),
+    '--json',
+  ]);
+  const reserveActionInput = (action) => {
+    const argv = [...action.inputBinding.reserve.argv.slice(1)];
+    argv[2] = project;
+    const reservation = runInstalledCli(argv);
+    return {
+      draft: JSON.parse(readFileSync(join(project, reservation.path), 'utf8')),
+      guide: JSON.parse(readFileSync(join(project, reservation.guide.path), 'utf8')),
+      path: reservation.path,
+    };
+  };
+  const preparedGuard = guard();
   assert.equal(preparedGuard.disposition, 'continue-workflow');
   assert.equal(preparedGuard.hostAction.kind, 'implement-and-collect');
+  assert.equal(preparedGuard.actionUnchanged, false);
   assert.equal(preparedGuard.stateWritten, false);
+  const repeatedGuard = guard(preparedGuard.actionFingerprint);
+  assert.equal(repeatedGuard.actionUnchanged, true);
+  assert.equal(repeatedGuard.hostAction, null);
+  assert.equal(repeatedGuard.actionFingerprint, preparedGuard.actionFingerprint);
 
   writeFileSync(join(project, 'src/example.ts'), 'export const value = 2;\n', 'utf8');
   const collected = runInstalledCli(['change', 'collect', project, '--task', prepared.taskId, '--json']);
   assert.equal(collected.status, 'facts-collected');
-  assert.deepEqual(collected.changedFiles.map((file) => [file.path, file.operation]), [['src/example.ts', 'modified']]);
-  assert.equal(collected.checks[0].status, 'passed');
-  assert.equal(collected.checks[0].stdout.byteLength, 21);
-  assert.equal(collected.checks[0].stderr.byteLength, 21);
-  assert.match(readFileSync(join(project, collected.checks[0].stdout.logPath), 'utf8'), /fixture-check-stdout/);
-  assert.match(readFileSync(join(project, collected.checks[0].stderr.logPath), 'utf8'), /fixture-check-stderr/);
-  assert.equal(existsSync(join(project, collected.patch.path)), true);
-  assert.equal(collected.hostAction.kind, 'perform-independent-challenge');
-  assert.equal(collected.hostAction.challengeExecutionRequest.agentProfile, 'stetra-challenger');
+  assert.equal(collected.summary.changedFiles.total, 1);
+  assert.equal(collected.summary.changedFiles.operations.modified, 1);
+  assert.equal(collected.summary.checks.latestStatuses.passed, 1);
+  const attemptDetail = runInstalledCli([
+    'change', 'explain', project, '--task', prepared.taskId, '--section', 'attempts', '--json',
+  ]).attempts.find((attempt) => attempt.attemptId === collected.attemptId).facts;
+  assert.equal(attemptDetail.changedFiles.total, 1);
+  assert.equal(attemptDetail.changedFiles.operations.modified, 1);
+  const changedFile = runInstalledCli([
+    'change', 'explain', project, '--task', prepared.taskId,
+    '--section', 'changed-file', '--attempt', collected.attemptId,
+    '--path', 'src/example.ts', '--json',
+  ]).changedFile;
+  assert.deepEqual([changedFile.path, changedFile.operation], ['src/example.ts', 'modified']);
+  const definitionId = contractDetail.contract.verificationPlan.definitions[0].definitionId;
+  const checkAttempt = runInstalledCli([
+    'change', 'explain', project, '--task', prepared.taskId,
+    '--section', 'check-attempt', '--attempt', collected.attemptId,
+    '--definition', definitionId, '--json',
+  ]).checkAttempt;
+  assert.equal(checkAttempt.status, 'passed');
+  assert.equal(checkAttempt.stdout.byteLength, 21);
+  assert.equal(checkAttempt.stderr.byteLength, 21);
+  const stdout = runInstalledCli([
+    'change', 'explain', project, '--task', prepared.taskId,
+    '--section', 'log', '--attempt', collected.attemptId,
+    '--definition', definitionId, '--stream', 'stdout', '--json',
+  ]).log.content;
+  const stderr = runInstalledCli([
+    'change', 'explain', project, '--task', prepared.taskId,
+    '--section', 'log', '--attempt', collected.attemptId,
+    '--definition', definitionId, '--stream', 'stderr', '--json',
+  ]).log.content;
+  assert.match(stdout, /fixture-check-stdout/);
+  assert.match(stderr, /fixture-check-stderr/);
+  assert.equal(existsSync(join(project, attemptDetail.patch.path)), true);
+  assert.equal(collected.hostAction.kind, 'author-handoff');
+  assert.equal('authoringPacket' in collected.hostAction, false);
+  const collectedInput = reserveActionInput(collected.hostAction);
+  assert.ok(collectedInput.draft.conditions[0].reviewDecisionKeys.length);
+  assert.ok(collectedInput.draft.conditions[0].obligations[0].reviewDecisionKeys.length);
+  assert.equal(collectedInput.draft.reviewDecisions.length, 1);
+  assert.equal(collectedInput.guide.schema.included, false);
+  assert.equal('inputSchema' in collectedInput.guide, false);
+  assert.match(collectedInput.guide.schema.command.argv.join(' '), /--part schema/);
+  const handoffInputSchema = runInstalledCli([
+    'change', 'explain', project, '--task', prepared.taskId,
+    '--section', 'action-input', '--stage', 'handoff', '--part', 'schema', '--json',
+  ]).inputSchema;
+  assert.ok(Object.keys(handoffInputSchema).length > 0);
 
-  const challengePath = join(temporary, 'challenge.json');
-  assert.equal(collected.hostAction.authoringPacket, undefined);
-  assert.match(
-    collected.hostAction.challengeExecutionRequest.bindsTo.challengeExecutionPacketFingerprint,
-    /^sha256:[0-9a-f]{64}$/,
-  );
-  const challengeDraft = structuredClone(collected.hostAction.challengeExecutionPacket.draft);
-  challengeDraft.falsificationAttempt = 'Inspected whether the passing command depends on the changed export.';
-  challengeDraft.observedResult = 'The packed command observes value 2 in a Host-observed separate context.';
-  challengeDraft.supportingEvidence = [{
-    statement: 'The current Runtime check supports the bounded export observation.',
-    references: challengeDraft.evidence.checks.map((id) => ({ kind: 'check', id })),
-  }];
-  challengeDraft.outcome = 'supported';
-  challengeDraft.conclusion = 'The bounded observation is supported by the Host-observed Challenge.';
-  writeFileSync(challengePath, `${JSON.stringify({
-    project,
-    taskId: prepared.taskId,
-    request: collected.hostAction.challengeExecutionRequest,
-    challenge: challengeDraft,
-  }, null, 2)}\n`, 'utf8');
-  const trustedChallengePath = join(consumer, 'trusted-challenge.mjs');
-  writeFileSync(trustedChallengePath, [
-    "import { readFileSync } from 'node:fs';",
-    "import { Readable } from 'node:stream';",
-    "import { HostChallengeLifecycle, runCli } from '@sovea/stetra/host';",
-    "const input = JSON.parse(readFileSync(process.argv[2], 'utf8'));",
-    "const lifecycle = new HostChallengeLifecycle('evaluation-runner');",
-    'lifecycle.observeStart({',
-    '  request: input.request,',
-    "  agentType: 'stetra-challenger',",
-    "  parentContextId: 'context:packed-implementer',",
-    "  challengerContextId: 'context:packed-challenger',",
-    "  mutationPolicy: 'host-read-only',",
-    '});',
-    'const stopped = lifecycle.observeStop({',
-    '  requestId: input.request.requestId,',
-    "  agentType: 'stetra-challenger',",
-    "  challengerContextId: 'context:packed-challenger',",
-    '  output: input.challenge,',
-    '});',
-    "if (stopped.status !== 'completed') throw new Error('Packed Challenge output is invalid.');",
-    'const execution = await runCli([',
-    "  'change', 'challenge', input.project, '--task', input.taskId, '--input', '-', '--json',",
-    '], {',
-    '  interactive: false, color: false,',
-    '  input: Readable.from([JSON.stringify(stopped.submission)]),',
-    '  hostAttestations: {',
-    "    provenance: 'evaluation-runner',",
-    '    async evaluatePolicies() { return []; },',
-    '    verifyChallengeRun: lifecycle.verifyChallengeRun,',
-    '  },',
-    '});',
-    "process.stdout.write(typeof execution.output === 'string' ? execution.output : JSON.stringify(execution.output));",
-    '',
-  ].join('\n'), 'utf8');
-  const challenged = runJson(process.execPath, [trustedChallengePath, challengePath], consumer, {
-    shell: false,
-  });
-  assert.equal(challenged.challenge.independence, 'host-attested');
-  assert.equal(challenged.hostAction.kind, 'author-handoff');
-  assert.ok(!challenged.hostAction.authoringPacket.outstandingObligations.some(
-    (item) => item.code === 'direct-human-review-required',
-  ));
-
-  const handoffPath = join(temporary, 'handoff.json');
-  const handoffDraft = structuredClone(challenged.hostAction.authoringPacket.draft);
-  const changedFileIds = challenged.hostAction.authoringPacket.referenceCatalog.changedFiles
-    .map((file) => file.id);
-  const checkIds = challenged.hostAction.authoringPacket.referenceCatalog.checks
-    .map((check) => check.definitionId);
-  handoffDraft.summary = 'The packed fixture now exports value 2 instead of value 1.';
-  for (const conclusion of handoffDraft.obligationConclusions) {
-    conclusion.status = 'supported';
-    conclusion.falsification = {
-      attempt: 'Inspected whether the passing command observes the changed export boundary.',
-      observedResult: 'The command result depended on the exported value being 2.',
-    };
-    conclusion.conclusion = 'The current check and Host-attested Challenge support the bounded obligation.';
+  const handoffPath = join(project, collectedInput.path);
+  const handoffDraft = structuredClone(collectedInput.draft);
+  handoffDraft.actualChange = {
+    behavior: 'The packed fixture now exports value 2 instead of value 1.',
+    mechanism: ['The public export is changed at its source definition.'],
+    preservedInvariants: ['Human adoption remains explicit.'],
+    failureAndRecovery: [],
+    importantEffects: ['Consumers now observe the value 2.'],
+    materialTradeoffs: [],
+  };
+  for (const condition of handoffDraft.conditions) {
+    condition.status = 'unknown';
+    condition.summary = 'The Runtime check passed, but required independent evidence is unavailable.';
+    for (const obligation of condition.obligations) {
+      obligation.status = 'unknown';
+      obligation.falsification = {
+        attempt: 'Inspected whether the passing command observes the changed export boundary.',
+        observedResult: 'The command result depended on the exported value being 2.',
+      };
+      obligation.evidenceCoverage = {
+        status: 'insufficient',
+        rationale: 'The Runtime check does not replace the required independent observation.',
+        gaps: ['No trustworthy fresh-context Challenge result is available.'],
+      };
+      obligation.conclusion =
+        'The bounded obligation remains unknown pending direct review.';
+    }
   }
-  for (const conclusion of handoffDraft.conditionConclusions) {
-    conclusion.status = 'supported';
-    conclusion.summary = 'The current evidence supports the bounded condition.';
-  }
-  handoffDraft.importantSystemEffects = ['The export is now 2.'];
-  for (const question of handoffDraft.reviewQuestions) {
-    question.question = 'Does the changed verifier still distinguish the intended exported value?';
-    question.evidence = [
-      ...changedFileIds.map((id) => ({ kind: 'changed-file', id })),
-      ...checkIds.map((id) => ({ kind: 'check', id })),
-    ];
-  }
+  handoffDraft.reviewDecisions[0].question =
+    'Does the changed verifier still distinguish the intended exported value?';
+  handoffDraft.reviewDecisions[0].adoptionImpact =
+    'A verifier that misses the export boundary could support an unsafe adoption.';
+  handoffDraft.reviewDecisions[0].nextAction =
+    'Inspect the exported value and changed verifier before deciding.';
   handoffDraft.recommendation = {
-    action: 'accept',
-    rationale: 'Current facts and the Host-attested Challenge support adoption review.',
-    caveats: [],
+    action: 'defer',
+    rationale: 'The required independent evidence path remains unavailable.',
+    caveats: ['The developer must inspect the frozen failure hypothesis directly.'],
   };
   writeFileSync(handoffPath, `${JSON.stringify(handoffDraft, null, 2)}\n`, 'utf8');
-  const handedOff = runInstalledCli(['change', 'handoff', project, '--task', prepared.taskId, '--input', handoffPath, '--json']);
+  const handoffArgv = [...collected.hostAction.command.argv.slice(1)];
+  handoffArgv[2] = project;
+  const handedOff = runInstalledCli(handoffArgv);
   assert.equal(handedOff.status, 'needs-attention');
-  assert.equal(handedOff.decisionPacket.runtimeFacts.checks[0].latestAttempt.status, 'passed');
-  assert.equal(handedOff.decisionPacket.systemMeaning.summary, 'The packed fixture now exports value 2 instead of value 1.');
-  assert.deepEqual(handedOff.decisionPacket.decision.adoption, { authority: 'human', status: 'pending' });
+  assert.equal('decisionPacket' in handedOff, false);
+  const decisionPacket = runInstalledCli([
+    'change', 'explain', project, '--task', prepared.taskId, '--section', 'decision-packet', '--json',
+  ]).decisionPacket;
+  assert.equal(decisionPacket.runtimeFacts.checks[0].latestAttempt.status, 'passed');
+  assert.equal(decisionPacket.actualChange.behavior, 'The packed fixture now exports value 2 instead of value 1.');
+  assert.deepEqual(decisionPacket.decision.adoption, { authority: 'human', status: 'pending' });
   assert.equal(handedOff.hostAction.kind, 'present-handoff-and-await-human-decision');
   assert.equal(handedOff.hostAction.command, undefined);
-  assert.equal(handedOff.hostAction.developerDecisionBrief.decisionState.adoption, 'pending');
-  assert.equal(handedOff.hostAction.developerDecisionBrief.decisionIssues.length > 0, true);
+  assert.equal(handedOff.hostAction.developerDecisionBrief.primary.decisionState.adoption, 'pending');
+  assert.equal(handedOff.hostAction.developerDecisionBrief.primary.changeMeaning.authority, 'agent-judgment');
+  assert.equal(handedOff.hostAction.developerDecisionBrief.primary.runtimeEvidence.authority, 'runtime-fact');
+  assert.equal(handedOff.hostAction.developerDecisionBrief.primary.requestedDecision.authority, 'human-decision');
+  assert.equal(handedOff.hostAction.developerDecisionBrief.primary.blockers.length > 0, true);
+  assert.equal(handedOff.hostAction.presentationRequirements.requiredAttentionIds.length > 0, true);
   assert.equal(handedOff.hostAction.decisionContinuation.requiresNewHumanEvent, true);
 
   const decisionPath = join(temporary, 'decision.json');
   writeFileSync(decisionPath, `${JSON.stringify({
     humanEvent: { content: 'Accept the packed fixture.' },
     action: 'accepted', reason: 'The current packet is acceptable.',
-    exceptions: handedOff.decisionPacket.attention.map((item) => ({
+    exceptions: decisionPacket.attention.map((item) => ({
       attentionId: item.id,
       rationale: 'The exact Attention item was inspected and is accepted for this bounded fixture.',
     })),
@@ -296,15 +297,19 @@ try {
   assert.equal(decided.externalEffects.committed, false);
   const explained = runInstalledCli(['change', 'explain', project, '--task', prepared.taskId, '--section', 'events', '--json']);
   assert.deepEqual(explained.events.map((event) => event.type), [
-    'task-prepared', 'facts-collected', 'challenge-recorded', 'handoff-evaluated', 'decision-recorded',
+    'task-prepared', 'facts-collected', 'handoff-evaluated', 'decision-recorded',
   ]);
+  const artifactIndex = runInstalledCli(['change', 'explain', project, '--task', prepared.taskId, '--json']);
+  assert.equal(artifactIndex.section, 'index');
+  assert.equal(artifactIndex.availableSections.find((section) => section.name === 'events').count, explained.events.length);
+  assert.equal('events' in artifactIndex, false);
+  assert.equal('contract' in artifactIndex, false);
 
   const status = runInstalledCli(['status', project, '--json']);
+  assert.equal(status.status, 'ready');
   assert.equal(status.controlPlane.kind, 'cli');
   assert.equal(status.installation.status, 'current');
-  const doctor = runInstalledCli(['doctor', project, '--strict', '--json']);
-  assert.equal(doctor.status, 'ok');
-  assert.equal(doctor.worktree, 'supported');
+  assert.deepEqual(status.worktree, { status: 'supported' });
 
   const legacy = run(process.execPath, [cliEntrypoint, 'change', 'finalize'], consumer, {
     shell: false, expectStatus: 2,

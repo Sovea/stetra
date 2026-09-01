@@ -1,7 +1,6 @@
 import { Command, InvalidArgumentError } from 'commander';
 import type { Readable } from 'node:stream';
 
-import { DEFAULT_CHECK_TIMEOUT_MS } from '../facts/checks.ts';
 import {
   collectDelegationFacts,
   diagnoseCollectedEvidence,
@@ -9,7 +8,7 @@ import {
   explainDelegationTask,
   guardFinalResponse,
   prepareDelegationTask,
-  recordChallenge,
+  resumeDelegationTask,
   recordHumanDecision,
   resolveHumanChoice,
   reviseVerificationPlan,
@@ -25,6 +24,14 @@ interface TaskOptions {
   task: string;
 }
 
+interface GuardFinalOptions extends TaskOptions {
+  knownActionFingerprint?: string;
+}
+
+interface ResumeOptions {
+  prepareRequest: string;
+}
+
 interface TaskInputOptions extends TaskOptions, InputOptions {}
 
 interface CollectOptions extends TaskOptions {
@@ -35,6 +42,21 @@ interface CollectOptions extends TaskOptions {
 
 interface ExplainOptions extends TaskOptions {
   section?: string;
+  stage?: string;
+  part?: string;
+  attempt?: string;
+  definition?: string;
+  disposition?: string;
+  event?: string;
+  humanEvent?: string;
+  evidence?: string;
+  materialDecision?: string;
+  condition?: string;
+  path?: string;
+  checkAttempt?: number;
+  step?: string;
+  stream?: string;
+  tailBytes?: number;
 }
 
 export function registerChangeCommands(
@@ -48,7 +70,7 @@ export function registerChangeCommands(
 
   change
     .command('prepare')
-    .description('Compile the Task Contract, plan, first Attempt, and Git baseline')
+    .description('Compile the Task Contract, first Attempt, and Git baseline')
     .argument('[project-root]', 'Git worktree root', '.')
     .option('--input <path>', 'Task Contract input JSON path, or - for stdin', '-')
     .action(async (projectRoot: string, options: InputOptions, command: Command) => {
@@ -56,7 +78,6 @@ export function registerChangeCommands(
         projectRoot,
         inputPath: options.input,
         input: environment.runtime.input,
-        hostAttestations: environment.runtime.hostAttestations,
         productVersion,
       }), command);
     });
@@ -68,7 +89,7 @@ export function registerChangeCommands(
     .requiredOption('--task <id>', 'task ID returned by prepare')
     .option(
       '--timeout-ms <milliseconds>',
-      `initial timeout for each check; defaults to ${DEFAULT_CHECK_TIMEOUT_MS} ms`,
+      'initial timeout for each check; defaults to the prepared task execution budget',
       parseTimeout,
     )
     .option(
@@ -86,12 +107,22 @@ export function registerChangeCommands(
         ...(options.timeoutMs === undefined ? {} : { timeoutMs: options.timeoutMs }),
         retryChecks: options.retryCheck.map(parseRetryCheck),
         refresh: options.refresh ?? false,
-        hostAttestations: environment.runtime.hostAttestations,
       }), command);
     });
 
-  registerInputStage(change, environment, 'diagnose', 'Judge every non-passing check and route evidence without guessing its cause', diagnoseCollectedEvidence);
-  registerInputStage(change, environment, 'challenge', 'Record a fresh-context challenge bound to current facts', recordChallenge);
+  change
+    .command('resume')
+    .description('Recover the exact current action for one Prepare transport identity')
+    .argument('[project-root]', 'Git worktree root', '.')
+    .requiredOption('--prepare-request <id>', 'prepareRequestId returned by input reserve')
+    .action((projectRoot: string, options: ResumeOptions, command: Command) => {
+      environment.emit('change resume', resumeDelegationTask({
+        projectRoot,
+        prepareRequestId: options.prepareRequest,
+      }), command);
+    });
+
+  registerInputStage(change, environment, 'diagnose', 'Judge every mechanical evidence concern and route it without guessing its cause', diagnoseCollectedEvidence);
   registerInputStage(change, environment, 'handoff', 'Evaluate a fact-bound Cognitive Handoff for Human review', evaluateDelegationHandoff);
   registerInputStage(change, environment, 'decide', 'Record the exact Human adoption decision', recordHumanDecision);
   registerInputStage(change, environment, 'resolve', 'Record an exact mid-task Human resolution and continue the lifecycle', resolveHumanChoice);
@@ -102,11 +133,12 @@ export function registerChangeCommands(
     .description('Read the current task state before a Host sends its final response')
     .argument('[project-root]', 'Git worktree root', '.')
     .requiredOption('--task <id>', 'task ID returned by prepare')
-    .action(async (projectRoot: string, options: TaskOptions, command: Command) => {
+    .option('--known-action-fingerprint <sha256>', 'omit an unchanged Host Action already held by the caller')
+    .action(async (projectRoot: string, options: GuardFinalOptions, command: Command) => {
       environment.emit('change guard-final', await guardFinalResponse({
         projectRoot,
         taskId: options.task,
-        hostAttestations: environment.runtime.hostAttestations,
+        knownActionFingerprint: options.knownActionFingerprint,
       }), command);
     });
 
@@ -115,28 +147,72 @@ export function registerChangeCommands(
     .description('Regenerate the current action or inspect durable workflow artifacts')
     .argument('[project-root]', 'Git worktree root', '.')
     .requiredOption('--task <id>', 'task ID returned by prepare')
-    .option('--section <name>', 'action, contract, baseline, plan, attempts, challenge, revision, handoff, decision, events, or all', 'all')
+    .option('--section <name>', 'bounded task view or exact artifact selector', 'index')
+    .option('--stage <name>', 'current input stage for action-input inspection')
+    .option('--part <name>', 'draft, guide, or schema for action-input inspection', 'guide')
+    .option('--attempt <id>', 'exact Attempt identity for attempt-scoped inspection')
+    .option('--definition <sha256>', 'exact Verification Definition identity for Check inspection')
+    .option('--disposition <sha256>', 'exact Evidence Disposition identity')
+    .option('--event <id>', 'exact lifecycle Event identity')
+    .option('--human-event <id>', 'exact Human Event identity')
+    .option('--evidence <id>', 'exact Repository Evidence identity')
+    .option('--material-decision <key>', 'exact Material Decision key')
+    .option('--condition <key>', 'exact Condition key')
+    .option('--path <path>', 'exact repository-relative baseline path')
+    .option('--check-attempt <number>', 'one-based Check execution attempt; defaults to latest', parsePositiveInteger)
+    .option('--step <id>', 'exact Check step identity; omit for the aggregate attempt')
+    .option('--stream <name>', 'stdout or stderr')
+    .option('--tail-bytes <bytes>', 'bounded persisted log tail, at most 65536 bytes', parseLogTailBytes, 8192)
     .action((projectRoot: string, options: ExplainOptions, command: Command) => {
       environment.emit('change explain', explainDelegationTask({
         projectRoot,
         taskId: options.task,
         section: options.section,
-        hostAttestations: environment.runtime.hostAttestations,
+        stage: options.stage,
+        part: options.part,
+        attemptId: options.attempt,
+        definitionId: options.definition,
+        dispositionId: options.disposition,
+        eventId: options.event,
+        humanEventId: options.humanEvent,
+        repositoryEvidenceId: options.evidence,
+        materialDecisionKey: options.materialDecision,
+        conditionKey: options.condition,
+        repositoryPath: options.path,
+        checkAttempt: options.checkAttempt,
+        stepId: options.step,
+        stream: options.stream,
+        tailBytes: options.tailBytes,
       }), command);
     });
+}
+
+function parsePositiveInteger(value: string): number {
+  const parsed = Number(value);
+  if (!Number.isSafeInteger(parsed) || parsed < 1) {
+    throw new InvalidArgumentError('must be a positive integer');
+  }
+  return parsed;
+}
+
+function parseLogTailBytes(value: string): number {
+  const parsed = parsePositiveInteger(value);
+  if (parsed > 65_536) {
+    throw new InvalidArgumentError('must be at most 65536');
+  }
+  return parsed;
 }
 
 function registerInputStage(
   change: Command,
   environment: CommandEnvironment,
-  name: 'diagnose' | 'challenge' | 'handoff' | 'decide' | 'resolve' | 'revise-verification',
+  name: 'diagnose' | 'handoff' | 'decide' | 'resolve' | 'revise-verification',
   description: string,
   operation: (options: {
     projectRoot: string;
     taskId: string;
     inputPath: string;
     input?: Readable;
-    hostAttestations?: CommandEnvironment['runtime']['hostAttestations'];
   }) => Promise<unknown>,
 ): void {
   change
@@ -151,7 +227,6 @@ function registerInputStage(
         taskId: options.task,
         inputPath: options.input,
         input: environment.runtime.input,
-        hostAttestations: environment.runtime.hostAttestations,
       }), command);
     });
 }

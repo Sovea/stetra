@@ -25,7 +25,7 @@ export function formatHumanResult(
 ): string {
   if (!isRecord(output)) return String(output);
   if (command === 'init') return formatInit(output, colors);
-  if (command === 'status' || command === 'doctor') {
+  if (command === 'status') {
     return formatReadiness(output, colors);
   }
   if (command === 'change prepare') return formatChangePrepare(output, colors);

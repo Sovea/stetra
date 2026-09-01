@@ -2,7 +2,6 @@ import type { Colors } from 'picocolors/types';
 
 import {
   appendHostAction,
-  countValues,
   formatCounts,
   heading,
   isRecord,
@@ -17,7 +16,13 @@ export function formatChangePrepare(output: JsonObject, colors: Colors): string 
     statusLine(status, colors),
   ];
   if (typeof output.taskId === 'string') lines.push(`${colors.bold('Task:')} ${output.taskId}`);
-  if (isRecord(output.taskContract)) appendContract(lines, output.taskContract, colors);
+  if (isRecord(output.summary) && isRecord(output.summary.contract)) {
+    const contract = output.summary.contract;
+    lines.push(
+      `${colors.bold('Contract:')} ${String(contract.conditionCount ?? 0)} conditions; `
+      + `${String(contract.obligationCount ?? 0)} obligations; ${String(contract.checkCount ?? 0)} checks`,
+    );
+  }
   if (Array.isArray(output.issues)) {
     for (const issue of output.issues) {
       if (isRecord(issue)) lines.push(`${colors.yellow('•')} ${String(issue.path)}: ${String(issue.message)}`);
@@ -43,22 +48,30 @@ export function formatChangeCollect(output: JsonObject, colors: Colors): string 
     statusLine(String(output.status ?? 'unknown'), colors),
   ];
   if (typeof output.attemptId === 'string') lines.push(`${colors.bold('Attempt:')} ${output.attemptId}`);
-  if (Array.isArray(output.changedFiles)) {
-    const counts = countValues(output.changedFiles.filter(isRecord).map((file) => String(file.operation ?? 'unknown')));
-    lines.push(`${colors.bold('Changed files:')} ${output.changedFiles.length}${formatCounts(counts)}`);
-  }
-  if (Array.isArray(output.checkInducedChanges) && output.checkInducedChanges.length) {
-    lines.push(`${colors.bold('Check-induced changes:')} ${output.checkInducedChanges.length}`);
-  }
-  if (Array.isArray(output.checks)) {
-    const counts = countValues(output.checks.filter(isRecord).map((check) => String(check.status ?? 'unknown')));
-    lines.push(`${colors.bold('Checks:')} ${output.checks.length}${formatCounts(counts)}`);
+  if (isRecord(output.summary)) {
+    const changedFiles = output.summary.changedFiles;
+    if (isRecord(changedFiles)) {
+      lines.push(`${colors.bold('Changed files:')} ${String(changedFiles.total ?? 0)}${formatRecordCounts(changedFiles.operations)}`);
+    }
+    if (Number(output.summary.checkInducedChanges ?? 0) > 0) {
+      lines.push(`${colors.bold('Check-induced changes:')} ${String(output.summary.checkInducedChanges)}`);
+    }
+    const checks = output.summary.checks;
+    if (isRecord(checks)) {
+      lines.push(`${colors.bold('Checks:')} ${String(checks.total ?? 0)}${formatRecordCounts(checks.latestStatuses)}`);
+    }
   }
   if (output.repeatedObservation === true) {
     lines.push(colors.yellow('The parent and current Attempt have the same collected change/check observation; no route is inferred from this fact.'));
   }
   appendHostAction(lines, output.hostAction, colors);
   return lines.join('\n');
+}
+
+function formatRecordCounts(value: unknown): string {
+  if (!isRecord(value)) return '';
+  return formatCounts(new Map(Object.entries(value).flatMap(([key, count]) =>
+    typeof count === 'number' ? [[key, count] as const] : [])));
 }
 
 export function formatChangeFinalize(output: JsonObject, colors: Colors): string {
@@ -84,26 +97,9 @@ export function formatChangeExplain(output: JsonObject, colors: Colors): string 
     if (isRecord(desired)) lines.push(`${colors.bold('Desired outcome:')} ${String(desired.value)}`);
   }
   if (Array.isArray(output.attempts)) lines.push(`${colors.bold('Attempts:')} ${output.attempts.length}`);
-  if (Array.isArray(output.challenges)) lines.push(`${colors.bold('Challenges:')} ${output.challenges.length}`);
   if (Array.isArray(output.events)) lines.push(`${colors.bold('Events:')} ${output.events.length}`);
   lines.push(colors.dim('Use --json for exact Human Events, Runtime facts, Agent judgments, and Human decisions.'));
   return lines.join('\n');
-}
-
-function appendContract(lines: string[], contract: JsonObject, colors: Colors): void {
-  if (isRecord(contract.understanding)) {
-    const desired = contract.understanding.desiredOutcome;
-    if (isRecord(desired)) lines.push('', `${colors.bold('Desired outcome:')} ${String(desired.value)}`);
-  }
-  if (Array.isArray(contract.adoptionConditions)) {
-    lines.push(colors.bold('Adoption Conditions'));
-    for (const condition of contract.adoptionConditions) {
-      if (isRecord(condition)) lines.push(`${colors.cyan('•')} ${String(condition.id)} [${String(condition.criticality)}] — ${String(condition.statement)}`);
-    }
-  }
-  if (isRecord(contract.plan)) {
-    lines.push(`${colors.bold('Delivery:')} repair budget ${String(contract.plan.maxRepairAttempts)}`);
-  }
 }
 
 function appendDecisionLayerFallback(lines: string[], packet: JsonObject, colors: Colors): void {
@@ -122,8 +118,8 @@ function appendDecisionLayerFallback(lines: string[], packet: JsonObject, colors
   if (Array.isArray(packet.conditions) && packet.conditions.length) {
     lines.push(colors.bold('Condition conclusions'));
     for (const condition of packet.conditions) {
-      if (isRecord(condition) && isRecord(condition.conclusion)) {
-        lines.push(`${colors.cyan('•')} ${String(condition.id)} — ${String(condition.conclusion.status)}`);
+      if (isRecord(condition) && isRecord(condition.agentFinding)) {
+        lines.push(`${colors.cyan('•')} ${String(condition.id)} — ${String(condition.agentFinding.status)}`);
       }
     }
   }
@@ -134,6 +130,8 @@ function appendDeveloperDecisionBrief(
   brief: JsonObject,
   colors: Colors,
 ): void {
+  if (!isRecord(brief.primary)) return;
+  brief = brief.primary;
   if (isRecord(brief.decisionState)) {
     const state = brief.decisionState;
     lines.push(
@@ -145,61 +143,95 @@ function appendDeveloperDecisionBrief(
       `${colors.bold('Human adoption:')} ${String(state.adoption ?? 'pending')}`,
     );
   }
+  if (isRecord(brief.recommendation)) {
+    lines.push(`${colors.bold('Why:')} ${String(brief.recommendation.rationale ?? '')}`);
+    if (Array.isArray(brief.recommendation.caveats)) {
+      for (const caveat of brief.recommendation.caveats) {
+        lines.push(`${colors.yellow('•')} Caveat: ${String(caveat)}`);
+      }
+    }
+  }
+  if (Array.isArray(brief.priorHumanResolutions) && brief.priorHumanResolutions.length) {
+    lines.push('', colors.bold('Prior developer resolutions'));
+    for (const resolution of brief.priorHumanResolutions) {
+      if (!isRecord(resolution)) continue;
+      lines.push(
+        `${colors.cyan('•')} ${String(resolution.target ?? 'unknown')} — ${String(resolution.action ?? 'unknown')}`,
+        `  ${String(resolution.reason ?? '')}`,
+      );
+    }
+  }
   if (isRecord(brief.changeMeaning)) {
+    const actual = isRecord(brief.changeMeaning.actualChange)
+      ? brief.changeMeaning.actualChange : {};
     lines.push(
       '',
-      `${colors.bold('Desired outcome:')} ${String(brief.changeMeaning.desiredOutcome ?? '')}`,
-      `${colors.bold('Actual system meaning:')} ${String(brief.changeMeaning.actualSystemMeaning ?? '')}`,
+      colors.bold('Agent interpretation'),
+      `${colors.bold('Intended outcome:')} ${String(brief.changeMeaning.intendedOutcome ?? '')}`,
+      `${colors.bold('Actual behavior:')} ${String(actual.behavior ?? '')}`,
     );
-    if (Array.isArray(brief.changeMeaning.importantSystemEffects)) {
-      for (const effect of brief.changeMeaning.importantSystemEffects) {
-        lines.push(`${colors.cyan('•')} ${String(effect)}`);
+    for (const [label, field] of [
+      ['Mechanism', 'mechanism'],
+      ['Preserved', 'preservedInvariants'],
+      ['Failure / recovery', 'failureAndRecovery'],
+      ['Important effect', 'importantEffects'],
+      ['Tradeoff', 'materialTradeoffs'],
+    ] as const) {
+      if (Array.isArray(actual[field])) {
+        for (const item of actual[field]) {
+          lines.push(`${colors.cyan('•')} ${label}: ${String(item)}`);
+        }
       }
     }
   }
   if (Array.isArray(brief.conditions) && brief.conditions.length) {
-    lines.push('', colors.bold('Adoption conditions'));
+    lines.push('', colors.bold('Agent findings and assurance'));
     for (const condition of brief.conditions) {
-      if (!isRecord(condition)) continue;
+      if (!isRecord(condition) || !isRecord(condition.finding)) continue;
       lines.push(
-        `${colors.cyan('•')} ${String(condition.statement ?? condition.id)} — ${String(condition.status ?? 'unknown')}`,
-        `  ${String(condition.summary ?? '')}`,
+        `${colors.cyan('•')} ${String(condition.statement ?? '')} — ${String(condition.finding.status ?? 'unknown')}`,
+        `  ${String(condition.finding.summary ?? '')}`,
       );
-      if (!Array.isArray(condition.obligations)) continue;
-      for (const obligation of condition.obligations) {
-        if (!isRecord(obligation) || !isRecord(obligation.evidenceBoundary)) continue;
-        lines.push(`  ${colors.cyan('↳')} ${String(obligation.statement ?? obligation.id)} — ${String(obligation.status ?? 'unknown')}`);
-        const findings = obligation.evidenceBoundary.challengeFindings;
-        if (!Array.isArray(findings)) continue;
-        for (const finding of findings) {
-          if (!isRecord(finding) || !Array.isArray(finding.counterEvidence)) continue;
-          for (const counterEvidence of finding.counterEvidence) {
-            if (isRecord(counterEvidence)) {
-              lines.push(`    Challenge counter-evidence: ${String(counterEvidence.statement ?? '')}`);
-            }
+      if (!Array.isArray(condition.evidence)) continue;
+      for (const obligation of condition.evidence) {
+        if (!isRecord(obligation)) continue;
+        lines.push(
+          `  ${colors.cyan('↳')} ${String(obligation.statement ?? '')} — ${String(obligation.finding ?? 'unknown')}`,
+          `    Evidence path: ${String(obligation.evidencePath ?? 'unknown')}; counter-evidence: ${String(obligation.counterEvidenceCount ?? 0)}`,
+        );
+      }
+    }
+  }
+  if (Array.isArray(brief.blockers) && brief.blockers.length) {
+    lines.push('', colors.bold('Adoption blockers'));
+    for (const issue of brief.blockers) {
+      if (!isRecord(issue)) continue;
+      const resolutions = Array.isArray(issue.resolutions) ? issue.resolutions.join(' / ') : 'inspect';
+      const codes = Array.isArray(issue.codes) ? issue.codes.join(', ') : 'attention-required';
+      lines.push(`${colors.yellow('•')} ${String(issue.group ?? 'delivery')} — ${resolutions} [${codes}]`);
+      if (Array.isArray(issue.affectedConditions)) {
+        for (const statement of issue.affectedConditions) lines.push(`  Affects: ${String(statement)}`);
+      }
+      if (Array.isArray(issue.residualUnknowns)) {
+        for (const unknown of issue.residualUnknowns) {
+          if (isRecord(unknown)) {
+            lines.push(`  Unknown: ${String(unknown.statement ?? '')}`);
           }
         }
       }
     }
   }
-  if (Array.isArray(brief.decisionIssues) && brief.decisionIssues.length) {
-    lines.push('', colors.bold('Decision issues'));
-    for (const issue of brief.decisionIssues) {
-      if (!isRecord(issue)) continue;
-      const codes = Array.isArray(issue.codes) ? issue.codes.join(' + ') : 'unknown';
-      const resolutions = Array.isArray(issue.resolutions) ? issue.resolutions.join(' / ') : 'inspect';
-      lines.push(`${colors.yellow('•')} ${codes} — ${resolutions} (${String(issue.id ?? '')})`);
-      if (Array.isArray(issue.residualUnknowns)) {
-        for (const unknown of issue.residualUnknowns) {
-          if (isRecord(unknown)) {
-            lines.push(`  Unknown: ${String(unknown.statement ?? '')}`, `  Next: ${String(unknown.nextAction ?? '')}`);
-          }
-        }
-      }
-      if (Array.isArray(issue.reviewQuestions)) {
-        for (const question of issue.reviewQuestions) {
-          if (isRecord(question)) lines.push(`  Review: ${String(question.question ?? '')}`);
-        }
+  if (Array.isArray(brief.reviewFocus) && brief.reviewFocus.length) {
+    lines.push('', colors.bold('Where direct review changes the decision'));
+    for (const item of brief.reviewFocus) {
+      if (!isRecord(item)) continue;
+      lines.push(
+        `${colors.cyan('•')} ${String(item.question ?? '')}`,
+        `  Adoption impact: ${String(item.adoptionImpact ?? '')}`,
+        `  Next: ${String(item.nextAction ?? '')}`,
+      );
+      if (Array.isArray(item.affectedConditions)) {
+        for (const statement of item.affectedConditions) lines.push(`  Affects: ${String(statement)}`);
       }
     }
   }
@@ -222,7 +254,7 @@ function appendDeveloperDecisionBrief(
       ? brief.runtimeEvidence.changedFiles : [];
     const checks = Array.isArray(brief.runtimeEvidence.checks)
       ? brief.runtimeEvidence.checks : [];
-    lines.push('', colors.bold('Runtime evidence'), `Changed files: ${changedFiles.length}`);
+    lines.push('', colors.bold('Runtime observations'), `Changed files: ${changedFiles.length}`);
     for (const check of checks) {
       if (isRecord(check)) {
         lines.push(`${colors.cyan('•')} ${JSON.stringify(check.argv ?? [])} — ${String(check.status ?? 'unknown')} (${String(check.baselineRelation ?? 'unknown')})`);
@@ -232,8 +264,7 @@ function appendDeveloperDecisionBrief(
   if (isRecord(brief.requestedDecision)) {
     const actions = Array.isArray(brief.requestedDecision.actions)
       ? brief.requestedDecision.actions.join(' / ') : '';
-    const exceptions = Array.isArray(brief.requestedDecision.acceptanceRequiresExceptionsFor)
-      ? brief.requestedDecision.acceptanceRequiresExceptionsFor.length : 0;
+    const exceptions = Number(brief.requestedDecision.acceptanceExceptionIssueCount ?? 0);
     lines.push(
       '',
       `${colors.bold('Developer decision required:')} ${actions}`,

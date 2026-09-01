@@ -4,6 +4,14 @@ import { finished } from 'node:stream/promises';
 import { execa } from 'execa';
 
 import { resolveExecutable } from './executable.ts';
+import {
+  forwardTerminationSignals,
+  ownedProcessGroupExists,
+  ownsDetachedProcessGroup,
+  PROCESS_OUTPUT_DRAIN_MS,
+  PROCESS_TERMINATION_GRACE_MS,
+  signalOwnedProcessTree,
+} from './process-supervisor.ts';
 
 export interface CommandResult {
   code?: string;
@@ -61,6 +69,7 @@ export async function runStreamingCommand(input: {
   cwd: string;
   env?: NodeJS.ProcessEnv;
   file: string;
+  stdin?: Buffer | string;
   onStderr?: (chunk: Buffer) => void;
   onStdout?: (chunk: Buffer) => void;
   stderr: Writable;
@@ -81,13 +90,12 @@ export async function runStreamingCommand(input: {
   const subprocess = execa(resolution.path, input.args, {
     buffer: false,
     cwd: input.cwd,
+    detached: ownsDetachedProcessGroup(),
     env: input.env,
-    forceKillAfterDelay: 1_000,
     reject: false,
     stderr: 'pipe',
-    stdin: 'ignore',
+    stdin: input.stdin === undefined ? 'ignore' : 'pipe',
     stdout: 'pipe',
-    timeout: input.timeoutMs,
   });
   let executionError: NodeJS.ErrnoException | undefined;
   subprocess.once('error', (error: NodeJS.ErrnoException) => {
@@ -96,13 +104,65 @@ export async function runStreamingCommand(input: {
   if (!subprocess.stdout || !subprocess.stderr) {
     throw new Error('Command runner failed to create stdout/stderr pipes.');
   }
+  if (input.stdin !== undefined) subprocess.stdin?.end(input.stdin);
   subprocess.stdout.on('data', (chunk: Buffer) => input.onStdout?.(chunk));
   subprocess.stderr.on('data', (chunk: Buffer) => input.onStderr?.(chunk));
   subprocess.stdout.pipe(input.stdout);
   subprocess.stderr.pipe(input.stderr);
-  const result = await subprocess;
-  await outputFinished;
-  return normalizeCommandResult(result, executionError);
+  const pid = subprocess.pid;
+  if (pid === undefined) {
+    const result = await subprocess;
+    await outputFinished;
+    return normalizeCommandResult(result, executionError);
+  }
+  const removeSignalForwarding = forwardTerminationSignals(pid);
+  let timedOut = false;
+  let outputDrainForced = false;
+  let forceTimer: NodeJS.Timeout | undefined;
+  let drainTimer: NodeJS.Timeout | undefined;
+  let forceCompleted: Promise<void> | undefined;
+  const timeoutTimer = setTimeout(() => {
+    timedOut = true;
+    signalOwnedProcessTree(pid, 'SIGTERM');
+    forceCompleted = new Promise((resolve) => {
+      forceTimer = setTimeout(() => {
+        signalOwnedProcessTree(pid, 'SIGKILL');
+        resolve();
+        drainTimer = setTimeout(() => {
+          outputDrainForced = true;
+          subprocess.stdout?.unpipe(input.stdout);
+          subprocess.stderr?.unpipe(input.stderr);
+          subprocess.stdout?.destroy();
+          subprocess.stderr?.destroy();
+          if (!input.stdout.writableEnded) input.stdout.end();
+          if (!input.stderr.writableEnded) input.stderr.end();
+        }, PROCESS_OUTPUT_DRAIN_MS);
+      }, PROCESS_TERMINATION_GRACE_MS);
+    });
+  }, input.timeoutMs);
+
+  try {
+    const result = await subprocess;
+    await outputFinished;
+    if (timedOut && ownedProcessGroupExists(pid) !== false) {
+      await forceCompleted;
+      // After group-directed SIGKILL is issued, kill(-pgid, 0) can continue to
+      // observe unreaped zombies. In a nested PID namespace, reaping may depend
+      // on this command returning. Bound output closure separately instead of
+      // turning kernel reaping lag into an unavailable Runtime observation.
+    }
+    if (outputDrainForced) {
+      throw new Error(
+        `Command process group ${pid} did not close its output after forced termination.`,
+      );
+    }
+    return normalizeCommandResult(result, executionError, timedOut);
+  } finally {
+    clearTimeout(timeoutTimer);
+    if (forceTimer) clearTimeout(forceTimer);
+    if (drainTimer) clearTimeout(drainTimer);
+    removeSignalForwarding();
+  }
 }
 
 function unavailableCommandResult(
@@ -127,7 +187,7 @@ function normalizeCommandResult(result: {
   shortMessage?: string;
   signal?: string;
   timedOut: boolean;
-}, executionError: NodeJS.ErrnoException | undefined): CommandResult {
+}, executionError: NodeJS.ErrnoException | undefined, timedOut = result.timedOut): CommandResult {
   const code = executionError?.code ?? result.code;
   const hasExecutionError = executionError !== undefined || code !== undefined;
   return {
@@ -140,6 +200,6 @@ function normalizeCommandResult(result: {
     failed: result.failed,
     message: result.shortMessage ?? result.message ?? executionError?.message,
     signal: result.signal ?? null,
-    timedOut: result.timedOut,
+    timedOut,
   };
 }

@@ -33,7 +33,6 @@ export function formatInit(output: JsonObject, colors: Colors): string {
       );
     }
   }
-  appendRequired(lines, output.readiness, colors);
   return lines.join('\n');
 }
 
@@ -46,27 +45,24 @@ export function formatReadiness(output: JsonObject, colors: Colors): string {
   if (typeof output.version === 'string') {
     lines.push(`${colors.bold('Version:')} ${output.version}`);
   }
-  if (isRecord(output.readiness)) {
-    lines.push(`${colors.bold('Readiness:')} ${statusValue(
-      String(output.readiness.status ?? 'unknown'),
-      colors,
-    )}`);
-    appendRequired(lines, output.readiness, colors);
-  }
   if (isRecord(output.installation)) {
     lines.push(`${colors.bold('Installation:')} ${statusValue(
       String(output.installation.status ?? 'unknown'),
       colors,
     )}`);
   }
-  return lines.join('\n');
-}
-
-function appendRequired(lines: string[], readiness: unknown, colors: Colors): void {
-  if (!isRecord(readiness) || !Array.isArray(readiness.required) || !readiness.required.length) return;
-  lines.push('', colors.bold('Required'));
-  for (const action of readiness.required) {
-    if (!isRecord(action)) continue;
-    lines.push(`${colors.yellow('!')} ${String(action.message ?? action.code)}`);
+  if (isRecord(output.worktree)) {
+    lines.push(`${colors.bold('Git worktree:')} ${statusValue(
+      String(output.worktree.status ?? 'unknown'),
+      colors,
+    )}`);
   }
+  if (Array.isArray(output.issues) && output.issues.length) {
+    lines.push('', colors.bold('Required'));
+    for (const issue of output.issues) {
+      if (!isRecord(issue)) continue;
+      lines.push(`${colors.yellow('!')} ${String(issue.message ?? issue.code)}`);
+    }
+  }
+  return lines.join('\n');
 }

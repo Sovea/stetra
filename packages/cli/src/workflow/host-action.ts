@@ -1,44 +1,22 @@
 import type {
-  DeveloperEventInput,
   FactBundle,
   HandoffStatus,
   MaterialDecisionForkInput,
-  TaskMeaningInput,
+  DecisionPacket,
 } from '@sovea/stetra-core';
 
-import type { AuthoringPacket } from './authoring.ts';
-import type { ChallengeExecutionPacket } from './challenge-projection.ts';
+import { authoringStage, type AuthoringPacket } from './authoring.ts';
 import type { DeveloperDecisionBrief } from './decision-brief.ts';
+import type { HostEnvironmentDisclosure } from '../runtime-context.ts';
 import { stableFingerprint } from '../protocol.ts';
+import {
+  ownedInputReservation,
+  taskOwnedInputToken,
+  type OwnedInputReservation,
+} from '../host/owned-input.ts';
 
 export type HostWorkflowReference =
-  | 'change'
-  | 'delivery'
-  | 'challenge'
-  | 'handoff'
   | 'recovery';
-
-export interface ChallengeExecutionRequest {
-  requestId: string;
-  role: 'independent-challenger';
-  agentProfile: 'stetra-challenger';
-  bindsTo: {
-    taskId: string;
-    effectiveContractId: string;
-    attemptId: string;
-    factCollectionId: string;
-    challengeExecutionPacketFingerprint: string;
-  };
-  contextPolicy: 'fresh-required';
-  mutationPolicy: 'forbidden';
-  parallelism: 'single';
-  outputRepairBudget: 1;
-  expectedOutput: {
-    serialization: 'json';
-    schema: 'challenge-document';
-    source: 'challengeExecutionPacket.draft';
-  };
-}
 
 export interface HostAction {
   kind:
@@ -47,7 +25,6 @@ export interface HostAction {
     | 'revise-verification'
     | 'retry-timed-out-check'
     | 'recollect-stale-facts'
-    | 'perform-independent-challenge'
     | 'author-handoff'
     | 'present-handoff-and-await-human-decision'
     | 'resolve-human-choice'
@@ -56,28 +33,27 @@ export interface HostAction {
     | 'resolve-evidence-decision';
   reference: HostWorkflowReference | null;
   command?: { argv: string[] };
+  finalResponseGuard?: { argv: string[] };
   inputBinding?: {
-    transport: 'stdin';
-    source: 'authoringPacket.draft' | 'hostChallengeSubmission';
-    serialization: 'json';
-    execution: 'one-shot';
+    inputKind: AuthoringPacket['inputKind'];
+    projectionFingerprint: string;
+    bindsTo: AuthoringPacket['bindsTo'];
+    draftPath: string;
+    guidePath: string;
+    reserve: { argv: string[] };
   };
-  authoringPacket?: AuthoringPacket;
-  challengeExecutionPacket?: ChallengeExecutionPacket;
-  challengeExecutionRequest?: ChallengeExecutionRequest;
   developerDecisionBrief?: DeveloperDecisionBrief;
   presentationRequirements?: {
     leadWithDecisionState: true;
     requiredConditionIds: string[];
-    requiredDecisionIssueIds: string[];
-    requiredReviewQuestionIds: string[];
+    requiredAttentionIds: string[];
+    requiredReviewDecisionIds: string[];
     prohibitImpliedAdoption: true;
   };
   decisionContinuation?: {
     requiresNewHumanEvent: true;
     command: { argv: string[] };
     inputBinding: NonNullable<HostAction['inputBinding']>;
-    authoringPacket: AuthoringPacket;
   };
   clarificationBrief?: ClarificationBrief;
   clarificationContinuation?: {
@@ -85,12 +61,25 @@ export interface HostAction {
     prepareRequestId: string;
     requiresNewHumanEvent: true;
   };
+  prepareContinuation?: {
+    prepareRequestId: string;
+    taskId: string;
+    requiresNewHumanEvent: boolean;
+    input: OwnedInputReservation;
+    command: { argv: string[] };
+  };
+}
+
+const authoringPackets = new WeakMap<object, AuthoringPacket>();
+
+export function hostActionAuthoringPacket(
+  action: HostAction | NonNullable<HostAction['decisionContinuation']>,
+): AuthoringPacket | undefined {
+  return authoringPackets.get(action);
 }
 
 export interface ClarificationBrief {
   prepareRequestId: string;
-  developerEvents: DeveloperEventInput[];
-  taskInterpretation: TaskMeaningInput;
   forks: MaterialDecisionForkInput[];
 }
 
@@ -106,7 +95,9 @@ export interface FinalResponseGuard {
     | 'human-decision-recorded';
   factsCurrent: boolean;
   actionFingerprint: string;
+  actionUnchanged: boolean;
   hostAction: HostAction | null;
+  hostEnvironment: HostEnvironmentDisclosure;
   stateWritten: false;
 }
 
@@ -118,7 +109,7 @@ export function compileProblemHostAction(
     if (!clarificationBrief) throw new Error('Semantic decision action requires a clarification brief.');
     return {
       kind: 'resolve-human-choice',
-      reference: 'change',
+      reference: null,
       clarificationBrief,
       clarificationContinuation: {
         kind: 'reprepare',
@@ -128,9 +119,9 @@ export function compileProblemHostAction(
     };
   }
   if (status === 'verification-required') {
-    return { kind: 'configure-verification', reference: 'change' };
+    return { kind: 'configure-verification', reference: null };
   }
-  return { kind: 'correct-protocol-input', reference: 'change' };
+  return { kind: 'correct-protocol-input', reference: null };
 }
 
 export function unavailableVerificationHostAction(): HostAction {
@@ -140,8 +131,9 @@ export function unavailableVerificationHostAction(): HostAction {
 export function preparedHostAction(taskId: string): HostAction {
   return {
     kind: 'implement-and-collect',
-    reference: 'delivery',
+    reference: null,
     command: taskCommand('collect', taskId),
+    finalResponseGuard: guardCommand(taskId),
   };
 }
 
@@ -149,93 +141,64 @@ export function collectedHostAction(input: {
   facts: FactBundle;
   taskId: string;
   diagnosisPacket: AuthoringPacket;
-  challengePacket?: ChallengeExecutionPacket;
   handoffPacket: AuthoringPacket;
-  pendingChallengeObligationIds: string[];
+  timeoutRetryLimits: Map<string, number>;
 }): HostAction {
   const timedOut = input.facts.checks.filter((check) =>
-    latestAttempt(check).termination.kind === 'timeout');
+    latestAttempt(check).termination.kind === 'timeout'
+    && input.timeoutRetryLimits.has(check.definitionId));
   if (timedOut.length) {
     const argv = taskCommand('collect', input.taskId).argv;
     for (const check of timedOut) {
       const latest = latestAttempt(check);
-      argv.splice(-1, 0, '--retry-check', `${check.definitionId}=<integer-greater-than-${latest.timeoutMs}>`);
+      const maximum = input.timeoutRetryLimits.get(check.definitionId)!;
+      argv.splice(
+        -1,
+        0,
+        '--retry-check',
+        `${check.definitionId}=<integer-greater-than-${latest.timeoutMs}-and-at-most-${maximum}>`,
+      );
     }
     return {
       kind: 'retry-timed-out-check',
       reference: 'recovery',
       command: { argv },
+      finalResponseGuard: guardCommand(input.taskId),
     };
   }
-  if (input.facts.checks.some((check) => latestAttempt(check).status !== 'passed')) {
-    return inputAction('diagnose-collected-evidence', 'recovery', 'diagnose', input.taskId, input.diagnosisPacket);
-  }
-  if (input.pendingChallengeObligationIds.length) {
-    return challengeInputAction(
-      input.taskId,
-      requiredChallengeExecutionPacket(input.challengePacket, 'challenge'),
+  if (input.facts.evidenceConcerns.length) {
+    return inputAction(
+      'diagnose-collected-evidence', 'recovery', input.taskId, input.diagnosisPacket,
     );
   }
-  return inputAction('author-handoff', 'handoff', 'handoff', input.taskId, input.handoffPacket);
+  return inputAction('author-handoff', null, input.taskId, input.handoffPacket);
 }
 
 export function diagnosisHostAction(
   route:
-    | 'repair-implementation'
+    | 'repair-delivery'
     | 'revise-verification'
-    | 'challenge'
     | 'handoff'
     | 'ask-human',
   taskId: string,
-  packet?: AuthoringPacket | ChallengeExecutionPacket,
+  packet?: AuthoringPacket,
 ): HostAction {
-  if (route === 'repair-implementation') return preparedHostAction(taskId);
+  if (route === 'repair-delivery') return preparedHostAction(taskId);
   if (route === 'revise-verification') {
     return inputAction(
-      'revise-verification', 'recovery', 'revise-verification', taskId,
-      requiredAuthoringPacket(packet, route),
+      'revise-verification', 'recovery', taskId, requiredAuthoringPacket(packet, route),
     );
-  }
-  if (route === 'challenge') {
-    return challengeInputAction(taskId, requiredChallengeExecutionPacket(packet, route));
   }
   if (route === 'handoff') {
     return inputAction(
-      'author-handoff', 'handoff', 'handoff', taskId,
-      requiredAuthoringPacket(packet, route),
+      'author-handoff', null, taskId, requiredAuthoringPacket(packet, route),
     );
   }
   return resolutionHostAction(taskId, requiredAuthoringPacket(packet, route));
 }
 
-export function challengeHostAction(
-  taskId: string,
-  needsAnotherChallenge: boolean,
-  packet: AuthoringPacket | ChallengeExecutionPacket,
-): HostAction {
-  return needsAnotherChallenge
-    ? challengeInputAction(taskId, requiredChallengeExecutionPacket(packet, 'challenge'))
-    : inputAction(
-        'author-handoff', 'handoff', 'handoff', taskId,
-        requiredAuthoringPacket(packet, 'handoff'),
-      );
-}
-
-export function adverseChallengeHostAction(
-  taskId: string,
-  packet: AuthoringPacket,
-): HostAction {
-  return inputAction(
-    'diagnose-collected-evidence',
-    'recovery',
-    'diagnose',
-    taskId,
-    packet,
-  );
-}
-
 export function resolutionHostAction(taskId: string, packet: AuthoringPacket): HostAction {
-  return inputAction('resolve-evidence-decision', 'recovery', 'resolve', taskId, packet);
+  return inputAction('resolve-evidence-decision', 'recovery', taskId, packet);
 }
 
 export function staleFactsHostAction(taskId: string): HostAction {
@@ -243,6 +206,7 @@ export function staleFactsHostAction(taskId: string): HostAction {
     kind: 'recollect-stale-facts',
     reference: 'recovery',
     command: taskCommand('collect', taskId),
+    finalResponseGuard: guardCommand(taskId),
   };
 }
 
@@ -251,28 +215,30 @@ export function handoffHostAction(
   taskId: string,
   brief: DeveloperDecisionBrief,
   packet: AuthoringPacket,
+  decisionPacket?: DecisionPacket,
 ): HostAction {
   const continuation = inputAction(
-    'present-handoff-and-await-human-decision', 'handoff', 'decide', taskId, packet,
+    'present-handoff-and-await-human-decision', null, taskId, packet,
   );
+  const decisionContinuation = {
+    requiresNewHumanEvent: true as const,
+    command: continuation.command!,
+    inputBinding: continuation.inputBinding!,
+  };
+  authoringPackets.set(decisionContinuation, packet);
   return {
     kind: 'present-handoff-and-await-human-decision',
-    reference: 'handoff',
+    reference: null,
+    finalResponseGuard: guardCommand(taskId),
     developerDecisionBrief: brief,
     presentationRequirements: {
       leadWithDecisionState: true,
-      requiredConditionIds: brief.conditions.map((condition) => condition.id),
-      requiredDecisionIssueIds: brief.decisionIssues.map((issue) => issue.id),
-      requiredReviewQuestionIds: [...new Set(brief.decisionIssues.flatMap((issue) =>
-        issue.reviewQuestions.map((question) => question.id)))].sort(),
+      requiredConditionIds: decisionPacket?.conditions.map((condition) => condition.id) ?? [],
+      requiredAttentionIds: decisionPacket?.attention.map((item) => item.id) ?? [],
+      requiredReviewDecisionIds: decisionPacket?.reviewDecisions.map((question) => question.id) ?? [],
       prohibitImpliedAdoption: true,
     },
-    decisionContinuation: {
-      requiresNewHumanEvent: true,
-      command: continuation.command!,
-      inputBinding: continuation.inputBinding!,
-      authoringPacket: packet,
-    },
+    decisionContinuation,
   };
 }
 
@@ -280,97 +246,72 @@ function taskCommand(stage: 'collect', taskId: string): { argv: string[] } {
   return { argv: ['stetra', 'change', stage, '.', '--task', taskId, '--json'] };
 }
 
+function guardCommand(taskId: string): { argv: string[] } {
+  return { argv: ['stetra', 'change', 'guard-final', '.', '--task', taskId, '--json'] };
+}
+
 function inputAction(
   kind: HostAction['kind'],
-  reference: HostWorkflowReference,
-  stage:
-    | 'diagnose'
-    | 'revise-verification'
-    | 'challenge'
-    | 'handoff'
-    | 'decide'
-    | 'resolve',
+  reference: HostWorkflowReference | null,
   taskId: string,
   authoringPacket: AuthoringPacket,
 ): HostAction {
-  return {
+  const stage = authoringStage(authoringPacket.inputKind);
+  const binding = inputBinding(
+    stage,
+    taskId,
+    authoringPacket.inputKind,
+    authoringPacket.bindsTo,
+    stableFingerprint(authoringPacket),
+  );
+  const action: HostAction = {
     kind,
     reference,
     command: {
-      argv: ['stetra', 'change', stage, '.', '--task', taskId, '--input', '-', '--json'],
+      argv: ['stetra', 'change', stage, '.', '--task', taskId, '--input', binding.draftPath, '--json'],
     },
-    inputBinding: {
-      transport: 'stdin',
-      source: 'authoringPacket.draft',
-      serialization: 'json',
-      execution: 'one-shot',
-    },
-    authoringPacket,
+    finalResponseGuard: guardCommand(taskId),
+    inputBinding: binding,
   };
+  authoringPackets.set(action, authoringPacket);
+  return action;
 }
 
-function challengeInputAction(
+function inputBinding(
+  stage: 'diagnose' | 'revise-verification' | 'handoff' | 'decide' | 'resolve',
   taskId: string,
-  challengeExecutionPacket: ChallengeExecutionPacket,
-): HostAction {
-  const factCollectionId = challengeExecutionPacket.bindsTo.factCollectionId;
-  const challengeExecutionPacketFingerprint = stableFingerprint(challengeExecutionPacket);
-  const requestBody = {
-    role: 'independent-challenger' as const,
-    agentProfile: 'stetra-challenger' as const,
-    bindsTo: {
-      taskId,
-      effectiveContractId: challengeExecutionPacket.bindsTo.effectiveContractId,
-      attemptId: challengeExecutionPacket.bindsTo.attemptId,
-      factCollectionId,
-      challengeExecutionPacketFingerprint,
-    },
-    contextPolicy: 'fresh-required' as const,
-    mutationPolicy: 'forbidden' as const,
-    parallelism: 'single' as const,
-    outputRepairBudget: 1 as const,
-    expectedOutput: {
-      serialization: 'json' as const,
-      schema: 'challenge-document' as const,
-      source: 'challengeExecutionPacket.draft' as const,
-    },
-  };
+  inputKind: NonNullable<HostAction['inputBinding']>['inputKind'],
+  bindsTo: NonNullable<HostAction['inputBinding']>['bindsTo'],
+  projectionFingerprint: string,
+): NonNullable<HostAction['inputBinding']> {
+  const token = taskOwnedInputToken(taskId, stableFingerprint({
+    taskId,
+    stage,
+    inputKind,
+    projectionFingerprint,
+  }));
+  const reservation = ownedInputReservation('.', token);
   return {
-    kind: 'perform-independent-challenge',
-    reference: 'challenge',
-    command: {
-      argv: ['stetra', 'change', 'challenge', '.', '--task', taskId, '--input', '-', '--json'],
-    },
-    inputBinding: {
-      transport: 'stdin',
-      source: 'hostChallengeSubmission',
-      serialization: 'json',
-      execution: 'one-shot',
-    },
-    challengeExecutionPacket,
-    challengeExecutionRequest: {
-      requestId: stableFingerprint(requestBody),
-      ...requestBody,
+    inputKind,
+    projectionFingerprint,
+    bindsTo,
+    draftPath: reservation.path,
+    guidePath: reservation.path.replace(/\.json$/, '.guide.json'),
+    reserve: {
+      argv: [
+        'stetra', 'input', 'reserve', '.', '--token', token,
+        '--task', taskId, '--stage', stage, '--json',
+      ],
     },
   };
 }
 
 function requiredAuthoringPacket(
-  packet: AuthoringPacket | ChallengeExecutionPacket | undefined,
+  packet: AuthoringPacket | undefined,
   route: string,
 ): AuthoringPacket {
-  if (!packet || packet.inputKind === 'challenge') {
-    throw new Error(`Route ${route} requires an Authoring Packet.`);
-  }
-  return packet;
-}
-
-function requiredChallengeExecutionPacket(
-  packet: AuthoringPacket | ChallengeExecutionPacket | undefined,
-  route: string,
-): ChallengeExecutionPacket {
-  if (!packet || packet.inputKind !== 'challenge') {
-    throw new Error(`Route ${route} requires a Challenge Execution Packet.`);
+  if (!packet) {
+    throw new Error(`Route ${route} requires an Authoring Projection.`);
   }
   return packet;
 }

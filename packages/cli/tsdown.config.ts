@@ -1,6 +1,6 @@
 /** Build the public CLI while keeping the separately published Core external. */
 export default {
-  entry: ['./src/index.ts', './src/host.ts'],
+  entry: ['./src/index.ts'],
   format: 'esm',
   outDir: 'dist',
   platform: 'node',

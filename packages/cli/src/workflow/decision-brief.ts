@@ -4,51 +4,125 @@ import type {
   HandoffAttentionItem,
   HandoffEvaluation,
   HumanDecisionAction,
-  ReviewQuestion,
+  ReviewDecision,
   TaskContract,
 } from '@sovea/stetra-core';
 
-import { HUMAN_DECISION_ACTIONS, type TaskProjection } from '../schemas/delegation.ts';
+import {
+  HUMAN_DECISION_ACTIONS,
+  type DerivedTaskState,
+  type TaskProjection,
+} from '../schemas/delegation.ts';
 import { stableFingerprint } from '../protocol.ts';
 
-export interface DeveloperDecisionBrief {
+export interface DeveloperDecisionPrimary {
   decisionState: {
-    delivery: TaskProjection['deliveryStatus'];
+    delivery: DerivedTaskState['deliveryStatus'];
     evidence: HandoffEvaluation['status'];
     recommendation: DecisionPacket['decision']['recommendation']['action'];
     adoption: HandoffEvaluation['adoption']['status'];
   };
   changeMeaning: {
-    desiredOutcome: string;
-    actualSystemMeaning: string;
-    importantSystemEffects: string[];
+    authority: 'agent-judgment';
+    intendedOutcome: string;
+    actualChange: DecisionPacket['actualChange'];
   };
+  recommendation: DecisionPacket['decision']['recommendation'];
+  priorHumanResolutions: Array<{
+    target: DecisionPacket['decision']['resolutions'][number]['interpretation']['target']['kind'];
+    action: DecisionPacket['decision']['resolutions'][number]['interpretation']['action'];
+    reason: string;
+  }>;
   conditions: Array<{
+    statement: string;
+    criticality: 'material' | 'adoption-critical';
+    finding: {
+      status: DecisionPacket['conditions'][number]['agentFinding']['status'];
+      summary: string;
+    };
+    evidence: Array<{
+      statement: string;
+      finding: DecisionPacket['conditions'][number]['obligations'][number]['agentFinding']['status'];
+      evidencePath: DecisionPacket['conditions'][number]['obligations'][number]['evidencePath']['status'];
+      counterEvidenceCount: number;
+    }>;
+  }>;
+  blockers: Array<{
+    group: DeveloperDecisionIssue['group'];
+    codes: HandoffAttentionCode[];
+    resolutions: HandoffAttentionItem['resolution']['kind'][];
+    affectedConditions: string[];
+    residualUnknowns: Array<{
+      statement: string;
+    }>;
+    reviewDecisions: Array<{ question: string; adoptionImpact: string; nextAction: string }>;
+  }>;
+  reviewFocus: Array<{
+    question: string;
+    adoptionImpact: string;
+    nextAction: string;
+    affectedConditions: string[];
+  }>;
+  runtimeEvidence: {
+    authority: 'runtime-fact';
+    changedFiles: Array<{
+      path: string;
+      operation: DecisionPacket['runtimeFacts']['changedFiles'][number]['operation'];
+      representation: DecisionPacket['runtimeFacts']['changedFiles'][number]['representation'];
+    }>;
+    checks: Array<{
+      argv: string[];
+      status: DecisionPacket['runtimeFacts']['checks'][number]['latestAttempt']['status'];
+      termination: DecisionPacket['runtimeFacts']['checks'][number]['latestAttempt']['termination'];
+      baselineRelation: DecisionPacket['runtimeFacts']['checks'][number]['baselineRelation'];
+      attemptCount: number;
+    }>;
+  };
+  requestedDecision: {
+    authority: 'human-decision';
+    actions: HumanDecisionAction[];
+    acceptanceExceptionIssueCount: number;
+  };
+}
+
+interface DeveloperDecisionDetails {
+  decisionState: {
+    delivery: DerivedTaskState['deliveryStatus'];
+    evidence: HandoffEvaluation['status'];
+    recommendation: DecisionPacket['decision']['recommendation']['action'];
+    adoption: HandoffEvaluation['adoption']['status'];
+  };
+  changeMeaning: {
+    authority: 'agent-judgment';
+    intendedOutcome: string;
+    actualChange: DecisionPacket['actualChange'];
+  };
+  recommendation: DecisionPacket['decision']['recommendation'];
+  priorHumanResolutions: DecisionPacket['decision']['resolutions'];
+  conditions: Array<{
+    authority: 'agent-judgment';
     id: string;
     statement: string;
     criticality: 'material' | 'adoption-critical';
-    status: DecisionPacket['conditions'][number]['conclusion']['status'];
+    status: DecisionPacket['conditions'][number]['agentFinding']['status'];
     summary: string;
     obligations: Array<{
       id: string;
       statement: string;
-      status: DecisionPacket['conditions'][number]['obligations'][number]['conclusion']['status'];
+      status: DecisionPacket['conditions'][number]['obligations'][number]['agentFinding']['status'];
       conclusion: string;
+      evidencePath: DecisionPacket['conditions'][number]['obligations'][number]['evidencePath'];
       evidenceBoundary: {
         failureHypothesis: string;
         observedResult: string;
+        coverage: DecisionPacket['conditions'][number]['obligations'][number]['agentFinding']['evidenceCoverage'];
         supportingEvidenceCount: number;
         counterEvidenceCount: number;
-        challengeFindings: Array<{
-          id: string;
-          outcome: string;
-          conclusion: string;
-          counterEvidence: DecisionPacket['evidenceJudgments']['challenges'][number]['counterEvidence'];
-        }>;
       };
     }>;
   }>;
   decisionIssues: DeveloperDecisionIssue[];
+  reviewDecisions: ReviewDecision[];
   evidenceHistory: Array<{
     dispositionId: string;
     attemptId: string;
@@ -64,6 +138,7 @@ export interface DeveloperDecisionBrief {
     };
   }>;
   runtimeEvidence: {
+    authority: 'runtime-fact';
     changedFiles: Array<{
       path: string;
       operation: DecisionPacket['runtimeFacts']['changedFiles'][number]['operation'];
@@ -79,10 +154,22 @@ export interface DeveloperDecisionBrief {
     }>;
   };
   requestedDecision: {
+    authority: 'human-decision';
     actions: HumanDecisionAction[];
-    acceptanceRequiresExceptionsFor: string[];
+    acceptanceRequiresExceptionsFor: Array<{
+      decisionIssueId: string;
+      attentionIds: string[];
+    }>;
   };
   detailSections: DecisionPacket['detailSections'];
+}
+
+export interface DeveloperDecisionBrief {
+  primary: DeveloperDecisionPrimary;
+  details: {
+    command: { argv: string[] };
+    sections: DecisionPacket['detailSections'];
+  };
 }
 
 export interface DeveloperDecisionIssue {
@@ -94,12 +181,12 @@ export interface DeveloperDecisionIssue {
   references: HandoffAttentionItem['references'];
   conditionIds: string[];
   obligationIds: string[];
-  residualUnknowns: DecisionPacket['systemMeaning']['residualUnknowns'];
-  reviewQuestions: ReviewQuestion[];
+  residualUnknowns: DecisionPacket['residualUnknowns'];
+  reviewDecisions: ReviewDecision[];
 }
 
 export function buildDeveloperDecisionBrief(input: {
-  task: TaskProjection;
+  task: TaskProjection & DerivedTaskState;
   contract: TaskContract;
   packet: DecisionPacket;
   evaluation: HandoffEvaluation;
@@ -116,10 +203,54 @@ export function buildDeveloperDecisionBrief(input: {
   );
   const changedFileIdByPath = new Map(input.packet.runtimeFacts.changedFiles.map((file) =>
     [file.path, file.id] as const));
-  const challengeById = new Map(input.packet.evidenceJudgments.challenges.map((challenge) =>
-    [challenge.id, challenge] as const));
+  const decisionIssues = aggregateDecisionAttention(input.packet.attention).map((group) => {
+    const obligationIds = new Set(group.references.obligations ?? []);
+    for (const definitionId of group.references.checks ?? []) {
+      const verifierId = verifierByDefinition.get(definitionId);
+      if (!verifierId) continue;
+      for (const [obligationId, obligation] of obligationById) {
+        if (obligation.strategies.some((strategy) =>
+          strategy.kind === 'runtime-check' && strategy.verifierIds.includes(verifierId))) {
+          obligationIds.add(obligationId);
+        }
+      }
+    }
+    const conditionIds = new Set(group.references.conditions ?? []);
+    for (const obligationId of obligationIds) {
+      const conditionId = conditionByObligation.get(obligationId);
+      if (conditionId) conditionIds.add(conditionId);
+    }
+    const target = {
+      conditionIds: [...conditionIds].sort(),
+      obligationIds: [...obligationIds].sort(),
+      evidenceKeys: attentionEvidenceKeys(group.references, changedFileIdByPath),
+    };
+    const residualUnknowns = input.packet.residualUnknowns.filter((unknown) =>
+      (unknown.target.kind === 'task'
+        && !target.conditionIds.length && !target.obligationIds.length)
+      || (unknown.target.kind !== 'task' && conditionIds.has(unknown.target.conditionId))
+      || (unknown.target.kind === 'obligation' && obligationIds.has(unknown.target.obligationId)));
+    return {
+      id: `decision-issue:${stableFingerprint({
+        effectiveContractId: input.contract.effectiveContractId,
+        group: group.group,
+        resolution: group.resolution,
+      }).slice('sha256:'.length)}`,
+      attentionIds: group.items.map((item) => item.id).sort(),
+      codes: [...new Set(group.items.flatMap((item) => item.codes))].sort(),
+      group: group.group,
+      resolutions: [group.resolution],
+      references: group.references,
+      conditionIds: target.conditionIds,
+      obligationIds: target.obligationIds,
+      residualUnknowns,
+      reviewDecisions: input.packet.reviewDecisions.filter((question) =>
+        questionMatchesTarget(question, target)
+        || residualUnknowns.some((unknown) => unknown.reviewDecisionIds.includes(question.id))),
+    } satisfies DeveloperDecisionIssue;
+  });
 
-  return {
+  const details: DeveloperDecisionDetails = {
     decisionState: {
       delivery: input.task.deliveryStatus,
       evidence: input.evaluation.status,
@@ -127,77 +258,36 @@ export function buildDeveloperDecisionBrief(input: {
       adoption: input.evaluation.adoption.status,
     },
     changeMeaning: {
-      desiredOutcome: input.packet.semanticContract.desiredOutcome,
-      actualSystemMeaning: input.packet.systemMeaning.summary,
-      importantSystemEffects: input.packet.systemMeaning.importantSystemEffects,
+      authority: 'agent-judgment',
+      intendedOutcome: input.packet.semanticContract.desiredOutcome,
+      actualChange: input.packet.actualChange,
     },
+    recommendation: input.packet.decision.recommendation,
+    priorHumanResolutions: input.packet.decision.resolutions,
     conditions: input.packet.conditions.map((condition) => ({
+      authority: 'agent-judgment',
       id: condition.id,
       statement: condition.statement,
       criticality: condition.criticality,
-      status: condition.conclusion.status,
-      summary: condition.conclusion.summary,
+      status: condition.agentFinding.status,
+      summary: condition.agentFinding.summary,
       obligations: condition.obligations.map((obligation) => ({
         id: obligation.id,
         statement: obligation.statement,
-        status: obligation.conclusion.status,
-        conclusion: obligation.conclusion.conclusion,
+        status: obligation.agentFinding.status,
+        conclusion: obligation.agentFinding.conclusion,
+        evidencePath: obligation.evidencePath,
         evidenceBoundary: {
           failureHypothesis: obligation.falsification.failureHypothesis,
-          observedResult: obligation.conclusion.falsification.observedResult,
-          supportingEvidenceCount: obligation.conclusion.evidence.length,
-          counterEvidenceCount: obligation.conclusion.counterEvidence.length,
-          challengeFindings: obligation.challengeIds.flatMap((id) => {
-            const challenge = challengeById.get(id);
-            return challenge ? [{
-              id,
-              outcome: challenge.outcome,
-              conclusion: challenge.conclusion,
-              counterEvidence: challenge.counterEvidence,
-            }] : [];
-          }),
+          observedResult: obligation.agentFinding.falsification.observedResult,
+          coverage: obligation.agentFinding.evidenceCoverage,
+          supportingEvidenceCount: obligation.agentFinding.evidence.length,
+          counterEvidenceCount: obligation.agentFinding.counterEvidence.length,
         },
       })),
     })),
-    decisionIssues: aggregateAttention(input.packet.attention).map((group) => {
-      const obligationIds = new Set(group.references.obligations ?? []);
-      for (const definitionId of group.references.checks ?? []) {
-        const verifierId = verifierByDefinition.get(definitionId);
-        if (!verifierId) continue;
-        for (const [obligationId, obligation] of obligationById) {
-          if (obligation.strategies.some((strategy) =>
-            strategy.kind === 'runtime-check' && strategy.verifierIds.includes(verifierId))) {
-            obligationIds.add(obligationId);
-          }
-        }
-      }
-      const conditionIds = new Set(group.references.conditions ?? []);
-      for (const obligationId of obligationIds) {
-        const conditionId = conditionByObligation.get(obligationId);
-        if (conditionId) conditionIds.add(conditionId);
-      }
-      const target = {
-        conditionIds: [...conditionIds].sort(),
-        obligationIds: [...obligationIds].sort(),
-        evidenceKeys: attentionEvidenceKeys(group.references, changedFileIdByPath),
-      };
-      return {
-        id: `decision-issue:${stableFingerprint({
-          group: group.group, references: group.references,
-        }).slice('sha256:'.length)}`,
-        attentionIds: group.items.map((item) => item.id).sort(),
-        codes: [...new Set(group.items.flatMap((item) => item.codes))].sort(),
-        group: group.group,
-        resolutions: [...new Set(group.items.map((item) => item.resolution.kind))].sort(),
-        references: group.references,
-        conditionIds: target.conditionIds,
-        obligationIds: target.obligationIds,
-        residualUnknowns: input.packet.systemMeaning.residualUnknowns.filter((unknown) =>
-          overlaps(unknown.conditionIds, conditionIds) || overlaps(unknown.obligationIds, obligationIds)),
-        reviewQuestions: input.packet.reviewQuestions.filter((question) =>
-          questionMatchesTarget(question, target)),
-      };
-    }),
+    decisionIssues,
+    reviewDecisions: input.packet.reviewDecisions,
     evidenceHistory: input.packet.evidenceJudgments.dispositions.map((disposition) => ({
       dispositionId: disposition.dispositionId,
       attemptId: disposition.attemptId,
@@ -213,6 +303,7 @@ export function buildDeveloperDecisionBrief(input: {
       },
     })),
     runtimeEvidence: {
+      authority: 'runtime-fact',
       changedFiles: input.packet.runtimeFacts.changedFiles.map((file) => ({
         path: file.path,
         operation: file.operation,
@@ -228,10 +319,89 @@ export function buildDeveloperDecisionBrief(input: {
       })),
     },
     requestedDecision: {
+      authority: 'human-decision',
       actions: [...HUMAN_DECISION_ACTIONS],
-      acceptanceRequiresExceptionsFor: input.packet.attention.map((item) => item.id),
+      acceptanceRequiresExceptionsFor: decisionIssues.map((issue) => ({
+        decisionIssueId: issue.id,
+        attentionIds: issue.attentionIds,
+      })),
     },
     detailSections: input.packet.detailSections,
+  };
+  return {
+    primary: primaryBrief(details),
+    details: {
+      command: {
+        argv: [
+          'stetra', 'change', 'explain', '.', '--task', input.task.taskId,
+          '--section', 'decision-packet', '--json',
+        ],
+      },
+      sections: input.packet.detailSections,
+    },
+  };
+}
+
+function primaryBrief(details: DeveloperDecisionDetails): DeveloperDecisionPrimary {
+  const conditionStatementById = new Map(details.conditions.map((condition) =>
+    [condition.id, condition.statement]));
+  return {
+    decisionState: details.decisionState,
+    changeMeaning: details.changeMeaning,
+    recommendation: details.recommendation,
+    priorHumanResolutions: details.priorHumanResolutions.map((resolution) => ({
+      target: resolution.interpretation.target.kind,
+      action: resolution.interpretation.action,
+      reason: resolution.interpretation.reason,
+    })),
+    conditions: details.conditions.map((condition) => ({
+      statement: condition.statement,
+      criticality: condition.criticality,
+      finding: { status: condition.status, summary: condition.summary },
+      evidence: condition.obligations.map((obligation) => ({
+        statement: obligation.statement,
+        finding: obligation.status,
+        evidencePath: obligation.evidencePath.status,
+        counterEvidenceCount: obligation.evidenceBoundary.counterEvidenceCount,
+      })),
+    })),
+    blockers: details.decisionIssues.map((issue) => ({
+      group: issue.group,
+      codes: issue.codes,
+      resolutions: issue.resolutions,
+      affectedConditions: issue.conditionIds.flatMap((id) => {
+        const statement = conditionStatementById.get(id);
+        return statement ? [statement] : [];
+      }),
+      residualUnknowns: issue.residualUnknowns.map((unknown) => ({
+        statement: unknown.statement,
+      })),
+      reviewDecisions: issue.reviewDecisions.map((decision) => ({
+        question: decision.question,
+        adoptionImpact: decision.adoptionImpact,
+        nextAction: decision.nextAction,
+      })),
+    })),
+    reviewFocus: details.reviewDecisions.map((decision) => ({
+      question: decision.question,
+      adoptionImpact: decision.adoptionImpact,
+      nextAction: decision.nextAction,
+      affectedConditions: decision.conditionIds.flatMap((id) => {
+        const statement = conditionStatementById.get(id);
+        return statement ? [statement] : [];
+      }),
+    })),
+    runtimeEvidence: {
+      authority: 'runtime-fact',
+      changedFiles: details.runtimeEvidence.changedFiles,
+      checks: details.runtimeEvidence.checks.map(({ definitionId: _definitionId, ...check }) => check),
+    },
+    requestedDecision: {
+      authority: 'human-decision',
+      actions: details.requestedDecision.actions,
+      acceptanceExceptionIssueCount:
+        details.requestedDecision.acceptanceRequiresExceptionsFor.length,
+    },
   };
 }
 
@@ -241,7 +411,6 @@ function attentionEvidenceKeys(
 ): Set<string> {
   const keys = new Set<string>();
   for (const id of references.checks ?? []) keys.add(`check:${id}`);
-  for (const id of references.challenges ?? []) keys.add(`challenge:${id}`);
   for (const path of references.changedFiles ?? []) {
     const id = changedFileIdByPath.get(path);
     if (id) keys.add(`changed-file:${id}`);
@@ -249,25 +418,50 @@ function attentionEvidenceKeys(
   return keys;
 }
 
-function aggregateAttention(items: HandoffAttentionItem[]): Array<{
+export function aggregateDecisionAttention(items: HandoffAttentionItem[]): Array<{
   group: HandoffAttentionItem['group'];
+  resolution: HandoffAttentionItem['resolution']['kind'];
   references: HandoffAttentionItem['references'];
   items: HandoffAttentionItem[];
 }> {
   const grouped = new Map<string, {
     group: HandoffAttentionItem['group'];
+    resolution: HandoffAttentionItem['resolution']['kind'];
     references: HandoffAttentionItem['references'];
     items: HandoffAttentionItem[];
   }>();
   for (const item of items) {
-    const references = normalizedReferences(item.references);
-    const key = stableFingerprint({ group: item.group, references });
+    const key = stableFingerprint({ group: item.group, resolution: item.resolution.kind });
     const existing = grouped.get(key);
-    if (existing) existing.items.push(item);
-    else grouped.set(key, { group: item.group, references, items: [item] });
+    if (existing) {
+      existing.items.push(item);
+      existing.references = mergeReferences(existing.references, item.references);
+    } else {
+      grouped.set(key, {
+        group: item.group,
+        resolution: item.resolution.kind,
+        references: normalizedReferences(item.references),
+        items: [item],
+      });
+    }
   }
   return [...grouped.values()].sort((left, right) =>
-    left.items[0].id.localeCompare(right.items[0].id));
+    left.group.localeCompare(right.group) || left.resolution.localeCompare(right.resolution));
+}
+
+function mergeReferences(
+  left: HandoffAttentionItem['references'],
+  right: HandoffAttentionItem['references'],
+): HandoffAttentionItem['references'] {
+  return normalizedReferences(Object.fromEntries(
+    [...new Set([...Object.keys(left), ...Object.keys(right)])].map((key) => [
+      key,
+      [
+        ...(left[key as keyof HandoffAttentionItem['references']] ?? []),
+        ...(right[key as keyof HandoffAttentionItem['references']] ?? []),
+      ],
+    ]),
+  ));
 }
 
 function normalizedReferences(
@@ -279,7 +473,7 @@ function normalizedReferences(
 }
 
 function questionMatchesTarget(
-  question: ReviewQuestion,
+  question: ReviewDecision,
   target: { conditionIds: string[]; obligationIds: string[]; evidenceKeys: Set<string> },
 ): boolean {
   if (question.conditionIds.some((id) => target.conditionIds.includes(id))) return true;

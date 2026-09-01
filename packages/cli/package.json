@@ -13,10 +13,6 @@
     "stetra": "./dist/index.mjs"
   },
   "exports": {
-    "./host": {
-      "types": "./dist/host.d.mts",
-      "import": "./dist/host.mjs"
-    },
     "./package.json": "./package.json"
   },
   "files": [
@@ -43,6 +39,7 @@
     "@sovea/stetra-core": "workspace:*",
     "commander": "^15.0.0",
     "execa": "^9.6.0",
+    "jsonc-parser": "^3.3.1",
     "picocolors": "^1.1.1",
     "which": "^6.0.0",
     "zod": "^4.0.0"

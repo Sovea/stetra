@@ -2,35 +2,28 @@ import type {
   CognitiveHandoff,
   FactBundle,
   HandoffEvaluation,
-  IndependentChallenge,
   TaskContract,
 } from '@sovea/stetra-core';
+import { z } from 'zod';
 
 import {
   CONCLUSION_STATUSES,
-  EVIDENCE_CAUSES,
-  EVIDENCE_ROUTES,
-  EVIDENCE_SEMANTIC_IMPACTS,
-  HUMAN_DECISION_ACTIONS,
-  HUMAN_RESOLUTION_ACTIONS,
+  EVIDENCE_COVERAGE_STATUSES,
+  EvidenceDispositionDocumentSchema,
+  HumanDecisionDocumentSchema,
+  HumanResolutionDocumentSchema,
   RECOMMENDATION_ACTIONS,
+  taskSpecificCognitiveHandoffDocumentSchema,
   type TaskProjection,
-  VERIFICATION_REVISION_KINDS,
+  VerificationRevisionDocumentSchema,
 } from '../schemas/delegation.ts';
+import { stableFingerprint } from '../protocol.ts';
 
-export interface AuthoringFieldRequirement {
-  path: string;
-  authority: 'agent-judgment' | 'human-decision';
-  allowedValues?: string[];
-  shapeRef?: AuthoringShapeName;
-  instruction: string;
+interface AuthoringDetailCommand {
+  purpose: string;
+  section: string;
+  argv: string[];
 }
-
-export type AuthoringShapeName =
-  | 'verification-baseline'
-  | 'handoff-evidence-reference'
-  | 'residual-unknown'
-  | 'review-question';
 
 export interface AuthoringPacket {
   inputKind:
@@ -50,7 +43,7 @@ export interface AuthoringPacket {
   semanticContext: {
     exactDeveloperEvents: {
       authority: 'human-event';
-      events: TaskContract['authority']['developerEvents'];
+      events: TaskContract['humanEvents'];
     };
     agentInterpretation: {
       authority: 'agent-judgment';
@@ -61,8 +54,9 @@ export interface AuthoringPacket {
     };
   };
   draft: unknown;
-  fieldRequirements: AuthoringFieldRequirement[];
-  shapeCatalog?: Partial<Record<AuthoringShapeName, unknown[]>>;
+  inputSchema: Record<string, unknown>;
+  constraints: Record<string, unknown>;
+  detailCommands: AuthoringDetailCommand[];
   referenceCatalog: {
     conditions?: Array<{
       id: string;
@@ -74,6 +68,8 @@ export interface AuthoringPacket {
     obligations?: Array<{
       id: string;
       conditionId: string;
+      conditionKey: string;
+      key: string;
       statement: string;
       falsification: TaskContract['adoptionConditions'][number]['evidenceObligations'][number]['falsification'];
     }>;
@@ -82,20 +78,14 @@ export interface AuthoringPacket {
       definitionId: string;
       key: string;
       latestStatus?: string;
+      baselineStatus?: string;
       baselineRelation?: string;
-      logPaths: string[];
+      latestAttempt?: number;
     }>;
     changedFiles?: Array<{
       id: string;
       path: string;
       operation: string;
-    }>;
-    challenges?: Array<{
-      id: string;
-      obligationIds: string[];
-      outcome: string;
-      conclusion: string;
-      counterEvidence: IndependentChallenge['counterEvidence'];
     }>;
     repositoryEvidence?: Array<{
       id: string;
@@ -105,97 +95,104 @@ export interface AuthoringPacket {
     }>;
     attention?: Array<{ id: string }>;
   };
-  outstandingObligations: Array<{
-    code: string;
-    targetId: string;
-    requiredAction: string;
-  }>;
+}
+
+export interface AuthoringGuide {
+  inputKind: AuthoringPacket['inputKind'];
+  projectionFingerprint: string;
+  bindsTo: AuthoringPacket['bindsTo'];
+  semanticContext: AuthoringPacket['semanticContext'];
+  referenceCatalog: AuthoringPacket['referenceCatalog'];
+  constraints: AuthoringPacket['constraints'];
+  schema: {
+    included: false;
+    command: { argv: string[] };
+  };
+  details: {
+    commands: Array<{
+      purpose: string;
+      section: string;
+      argv: string[];
+    }>;
+  };
+}
+
+export type AuthoringStage =
+  | 'diagnose'
+  | 'revise-verification'
+  | 'handoff'
+  | 'decide'
+  | 'resolve';
+
+const AUTHORING_STAGE_BY_INPUT_KIND: Record<
+  AuthoringPacket['inputKind'],
+  AuthoringStage
+> = {
+  diagnosis: 'diagnose',
+  'verification-revision': 'revise-verification',
+  handoff: 'handoff',
+  decision: 'decide',
+  resolution: 'resolve',
+};
+
+export function authoringStage(inputKind: AuthoringPacket['inputKind']): AuthoringStage {
+  return AUTHORING_STAGE_BY_INPUT_KIND[inputKind];
+}
+
+export function authoringGuide(packet: AuthoringPacket): AuthoringGuide {
+  return {
+    inputKind: packet.inputKind,
+    projectionFingerprint: stableFingerprint(packet),
+    bindsTo: packet.bindsTo,
+    semanticContext: packet.semanticContext,
+    referenceCatalog: packet.referenceCatalog,
+    constraints: packet.constraints,
+    schema: {
+      included: false,
+      command: {
+        argv: [
+          'stetra', 'change', 'explain', '.', '--task', packet.bindsTo.taskId,
+          '--section', 'action-input', '--stage', authoringStage(packet.inputKind),
+          '--part', 'schema', '--json',
+        ],
+      },
+    },
+    details: {
+      commands: packet.detailCommands,
+    },
+  };
 }
 
 export function diagnosisAuthoringPacket(input: {
   task: TaskProjection;
   contract: TaskContract;
   facts: FactBundle;
-  challenges?: IndependentChallenge[];
 }): AuthoringPacket {
-  const nonpassing = input.facts.checks.filter((check) => latestStatus(check) !== 'passed');
-  const adverseChallenges = (input.challenges ?? []).filter((challenge) =>
-    challenge.outcome !== 'supported');
-  const concerns = [
-    ...nonpassing.map((check) => ({
-      source: { kind: 'check' as const, definitionId: check.definitionId },
-      code: 'diagnose-nonpassing-check',
-      targetId: check.definitionId,
-      action: 'Classify the observed check cause and state how that diagnosis was challenged.',
-    })),
-    ...adverseChallenges.map((challenge) => ({
-      source: { kind: 'challenge' as const, challengeId: challenge.id },
-      code: 'diagnose-adverse-challenge',
-      targetId: challenge.id,
-      action: 'Classify the adverse Challenge without asking another Challenger to choose the engineering route.',
-    })),
-  ];
+  const concerns = input.facts.evidenceConcerns.map((concern) => ({ source: concern }));
   return packetBase(
     input.task,
     input.contract,
     input.facts,
-    input.challenges ?? [],
     [],
-    adverseChallenges.length ? ['checks', 'challenges'] : ['checks'],
+    ['checks'],
     {
-    inputKind: 'diagnosis',
-    draft: {
-      semanticImpact: '',
-      proposedRoute: '',
-      routeRationale: '',
-      entries: concerns.map((concern) => ({
-        source: concern.source,
-        cause: '',
-        diagnosis: '',
-        falsificationAttempt: '',
-        codeChangeCanAlterObservation: false,
-        expectedDifferentObservation: '',
-        intendedChanges: [],
-      })),
+      inputKind: 'diagnosis',
+      constraints: {},
+      draft: {
+        contractImpact: '',
+        entries: concerns.map((concern) => ({
+          source: concern.source,
+          cause: '',
+          diagnosis: '',
+          falsificationAttempt: '',
+          repositoryChange: { surface: '', intendedChanges: [] },
+          expectedDifferentObservation: '',
+        })),
+        action: { kind: '', rationale: '' },
+      },
+      inputSchema: jsonSchema(EvidenceDispositionDocumentSchema),
     },
-    fieldRequirements: [
-      choiceRequirement(
-        'draft.semanticImpact', 'agent-judgment', EVIDENCE_SEMANTIC_IMPACTS,
-        'Choose whether the diagnosed evidence gap changes the compiled task meaning.',
-      ),
-      choiceRequirement(
-        'draft.proposedRoute', 'agent-judgment', EVIDENCE_ROUTES,
-        'Choose the next lifecycle route explicitly. A bounded implementation repair may coexist with environment or verification entries, which remain visible and are rerun; unknown cause cannot be repaired.',
-      ),
-      textRequirement(
-        'draft.routeRationale', 'agent-judgment',
-        'Explain why the selected route follows from the diagnosed evidence without changing the compiled task meaning implicitly.',
-      ),
-      ...concerns.flatMap((_, index) => [
-        choiceRequirement(
-          `draft.entries[${index}].cause`, 'agent-judgment', EVIDENCE_CAUSES,
-          'Classify the observed cause from current evidence; Runtime does not infer it.',
-        ),
-        textRequirement(
-          `draft.entries[${index}].diagnosis`, 'agent-judgment',
-          'State the bounded diagnosis supported by the current observation.',
-        ),
-        textRequirement(
-          `draft.entries[${index}].falsificationAttempt`, 'agent-judgment',
-          'Describe the concrete attempt made to disprove this diagnosis.',
-        ),
-        textRequirement(
-          `draft.entries[${index}].expectedDifferentObservation`, 'agent-judgment',
-          'State the observable result that would distinguish the proposed cause or route from the current one.',
-        ),
-      ]),
-    ],
-    outstandingObligations: concerns.map((concern) => ({
-      code: concern.code,
-      targetId: concern.targetId,
-      requiredAction: concern.action,
-    })),
-  });
+  );
 }
 
 export function verificationRevisionAuthoringPacket(input: {
@@ -209,10 +206,16 @@ export function verificationRevisionAuthoringPacket(input: {
       { conditionKey: condition.key, obligationKey: obligation.key },
     ] as const)));
   const checks = input.contract.verificationPlan.mode === 'checks'
-    ? input.contract.verificationPlan.definitions.map((definition) => ({
+      ? input.contract.verificationPlan.definitions.map((definition) => ({
         key: definition.key,
         rationale: definition.rationale,
-        argv: definition.argv,
+        execution: {
+          preparation: definition.execution.preparation.map((step) => ({
+            argv: step.argv,
+          })),
+          assertion: { argv: definition.execution.assertion.argv },
+        },
+        executionInputs: definition.executionInputs,
         baseline: definition.baseline.mode === 'task-start'
           ? {
               mode: 'task-start',
@@ -229,44 +232,20 @@ export function verificationRevisionAuthoringPacket(input: {
     input.contract,
     input.facts,
     [],
-    [],
     ['conditions', 'obligations', 'checks'],
     {
-    inputKind: 'verification-revision',
-    draft: {
-      kind: '',
-      rationale: '',
-      equivalenceClaim: '',
-      ...(checks ? { checks } : {
-        noCommandRationale: input.contract.verificationPlan.mode === 'no-command'
-          ? input.contract.verificationPlan.rationale : '',
-      }),
-    },
-    fieldRequirements: [
-      choiceRequirement(
-        'draft.kind', 'agent-judgment', VERIFICATION_REVISION_KINDS,
-        'Choose execution-rebinding only for a claimed equivalent execution binding; verification-plan changes the evidence plan.',
-      ),
-      textRequirement(
-        'draft.rationale', 'agent-judgment',
-        'Explain why the revision is required and what observation it is intended to restore.',
-      ),
-      textRequirement(
-        'draft.equivalenceClaim', 'agent-judgment',
-        'State the bounded engineering-equivalence claim; Runtime records but does not prove it.',
-      ),
-      ...(checks ?? []).map((_, index) => shapeRequirement(
-        `draft.checks[${index}].baseline`, 'agent-judgment', 'verification-baseline',
-        'Use exactly one baseline variant. For execution-rebinding, preserve this prefilled object and its array ordering exactly; only argv may change. Unknown has no rationale or obligationKeys fields.',
-      )),
-    ],
-    outstandingObligations: input.facts.checks
-      .filter((check) => latestStatus(check) !== 'passed')
-      .map((check) => ({
-        code: 'revise-invalid-verification-definition',
-        targetId: check.definitionId,
-        requiredAction: 'State the bounded definition change and why its engineering semantics are claimed equivalent; Human authority is required for mechanical relaxation.',
-      })),
+      inputKind: 'verification-revision',
+      constraints: {},
+      draft: {
+        kind: '',
+        rationale: '',
+        equivalenceClaim: '',
+        ...(checks ? { checks } : {
+          noCommandRationale: input.contract.verificationPlan.mode === 'no-command'
+            ? input.contract.verificationPlan.rationale : '',
+        }),
+      },
+      inputSchema: jsonSchema(VerificationRevisionDocumentSchema),
     },
   );
 }
@@ -275,173 +254,99 @@ export function handoffAuthoringPacket(input: {
   task: TaskProjection;
   contract: TaskContract;
   facts: FactBundle;
-  challenges: IndependentChallenge[];
   requiredObligationIds: string[];
-  challengeAttestationAvailable?: boolean;
 }): AuthoringPacket {
-  const challengeByObligation = new Map(input.challenges.flatMap((challenge) =>
-    challenge.obligationIds.map((id) => [id, challenge] as const)));
   const checkStatusByDefinition = new Map(input.facts.checks.map((check) =>
     [check.definitionId, latestStatus(check)] as const));
-  const obligations = allObligations(input.contract);
-  const conclusionValuesByObligation = new Map(obligations.map((obligation) => [
-    obligation.id,
-    supportedConclusionAllowed(
-      obligation.id,
-      input.requiredObligationIds,
-      input.challenges,
-    ) ? [...CONCLUSION_STATUSES] : CONCLUSION_STATUSES.filter((status) => status !== 'supported'),
-  ] as const));
-  const conclusionValuesByCondition = new Map(input.contract.adoptionConditions.map((condition) => [
-    condition.id,
-    condition.evidenceObligations.every((obligation) =>
-      conclusionValuesByObligation.get(obligation.id)!.includes('supported'))
-      ? [...CONCLUSION_STATUSES]
-      : CONCLUSION_STATUSES.filter((status) => status !== 'supported'),
-  ] as const));
+  const checkKeyByDefinition = new Map(input.contract.verificationPlan.mode === 'checks'
+    ? input.contract.verificationPlan.definitions.map((definition) =>
+        [definition.definitionId, definition.key] as const)
+    : []);
+  const constraints = deriveHandoffAuthoringConstraints(input);
+  const prefilledReviewConditionIds = new Set(input.contract.adoptionConditions
+    .filter((condition) => condition.criticality === 'adoption-critical'
+      || !constraints.conclusionValuesByCondition.get(condition.id)!.includes('supported')
+      || condition.evidenceObligations.some((obligation) =>
+        !constraints.conclusionValuesByObligation.get(obligation.id)!.includes('supported')))
+    .map((condition) => condition.id));
+  const documentSchema = handoffDocumentSchema(input);
+  const constraintsDocument = {
+    conditions: input.contract.adoptionConditions.map((condition) => ({
+      key: condition.key,
+      allowedStatuses: constraints.conclusionValuesByCondition.get(condition.id)!,
+      obligations: condition.evidenceObligations.map((obligation) => ({
+        key: obligation.key,
+        allowedStatuses: constraints.conclusionValuesByObligation.get(obligation.id)!,
+      })),
+    })),
+    recommendationActions: constraints.recommendationActions,
+    evidenceCoverageStatuses: EVIDENCE_COVERAGE_STATUSES,
+  };
   return packetBase(
     input.task,
     input.contract,
     input.facts,
-    input.challenges,
     [],
-    ['conditions', 'obligations', 'checks', 'changedFiles', 'challenges', 'repositoryEvidence'],
+    ['conditions', 'obligations', 'checks', 'changedFiles', 'repositoryEvidence'],
     {
-    inputKind: 'handoff',
-    draft: {
-      summary: '',
-      obligationConclusions: obligations.map((obligation) => ({
-        obligationId: obligation.id,
-        status: '',
-        evidence: [
-          ...currentDefinitionIds(obligation, input.contract)
-            .filter((id) => checkStatusByDefinition.get(id) === 'passed')
-            .map((id) => ({ kind: 'check', id })),
-          ...repositoryEvidenceIds(obligation).map((id) => ({ kind: 'repository-evidence', id })),
-          ...(challengeByObligation.get(obligation.id)?.outcome === 'supported'
-            ? [{ kind: 'challenge', id: challengeByObligation.get(obligation.id)!.id }] : []),
-        ],
-        falsification: {
-          attempt: '',
-          observedResult: '',
+      inputKind: 'handoff',
+      constraints: constraintsDocument,
+      draft: {
+        actualChange: {
+          behavior: '',
+          mechanism: [''],
+          preservedInvariants: [],
+          failureAndRecovery: [],
+          importantEffects: [],
+          materialTradeoffs: [],
         },
-        counterEvidence: [
-          ...currentDefinitionIds(obligation, input.contract)
-            .filter((id) => checkStatusByDefinition.get(id) !== 'passed')
-            .map((id) => ({ kind: 'check', id })),
-          ...(challengeByObligation.has(obligation.id)
-            && challengeByObligation.get(obligation.id)!.outcome !== 'supported'
-            ? [{ kind: 'challenge', id: challengeByObligation.get(obligation.id)!.id }] : []),
-        ],
-        conclusion: '',
-      })),
-      conditionConclusions: input.contract.adoptionConditions.map((condition) => ({
-        conditionId: condition.id,
-        status: '',
-        summary: '',
-      })),
-      importantSystemEffects: [],
-      residualUnknowns: [],
-      reviewQuestions: input.contract.adoptionConditions.map((condition) => ({
-        conditionIds: [condition.id],
-        obligationIds: condition.evidenceObligations.map((item) => item.id),
-        question: '',
-        adoptionImpact: condition.adoptionRationale,
-        evidence: [],
-      })),
-      recommendation: { action: '', rationale: '', caveats: [] },
-    },
-    fieldRequirements: [
-      textRequirement(
-        'draft.summary', 'agent-judgment',
-        'Summarize what the actual collected change means for the system.',
-      ),
-      ...obligations.flatMap((obligation, index) => [
-        choiceRequirement(
-        `draft.obligationConclusions[${index}].status`, 'agent-judgment',
-        conclusionValuesByObligation.get(obligation.id)!,
-        'Conclude the bounded obligation without exceeding its cited evidence and challenge outcome.',
-        ),
-        textRequirement(
-          `draft.obligationConclusions[${index}].falsification.attempt`, 'agent-judgment',
-          'Describe how the frozen falsification scenario was executed or inspected.',
-        ),
-        textRequirement(
-          `draft.obligationConclusions[${index}].falsification.observedResult`, 'agent-judgment',
-          'State the actual observed result without converting it into a Runtime fact.',
-        ),
-        textRequirement(
-          `draft.obligationConclusions[${index}].conclusion`, 'agent-judgment',
-          'State the bounded evidence conclusion and preserve adverse or missing evidence.',
-        ),
-        shapeRequirement(
-          `draft.obligationConclusions[${index}].evidence[]`, 'agent-judgment',
-          'handoff-evidence-reference',
-          'Use a direct exact evidence reference; this array does not accept a statement/references wrapper.',
-        ),
-        shapeRequirement(
-          `draft.obligationConclusions[${index}].counterEvidence[]`, 'agent-judgment',
-          'handoff-evidence-reference',
-          'Use direct exact references for adverse evidence; leave the array empty only when none was found.',
-        ),
-      ]),
-      ...input.contract.adoptionConditions.flatMap((condition, index) => [
-        choiceRequirement(
-        `draft.conditionConclusions[${index}].status`, 'agent-judgment',
-        conclusionValuesByCondition.get(condition.id)!,
-        'Conclude the condition without exceeding any of its obligation conclusions.',
-        ),
-        textRequirement(
-          `draft.conditionConclusions[${index}].summary`, 'agent-judgment',
-          'Explain how the obligation conclusions bound this condition conclusion.',
-        ),
-      ]),
-      shapeRequirement(
-        'draft.residualUnknowns[]', 'agent-judgment', 'residual-unknown',
-        'Add one item for each adoption-relevant unknown; keep the array empty only when none remains.',
-      ),
-      shapeRequirement(
-        'draft.reviewQuestions[]', 'agent-judgment', 'review-question',
-        'Review questions use exact current condition, obligation, and evidence references.',
-      ),
-      choiceRequirement(
-        'draft.recommendation.action', 'agent-judgment', RECOMMENDATION_ACTIONS,
-        'Give Agent advice only; accept is valid only when every conclusion is supported, required Challenges are trusted and favorable, checks pass, and no adoption-changing unknown or integrity blocker remains.',
-      ),
-      textRequirement(
-        'draft.recommendation.rationale', 'agent-judgment',
-        'Explain the recommendation in terms of the current conditions, evidence, and remaining attention.',
-      ),
-    ],
-    outstandingObligations: [
-      ...obligations.map((obligation) => ({
-        code: 'conclude-evidence-obligation',
-        targetId: obligation.id,
-        requiredAction: 'State the bounded conclusion, falsification attempt, supporting evidence, and counter-evidence.',
-      })),
-      ...input.contract.adoptionConditions.map((condition) => ({
-        code: 'conclude-adoption-condition',
-        targetId: condition.id,
-        requiredAction: 'Conclude the condition without exceeding its obligation conclusions.',
-      })),
-      ...input.requiredObligationIds.filter((id) => !challengeByObligation.has(id)).map((id) => ({
-        code: input.challengeAttestationAvailable === false
-          ? 'direct-human-review-required'
-          : 'required-challenge-missing',
-        targetId: id,
-        requiredAction: input.challengeAttestationAvailable === false
-          ? 'The current Host cannot attest a fresh challenger context. Keep the conclusion below supported and give the developer a concrete direct-review question.'
-          : 'Complete and record the required challenge before claiming support.',
-      })),
-      ...input.requiredObligationIds.filter((id) => {
-        const challenge = challengeByObligation.get(id);
-        return challenge && challenge.independence !== 'host-attested';
-      }).map((id) => ({
-        code: 'direct-human-review-required',
-        targetId: id,
-        requiredAction: 'The recorded Challenger output has no verified Host lifecycle receipt. Keep the conclusion below supported and direct the developer to inspect the unresolved failure hypothesis.',
-      })),
-    ],
+        conditions: input.contract.adoptionConditions.map((condition) => ({
+          conditionKey: condition.key,
+          status: '',
+          summary: '',
+          reviewDecisionKeys: prefilledReviewConditionIds.has(condition.id)
+            ? [`review-${condition.key}`]
+            : [],
+          obligations: condition.evidenceObligations.map((obligation) => ({
+            obligationKey: obligation.key,
+            status: '',
+            reviewDecisionKeys: prefilledReviewConditionIds.has(condition.id)
+              ? [`review-${condition.key}`]
+              : [],
+            evidence: [
+              ...currentDefinitionIds(obligation, input.contract)
+                .filter((id) => checkStatusByDefinition.get(id) === 'passed')
+                .map((id) => ({ kind: 'check', key: checkKeyByDefinition.get(id)! })),
+              ...repositoryEvidenceIds(obligation).map((id) => ({ kind: 'repository-evidence', id })),
+            ],
+            evidenceCoverage: { status: '', rationale: '', gaps: [] },
+            falsification: { attempt: '', observedResult: '' },
+            counterEvidence: [
+              ...currentDefinitionIds(obligation, input.contract)
+                .filter((id) => checkStatusByDefinition.get(id) !== 'passed')
+                .map((id) => ({ kind: 'check', key: checkKeyByDefinition.get(id)! })),
+            ],
+            conclusion: '',
+          })),
+        })),
+        residualUnknowns: [],
+        reviewDecisions: input.contract.adoptionConditions
+          .filter((condition) => prefilledReviewConditionIds.has(condition.id))
+          .map((condition) => ({
+            key: `review-${condition.key}`,
+            conditionKeys: [condition.key],
+            obligationKeys: condition.evidenceObligations.map((obligation) => ({
+              conditionKey: condition.key,
+              obligationKey: obligation.key,
+            })),
+            question: '',
+            adoptionImpact: condition.adoptionRationale,
+            nextAction: '',
+            evidence: [],
+          })),
+        recommendation: { action: '', rationale: '', caveats: [] },
+      },
+      inputSchema: jsonSchema(documentSchema),
     },
   );
 }
@@ -450,15 +355,15 @@ export function decisionAuthoringPacket(input: {
   task: TaskProjection;
   contract: TaskContract;
   facts: FactBundle;
-  challenges: IndependentChallenge[];
   handoff: CognitiveHandoff;
   evaluation: HandoffEvaluation;
 }): AuthoringPacket {
   const base = packetBase(
-    input.task, input.contract, input.facts, input.challenges, input.evaluation.attention,
+    input.task, input.contract, input.facts, input.evaluation.attention,
     ['attention'],
     {
       inputKind: 'decision',
+      constraints: {},
       draft: {
         humanEvent: { content: '' },
         action: '',
@@ -468,21 +373,7 @@ export function decisionAuthoringPacket(input: {
           rationale: '',
         })),
       },
-      fieldRequirements: [choiceRequirement(
-        'draft.action', 'human-decision', HUMAN_DECISION_ACTIONS,
-        'Normalize the developer\'s exact decision message to one supported action.',
-      ), textRequirement(
-        'draft.humanEvent.content', 'human-decision',
-        'Preserve the developer\'s exact new decision message.',
-      ), textRequirement(
-        'draft.reason', 'human-decision',
-        'State why the exact Human decision follows from the reviewed packet.',
-      )],
-      outstandingObligations: input.evaluation.attention.map((item) => ({
-        code: 'resolve-attention-in-decision',
-        targetId: item.id,
-        requiredAction: 'Inspect the exact references and either resolve the gap or name an explicit adoption exception.',
-      })),
+      inputSchema: jsonSchema(HumanDecisionDocumentSchema),
     },
   );
   base.bindsTo.handoffFingerprint = input.handoff.handoffFingerprint;
@@ -495,29 +386,16 @@ export function resolutionAuthoringPacket(input: {
   facts?: FactBundle;
 }): AuthoringPacket {
   const pending = input.task.pendingResolution;
-  const base = packetBase(input.task, input.contract, input.facts, [], [], [], {
+  const base = packetBase(input.task, input.contract, input.facts, [], [], {
     inputKind: 'resolution',
+    constraints: {},
     draft: {
       humanEvent: { content: '' },
       target: pending ? targetDocument(pending) : {},
       action: '',
       reason: '',
     },
-    fieldRequirements: [choiceRequirement(
-      'draft.action', 'human-decision', HUMAN_RESOLUTION_ACTIONS,
-      'Normalize the developer\'s exact mid-task resolution without altering the prefilled target.',
-    ), textRequirement(
-      'draft.humanEvent.content', 'human-decision',
-      'Preserve the developer\'s exact new resolution message.',
-    ), textRequirement(
-      'draft.reason', 'human-decision',
-      'State why this resolution should control the pending target.',
-    )],
-    outstandingObligations: pending ? [{
-      code: 'human-resolution-required',
-      targetId: pending.targetId,
-      requiredAction: 'Record the exact Human choice before the workflow continues.',
-    }] : [],
+    inputSchema: jsonSchema(HumanResolutionDocumentSchema),
   });
   return base;
 }
@@ -526,16 +404,70 @@ function packetBase(
   task: TaskProjection,
   contract: TaskContract,
   facts: FactBundle | undefined,
-  challenges: IndependentChallenge[],
   attention: HandoffEvaluation['attention'],
   catalogSelection: Array<keyof AuthoringPacket['referenceCatalog']>,
-  content: Pick<AuthoringPacket, 'inputKind' | 'draft' | 'fieldRequirements' | 'outstandingObligations'>,
+  content: Pick<
+    AuthoringPacket,
+    'inputKind' | 'draft' | 'inputSchema' | 'constraints'
+  >,
 ): AuthoringPacket {
   const comparisons = new Map(facts?.checkComparisons.map((item) =>
     [item.definitionId, item.relation]) ?? []);
   const factChecks = new Map(facts?.checks.map((item) => [item.definitionId, item]) ?? []);
-  const shapeNames = [...new Set(content.fieldRequirements.flatMap((requirement) =>
-    requirement.shapeRef ? [requirement.shapeRef] : []))];
+  const baselineChecks = new Map(facts?.baselineVerification.checks.map((item) =>
+    [item.definitionId, item.observation]) ?? []);
+  const referenceCatalog = selectedCatalog(catalogSelection, {
+      conditions: contract.adoptionConditions.map((condition) => ({
+        id: condition.id,
+        key: condition.key,
+        statement: condition.statement,
+        criticality: condition.criticality,
+        obligationIds: condition.evidenceObligations.map((item) => item.id),
+      })),
+      obligations: contract.adoptionConditions.flatMap((condition) =>
+        condition.evidenceObligations.map((obligation) => ({
+          id: obligation.id,
+          conditionId: obligation.conditionId,
+          conditionKey: condition.key,
+          key: obligation.key,
+          statement: obligation.statement,
+          falsification: obligation.falsification,
+        }))),
+      checks: contract.verificationPlan.mode === 'checks'
+        ? contract.verificationPlan.definitions.map((definition) => {
+            const fact = factChecks.get(definition.definitionId);
+            return {
+              verifierId: definition.verifierId,
+              definitionId: definition.definitionId,
+              key: definition.key,
+              ...(fact ? {
+                latestStatus: latestStatus(fact),
+                latestAttempt: fact.attempts.at(-1)?.attempt,
+              } : {}),
+              ...(baselineChecks.get(definition.definitionId) ? {
+                baselineStatus: latestStatus(baselineChecks.get(definition.definitionId)!),
+              } : {}),
+              ...(comparisons.has(definition.definitionId)
+                ? { baselineRelation: comparisons.get(definition.definitionId)! } : {}),
+            };
+          }) : [],
+      changedFiles: facts?.changedFiles.map((file) => ({
+        id: file.id, path: file.path, operation: file.operation,
+      })) ?? [],
+      repositoryEvidence: contract.repositoryEvidence.map((evidence) => ({
+        id: evidence.id,
+        path: evidence.path,
+        startLine: evidence.startLine,
+        endLine: evidence.endLine,
+      })),
+      attention: attention.map((item) => ({ id: item.id })),
+    });
+  const detailCommands = authoringDetailCommands(
+    content.inputKind,
+    task.taskId,
+    task.currentAttemptId,
+    facts,
+  );
   return {
     ...content,
     bindsTo: {
@@ -548,7 +480,7 @@ function packetBase(
     semanticContext: {
       exactDeveloperEvents: {
         authority: 'human-event',
-        events: contract.authority.developerEvents,
+        events: contract.humanEvents,
       },
       agentInterpretation: {
         authority: 'agent-judgment',
@@ -558,57 +490,78 @@ function packetBase(
         focus: contract.understanding.focus.map((item) => item.value),
       },
     },
-    ...(shapeNames.length ? {
-      shapeCatalog: Object.fromEntries(shapeNames.map((name) => [name, AUTHORING_SHAPES[name]])),
-    } : {}),
-    referenceCatalog: selectedCatalog(catalogSelection, {
-      conditions: contract.adoptionConditions.map((condition) => ({
-        id: condition.id,
-        key: condition.key,
-        statement: condition.statement,
-        criticality: condition.criticality,
-        obligationIds: condition.evidenceObligations.map((item) => item.id),
-      })),
-      obligations: allObligations(contract).map((obligation) => ({
-        id: obligation.id,
-        conditionId: obligation.conditionId,
-        statement: obligation.statement,
-        falsification: obligation.falsification,
-      })),
-      checks: contract.verificationPlan.mode === 'checks'
-        ? contract.verificationPlan.definitions.map((definition) => {
-            const fact = factChecks.get(definition.definitionId);
-            return {
-              verifierId: definition.verifierId,
-              definitionId: definition.definitionId,
-              key: definition.key,
-              ...(fact ? { latestStatus: latestStatus(fact) } : {}),
-              ...(comparisons.has(definition.definitionId)
-                ? { baselineRelation: comparisons.get(definition.definitionId)! } : {}),
-              logPaths: fact ? fact.attempts.flatMap((attempt) =>
-                [attempt.stdout.logPath, attempt.stderr.logPath]
-                  .filter((path): path is string => Boolean(path))) : [],
-            };
-          }) : [],
-      changedFiles: facts?.changedFiles.map((file) => ({
-        id: file.id, path: file.path, operation: file.operation,
-      })) ?? [],
-      challenges: challenges.map((challenge) => ({
-        id: challenge.id,
-        obligationIds: challenge.obligationIds,
-        outcome: challenge.outcome,
-        conclusion: challenge.conclusion,
-        counterEvidence: challenge.counterEvidence,
-      })),
-      repositoryEvidence: contract.repositoryEvidence.map((evidence) => ({
-        id: evidence.id,
-        path: evidence.path,
-        startLine: evidence.startLine,
-        endLine: evidence.endLine,
-      })),
-      attention: attention.map((item) => ({ id: item.id })),
-    }),
+    referenceCatalog,
+    detailCommands,
   };
+}
+
+function authoringDetailCommands(
+  inputKind: AuthoringPacket['inputKind'],
+  taskId: string,
+  attemptId: string,
+  facts: FactBundle | undefined,
+): AuthoringDetailCommand[] {
+  if (!facts || inputKind === 'decision' || inputKind === 'resolution') return [];
+  const concerningDefinitionIds = new Set(facts.evidenceConcerns
+    .filter((concern) => concern.kind === 'check')
+    .map((concern) => concern.definitionId));
+  const selectedChecks = inputKind === 'verification-revision'
+    ? facts.checks
+    : inputKind === 'diagnosis'
+      ? facts.checks.filter((check) => concerningDefinitionIds.has(check.definitionId))
+      : facts.checks.filter((check) => latestStatus(check) !== 'passed'
+        || facts.checkComparisons.some((comparison) =>
+          comparison.definitionId === check.definitionId
+          && comparison.relation !== 'baseline-unknown'));
+  const commands = selectedChecks.flatMap((check) => {
+    const latest = check.attempts.at(-1)!;
+    const base = [
+      'stetra', 'change', 'explain', '.', '--task', taskId,
+      '--attempt', attemptId, '--definition', check.definitionId,
+    ];
+    const result: AuthoringDetailCommand[] = [{
+      purpose: `Inspect the exact latest Check Attempt for ${check.definitionId}.`,
+      section: 'check-attempt',
+      argv: [...base, '--check-attempt', String(latest.attempt), '--section', 'check-attempt', '--json'],
+    }];
+    for (const stream of ['stdout', 'stderr'] as const) {
+      if (latest[stream].persistedBytes === 0) continue;
+      result.push({
+        purpose: `Inspect the bounded ${stream} tail for ${check.definitionId}.`,
+        section: 'log',
+        argv: [...base, '--check-attempt', String(latest.attempt), '--stream', stream,
+          '--tail-bytes', '8192', '--section', 'log', '--json'],
+      });
+    }
+    return result;
+  });
+  if (inputKind === 'handoff') {
+    for (const check of selectedChecks) {
+      const baseline = facts.baselineVerification.checks.find((item) =>
+        item.definitionId === check.definitionId)?.observation;
+      if (!baseline) continue;
+      const latest = baseline.attempts.at(-1)!;
+      const base = [
+        'stetra', 'change', 'explain', '.', '--task', taskId,
+        '--attempt', 'baseline', '--definition', check.definitionId,
+      ];
+      commands.push({
+        purpose: `Inspect the Runtime-recorded baseline Check Attempt for ${check.definitionId}.`,
+        section: 'check-attempt',
+        argv: [...base, '--check-attempt', String(latest.attempt), '--section', 'check-attempt', '--json'],
+      });
+      for (const stream of ['stdout', 'stderr'] as const) {
+        if (latest[stream].persistedBytes === 0) continue;
+        commands.push({
+          purpose: `Inspect the bounded baseline ${stream} tail for ${check.definitionId}.`,
+          section: 'log',
+          argv: [...base, '--check-attempt', String(latest.attempt), '--stream', stream,
+            '--tail-bytes', '8192', '--section', 'log', '--json'],
+        });
+      }
+    }
+  }
+  return commands;
 }
 
 function selectedCatalog(
@@ -618,99 +571,69 @@ function selectedCatalog(
   return Object.fromEntries(selection.map((key) => [key, catalog[key]]));
 }
 
-function choiceRequirement(
-  path: string,
-  authority: AuthoringFieldRequirement['authority'],
-  allowedValues: readonly string[],
-  instruction: string,
-): AuthoringFieldRequirement {
-  return { path, authority, allowedValues: [...allowedValues], instruction };
-}
+function deriveHandoffAuthoringConstraints(input: {
+  task: TaskProjection;
+  contract: TaskContract;
+  facts: FactBundle;
+  requiredObligationIds: string[];
+}) {
+  const obligations = allObligations(input.contract);
+  const conclusionValuesByObligation = new Map(obligations.map((obligation) => [
+    obligation.id,
+    supportedConclusionAllowed(
+      obligation.id,
+      input.requiredObligationIds,
+    ) ? [...CONCLUSION_STATUSES] : CONCLUSION_STATUSES.filter((status) => status !== 'supported'),
+  ] as const));
+  const conclusionValuesByCondition = new Map(input.contract.adoptionConditions.map((condition) => [
+    condition.id,
+    condition.evidenceObligations.every((obligation) =>
+      conclusionValuesByObligation.get(obligation.id)!.includes('supported'))
+      ? [...CONCLUSION_STATUSES]
+      : CONCLUSION_STATUSES.filter((status) => status !== 'supported'),
+  ] as const));
+  const acceptanceAdviceAllowed = [...conclusionValuesByCondition.values()].every((values) =>
+    values.includes('supported'))
+    && input.facts.checks.every((check) => latestStatus(check) === 'passed')
+    && input.facts.changedFiles.every((file) => file.representation !== 'unrepresentable')
+    && input.contract.hostPolicyRequirements.every((requirement) =>
+      requirement.enforcementRequirement !== 'required');
 
-function shapeRequirement(
-  path: string,
-  authority: AuthoringFieldRequirement['authority'],
-  shapeRef: AuthoringShapeName,
-  instruction: string,
-): AuthoringFieldRequirement {
-  return { path, authority, shapeRef, instruction };
-}
-
-function textRequirement(
-  path: string,
-  authority: AuthoringFieldRequirement['authority'],
-  instruction: string,
-): AuthoringFieldRequirement {
-  return { path, authority, instruction };
+  return {
+    conclusionValuesByObligation,
+    conclusionValuesByCondition,
+    recommendationActions: acceptanceAdviceAllowed
+      ? [...RECOMMENDATION_ACTIONS]
+      : RECOMMENDATION_ACTIONS.filter((action) => action !== 'accept'),
+  };
 }
 
 function supportedConclusionAllowed(
   obligationId: string,
   requiredObligationIds: string[],
-  challenges: IndependentChallenge[],
 ): boolean {
-  const relevant = challenges.filter((challenge) => challenge.obligationIds.includes(obligationId));
-  if (requiredObligationIds.includes(obligationId) && relevant.length === 0) return false;
-  return relevant.every((challenge) =>
-    challenge.independence === 'host-attested' && challenge.outcome === 'supported');
+  return !requiredObligationIds.includes(obligationId);
 }
 
-function baselineShapes(): unknown[] {
-  return [
-    { mode: 'unknown' },
-    {
-      mode: 'task-start',
-      rationale: '<non-empty reason why before/after changes this decision>',
-      expectation: {
-        baselineStatus: '<passed | failed | unavailable>',
-        currentStatus: '<passed | failed | unavailable>',
-      },
-      obligationKeys: [{
-        conditionKey: '<referenceCatalog condition key>',
-        obligationKey: '<referenceCatalog obligation key>',
-      }],
-    },
-  ];
+export function handoffDocumentSchema(input: Parameters<typeof handoffAuthoringPacket>[0]) {
+  const constraints = deriveHandoffAuthoringConstraints(input);
+  return taskSpecificCognitiveHandoffDocumentSchema({
+    conditions: input.contract.adoptionConditions.map((condition) => ({
+      key: condition.key,
+      critical: condition.criticality === 'adoption-critical',
+      allowedStatuses: constraints.conclusionValuesByCondition.get(condition.id)!,
+      obligations: condition.evidenceObligations.map((obligation) => ({
+        key: obligation.key,
+        allowedStatuses: constraints.conclusionValuesByObligation.get(obligation.id)!,
+      })),
+    })),
+    recommendationActions: constraints.recommendationActions,
+  });
 }
 
-function handoffEvidenceReferenceShapes(): unknown[] {
-  return [
-    { kind: 'changed-file', id: '<exact changed-file id>' },
-    { kind: 'check', id: '<exact definition id>' },
-    { kind: 'repository-evidence', id: '<exact repository-evidence id>' },
-    { kind: 'human-event', id: '<exact human-event id>' },
-    { kind: 'challenge', id: '<exact challenge id>' },
-    { kind: 'patch' },
-  ];
+function jsonSchema(schema: z.ZodType): Record<string, unknown> {
+  return z.toJSONSchema(schema, { reused: 'ref' }) as Record<string, unknown>;
 }
-
-function residualUnknownShape() {
-  return {
-    conditionIds: ['<exact condition id>'],
-    obligationIds: ['<exact obligation id>'],
-    statement: '<what remains unknown>',
-    adoptionImpact: '<how the unknown changes adoption>',
-    nextAction: '<specific next investigation or decision>',
-    evidence: [{ kind: '<evidence kind>', id: '<exact referenceCatalog id>' }],
-  };
-}
-
-function reviewQuestionShape() {
-  return {
-    conditionIds: ['<exact condition id>'],
-    obligationIds: ['<exact obligation id>'],
-    question: '<consequence-directed review question>',
-    adoptionImpact: '<why the answer changes adoption>',
-    evidence: [{ kind: '<evidence kind>', id: '<exact referenceCatalog id>' }],
-  };
-}
-
-const AUTHORING_SHAPES: Record<AuthoringShapeName, unknown[]> = {
-  'verification-baseline': baselineShapes(),
-  'handoff-evidence-reference': handoffEvidenceReferenceShapes(),
-  'residual-unknown': [residualUnknownShape()],
-  'review-question': [reviewQuestionShape()],
-};
 
 function targetDocument(pending: NonNullable<TaskProjection['pendingResolution']>) {
   if (pending.kind === 'semantic-impact') {
@@ -719,7 +642,7 @@ function targetDocument(pending: NonNullable<TaskProjection['pendingResolution']
   if (pending.kind === 'correction') {
     return { kind: pending.kind, decisionId: pending.targetId };
   }
-  return { kind: pending.kind, requirementId: pending.targetId };
+  return { kind: pending.kind, requirementIds: pending.targetIds };
 }
 
 function allObligations(contract: TaskContract) {

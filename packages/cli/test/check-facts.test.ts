@@ -4,6 +4,7 @@ import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
+import { fileURLToPath } from 'node:url';
 
 import type { VerificationDefinition } from '@sovea/stetra-core';
 
@@ -11,6 +12,10 @@ import {
   MAX_CHECK_LOG_BYTES,
   runFrozenChecks,
 } from '../src/facts/checks.ts';
+
+const hangingDescendantFixture = fileURLToPath(
+  new URL('./fixtures/hanging-descendant.mjs', import.meta.url),
+);
 
 test('check facts preserve stdout, stderr, exact exit termination, and an outcome fingerprint', async () => {
   const root = mkdtempSync(join(tmpdir(), 'stetra-check-facts-'));
@@ -69,6 +74,133 @@ test('check facts distinguish outputless failure, timeout, platform termination,
   }
 });
 
+test('a timed-out check terminates its launcher and descendants that retain output pipes', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'stetra-check-descendant-timeout-'));
+  const pidPath = join(root, 'descendant.pid');
+  try {
+    const startedAt = performance.now();
+    const timedOut = await run(
+      root,
+      [process.execPath, hangingDescendantFixture, pidPath],
+      500,
+      'descendant-timeout',
+    );
+    const durationMs = performance.now() - startedAt;
+    const attempt = timedOut.attempts[0];
+    assert.equal(attempt.status, 'unavailable');
+    assert.equal(attempt.termination.kind, 'timeout');
+    assert.ok(durationMs < 3_000, `Expected bounded termination, observed ${durationMs} ms.`);
+
+    const descendantPid = Number(readFileSync(pidPath, 'utf8').trim());
+    assert.ok(Number.isSafeInteger(descendantPid));
+    await waitForProcessExit(descendantPid);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('a POSIX process group remains terminable after the launcher exits', {
+  skip: process.platform === 'win32' ? 'Windows task trees require a live root PID.' : false,
+}, async () => {
+  const root = mkdtempSync(join(tmpdir(), 'stetra-check-exited-launcher-'));
+  const pidPath = join(root, 'descendant.pid');
+  try {
+    const timedOut = await run(
+      root,
+      [process.execPath, hangingDescendantFixture, pidPath, 'launcher-exits'],
+      500,
+      'exited-launcher',
+    );
+    assert.equal(timedOut.attempts[0].termination.kind, 'timeout');
+    const descendantPid = Number(readFileSync(pidPath, 'utf8').trim());
+    await waitForProcessExit(descendantPid);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('a timed-out check forcefully terminates a descendant that ignores graceful termination', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'stetra-check-descendant-force-'));
+  const pidPath = join(root, 'descendant.pid');
+  try {
+    const startedAt = performance.now();
+    const timedOut = await run(
+      root,
+      [process.execPath, hangingDescendantFixture, pidPath, 'ignore-term'],
+      500,
+      'descendant-force',
+    );
+    const durationMs = performance.now() - startedAt;
+    assert.equal(timedOut.attempts[0].termination.kind, 'timeout');
+    assert.ok(
+      durationMs >= 1_400 && durationMs < 3_500,
+      `Expected one bounded force-kill phase, observed ${durationMs} ms.`,
+    );
+
+    const descendantPid = Number(readFileSync(pidPath, 'utf8').trim());
+    await waitForProcessExit(descendantPid);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('a timed-out check waits for force termination when a silent descendant outlives the launcher', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'stetra-check-silent-descendant-force-'));
+  const pidPath = join(root, 'descendant.pid');
+  try {
+    const startedAt = performance.now();
+    const timedOut = await run(
+      root,
+      [process.execPath, hangingDescendantFixture, pidPath, 'ignore-term-no-output'],
+      500,
+      'silent-descendant-force',
+    );
+    const durationMs = performance.now() - startedAt;
+    assert.equal(timedOut.attempts[0].termination.kind, 'timeout');
+    assert.ok(
+      durationMs >= 1_400 && durationMs < 3_500,
+      `Expected force termination before returning, observed ${durationMs} ms.`,
+    );
+
+    const descendantPid = Number(readFileSync(pidPath, 'utf8').trim());
+    await waitForProcessExit(descendantPid);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('POSIX reaping lag after force termination still produces a timeout fact', {
+  skip: process.platform === 'win32' ? 'Windows does not expose POSIX process groups.' : false,
+}, async (t) => {
+  const root = mkdtempSync(join(tmpdir(), 'stetra-check-reaping-lag-'));
+  const originalKill = process.kill;
+  t.mock.method(process, 'kill', (pid: number, signal?: NodeJS.Signals | number) => {
+    // kill(-pgid, 0) also observes unreaped zombies. Simulate that kernel-visible
+    // state outliving successful group-directed termination, as it can in a PID
+    // namespace whose init process has not reaped the group yet.
+    if (pid < 0 && signal === 0) return true;
+    return originalKill(pid, signal);
+  });
+  try {
+    const startedAt = performance.now();
+    const timedOut = await run(
+      root,
+      [process.execPath, '-e', 'setInterval(() => {}, 10_000)'],
+      50,
+      'reaping-lag',
+    );
+    const durationMs = performance.now() - startedAt;
+    assert.equal(timedOut.attempts[0].status, 'unavailable');
+    assert.equal(timedOut.attempts[0].termination.kind, 'timeout');
+    assert.ok(
+      durationMs >= 1_000 && durationMs < 3_000,
+      `Expected one bounded force-kill phase, observed ${durationMs} ms.`,
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('bounded logs keep complete-stream digests while persisting only the byte limit', async () => {
   const root = mkdtempSync(join(tmpdir(), 'stetra-check-bounded-'));
   try {
@@ -92,11 +224,40 @@ test('bounded logs keep complete-stream digests while persisting only the byte l
   }
 });
 
+test('check facts separate preparation from assertion and capture declared ignored inputs', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'stetra-check-inputs-'));
+  try {
+    const generated = join(root, 'generated');
+    const check = await run(
+      root,
+      [process.execPath, '-e', "process.exit(require('node:fs').existsSync('generated/input.txt') ? 0 : 1)"],
+      1_000,
+      'prepared-check',
+      [{
+        key: 'generate-input',
+        argv: [process.execPath, '-e', "require('node:fs').mkdirSync('generated',{recursive:true});require('node:fs').writeFileSync('generated/input.txt','ready')"],
+      }],
+      [{ kind: 'tree', path: 'generated' }],
+    );
+    const attempt = check.attempts[0];
+    assert.equal(attempt.status, 'passed');
+    assert.deepEqual(attempt.steps.map((step) => step.role), ['preparation', 'assertion']);
+    assert.equal(attempt.executionInputs.beforePreparation.inputs[0].state, 'missing');
+    assert.equal(attempt.executionInputs.readyForAssertion.inputs[0].state, 'present');
+    assert.equal(attempt.executionInputs.readyForAssertion.inputs[0].entries[0].path, 'generated/input.txt');
+    assert.equal(readFileSync(join(generated, 'input.txt'), 'utf8'), 'ready');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 async function run(
   root: string,
   argv: string[],
   timeoutMs = 1_000,
   key = 'check',
+  preparation: Array<{ key: string; argv: string[] }> = [],
+  executionInputs: VerificationDefinition['executionInputs'] = [],
 ) {
   const definition: VerificationDefinition = {
     verifierId: `verifier:${key}`,
@@ -104,7 +265,17 @@ async function run(
     revision: 1,
     key,
     rationale: 'Exercise streaming check facts.',
-    argv,
+    execution: {
+      preparation: preparation.map((step) => ({
+        ...step,
+        stepId: digest(`${key}:preparation:${step.key}:${JSON.stringify(step.argv)}`),
+      })),
+      assertion: {
+        stepId: digest(`${key}:assertion`),
+        argv,
+      },
+    },
+    executionInputs,
     baseline: { mode: 'unknown' },
     verifierRefs: [],
   };
@@ -118,4 +289,21 @@ async function run(
 
 function digest(value: string): string {
   return `sha256:${createHash('sha256').update(value).digest('hex')}`;
+}
+
+async function waitForProcessExit(pid: number): Promise<void> {
+  const deadline = Date.now() + 2_000;
+  while (processExists(pid)) {
+    if (Date.now() >= deadline) throw new Error(`Descendant process ${pid} remained alive.`);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+}
+
+function processExists(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code !== 'ESRCH';
+  }
 }

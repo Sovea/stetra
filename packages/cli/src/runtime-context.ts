@@ -1,17 +1,5 @@
 import type { Readable, Writable } from 'node:stream';
-import type {
-  HostPolicyEvaluation,
-  HostPolicyRequirement,
-} from '@sovea/stetra-core';
-
 import type { HostAdapter } from './project/init.ts';
-import type {
-  ChallengeExecutionRequest,
-} from './workflow/host-action.ts';
-import type {
-  ChallengeDocument,
-  HostChallengeRunReceipt,
-} from './schemas/delegation.ts';
 
 export interface PromptProvider {
   selectAdapters(input: {
@@ -32,20 +20,38 @@ export interface RunCliOptions {
   interactive?: boolean;
   color?: boolean;
   prompts?: PromptProvider;
-  hostAttestations?: HostAttestationProvider;
 }
 
-export interface HostAttestationProvider {
-  provenance: 'native-adapter' | 'evaluation-runner';
-  evaluatePolicies(input: {
-    taskId: string;
-    requirements: HostPolicyRequirement[];
-  }): Promise<HostPolicyEvaluation[]>;
-  verifyChallengeRun?(input: {
-    request: ChallengeExecutionRequest;
-    receipt: HostChallengeRunReceipt;
-    challenge: ChallengeDocument;
-  }): Promise<boolean>;
+export interface HostEnvironmentDisclosure {
+  surface: 'thin-skill';
+  independentChallenge: {
+    availability: 'unavailable';
+    unavailableBehavior: 'author-handoff-preserving-gap';
+  };
+  verificationExecution: {
+    authoritativeCollector: 'stetra-runtime';
+    trigger: 'change-collect';
+    processModel: 'frozen-argv-without-shell';
+    preparePreflightScope: 'top-level-executable-only';
+    directHostExecution: 'agent-evidence-only';
+  };
+}
+
+export function hostEnvironmentDisclosure(): HostEnvironmentDisclosure {
+  return {
+    surface: 'thin-skill',
+    independentChallenge: {
+      availability: 'unavailable',
+      unavailableBehavior: 'author-handoff-preserving-gap',
+    },
+    verificationExecution: {
+      authoritativeCollector: 'stetra-runtime',
+      trigger: 'change-collect',
+      processModel: 'frozen-argv-without-shell',
+      preparePreflightScope: 'top-level-executable-only',
+      directHostExecution: 'agent-evidence-only',
+    },
+  };
 }
 
 export interface CliRuntimeContext {
@@ -54,7 +60,6 @@ export interface CliRuntimeContext {
   interactive: boolean;
   color: boolean;
   prompts: PromptProvider;
-  hostAttestations?: HostAttestationProvider;
 }
 
 export async function resolveRuntimeContext(
@@ -77,7 +82,6 @@ export async function resolveRuntimeContext(
       && process.env.NO_COLOR === undefined
     ),
     prompts: options.prompts ?? defaultPromptProvider,
-    ...(options.hostAttestations ? { hostAttestations: options.hostAttestations } : {}),
   };
 }
 

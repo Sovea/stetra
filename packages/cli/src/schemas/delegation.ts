@@ -2,20 +2,21 @@ import { z } from 'zod';
 
 import { DELEGATION_PROTOCOL, DELEGATION_SCHEMA_VERSION } from '../protocol.ts';
 
-export const EVIDENCE_SEMANTIC_IMPACTS = ['none', 'material'] as const;
 export const EVIDENCE_CAUSES = ['implementation', 'environment', 'verification', 'unknown'] as const;
-export const EVIDENCE_ROUTES = [
-  'repair-implementation',
-  'revise-verification',
-  'challenge',
-  'handoff',
-  'ask-human',
-] as const;
 export const CONCLUSION_STATUSES = ['supported', 'partial', 'contradicted', 'unknown'] as const;
+export const EVIDENCE_COVERAGE_STATUSES = ['sufficient', 'insufficient'] as const;
+export const EVIDENCE_CONTRACT_IMPACTS = ['unchanged', 'material'] as const;
+export const WITHIN_CONTRACT_ACTIONS = [
+  'repair-delivery', 'revise-verification', 'handoff',
+] as const;
 export const RECOMMENDATION_ACTIONS = ['accept', 'request-correction', 'reject', 'defer'] as const;
 export const HUMAN_DECISION_ACTIONS = ['accepted', 'correction-requested', 'rejected', 'deferred'] as const;
 export const VERIFICATION_REVISION_KINDS = ['execution-rebinding', 'verification-plan'] as const;
-export const HUMAN_RESOLUTION_ACTIONS = ['continue-current-contract', 'request-correction', 'abort'] as const;
+export const HUMAN_RESOLUTION_ACTIONS = [
+  'continue-current-contract',
+  'request-correction',
+  'abort',
+] as const;
 
 export const StableIdSchema = z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/);
 export const Sha256Schema = z.string().regex(/^sha256:[a-f0-9]{64}$/);
@@ -111,16 +112,55 @@ const VerificationBaselineSchema = z.discriminatedUnion('mode', [
   z.strictObject({ mode: z.literal('unknown') }),
 ]);
 
+const AuthoredVerificationBaselineSchema = z.discriminatedUnion('mode', [
+  z.strictObject({
+    mode: z.literal('task-start'),
+    rationale: NonEmptyStringSchema,
+    expectation: z.strictObject({
+      baselineStatus: z.enum(['passed', 'failed', 'unavailable']),
+      currentStatus: z.enum(['passed', 'failed', 'unavailable']),
+    }),
+  }),
+  z.strictObject({ mode: z.literal('unknown') }),
+]);
+
 export const VerificationDefinitionSchema = z.strictObject({
   key: StableIdSchema,
   rationale: NonEmptyStringSchema,
-  argv: z.array(z.string().min(1)).min(1),
+  execution: z.strictObject({
+    preparation: z.array(z.strictObject({
+      key: StableIdSchema,
+      argv: z.array(z.string().min(1)).min(1),
+    })),
+    assertion: z.strictObject({
+      argv: z.array(z.string().min(1)).min(1),
+    }),
+  }),
+  executionInputs: z.array(z.strictObject({
+    kind: z.enum(['file', 'tree']),
+    path: SafeRepositoryPathSchema,
+  })),
   baseline: VerificationBaselineSchema,
   verifierSelectors: z.array(z.strictObject({
     kind: z.enum(['file', 'tree']),
     path: SafeRepositoryPathSchema,
     role: z.enum(['command-definition', 'acceptance-surface']),
   })),
+});
+
+export const AuthoredVerificationDefinitionSchema = VerificationDefinitionSchema.extend({
+  execution: z.strictObject({
+    preparation: z.array(z.strictObject({
+      argv: z.array(z.string().min(1)).min(1),
+    })),
+    assertion: z.strictObject({
+      argv: z.array(z.string().min(1)).min(1),
+    }),
+  }),
+});
+
+const PrepareVerificationDefinitionSchema = AuthoredVerificationDefinitionSchema.extend({
+  baseline: AuthoredVerificationBaselineSchema,
 });
 
 const EvidenceObligationStrategySchema = z.discriminatedUnion('kind', [
@@ -136,7 +176,6 @@ const EvidenceObligationStrategySchema = z.discriminatedUnion('kind', [
     kind: z.literal('independent-challenge'),
     policy: z.enum(['required', 'fact-triggered']),
   }),
-  z.strictObject({ kind: z.literal('human-review') }),
 ]);
 
 const FalsificationDesignSchema = z.strictObject({
@@ -160,6 +199,18 @@ const AdoptionConditionSchema = z.strictObject({
   })).min(1),
 });
 
+const AssuranceDeclarationSchema = z.discriminatedUnion('kind', [
+  z.strictObject({
+    kind: z.literal('routine'),
+    rationale: NonEmptyStringSchema,
+    basis: CompactBasisSchema.optional(),
+  }),
+  z.strictObject({
+    kind: z.literal('conditioned'),
+    conditions: z.array(AdoptionConditionSchema).min(1),
+  }),
+]);
+
 const HostPolicyRequirementSchema = z.strictObject({
   key: StableIdSchema,
   capability: z.enum(['web-search', 'network', 'external-mutation', 'fresh-context']),
@@ -167,6 +218,30 @@ const HostPolicyRequirementSchema = z.strictObject({
   enforcementRequirement: z.enum(['required', 'preferred']),
   rationale: NonEmptyStringSchema,
   basis: CompactBasisSchema.optional(),
+});
+
+const TimeoutRetryBudgetSchema = z.discriminatedUnion('mode', [
+  z.strictObject({ mode: z.literal('disabled') }),
+  z.strictObject({
+    mode: z.literal('bounded'),
+    maxRetriesPerVerifier: z.number().int().min(1).max(5),
+    maxTimeoutMs: z.number().int().min(1_000).max(3_600_000),
+  }),
+]);
+
+const ExecutionBudgetSchema = z.strictObject({
+  checkTimeoutMs: z.number().int().min(1_000).max(3_600_000),
+  maxDeliveryRepairs: z.number().int().min(0).max(5),
+  timeoutRetry: TimeoutRetryBudgetSchema,
+}).superRefine((budget, context) => {
+  if (budget.timeoutRetry.mode === 'bounded'
+    && budget.timeoutRetry.maxTimeoutMs <= budget.checkTimeoutMs) {
+    context.addIssue({
+      code: 'custom',
+      path: ['timeoutRetry', 'maxTimeoutMs'],
+      message: 'Bounded timeout retry must allow more time than the initial check attempt.',
+    });
+  }
 });
 
 export const DelegationPrepareDocumentSchema = z.strictObject({
@@ -183,151 +258,281 @@ export const DelegationPrepareDocumentSchema = z.strictObject({
   }),
   materialDecisionForks: z.array(MaterialDecisionForkSchema),
   repositoryEvidence: z.array(EvidenceWindowSchema).optional(),
-  conditions: z.array(AdoptionConditionSchema),
+  assurance: AssuranceDeclarationSchema,
   hostPolicyRequirements: z.array(HostPolicyRequirementSchema),
-  delivery: z.strictObject({
-    maxRepairAttempts: z.number().int().min(0).max(5),
-  }),
-  checks: z.array(VerificationDefinitionSchema).optional(),
+  executionBudget: ExecutionBudgetSchema,
+  checks: z.array(PrepareVerificationDefinitionSchema).optional(),
   noCommandRationale: NonEmptyStringSchema.optional(),
 });
 
-export const EvidenceDispositionDocumentSchema = z.strictObject({
-  semanticImpact: z.enum(EVIDENCE_SEMANTIC_IMPACTS),
-  proposedRoute: z.enum(EVIDENCE_ROUTES),
-  routeRationale: NonEmptyStringSchema,
-  entries: z.array(z.strictObject({
-    source: z.discriminatedUnion('kind', [
-      z.strictObject({ kind: z.literal('check'), definitionId: Sha256Schema }),
-      z.strictObject({ kind: z.literal('challenge'), challengeId: StableIdSchema }),
-    ]),
-    cause: z.enum(EVIDENCE_CAUSES),
-    diagnosis: NonEmptyStringSchema,
-    falsificationAttempt: NonEmptyStringSchema,
-    codeChangeCanAlterObservation: z.boolean(),
-    expectedDifferentObservation: NonEmptyStringSchema,
-    intendedChanges: z.array(NonEmptyStringSchema),
-  })).min(1),
+const EvidenceConcernSourceSchema = z.strictObject({
+  kind: z.literal('check'),
+  definitionId: Sha256Schema,
+  observation: z.enum(['current-nonpassing', 'baseline-expectation-mismatch']),
 });
 
-const ChallengeEvidenceSchema = z.strictObject({
-  changedFiles: z.array(StableIdSchema),
-  checks: z.array(Sha256Schema),
-  repositoryEvidence: z.array(StableIdSchema),
-  humanEvents: z.array(StableIdSchema),
-  patch: z.boolean(),
+const DiagnosisEntryBase = {
+  source: EvidenceConcernSourceSchema,
+  diagnosis: NonEmptyStringSchema,
+  falsificationAttempt: NonEmptyStringSchema,
+  expectedDifferentObservation: NonEmptyStringSchema,
+};
+
+const DiagnosisEntrySchema = z.strictObject({
+  ...DiagnosisEntryBase,
+  cause: z.enum(EVIDENCE_CAUSES),
+  repositoryChange: z.strictObject({
+    surface: z.enum(['production', 'verification-surface', 'none']),
+    intendedChanges: z.array(NonEmptyStringSchema),
+  }),
+}).superRefine((value, context) => {
+  const surfaceAllowed = value.cause === 'implementation'
+    ? value.repositoryChange.surface === 'production'
+    : value.cause === 'verification'
+      ? ['verification-surface', 'none'].includes(value.repositoryChange.surface)
+      : value.repositoryChange.surface === 'none';
+  if (!surfaceAllowed) {
+    context.addIssue({
+      code: 'custom',
+      path: ['repositoryChange', 'surface'],
+      message: `must match the declared ${value.cause} cause`,
+    });
+  }
+  if (value.repositoryChange.surface === 'none' && value.repositoryChange.intendedChanges.length) {
+    context.addIssue({
+      code: 'custom',
+      path: ['repositoryChange', 'intendedChanges'],
+      message: 'must be empty when repositoryChange.surface is none',
+    });
+  }
+  if (value.repositoryChange.surface !== 'none' && !value.repositoryChange.intendedChanges.length) {
+    context.addIssue({
+      code: 'custom',
+      path: ['repositoryChange', 'intendedChanges'],
+      message: 'must name at least one intended change when a repository surface is selected',
+    });
+  }
 });
+
+const WithinContractActionSchema = z.discriminatedUnion('kind', [
+  z.strictObject({ kind: z.literal('repair-delivery'), rationale: NonEmptyStringSchema }),
+  z.strictObject({ kind: z.literal('revise-verification'), rationale: NonEmptyStringSchema }),
+  z.strictObject({ kind: z.literal('handoff'), rationale: NonEmptyStringSchema }),
+]);
+
+export const EvidenceDispositionDocumentSchema = z.discriminatedUnion('contractImpact', [
+  z.strictObject({
+    contractImpact: z.literal('unchanged'),
+    entries: z.array(DiagnosisEntrySchema).min(1),
+    action: WithinContractActionSchema,
+  }),
+  z.strictObject({
+    contractImpact: z.literal('material'),
+    impact: NonEmptyStringSchema,
+    entries: z.array(DiagnosisEntrySchema).min(1),
+    action: z.strictObject({ kind: z.literal('ask-human'), rationale: NonEmptyStringSchema }),
+  }),
+]);
 
 const HandoffEvidenceReferenceSchema = z.union([
   z.strictObject({ kind: z.literal('patch') }),
   z.strictObject({
-    kind: z.enum(['changed-file', 'check', 'repository-evidence', 'human-event', 'challenge']),
-    id: z.string().min(1),
+    kind: z.literal('changed-file'),
+    path: SafeRepositoryPathSchema,
+  }),
+  z.strictObject({
+    kind: z.literal('check'),
+    key: StableIdSchema,
+  }),
+  z.strictObject({
+    kind: z.enum(['repository-evidence', 'human-event']),
+    id: StableIdSchema,
   }),
 ]);
 
-const ChallengeEvidenceItemSchema = z.strictObject({
-  statement: NonEmptyStringSchema,
-  references: z.array(HandoffEvidenceReferenceSchema).min(1),
-});
+export const EvidenceCoverageAssessmentSchema = z.discriminatedUnion('status', [
+  z.strictObject({
+    status: z.literal('sufficient'),
+    rationale: NonEmptyStringSchema,
+    gaps: z.array(z.never()).length(0),
+  }),
+  z.strictObject({
+    status: z.literal('insufficient'),
+    rationale: NonEmptyStringSchema,
+    gaps: z.array(NonEmptyStringSchema).min(1),
+  }),
+]);
 
-export const ChallengeDocumentSchema = z.strictObject({
-  obligationIds: z.array(StableIdSchema).min(1),
-  falsification: FalsificationDesignSchema,
-  evidence: ChallengeEvidenceSchema,
-  falsificationAttempt: NonEmptyStringSchema,
-  observedResult: NonEmptyStringSchema,
-  supportingEvidence: z.array(ChallengeEvidenceItemSchema),
-  counterEvidence: z.array(ChallengeEvidenceItemSchema),
-  outcome: z.enum(CONCLUSION_STATUSES),
+const HandoffFindingBase = {
+  obligationKey: StableIdSchema,
+  reviewDecisionKeys: z.array(StableIdSchema),
+  evidence: z.array(HandoffEvidenceReferenceSchema),
+  falsification: z.strictObject({
+    attempt: NonEmptyStringSchema,
+    observedResult: NonEmptyStringSchema,
+  }),
+  counterEvidence: z.array(HandoffEvidenceReferenceSchema),
   conclusion: NonEmptyStringSchema,
-}).superRefine((value, context) => {
-  if (value.outcome === 'supported' && value.counterEvidence.length > 0) {
-    context.addIssue({
-      code: 'custom',
-      path: ['counterEvidence'],
-      message: 'must be preserved and outcome changed to partial, contradicted, or unknown while counter-evidence remains',
-    });
-  }
-});
+};
 
-export const HostChallengeRunReceiptSchema = z.strictObject({
-  receiptId: StableIdSchema,
-  requestId: Sha256Schema,
-  provider: z.enum(['codex', 'claude', 'evaluation-runner']),
-  agentType: z.literal('stetra-challenger'),
-  parentContextId: NonEmptyStringSchema,
-  challengerContextId: NonEmptyStringSchema,
-  lifecycle: z.literal('start-and-stop-observed'),
-  contextFingerprint: Sha256Schema,
-  outputFingerprint: Sha256Schema,
-  mutationPolicy: z.enum(['host-read-only', 'tool-restricted']),
-}).refine((value) => value.parentContextId !== value.challengerContextId, {
-  path: ['challengerContextId'],
-  message: 'must identify a context distinct from the implementer context',
-});
+const HandoffObligationFindingSchema = z.discriminatedUnion('status', [
+  z.strictObject({
+    ...HandoffFindingBase,
+    status: z.literal('supported'),
+    evidenceCoverage: z.strictObject({
+      status: z.literal('sufficient'),
+      rationale: NonEmptyStringSchema,
+      gaps: z.array(z.never()).length(0),
+    }),
+  }),
+  ...(['partial', 'contradicted', 'unknown'] as const).map((status) => z.strictObject({
+    ...HandoffFindingBase,
+    status: z.literal(status),
+    evidenceCoverage: EvidenceCoverageAssessmentSchema,
+    reviewDecisionKeys: z.array(StableIdSchema).min(1),
+  })),
+]);
 
-export const ChallengeSubmissionSchema = z.strictObject({
-  requestId: Sha256Schema.optional(),
-  hostReceipt: HostChallengeRunReceiptSchema.optional(),
-  challenge: ChallengeDocumentSchema,
-}).superRefine((value, context) => {
-  if (value.hostReceipt && !value.requestId) {
-    context.addIssue({
-      code: 'custom',
-      path: ['requestId'],
-      message: 'is required when a Host Challenge Run Receipt is supplied',
-    });
-  }
-  if (value.hostReceipt && value.hostReceipt.requestId !== value.requestId) {
-    context.addIssue({
-      code: 'custom',
-      path: ['hostReceipt', 'requestId'],
-      message: 'must match the submitted Challenge requestId',
-    });
-  }
+const HandoffConditionFindingSchema = z.discriminatedUnion('status', [
+  z.strictObject({
+    conditionKey: StableIdSchema,
+    status: z.literal('supported'),
+    summary: NonEmptyStringSchema,
+    obligations: z.array(HandoffObligationFindingSchema).min(1),
+    reviewDecisionKeys: z.array(StableIdSchema),
+  }),
+  ...(['partial', 'contradicted', 'unknown'] as const).map((status) => z.strictObject({
+    conditionKey: StableIdSchema,
+    status: z.literal(status),
+    summary: NonEmptyStringSchema,
+    obligations: z.array(HandoffObligationFindingSchema).min(1),
+    reviewDecisionKeys: z.array(StableIdSchema).min(1),
+  })),
+]);
+
+const HandoffReviewDecisionSchema = z.strictObject({
+  key: StableIdSchema,
+  conditionKeys: z.array(StableIdSchema),
+  obligationKeys: z.array(z.strictObject({
+    conditionKey: StableIdSchema,
+    obligationKey: StableIdSchema,
+  })),
+  question: NonEmptyStringSchema,
+  adoptionImpact: NonEmptyStringSchema,
+  nextAction: NonEmptyStringSchema,
+  evidence: z.array(HandoffEvidenceReferenceSchema),
 });
 
 export const CognitiveHandoffDocumentSchema = z.strictObject({
-  summary: NonEmptyStringSchema,
-  obligationConclusions: z.array(z.strictObject({
-    obligationId: StableIdSchema,
-    status: z.enum(CONCLUSION_STATUSES),
-    evidence: z.array(HandoffEvidenceReferenceSchema),
-    falsification: z.strictObject({
-      attempt: NonEmptyStringSchema,
-      observedResult: NonEmptyStringSchema,
-    }),
-    counterEvidence: z.array(HandoffEvidenceReferenceSchema),
-    conclusion: NonEmptyStringSchema,
-  })),
-  conditionConclusions: z.array(z.strictObject({
-    conditionId: StableIdSchema,
-    status: z.enum(CONCLUSION_STATUSES),
-    summary: NonEmptyStringSchema,
-  })),
-  importantSystemEffects: z.array(NonEmptyStringSchema),
+  actualChange: z.strictObject({
+    behavior: NonEmptyStringSchema,
+    mechanism: z.array(NonEmptyStringSchema).min(1),
+    preservedInvariants: z.array(NonEmptyStringSchema),
+    failureAndRecovery: z.array(NonEmptyStringSchema),
+    importantEffects: z.array(NonEmptyStringSchema),
+    materialTradeoffs: z.array(NonEmptyStringSchema),
+  }),
+  conditions: z.array(HandoffConditionFindingSchema),
   residualUnknowns: z.array(z.strictObject({
-    conditionIds: z.array(StableIdSchema),
-    obligationIds: z.array(StableIdSchema),
+    target: z.discriminatedUnion('kind', [
+      z.strictObject({ kind: z.literal('task') }),
+      z.strictObject({
+        kind: z.literal('condition'),
+        conditionKey: StableIdSchema,
+      }),
+      z.strictObject({
+        kind: z.literal('obligation'),
+        conditionKey: StableIdSchema,
+        obligationKey: StableIdSchema,
+      }),
+    ]),
     statement: NonEmptyStringSchema,
-    adoptionImpact: NonEmptyStringSchema,
-    nextAction: NonEmptyStringSchema,
     evidence: z.array(HandoffEvidenceReferenceSchema),
+    reviewDecisionKeys: z.array(StableIdSchema).min(1),
   })),
-  reviewQuestions: z.array(z.strictObject({
-    conditionIds: z.array(StableIdSchema),
-    obligationIds: z.array(StableIdSchema),
-    question: NonEmptyStringSchema,
-    adoptionImpact: NonEmptyStringSchema,
-    evidence: z.array(HandoffEvidenceReferenceSchema),
-  })),
+  reviewDecisions: z.array(HandoffReviewDecisionSchema),
   recommendation: z.strictObject({
     action: z.enum(RECOMMENDATION_ACTIONS),
     rationale: NonEmptyStringSchema,
     caveats: z.array(NonEmptyStringSchema),
   }),
 });
+
+export interface TaskSpecificHandoffCondition {
+  key: string;
+  critical: boolean;
+  allowedStatuses: readonly (typeof CONCLUSION_STATUSES)[number][];
+  obligations: Array<{
+    key: string;
+    allowedStatuses: readonly (typeof CONCLUSION_STATUSES)[number][];
+  }>;
+}
+
+export function taskSpecificCognitiveHandoffDocumentSchema(input: {
+  conditions: TaskSpecificHandoffCondition[];
+  recommendationActions: readonly (typeof RECOMMENDATION_ACTIONS)[number][];
+}): z.ZodType<CognitiveHandoffDocument> {
+  const conditionSchemas = input.conditions.map((condition) => {
+    const obligationSchemas = condition.obligations.map((obligation) =>
+      obligationFindingSchema(obligation.key, obligation.allowedStatuses));
+    const obligations = z.tuple(obligationSchemas as []);
+    const variants = condition.allowedStatuses.map((status) => {
+      return z.strictObject({
+        conditionKey: z.literal(condition.key),
+        status: z.literal(status),
+        summary: NonEmptyStringSchema,
+        reviewDecisionKeys: status === 'supported' && !condition.critical
+          ? z.array(StableIdSchema)
+          : z.array(StableIdSchema).min(1),
+        obligations,
+      });
+    });
+    return z.discriminatedUnion(
+      'status',
+      variants as unknown as Parameters<typeof z.discriminatedUnion>[1],
+    );
+  });
+  return z.strictObject({
+    actualChange: CognitiveHandoffDocumentSchema.shape.actualChange,
+    conditions: z.tuple(conditionSchemas as []),
+    residualUnknowns: CognitiveHandoffDocumentSchema.shape.residualUnknowns,
+    reviewDecisions: CognitiveHandoffDocumentSchema.shape.reviewDecisions,
+    recommendation: z.strictObject({
+      action: z.enum(input.recommendationActions as [string, ...string[]]),
+      rationale: NonEmptyStringSchema,
+      caveats: z.array(NonEmptyStringSchema),
+    }),
+  }) as z.ZodType<CognitiveHandoffDocument>;
+}
+
+function obligationFindingSchema(
+  obligationKey: string,
+  allowedStatuses: readonly (typeof CONCLUSION_STATUSES)[number][],
+): z.ZodType {
+  const variants = allowedStatuses.map((status) => status === 'supported'
+    ? z.strictObject({
+        ...HandoffFindingBase,
+        obligationKey: z.literal(obligationKey),
+        status: z.literal(status),
+        reviewDecisionKeys: z.array(StableIdSchema),
+        evidenceCoverage: z.strictObject({
+          status: z.literal('sufficient'),
+          rationale: NonEmptyStringSchema,
+          gaps: z.array(z.never()).length(0),
+        }),
+      })
+    : z.strictObject({
+        ...HandoffFindingBase,
+        obligationKey: z.literal(obligationKey),
+        status: z.literal(status),
+        evidenceCoverage: EvidenceCoverageAssessmentSchema,
+        reviewDecisionKeys: z.array(StableIdSchema).min(1),
+      }));
+  return z.discriminatedUnion(
+    'status',
+    variants as unknown as Parameters<typeof z.discriminatedUnion>[1],
+  );
+}
 
 export const HumanDecisionDocumentSchema = z.strictObject({
   humanEvent: HumanEventInputSchema,
@@ -343,9 +548,12 @@ export const VerificationRevisionDocumentSchema = z.strictObject({
   kind: z.enum(VERIFICATION_REVISION_KINDS),
   rationale: NonEmptyStringSchema,
   equivalenceClaim: NonEmptyStringSchema,
-  checks: z.array(VerificationDefinitionSchema).optional(),
+  checks: z.array(AuthoredVerificationDefinitionSchema).optional(),
   noCommandRationale: NonEmptyStringSchema.optional(),
-  humanAuthorization: HumanEventInputSchema.optional(),
+  humanAuthorization: z.strictObject({
+    humanEvent: HumanEventInputSchema,
+    interpretation: NonEmptyStringSchema,
+  }).optional(),
 });
 
 export const HumanResolutionDocumentSchema = z.strictObject({
@@ -353,7 +561,7 @@ export const HumanResolutionDocumentSchema = z.strictObject({
   target: z.discriminatedUnion('kind', [
     z.strictObject({ kind: z.literal('semantic-impact'), dispositionId: Sha256Schema }),
     z.strictObject({ kind: z.literal('correction'), decisionId: StableIdSchema }),
-    z.strictObject({ kind: z.literal('host-policy'), requirementId: StableIdSchema }),
+    z.strictObject({ kind: z.literal('host-policy'), requirementIds: z.array(StableIdSchema).min(1) }),
   ]),
   action: z.enum(HUMAN_RESOLUTION_ACTIONS),
   reason: NonEmptyStringSchema,
@@ -364,17 +572,10 @@ const PackageIdentitySchema = z.strictObject({
   core: z.strictObject({ name: z.literal('@sovea/stetra-core'), version: NonEmptyStringSchema }),
 });
 
-export const HostPolicyEvaluationSchema = z.strictObject({
-  requirementId: StableIdSchema,
-  mode: z.enum(['enforced', 'instruction-only', 'unsupported']),
-  provenance: z.enum(['native-adapter', 'thin-skill', 'evaluation-runner']),
-  attestationId: StableIdSchema.optional(),
-});
-
 const PendingResolutionSchema = z.discriminatedUnion('kind', [
   z.strictObject({ kind: z.literal('semantic-impact'), targetId: Sha256Schema }),
   z.strictObject({ kind: z.literal('correction'), targetId: StableIdSchema }),
-  z.strictObject({ kind: z.literal('host-policy'), targetId: StableIdSchema }),
+  z.strictObject({ kind: z.literal('host-policy'), targetIds: z.array(StableIdSchema).min(1) }),
 ]);
 
 export const AttemptProjectionSchema = z.strictObject({
@@ -382,14 +583,9 @@ export const AttemptProjectionSchema = z.strictObject({
   ordinal: z.number().int().positive(),
   parentAttemptId: StableIdSchema.nullable(),
   effectiveContractId: Sha256Schema,
-  trigger: z.enum(['initial', 'repair', 'correction', 'verification-revision']),
-  deliveryStatus: z.enum([
-    'waiting-for-implementation', 'implementing', 'repairing',
-    'implementation-complete', 'exhausted',
-  ]),
-  createdAt: z.iso.datetime(),
+  trigger: z.enum(['initial', 'delivery-repair', 'correction', 'verification-revision']),
   factCollectionId: Sha256Schema.optional(),
-  evidenceDispositionPath: SafeRepositoryPathSchema.optional(),
+  evidenceDispositionIds: z.array(Sha256Schema),
 });
 
 export const TaskProjectionSchema = z.strictObject({
@@ -398,41 +594,24 @@ export const TaskProjectionSchema = z.strictObject({
   taskId: z.uuid(),
   prepareRequestId: StableIdSchema,
   prepareInputFingerprint: Sha256Schema,
-  workflow: z.literal('cognitive-adoption'),
-  projectRoot: NonEmptyStringSchema,
-  createdAt: z.iso.datetime(),
-  updatedAt: z.iso.datetime(),
   revision: z.number().int().positive(),
   contractRevision: z.number().int().positive(),
   packageIdentity: PackageIdentitySchema,
   semanticContractId: Sha256Schema,
   verificationPlanId: Sha256Schema,
   effectiveContractId: Sha256Schema,
-  planId: Sha256Schema,
+  executionBudget: ExecutionBudgetSchema,
+  timeoutRetryUsage: z.array(z.strictObject({
+    verifierId: StableIdSchema,
+    count: z.number().int().positive(),
+  })),
   currentAttemptId: StableIdSchema,
-  deliveryStatus: z.enum([
-    'waiting-for-implementation', 'implementing', 'repairing',
-    'implementation-complete', 'exhausted',
-  ]),
-  evidenceStatus: z.enum([
-    'not-collected', 'awaiting-evidence-judgment', 'incomplete',
-    'needs-attention', 'facts-stale', 'handoff-ready',
-  ]),
-  decisionStatus: z.enum([
-    'pending', 'correction-requested', 'accepted', 'rejected', 'deferred', 'aborted',
-  ]),
-  repairCount: z.number().int().nonnegative(),
   attempts: z.array(AttemptProjectionSchema).min(1),
-  challengeIds: z.array(StableIdSchema),
-  hostPolicyEvaluations: z.array(HostPolicyEvaluationSchema),
-  resolvedHostPolicyIds: z.array(StableIdSchema),
-  verificationRevised: z.boolean(),
+  humanResolutionIds: z.array(StableIdSchema),
   verificationRevisionIds: z.array(StableIdSchema),
   pendingResolution: PendingResolutionSchema.optional(),
   currentHandoffId: StableIdSchema.optional(),
-  currentHandoffFingerprint: Sha256Schema.optional(),
   decisionId: StableIdSchema.optional(),
-  terminalAt: z.iso.datetime().optional(),
 });
 
 export const TaskEventSchema = z.strictObject({
@@ -443,8 +622,8 @@ export const TaskEventSchema = z.strictObject({
   eventId: z.uuid(),
   type: z.enum([
     'task-prepared', 'facts-collected', 'timeout-retried', 'evidence-diagnosed',
-    'challenge-recorded', 'handoff-evaluated', 'decision-recorded',
-    'human-resolution-recorded', 'contract-revised', 'verification-revised',
+    'handoff-evaluated', 'decision-recorded',
+    'human-resolution-recorded', 'verification-revised',
   ]),
   actor: z.enum(['human', 'agent', 'runtime']),
   occurredAt: z.iso.datetime(),
@@ -456,12 +635,16 @@ export const TaskEventSchema = z.strictObject({
 
 export type DelegationPrepareDocument = z.infer<typeof DelegationPrepareDocumentSchema>;
 export type EvidenceDispositionDocument = z.infer<typeof EvidenceDispositionDocumentSchema>;
-export type ChallengeDocument = z.infer<typeof ChallengeDocumentSchema>;
-export type HostChallengeRunReceipt = z.infer<typeof HostChallengeRunReceiptSchema>;
-export type ChallengeSubmission = z.infer<typeof ChallengeSubmissionSchema>;
 export type CognitiveHandoffDocument = z.infer<typeof CognitiveHandoffDocumentSchema>;
 export type HumanDecisionDocument = z.infer<typeof HumanDecisionDocumentSchema>;
 export type VerificationRevisionDocument = z.infer<typeof VerificationRevisionDocumentSchema>;
 export type HumanResolutionDocument = z.infer<typeof HumanResolutionDocumentSchema>;
 export type TaskProjection = z.infer<typeof TaskProjectionSchema>;
 export type TaskEvent = z.infer<typeof TaskEventSchema>;
+
+export interface DerivedTaskState {
+  deliveryStatus: 'waiting-for-implementation' | 'repairing' | 'implementation-complete' | 'exhausted';
+  evidenceStatus: 'not-collected' | 'awaiting-evidence-judgment' | 'incomplete' | 'needs-attention' | 'handoff-ready' | 'facts-stale';
+  decisionStatus: 'pending' | 'correction-requested' | 'accepted' | 'rejected' | 'deferred' | 'aborted';
+  repairCount: number;
+}

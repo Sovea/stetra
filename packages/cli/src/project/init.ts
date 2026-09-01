@@ -14,25 +14,19 @@ import {
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 
 import {
-  ADAPTER_PROTOCOL_VERSION,
-  compareSemanticVersions,
-  MANIFEST_SCHEMA_VERSION,
-  PRODUCT_VERSION,
-} from '../version.ts';
-import {
   HOST_WORKFLOW_REFERENCES,
-  renderClaudeChallengerAgent,
-  renderCodexChallengerAgent,
   renderHostPointerBlock,
   renderHostSkill,
   renderHostWorkflowReference,
   type HostAdapter,
 } from '../adapters/templates.ts';
+import { hostAdapterDefinitions } from '../adapters/definition.ts';
+import { renderHostHookFragment, type HostHookFragment } from '../adapters/hooks.ts';
 import { inputError } from '../errors.ts';
 import {
   DELEGATION_PROTOCOL,
+  DELEGATION_SCHEMA_VERSION,
 } from '../protocol.ts';
-import { findLegacyArtifacts } from './legacy.ts';
 import {
   HostAdapterSchema,
   ProjectManifestSchema,
@@ -40,19 +34,23 @@ import {
   type ProjectManifest,
 } from '../schemas/project.ts';
 import { parseArtifact } from '../validation.ts';
+import { extractHostHookFragment, upsertHostHookFragment } from './json-fragment.ts';
 
 export type { HostAdapter } from '../adapters/templates.ts';
 
-type ArtifactKind = 'file' | 'managed-block';
+type ArtifactKind = 'file' | 'managed-block' | 'json-fragment';
 
 interface DesiredArtifact {
   path: string;
   kind: ArtifactKind;
-  templateRevision: number;
   content: string;
   markers?: {
     start: string;
     end: string;
+  };
+  jsonFragment?: {
+    adapter: HostAdapter;
+    value: HostHookFragment;
   };
 }
 
@@ -71,7 +69,6 @@ export interface InitializeProjectOptions {
 }
 
 const MANIFEST_PATH = '.stetra/manifest.json';
-const TEMPLATE_REVISION = 4;
 const DOC_MARKERS = {
   start: '<!-- stetra:begin -->',
   end: '<!-- stetra:end -->',
@@ -83,36 +80,6 @@ const GITIGNORE_MARKERS = {
 
 export function initializeProject(options: InitializeProjectOptions = {}) {
   const projectRoot = canonicalProjectRoot(options.projectRoot ?? '.');
-  const legacyArtifacts = findLegacyArtifacts(projectRoot);
-  if (legacyArtifacts.length) {
-    return {
-      status: 'blocked',
-      protocol: DELEGATION_PROTOCOL,
-      schemaVersion: MANIFEST_SCHEMA_VERSION,
-      projectRoot,
-      manifestPath: join(projectRoot, MANIFEST_PATH),
-      generatorVersion: PRODUCT_VERSION,
-      adapterProtocolVersion: ADAPTER_PROTOCOL_VERSION,
-      adapters: [],
-      dryRun: Boolean(options.dryRun),
-      force: Boolean(options.force),
-      counts: { create: 0, upgrade: 0, force: 0, unchanged: 0, blocked: legacyArtifacts.length },
-      artifacts: legacyArtifacts.map((path) => ({
-        path,
-        kind: 'legacy',
-        action: 'blocked',
-        reason: 'Archive or remove this legacy artifact explicitly; clean-break initialization never migrates or deletes it.',
-      })),
-      readiness: {
-        required: [{
-          code: 'legacy-artifacts-present',
-          message: `Archive or remove legacy artifacts explicitly: ${legacyArtifacts.join(', ')}.`,
-        }],
-        recommended: [],
-        optional: [],
-      },
-    };
-  }
   const existingManifest = readManifest(projectRoot);
   const requestedAdapters = options.adapters?.length
     ? normalizeAdapters(options.adapters)
@@ -156,17 +123,12 @@ export function initializeProject(options: InitializeProjectOptions = {}) {
   }
 
   const counts = countActions(plan);
-  const required: Array<{ code: string; message: string }> = [];
-  const recommended: Array<{ code: string; message: string }> = [];
-  const optional: Array<{ code: string; message: string }> = [];
   return {
     status: blocked.length ? 'blocked' : options.dryRun ? 'planned' : 'initialized',
     protocol: DELEGATION_PROTOCOL,
-    schemaVersion: MANIFEST_SCHEMA_VERSION,
+    schemaVersion: DELEGATION_SCHEMA_VERSION,
     projectRoot,
     manifestPath: join(projectRoot, MANIFEST_PATH),
-    generatorVersion: PRODUCT_VERSION,
-    adapterProtocolVersion: ADAPTER_PROTOCOL_VERSION,
     adapters,
     dryRun: Boolean(options.dryRun),
     force: Boolean(options.force),
@@ -177,35 +139,17 @@ export function initializeProject(options: InitializeProjectOptions = {}) {
       action: item.action,
       ...(item.reason ? { reason: item.reason } : {}),
     })),
-    readiness: {
-      required,
-      recommended,
-      optional,
-    },
   };
 }
 
 export function inspectProjectInstallation(projectRootInput = '.') {
   const projectRoot = canonicalProjectRoot(projectRootInput);
-  const legacyArtifacts = findLegacyArtifacts(projectRoot);
-  if (legacyArtifacts.length) {
-    return {
-      status: 'legacy',
-      protocol: DELEGATION_PROTOCOL,
-      schemaVersion: MANIFEST_SCHEMA_VERSION,
-      projectRoot,
-      manifestPath: join(projectRoot, MANIFEST_PATH),
-      adapters: [],
-      artifacts: legacyArtifacts.map((path) => ({ path, status: 'legacy' as const })),
-      legacyArtifacts,
-    };
-  }
   const manifest = readManifest(projectRoot);
   if (!manifest) {
     return {
       status: 'absent',
       protocol: DELEGATION_PROTOCOL,
-      schemaVersion: MANIFEST_SCHEMA_VERSION,
+      schemaVersion: DELEGATION_SCHEMA_VERSION,
       projectRoot,
       manifestPath: join(projectRoot, MANIFEST_PATH),
       adapters: [],
@@ -225,7 +169,6 @@ export function inspectProjectInstallation(projectRootInput = '.') {
       return {
         path: desired.path,
         kind: desired.kind,
-        templateRevision: desired.templateRevision,
         generatedHash: sha256(desired.content),
         status: 'missing' as const,
       };
@@ -238,7 +181,9 @@ export function inspectProjectInstallation(projectRootInput = '.') {
     const current = readFileSync(target, 'utf8');
     const generatedContent = desired.kind === 'file'
       ? current
-      : extractManagedBlock(current, desired.markers!, desired.path, true);
+      : desired.kind === 'managed-block'
+        ? extractManagedBlock(current, desired.markers!, desired.path, true)
+        : extractJsonFragmentContent(current, desired);
     if (generatedContent === null) {
       return { ...prior, status: 'missing' as const };
     }
@@ -260,19 +205,12 @@ export function inspectProjectInstallation(projectRootInput = '.') {
     }
   }
   const drifted = artifacts.some((artifact) => artifact.status !== 'current');
-  const versionStatus = manifest.generatorVersion === PRODUCT_VERSION
-    ? 'current'
-    : 'different';
-
   return {
-    status: drifted ? 'drifted' : versionStatus === 'different' ? 'version-drift' : 'current',
+    status: drifted ? 'drifted' : 'current',
     protocol: DELEGATION_PROTOCOL,
-    schemaVersion: MANIFEST_SCHEMA_VERSION,
+    schemaVersion: DELEGATION_SCHEMA_VERSION,
     projectRoot,
     manifestPath: join(projectRoot, MANIFEST_PATH),
-    generatorVersion: manifest.generatorVersion,
-    adapterProtocolVersion: manifest.adapterProtocolVersion,
-    versionStatus,
     adapters: manifest.adapters,
     artifacts,
   };
@@ -282,47 +220,41 @@ function buildDesiredArtifacts(adapters: HostAdapter[]): DesiredArtifact[] {
   const artifacts: DesiredArtifact[] = [{
     path: '.gitignore',
     kind: 'managed-block',
-    templateRevision: TEMPLATE_REVISION,
     markers: GITIGNORE_MARKERS,
     content: [
       GITIGNORE_MARKERS.start,
+      '.stetra/inbox/',
+      '.stetra/host-sessions/',
       '.stetra/tasks/',
       GITIGNORE_MARKERS.end,
     ].join('\n'),
   }];
 
-  for (const adapter of adapters) {
-    const skillRoot = adapter === 'codex'
-      ? '.agents/skills/stetra'
-      : '.claude/skills/stetra';
+  for (const definition of hostAdapterDefinitions(adapters)) {
+    const adapter = definition.id;
+    const skillRoot = definition.skillRoot;
+    const hookFragment = renderHostHookFragment(adapter);
+    artifacts.push({
+      path: definition.hookConfigurationPath,
+      kind: 'json-fragment',
+      content: canonicalJsonFragment(hookFragment),
+      jsonFragment: { adapter, value: hookFragment },
+    });
     artifacts.push({
       path: `${skillRoot}/SKILL.md`,
       kind: 'file',
-      templateRevision: TEMPLATE_REVISION,
       content: renderHostSkill(adapter),
-    });
-    artifacts.push({
-      path: adapter === 'codex'
-        ? '.codex/agents/stetra-challenger.toml'
-        : '.claude/agents/stetra-challenger.md',
-      kind: 'file',
-      templateRevision: TEMPLATE_REVISION,
-      content: adapter === 'codex'
-        ? renderCodexChallengerAgent()
-        : renderClaudeChallengerAgent(),
     });
     for (const workflow of HOST_WORKFLOW_REFERENCES) {
       artifacts.push({
         path: `${skillRoot}/references/${workflow}.md`,
         kind: 'file',
-        templateRevision: TEMPLATE_REVISION,
         content: renderHostWorkflowReference(adapter, workflow),
       });
     }
     artifacts.push({
-      path: adapter === 'codex' ? 'AGENTS.md' : 'CLAUDE.md',
+      path: definition.pointerDocument,
       kind: 'managed-block',
-      templateRevision: TEMPLATE_REVISION,
       markers: DOC_MARKERS,
       content: renderHostPointerBlock(adapter, DOC_MARKERS),
     });
@@ -343,7 +275,14 @@ function planArtifact(
   if (!existsSync(target)) {
     const nextContent = artifact.kind === 'file'
       ? artifact.content
-      : `${artifact.content}\n`;
+      : artifact.kind === 'managed-block'
+        ? `${artifact.content}\n`
+        : upsertHostHookFragment(
+            '{}\n',
+            artifact.jsonFragment!.adapter,
+            artifact.jsonFragment!.value,
+            artifact.path,
+          );
     return { artifact, action: 'create', nextContent };
   }
   if (!lstatSync(target).isFile()) {
@@ -366,6 +305,41 @@ function planArtifact(
       artifact,
       action: 'blocked',
       reason: 'The generated adapter file was modified outside stetra; use --force to replace this managed file.',
+    };
+  }
+
+  if (artifact.kind === 'json-fragment') {
+    const currentFragment = extractJsonFragmentContent(current, artifact);
+    if (currentFragment === null) {
+      return {
+        artifact,
+        action: 'create',
+        nextContent: upsertHostHookFragment(
+          current,
+          artifact.jsonFragment!.adapter,
+          artifact.jsonFragment!.value,
+          artifact.path,
+        ),
+      };
+    }
+    if (currentFragment === artifact.content) return { artifact, action: 'unchanged' };
+    const owned = prior?.generatedHash === sha256(currentFragment);
+    if (owned || force) {
+      return {
+        artifact,
+        action: owned ? 'upgrade' : 'force',
+        nextContent: upsertHostHookFragment(
+          current,
+          artifact.jsonFragment!.adapter,
+          artifact.jsonFragment!.value,
+          artifact.path,
+        ),
+      };
+    }
+    return {
+      artifact,
+      action: 'blocked',
+      reason: 'The Stetra Hook fragment was modified; use --force to replace only Stetra-owned Hook groups.',
     };
   }
 
@@ -409,14 +383,11 @@ function buildManifest(
 ): ProjectManifest {
   return {
     protocol: DELEGATION_PROTOCOL,
-    schemaVersion: MANIFEST_SCHEMA_VERSION,
-    generatorVersion: PRODUCT_VERSION,
-    adapterProtocolVersion: ADAPTER_PROTOCOL_VERSION,
+    schemaVersion: DELEGATION_SCHEMA_VERSION,
     adapters,
     artifacts: artifacts.map((artifact) => ({
       path: artifact.path,
       kind: artifact.kind,
-      templateRevision: artifact.templateRevision,
       generatedHash: sha256(artifact.content),
     })),
   };
@@ -439,9 +410,9 @@ function readManifest(projectRoot: string): ProjectManifest | null {
     || !('protocol' in value)
     || value.protocol !== DELEGATION_PROTOCOL
     || !('schemaVersion' in value)
-    || value.schemaVersion !== MANIFEST_SCHEMA_VERSION) {
+    || value.schemaVersion !== DELEGATION_SCHEMA_VERSION) {
     throw new Error(
-      `UNSUPPORTED_SCHEMA_VERSION: ${MANIFEST_PATH} must use ${MANIFEST_SCHEMA_VERSION}.`,
+      `UNSUPPORTED_SCHEMA_VERSION: ${MANIFEST_PATH} must use ${DELEGATION_SCHEMA_VERSION}.`,
     );
   }
   const manifest = parseArtifact(
@@ -449,29 +420,11 @@ function readManifest(projectRoot: string): ProjectManifest | null {
     value,
     MANIFEST_PATH,
   );
-  if (manifest.adapterProtocolVersion !== ADAPTER_PROTOCOL_VERSION) {
-    throw new Error(
-      `UNSUPPORTED_ADAPTER_PROTOCOL: ${MANIFEST_PATH} requires ${manifest.adapterProtocolVersion}; this CLI supports ${ADAPTER_PROTOCOL_VERSION}.`,
-    );
-  }
-  if (compareSemanticVersions(manifest.generatorVersion, PRODUCT_VERSION) > 0) {
-    throw new Error(
-      `UNSUPPORTED_GENERATOR_VERSION: ${MANIFEST_PATH} was written by newer CLI ${manifest.generatorVersion}; installed CLI is ${PRODUCT_VERSION}.`,
-    );
-  }
-  const artifacts: ManifestArtifact[] = manifest.artifacts.map((artifact, index) => {
-    if (artifact.templateRevision > TEMPLATE_REVISION) {
-      throw new Error(`${MANIFEST_PATH} artifact ${index} is invalid.`);
-    }
-    return artifact;
-  });
   return {
     protocol: manifest.protocol,
     schemaVersion: manifest.schemaVersion,
-    generatorVersion: manifest.generatorVersion,
-    adapterProtocolVersion: manifest.adapterProtocolVersion,
     adapters: manifest.adapters,
-    artifacts,
+    artifacts: manifest.artifacts,
   };
 }
 
@@ -632,6 +585,22 @@ function sha256(value: string): string {
 
 function canonicalGeneratedContent(value: string): string {
   return value.replace(/\r\n/g, '\n');
+}
+
+function canonicalJsonFragment(value: HostHookFragment): string {
+  return `${JSON.stringify(value)}\n`;
+}
+
+function extractJsonFragmentContent(
+  source: string,
+  artifact: DesiredArtifact,
+): string | null {
+  const fragment = extractHostHookFragment(
+    source,
+    artifact.jsonFragment!.adapter,
+    artifact.path,
+  );
+  return fragment === null ? null : canonicalJsonFragment(fragment);
 }
 
 function artifactNewlines(value: string, newline: string): string {

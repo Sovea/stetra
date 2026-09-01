@@ -9,15 +9,12 @@ import {
   type CompileDelegationInput,
   type ConclusionStatus,
   type FactBundle,
-  type HostPolicyEvaluation,
   type HumanDecision,
-  type IndependentChallenge,
   type TaskContract,
   type VerificationRevisionInput,
 } from '../src/index.ts';
 import {
   checkDefinitionFingerprint,
-  factBundleFingerprint,
   factCollectionId as collectionFingerprint,
 } from '../src/facts/validate.ts';
 
@@ -33,20 +30,25 @@ test('prepare separates semantic, verification, and effective identities', () =>
   assert.equal(first.contract.semanticContractId, second.contract.semanticContractId);
   assert.equal(first.contract.verificationPlanId, second.contract.verificationPlanId);
   assert.equal(first.contract.effectiveContractId, second.contract.effectiveContractId);
-  assert.match(first.contract.authority.developerEvents[0].id, /^event:/);
-  assert.deepEqual(first.contract.plan.lifecycle, [
-    'implement', 'collect', 'judge-evidence', 'resolve', 'handoff', 'decide',
-  ]);
+  assert.match(first.contract.humanEvents[0].id, /^event:/);
+  assert.deepEqual(first.executionBudget, {
+    checkTimeoutMs: 300_000,
+    maxDeliveryRepairs: 2,
+    timeoutRetry: { mode: 'bounded', maxRetriesPerVerifier: 1, maxTimeoutMs: 900_000 },
+  });
   assert.match(first.contract.adoptionConditions[0].id, /^condition:/);
   assert.match(first.contract.adoptionConditions[0].evidenceObligations[0].id, /^obligation:/);
   if (first.contract.verificationPlan.mode !== 'checks') return;
-  assert.match(first.contract.verificationPlan.verifiers[0].verifierId, /^verifier:/);
+  assert.match(first.contract.verificationPlan.definitions[0].verifierId, /^verifier:/);
   assert.match(first.contract.verificationPlan.definitions[0].definitionId, /^sha256:/);
 });
 
 test('routine work may omit conditions but still requires an explicit verification rationale', () => {
   const input = criticalInput();
-  input.conditions = [];
+  input.assurance = {
+    kind: 'routine',
+    rationale: 'No material adoption condition is needed for this wording-only change.',
+  };
   input.checks = undefined;
   input.noCommandRationale = 'Documentation wording has no executable behavior.';
   const result = compileDelegation(input);
@@ -57,6 +59,47 @@ test('routine work may omit conditions but still requires an explicit verificati
 
   const missing = compileDelegation({ ...input, noCommandRationale: undefined });
   assert.equal(missing.status, 'verification-required');
+});
+
+test('prepare requires an explicit routine or conditioned assurance declaration', () => {
+  const missing = criticalInput() as unknown as Record<string, unknown>;
+  delete missing.assurance;
+  const missingResult = compileDelegation(missing as unknown as CompileDelegationInput);
+  assert.equal(missingResult.status, 'authority-invalid');
+  if (missingResult.status !== 'authority-invalid') return;
+  assert.ok(missingResult.issues.some((item) => item.code === 'assurance-declaration-required'));
+
+  const empty = criticalInput();
+  empty.assurance = { kind: 'conditioned', conditions: [] };
+  const emptyResult = compileDelegation(empty);
+  assert.equal(emptyResult.status, 'authority-invalid');
+  if (emptyResult.status !== 'authority-invalid') return;
+  assert.ok(emptyResult.issues.some((item) => item.code === 'assurance-conditions-required'));
+});
+
+test('prepare freezes an explicit bounded or disabled timeout retry policy', () => {
+  const disabled = criticalInput();
+  disabled.executionBudget.timeoutRetry = { mode: 'disabled' };
+  const compiled = compileDelegation(disabled);
+  assert.equal(compiled.status, 'delegation-compiled');
+  if (compiled.status !== 'delegation-compiled') return;
+  assert.deepEqual(compiled.executionBudget.timeoutRetry, { mode: 'disabled' });
+
+  for (const maxTimeoutMs of [
+    criticalInput().executionBudget.checkTimeoutMs - 1,
+    criticalInput().executionBudget.checkTimeoutMs,
+  ]) {
+    const invalid = criticalInput();
+    invalid.executionBudget.timeoutRetry = {
+      mode: 'bounded',
+      maxRetriesPerVerifier: 1,
+      maxTimeoutMs,
+    };
+    const rejected = compileDelegation(invalid);
+    assert.equal(rejected.status, 'authority-invalid');
+    if (rejected.status !== 'authority-invalid') continue;
+    assert.ok(rejected.issues.some((issue) => issue.code === 'timeout-retry-maximum-invalid'));
+  }
 });
 
 test('unresolved material decisions block compilation without weakening the task contract', () => {
@@ -89,11 +132,11 @@ test('resolved material decisions bind the exact later Human event to final task
   const result = compileDelegation(input);
   assert.equal(result.status, 'delegation-compiled');
   if (result.status !== 'delegation-compiled') return;
-  assert.equal(result.contract.authority.developerEvents.length, 2);
+  assert.equal(result.contract.humanEvents.length, 2);
   assert.equal(result.contract.materialDecisions[0].resolution.selectedAlternativeKey, 'strict');
   assert.equal(
     result.contract.materialDecisions[0].resolution.humanEventId,
-    result.contract.authority.developerEvents[1].id,
+    result.contract.humanEvents[1].id,
   );
 
   input.task.basis.developerEventKeys = ['request'];
@@ -106,7 +149,7 @@ test('resolved material decisions bind the exact later Human event to final task
 
 test('every condition requires a falsifiable evidence obligation', () => {
   const input = criticalInput();
-  input.conditions[0].evidenceObligations = [];
+  inputConditions(input)[0].evidenceObligations = [];
   const result = compileDelegation(input);
   assert.equal(result.status, 'authority-invalid');
   if (result.status === 'authority-invalid') {
@@ -116,35 +159,27 @@ test('every condition requires a falsifiable evidence obligation', () => {
 
 test('an evidence obligation freezes a complete discriminating falsification design', () => {
   const input = criticalInput();
-  input.conditions[0].evidenceObligations[0].falsification.scenario = '';
+  inputConditions(input)[0].evidenceObligations[0].falsification.scenario = '';
   const result = compileDelegation(input);
   assert.equal(result.status, 'authority-invalid');
   if (result.status !== 'authority-invalid') return;
   assert.ok(result.issues.some((item) =>
-    item.path === 'conditions[0].evidenceObligations[0].falsification.scenario'));
+    item.path === 'assurance.conditions[0].evidenceObligations[0].falsification.scenario'));
 });
 
-test('adoption-critical semantics require challenge or direct Human review', () => {
+test('adoption-critical semantics retain direct review without fabricating a Challenge', () => {
   const input = criticalInput();
-  input.conditions[0].evidenceObligations[0].strategies = [{
+  inputConditions(input)[0].evidenceObligations[0].strategies = [{
     kind: 'runtime-check', checkKeys: ['suite'],
   }];
   const result = compileDelegation(input);
-  assert.equal(result.status, 'authority-invalid');
-  if (result.status === 'authority-invalid') {
-    assert.ok(result.issues.some((item) => item.code === 'critical-condition-review-required'));
-  }
-
-  const factTriggeredOnly = criticalInput();
-  factTriggeredOnly.conditions[0].evidenceObligations[0].strategies = [
-    { kind: 'runtime-check', checkKeys: ['suite'] },
-    { kind: 'independent-challenge', policy: 'fact-triggered' },
-  ];
-  const factTriggeredResult = compileDelegation(factTriggeredOnly);
-  assert.equal(factTriggeredResult.status, 'authority-invalid');
-  if (factTriggeredResult.status !== 'authority-invalid') return;
-  assert.ok(factTriggeredResult.issues.some((item) =>
-    item.code === 'critical-condition-review-required'));
+  assert.equal(result.status, 'delegation-compiled');
+  if (result.status !== 'delegation-compiled') return;
+  assert.deepEqual(
+    result.contract.adoptionConditions[0].evidenceObligations[0].strategies,
+    [{ kind: 'runtime-check', verifierIds: [result.contract.verificationPlan.mode === 'checks'
+      ? result.contract.verificationPlan.definitions[0].verifierId : ''] }],
+  );
 });
 
 test('unsupported schema versions are rejected without a migration path', () => {
@@ -165,7 +200,13 @@ test('verification rebinding preserves semantic identity and supersedes exact de
       kind: 'execution-rebinding',
       rationale: 'The original executable entry is unavailable in this workspace.',
       equivalenceClaim: 'The new argv invokes the same test runner and target.',
-      checks: [{ ...source, argv: ['node', '--test', 'test/feature.test.ts'] }],
+      checks: [{
+        ...source,
+        execution: {
+          ...source.execution,
+          assertion: { argv: ['node', '--test', 'test/feature.test.ts'] },
+        },
+      }],
     },
   } satisfies VerificationRevisionInput);
   assert.equal(result.status, 'delegation-compiled');
@@ -203,7 +244,13 @@ test('verification revision preserves the identity of unchanged definitions', ()
       rationale: 'Only one executable binding has changed.',
       equivalenceClaim: 'The changed argv invokes the same bounded verifier.',
       checks: input.checks!.map((check) => check.key === 'suite'
-        ? { ...check, argv: ['node', '--test', 'test/feature.test.ts'] }
+        ? {
+            ...check,
+            execution: {
+              ...check.execution,
+              assertion: { argv: ['node', '--test', 'test/feature.test.ts'] },
+            },
+          }
         : check),
     },
   } satisfies VerificationRevisionInput);
@@ -242,7 +289,10 @@ test('verification relaxation requires exact Human authority', () => {
     ...revision,
     revision: {
       ...revision.revision,
-      humanAuthorization: { content: 'Proceed without reconstructing the original baseline.' },
+      humanAuthorization: {
+        humanEvent: { content: 'Proceed without reconstructing the original baseline.' },
+        interpretation: 'The developer authorizes the stated baseline relaxation.',
+      },
     },
   });
   assert.equal(authorized.status, 'delegation-compiled');
@@ -251,16 +301,13 @@ test('verification relaxation requires exact Human authority', () => {
 test('clean handoff keeps Runtime facts, Agent recommendation, and Human adoption separate', () => {
   const contract = compiledContract();
   const facts = factBundle(contract);
-  const challenges = supportedChallenges(contract, facts);
-  const handoff = handoffFor(contract, facts, challenges);
+  const handoff = handoffFor(contract, facts);
   const evaluation = evaluateHandoff({
     ...envelope,
     contract,
     factBundle: facts,
     currentWorktreeFingerprint: facts.current.fingerprint,
-    challenges,
     currentEvidenceDisposition: undefined,
-    hostPolicyEvaluations: [],
     deliveryExhausted: false,
     verificationRevised: false,
     handoff,
@@ -280,18 +327,15 @@ test('expected failing-to-passing baseline evidence does not create attention', 
   assert.equal(compiled.status, 'delegation-compiled');
   if (compiled.status !== 'delegation-compiled') return;
   const facts = factBundle(compiled.contract, { baselineStatus: 'failed', currentStatus: 'passed' });
-  const challenges = supportedChallenges(compiled.contract, facts);
   const evaluation = evaluateHandoff({
     ...envelope,
     contract: compiled.contract,
     factBundle: facts,
     currentWorktreeFingerprint: facts.current.fingerprint,
-    challenges,
     currentEvidenceDisposition: undefined,
-    hostPolicyEvaluations: [],
     deliveryExhausted: false,
     verificationRevised: false,
-    handoff: handoffFor(compiled.contract, facts, challenges),
+    handoff: handoffFor(compiled.contract, facts),
   });
   assert.equal(evaluation.status, 'handoff-ready');
   assert.ok(!evaluation.attention.some((item) =>
@@ -301,16 +345,13 @@ test('expected failing-to-passing baseline evidence does not create attention', 
 test('baseline observation outside the explicit expectation creates attention', () => {
   const contract = compiledContract();
   const facts = factBundle(contract, { baselineStatus: 'failed', currentStatus: 'passed' });
-  const challenges = supportedChallenges(contract, facts);
-  const handoff = handoffFor(contract, facts, challenges);
+  const handoff = handoffFor(contract, facts);
   const evaluation = evaluateHandoff({
     ...envelope,
     contract,
     factBundle: facts,
     currentWorktreeFingerprint: facts.current.fingerprint,
-    challenges,
     currentEvidenceDisposition: undefined,
-    hostPolicyEvaluations: [],
     deliveryExhausted: false,
     verificationRevised: false,
     handoff,
@@ -327,9 +368,7 @@ test('facts-stale takes priority over malformed Agent handoff', () => {
     contract,
     factBundle: facts,
     currentWorktreeFingerprint: digest('different'),
-    challenges: [],
     currentEvidenceDisposition: undefined,
-    hostPolicyEvaluations: [],
     deliveryExhausted: false,
     verificationRevised: false,
     handoff: {} as CognitiveHandoff,
@@ -339,7 +378,7 @@ test('facts-stale takes priority over malformed Agent handoff', () => {
 
 test('changed acceptance surface triggers every related fact-triggered obligation', () => {
   const input = criticalInput('fact-triggered');
-  input.conditions.push({
+  inputConditions(input).push({
     key: 'shared-material',
     statement: 'The shared behavior remains understandable.',
     rationale: 'A second adoption decision consumes the same verifier.',
@@ -364,143 +403,73 @@ test('changed acceptance surface triggers every related fact-triggered obligatio
   if (result.status !== 'delegation-compiled') return;
   const contract = result.contract;
   const facts = factBundle(contract, { changedAcceptanceSurface: true });
-  assert.throws(() => evaluateHandoff({
-    ...envelope, contract, factBundle: facts,
-    currentWorktreeFingerprint: facts.current.fingerprint,
-    challenges: [], currentEvidenceDisposition: undefined, hostPolicyEvaluations: [],
-    deliveryExhausted: false, verificationRevised: false,
-    handoff: handoffFor(contract, facts, []),
-  }), /required challenge is missing/);
-  const handoff = handoffFor(contract, facts, [], 'partial');
+  const handoff = handoffFor(contract, facts, 'partial');
   const evaluation = evaluateHandoff({
     ...envelope, contract, factBundle: facts,
     currentWorktreeFingerprint: facts.current.fingerprint,
-    challenges: [], currentEvidenceDisposition: undefined, hostPolicyEvaluations: [],
+    currentEvidenceDisposition: undefined,
     deliveryExhausted: false, verificationRevised: false, handoff,
   });
   const obligationIds = contract.adoptionConditions
     .flatMap((condition) => condition.evidenceObligations.map((item) => item.id)).sort();
   assert.deepEqual(evaluation.requiredChallengeObligationIds, obligationIds);
-  assert.equal(evaluation.attention.filter((item) => item.codes.includes('challenge-missing')).length, 2);
+  const missingChallenge = evaluation.attention.find((item) => item.codes.includes('challenge-missing'));
+  assert.equal(evaluation.attention.filter((item) => item.codes.includes('challenge-missing')).length, 1);
+  assert.equal(missingChallenge?.group, 'challenge');
+  assert.deepEqual(missingChallenge?.references.obligations, obligationIds);
+  assert.ok(evaluation.evidencePaths.every((item) => item.status === 'unavailable'));
   assert.ok(evaluation.attention.every((item) => item.codes.length === 1));
 });
 
-test('challenge changed-file evidence uses the canonical Runtime fact identity', () => {
+
+test('an obligation cannot claim support beyond its declared evidence coverage', () => {
   const contract = compiledContract('fact-triggered');
-  const facts = factBundle(contract, { changedAcceptanceSurface: true });
-  const obligation = contract.adoptionConditions[0].evidenceObligations[0];
-  const challenge: IndependentChallenge = {
-    ...envelope,
-    id: 'challenge:changed-verifier',
-    effectiveContractId: contract.effectiveContractId,
-    attemptId: facts.attemptId,
-    factCollectionId: facts.factCollectionId,
-    obligationIds: [obligation.id],
-    conditionIds: [obligation.conditionId],
-    independence: 'host-attested',
-    implementerContextId: 'context:implementer',
-    challengerContextId: 'context:changed-verifier',
-    attestationId: 'attestation:changed-verifier',
-    falsification: obligation.falsification,
-    evidence: {
-      changedFiles: [facts.changedFiles[0].id],
-      checks: facts.checks.map((item) => item.definitionId),
-      repositoryEvidence: [],
-      humanEvents: [],
-      patch: false,
-    },
-    falsificationAttempt: 'Inspected the changed verifier and exercised the bounded behavior independently.',
-    observedResult: 'The incompatible boundary was rejected as required.',
-    supportingEvidence: [{
-      statement: 'The exact changed verifier and frozen check were inspected together.',
-      references: [
-        { kind: 'changed-file', id: facts.changedFiles[0].id },
-        ...facts.checks.map((item) => ({ kind: 'check' as const, id: item.definitionId })),
-      ],
-    }],
-    counterEvidence: [],
-    outcome: 'supported',
-    conclusion: 'The bounded failure hypothesis was not observed.',
+  const facts = factBundle(contract);
+  const handoff = handoffFor(contract, facts);
+  handoff.obligationConclusions[0].evidenceCoverage = {
+    status: 'insufficient',
+    rationale: 'One adoption-relevant path is not covered by current evidence.',
+    gaps: ['The alternate failure path remains unobserved.'],
   };
-  const handoff = handoffFor(contract, facts, [challenge]);
+  handoff.handoffFingerprint = fingerprint(withoutFingerprint(handoff));
+
+  assert.throws(() => evaluateHandoff({
+    ...envelope, contract, factBundle: facts,
+    currentWorktreeFingerprint: facts.current.fingerprint,
+    currentEvidenceDisposition: undefined,
+    deliveryExhausted: false, verificationRevised: false, handoff,
+  }), (error: unknown) => {
+    const candidate = error as { issues?: Array<{ code: string }> };
+    assert.ok(candidate.issues?.some((item) =>
+      item.code === 'obligation-supported-with-insufficient-coverage'));
+    return true;
+  });
+});
+
+test('declared evidence coverage gaps remain visible as adoption attention', () => {
+  const contract = compiledContract('fact-triggered');
+  const facts = factBundle(contract);
+  const handoff = handoffFor(contract, facts, 'partial');
   const evaluation = evaluateHandoff({
     ...envelope, contract, factBundle: facts,
     currentWorktreeFingerprint: facts.current.fingerprint,
-    challenges: [challenge], currentEvidenceDisposition: undefined, hostPolicyEvaluations: [],
+    currentEvidenceDisposition: undefined,
     deliveryExhausted: false, verificationRevised: false, handoff,
   });
-  assert.equal(evaluation.requiredChallengeObligationIds[0], obligation.id);
-
-  const pathReference = {
-    ...challenge,
-    evidence: { ...challenge.evidence, changedFiles: [facts.changedFiles[0].path] },
-  };
-  assert.throws(() => evaluateHandoff({
-    ...envelope, contract, factBundle: facts,
-    currentWorktreeFingerprint: facts.current.fingerprint,
-    challenges: [pathReference], currentEvidenceDisposition: undefined, hostPolicyEvaluations: [],
-    deliveryExhausted: false, verificationRevised: false, handoff,
-  }), (error: unknown) => {
-    const candidate = error as { issues?: Array<{ code: string; path: string }> };
-    assert.ok(candidate.issues?.some((item) =>
-      item.code === 'challenge-evidence-reference-invalid'
-      && item.path === 'challenges[0].evidence.changedFiles[0]'));
-    return true;
-  });
-});
-
-test('a challenge cannot rewrite the frozen falsification design', () => {
-  const contract = compiledContract();
-  const facts = factBundle(contract);
-  const challenges = supportedChallenges(contract, facts);
-  challenges[0].falsification = {
-    ...challenges[0].falsification,
-    scenario: 'A different scenario selected after implementation.',
-  };
-  const handoff = handoffFor(contract, facts, challenges);
-  assert.throws(() => evaluateHandoff({
-    ...envelope, contract, factBundle: facts,
-    currentWorktreeFingerprint: facts.current.fingerprint,
-    challenges, currentEvidenceDisposition: undefined, hostPolicyEvaluations: [],
-    deliveryExhausted: false, verificationRevised: false, handoff,
-  }), /falsification design/);
-});
-
-test('a supported challenge cannot retain counter-evidence even when it bypasses CLI validation', () => {
-  const contract = compiledContract();
-  const facts = factBundle(contract);
-  const challenges = supportedChallenges(contract, facts);
-  challenges[0].counterEvidence = [{
-    statement: 'The persistent verifier leaves the declared boundary unprotected.',
-    references: facts.checks.map((item) => ({ kind: 'check' as const, id: item.definitionId })),
-  }];
-  const handoff = handoffFor(contract, facts, challenges);
-
-  assert.throws(() => evaluateHandoff({
-    ...envelope, contract, factBundle: facts,
-    currentWorktreeFingerprint: facts.current.fingerprint,
-    challenges, currentEvidenceDisposition: undefined, hostPolicyEvaluations: [],
-    deliveryExhausted: false, verificationRevised: false, handoff,
-  }), (error: unknown) => {
-    const candidate = error as { issues?: Array<{ code: string; path: string }> };
-    assert.ok(candidate.issues?.some((item) =>
-      item.code === 'challenge-supported-with-counter-evidence'
-      && item.path === 'challenges[0].counterEvidence'));
-    return true;
-  });
+  assert.ok(evaluation.attention.some((item) =>
+    item.codes.includes('evidence-coverage-insufficient')));
 });
 
 test('a condition cannot claim support beyond its obligation conclusions', () => {
   const contract = compiledContract();
   const facts = factBundle(contract);
-  const challenges = supportedChallenges(contract, facts);
-  const handoff = handoffFor(contract, facts, challenges, 'partial');
+  const handoff = handoffFor(contract, facts, 'partial');
   handoff.conditionConclusions[0].status = 'supported';
   handoff.handoffFingerprint = fingerprint(withoutFingerprint(handoff));
   assert.throws(() => evaluateHandoff({
     ...envelope, contract, factBundle: facts,
     currentWorktreeFingerprint: facts.current.fingerprint,
-    challenges, currentEvidenceDisposition: undefined, hostPolicyEvaluations: [],
+    currentEvidenceDisposition: undefined,
     deliveryExhausted: false, verificationRevised: false, handoff,
   }), /cannot be supported while any evidence obligation/);
 });
@@ -508,7 +477,7 @@ test('a condition cannot claim support beyond its obligation conclusions', () =>
 test('Agent accept recommendation cannot exceed unresolved conclusions and unknowns', () => {
   const contract = compiledContract('fact-triggered');
   const facts = factBundle(contract);
-  const handoff = handoffFor(contract, facts, [], 'partial');
+  const handoff = handoffFor(contract, facts, 'partial');
   handoff.recommendation = {
     action: 'accept',
     rationale: 'The Agent attempts to accept unresolved evidence.',
@@ -520,9 +489,7 @@ test('Agent accept recommendation cannot exceed unresolved conclusions and unkno
     contract,
     factBundle: facts,
     currentWorktreeFingerprint: facts.current.fingerprint,
-    challenges: [],
     currentEvidenceDisposition: undefined,
-    hostPolicyEvaluations: [],
     deliveryExhausted: false,
     verificationRevised: false,
     handoff,
@@ -533,45 +500,35 @@ test('Agent accept recommendation cannot exceed unresolved conclusions and unkno
       item.code === 'recommendation-evidence-conflict')));
 });
 
-test('an unverified required challenge cannot support its obligation', () => {
-  const contract = compiledContract();
-  const facts = factBundle(contract);
-  const [attested] = supportedChallenges(contract, facts);
-  const {
-    implementerContextId: _implementerContextId,
-    challengerContextId: _challengerContextId,
-    attestationId: _attestationId,
-    ...challengeProjection
-  } = attested;
-  const challenge: IndependentChallenge = {
-    ...challengeProjection,
-    independence: 'unverified',
-  };
-  const handoff = handoffFor(contract, facts, [challenge]);
-  assert.throws(() => evaluateHandoff({
-    ...envelope, contract, factBundle: facts,
-    currentWorktreeFingerprint: facts.current.fingerprint,
-    challenges: [challenge], currentEvidenceDisposition: undefined, hostPolicyEvaluations: [],
-    deliveryExhausted: false, verificationRevised: false, handoff,
-  }), /lacks trusted Host independence/);
-});
 
-test('an unresolved required challenge needs an obligation-specific review question', () => {
+test('an unresolved required challenge needs an obligation-specific review decision', () => {
   const contract = compiledContract('fact-triggered');
   const facts = factBundle(contract, { changedAcceptanceSurface: true });
-  const handoff = handoffFor(contract, facts, [], 'partial');
-  handoff.reviewQuestions[0].obligationIds = [];
+  const handoff = handoffFor(contract, facts, 'partial');
+  handoff.reviewDecisions[0].obligationIds = [];
   handoff.handoffFingerprint = fingerprint(withoutFingerprint(handoff));
 
   assert.throws(() => evaluateHandoff({
     ...envelope, contract, factBundle: facts,
     currentWorktreeFingerprint: facts.current.fingerprint,
-    challenges: [], currentEvidenceDisposition: undefined, hostPolicyEvaluations: [],
+    currentEvidenceDisposition: undefined,
     deliveryExhausted: false, verificationRevised: false, handoff,
-  }), /directly bound review question/);
+  }), (error: unknown) => {
+    if (!error || typeof error !== 'object' || !('issues' in error)
+      || !Array.isArray(error.issues)) return false;
+    const issue = error.issues.find((candidate: { code?: string }) =>
+      candidate.code === 'challenge-review-coverage-missing') as {
+        references?: { conditionIds?: string[]; obligationIds?: string[] };
+      } | undefined;
+    assert.deepEqual(issue?.references, {
+      conditionIds: [contract.adoptionConditions[0].id],
+      obligationIds: [contract.adoptionConditions[0].evidenceObligations[0].id],
+    });
+    return true;
+  });
 });
 
-test('thin Host policy claims remain visible and cannot impersonate enforcement', () => {
+test('thin Host policy requirements remain visible without simulated enforcement', () => {
   const input = criticalInput();
   input.hostPolicyRequirements = [{
     key: 'no-web', capability: 'web-search', requiredState: 'disabled',
@@ -582,16 +539,11 @@ test('thin Host policy claims remain visible and cannot impersonate enforcement'
   if (result.status !== 'delegation-compiled') return;
   const contract = result.contract;
   const facts = factBundle(contract);
-  const challenges = supportedChallenges(contract, facts);
-  const handoff = handoffFor(contract, facts, challenges);
-  const hostPolicyEvaluations: HostPolicyEvaluation[] = [{
-    requirementId: contract.hostPolicyRequirements[0].id,
-    mode: 'instruction-only', provenance: 'thin-skill',
-  }];
+  const handoff = handoffFor(contract, facts);
   assert.throws(() => evaluateHandoff({
     ...envelope, contract, factBundle: facts,
     currentWorktreeFingerprint: facts.current.fingerprint,
-    challenges, currentEvidenceDisposition: undefined, hostPolicyEvaluations,
+    currentEvidenceDisposition: undefined,
     deliveryExhausted: false, verificationRevised: false, handoff,
   }), /host-policy-required-unenforced/);
   handoff.recommendation.action = 'defer';
@@ -599,27 +551,16 @@ test('thin Host policy claims remain visible and cannot impersonate enforcement'
   const evaluation = evaluateHandoff({
     ...envelope, contract, factBundle: facts,
     currentWorktreeFingerprint: facts.current.fingerprint,
-    challenges, currentEvidenceDisposition: undefined, hostPolicyEvaluations,
+    currentEvidenceDisposition: undefined,
     deliveryExhausted: false, verificationRevised: false, handoff,
   });
   assert.ok(evaluation.attention.some((item) => item.codes.includes('host-policy-unverified')));
-
-  assert.throws(() => evaluateHandoff({
-    ...envelope, contract, factBundle: facts,
-    currentWorktreeFingerprint: facts.current.fingerprint,
-    challenges, currentEvidenceDisposition: undefined,
-    hostPolicyEvaluations: [{
-      requirementId: contract.hostPolicyRequirements[0].id,
-      mode: 'enforced', provenance: 'thin-skill', attestationId: 'attestation:fake',
-    }],
-    deliveryExhausted: false, verificationRevised: false, handoff,
-  }), /host policy evaluation is invalid/);
 });
 
 test('non-passing facts remain inspectable and explicit Human exceptions preserve authority', () => {
   const contract = compiledContract('fact-triggered');
   const facts = factBundle(contract, { currentStatus: 'failed', baselineStatus: 'passed' });
-  const handoff = handoffFor(contract, facts, [], 'unknown');
+  const handoff = handoffFor(contract, facts, 'unknown');
   for (const conclusion of handoff.obligationConclusions) {
     const adverseChecks = conclusion.evidence.filter((item) => item.kind === 'check');
     conclusion.evidence = conclusion.evidence.filter((item) => item.kind !== 'check');
@@ -634,15 +575,16 @@ test('non-passing facts remain inspectable and explicit Human exceptions preserv
     semanticImpact: 'none' as const,
     proposedRoute: 'handoff' as const,
     routeRationale: 'Carry the environment limitation into Human adoption review.',
-    entries: [{
-      source: { kind: 'check' as const, definitionId: facts.checks[0].definitionId },
+    entries: facts.evidenceConcerns.map((source) => ({
+      source,
       cause: 'environment' as const,
       diagnosis: 'The runner dependency was unavailable.',
       falsificationAttempt: 'Checked whether implementation edits can restore the runner.',
-      codeChangeCanAlterObservation: false,
+      repositoryChangeCanAlterObservation: false,
+      changeSurface: 'none' as const,
       expectedDifferentObservation: 'The frozen command starts when the runner is available.',
       intendedChanges: [],
-    }],
+    })),
     route: 'handoff' as const,
   };
   const evidenceDispositions = [{
@@ -656,13 +598,13 @@ test('non-passing facts remain inspectable and explicit Human exceptions preserv
   assert.throws(() => evaluateHandoff({
     ...envelope, contract, factBundle: facts,
     currentWorktreeFingerprint: facts.current.fingerprint,
-    challenges: [], currentEvidenceDisposition: evidenceDispositions[0], hostPolicyEvaluations: [],
+    currentEvidenceDisposition: evidenceDispositions[0],
     deliveryExhausted: true, verificationRevised: false, handoff: ambiguousHandoff,
   }), /same reference cannot be both supporting and counter-evidence/i);
   const evaluation = evaluateHandoff({
     ...envelope, contract, factBundle: facts,
     currentWorktreeFingerprint: facts.current.fingerprint,
-    challenges: [], currentEvidenceDisposition: evidenceDispositions[0], hostPolicyEvaluations: [],
+    currentEvidenceDisposition: evidenceDispositions[0],
     deliveryExhausted: true, verificationRevised: false, handoff,
   });
   assert.equal(evaluation.status, 'needs-attention');
@@ -677,13 +619,13 @@ test('non-passing facts remain inspectable and explicit Human exceptions preserv
   const accepted = evaluateHandoff({
     ...envelope, contract, factBundle: facts,
     currentWorktreeFingerprint: facts.current.fingerprint,
-    challenges: [], currentEvidenceDisposition: evidenceDispositions[0], hostPolicyEvaluations: [],
+    currentEvidenceDisposition: evidenceDispositions[0],
     deliveryExhausted: true, verificationRevised: false, handoff, decision,
   });
   assert.equal(accepted.adoption.status, 'accepted');
 });
 
-function criticalInput(policy: 'required' | 'fact-triggered' = 'required'): CompileDelegationInput {
+function criticalInput(policy?: 'required' | 'fact-triggered'): CompileDelegationInput {
   return {
     ...envelope,
     developerEvents: [{ key: 'request', content: 'Keep compatibility intact.', provider: 'test' }],
@@ -695,11 +637,11 @@ function criticalInput(policy: 'required' | 'fact-triggered' = 'required'): Comp
       focus: ['src/feature.ts'],
     },
     materialDecisionForks: [],
-    conditions: [{
+    assurance: { kind: 'conditioned', conditions: [{
       key: 'compatibility',
       statement: 'Existing callers retain their behavior.',
       rationale: 'A wrong change breaks adoption.',
-      criticality: policy === 'required' ? 'adoption-critical' : 'material',
+      criticality: policy === 'fact-triggered' ? 'material' : 'adoption-critical',
       evidenceObligations: [{
         key: 'legacy-path',
         statement: 'The legacy call path retains its behavior.',
@@ -711,16 +653,24 @@ function criticalInput(policy: 'required' | 'fact-triggered' = 'required'): Comp
         },
         strategies: [
           { kind: 'runtime-check', checkKeys: ['suite'] },
-          { kind: 'independent-challenge', policy },
+          ...(policy ? [{ kind: 'independent-challenge' as const, policy }] : []),
         ],
       }],
-    }],
+    }] },
     hostPolicyRequirements: [],
-    delivery: { maxRepairAttempts: 2 },
+    executionBudget: {
+      checkTimeoutMs: 300_000,
+      maxDeliveryRepairs: 2,
+      timeoutRetry: { mode: 'bounded', maxRetriesPerVerifier: 1, maxTimeoutMs: 900_000 },
+    },
     checks: [{
       key: 'suite',
       rationale: 'Exercises the public behavior.',
-      argv: ['node', '--test'],
+      execution: {
+        preparation: [],
+        assertion: { argv: ['node', '--test'] },
+      },
+      executionInputs: [],
       baseline: {
         mode: 'task-start',
         rationale: 'The before/after result distinguishes a regression from a pre-existing failure.',
@@ -733,6 +683,13 @@ function criticalInput(policy: 'required' | 'fact-triggered' = 'required'): Comp
       ],
     }],
   };
+}
+
+function inputConditions(input: CompileDelegationInput) {
+  if (input.assurance.kind !== 'conditioned') {
+    throw new Error('Test fixture requires conditioned assurance.');
+  }
+  return input.assurance.conditions;
 }
 
 function materialDecisionFork(): CompileDelegationInput['materialDecisionForks'][number] {
@@ -759,7 +716,7 @@ function materialDecisionFork(): CompileDelegationInput['materialDecisionForks']
   };
 }
 
-function compiledContract(policy: 'required' | 'fact-triggered' = 'required'): TaskContract {
+function compiledContract(policy?: 'required' | 'fact-triggered'): TaskContract {
   const result = compileDelegation(criticalInput(policy));
   assert.equal(result.status, 'delegation-compiled');
   if (result.status !== 'delegation-compiled') throw new Error('fixture did not compile');
@@ -779,9 +736,12 @@ function factBundle(
   const baselineStatus = options.baselineStatus ?? 'passed';
   const implementationBaseline = worktree('baseline-post');
   const baselineWithoutFingerprint = {
-    capturedAt: '2026-08-11T00:00:00.000Z',
     preCheck: worktree('baseline-pre'),
     postCheck: implementationBaseline,
+    preCheckExecutionInputs: contract.verificationPlan.definitions.map((definition) =>
+      executionInputSnapshot(definition)),
+    postCheckExecutionInputs: contract.verificationPlan.definitions.map((definition) =>
+      executionInputSnapshot(definition)),
     checkInducedChanges: [],
     checks: contract.verificationPlan.definitions.map((definition) => ({
       definitionId: definition.definitionId,
@@ -800,10 +760,13 @@ function factBundle(
     ...envelope,
     effectiveContractId: contract.effectiveContractId,
     attemptId: 'attempt:1',
-    collectedAt: '2026-08-11T00:01:00.000Z',
     baseline: implementationBaseline,
     preCheck: worktree('current-pre'),
     current: worktree('current-post'),
+    preCheckExecutionInputs: contract.verificationPlan.definitions.map((definition) =>
+      executionInputSnapshot(definition)),
+    currentExecutionInputs: contract.verificationPlan.definitions.map((definition) =>
+      executionInputSnapshot(definition)),
     baselineVerification: {
       fingerprint: fingerprint(baselineWithoutFingerprint), ...baselineWithoutFingerprint,
     },
@@ -815,6 +778,22 @@ function factBundle(
       definitionId: check.definitionId,
       relation: `${baselineStatus}-before-${currentStatus}-now` as FactBundle['checkComparisons'][number]['relation'],
     })),
+    evidenceConcerns: contract.verificationPlan.definitions.flatMap((definition) => [
+      ...(currentStatus === 'passed' ? [] : [{
+        kind: 'check' as const,
+        definitionId: definition.definitionId,
+        observation: 'current-nonpassing' as const,
+      }]),
+      ...(definition.baseline.mode === 'task-start'
+        && (baselineStatus !== definition.baseline.expectation.baselineStatus
+          || currentStatus !== definition.baseline.expectation.currentStatus)
+        ? [{
+            kind: 'check' as const,
+            definitionId: definition.definitionId,
+            observation: 'baseline-expectation-mismatch' as const,
+          }]
+        : []),
+    ]),
     verifierMutations: options.changedAcceptanceSurface
       ? contract.verificationPlan.definitions.map((definition) => ({
           verifierId: definition.verifierId,
@@ -829,14 +808,12 @@ function factBundle(
           matchedBy: 'current-path' as const,
         })) : [],
     environment: {
-      platform: 'linux', architecture: 'x64', cwdFingerprint: digest('cwd'),
-      executables: [], toolchains: [], lockfiles: [], environmentVariableNames: [],
+      platform: 'linux', architecture: 'x64', executables: [],
     },
     provenance: { collector: 'stetra-cli' as const, cliVersion: '0.0.1', coreVersion: '0.0.1' },
   };
   const factCollectionId = collectionFingerprint(base);
-  const withCollection = { ...base, factCollectionId };
-  return { ...withCollection, bundleFingerprint: factBundleFingerprint(withCollection) };
+  return { ...base, factCollectionId };
 }
 
 function checkFact(
@@ -847,14 +824,14 @@ function checkFact(
   return {
     verifierId: definition.verifierId,
     definitionId: definition.definitionId,
-    argv: [...definition.argv],
+    assertionArgv: [...definition.execution.assertion.argv],
     definitionFingerprint: checkDefinitionFingerprint(definition),
     attempts: [{
       attempt: 1,
-      startedAt: '2026-08-11T00:00:30.000Z',
       durationMs: 12,
       timeoutMs: 1000,
       status,
+      observedPhase: 'assertion' as const,
       termination: status === 'passed'
         ? { kind: 'exit' as const, exitCode: 0 }
         : status === 'failed'
@@ -863,18 +840,46 @@ function checkFact(
       outcomeFingerprint: digest(`output:${status}`),
       stdout: stream,
       stderr: stream,
+      steps: [{
+        stepId: definition.execution.assertion.stepId,
+        role: 'assertion' as const,
+        argv: [...definition.execution.assertion.argv],
+        durationMs: 12,
+        timeoutMs: 1000,
+        status,
+        termination: status === 'passed'
+          ? { kind: 'exit' as const, exitCode: 0 }
+          : status === 'failed'
+            ? { kind: 'exit' as const, exitCode: 1 }
+            : { kind: 'spawn-error' as const, code: 'ENOENT' },
+        outcomeFingerprint: digest(`step-output:${status}`),
+        stdout: stream,
+        stderr: stream,
+      }],
+      executionInputs: {
+        beforePreparation: executionInputSnapshot(definition),
+        readyForAssertion: executionInputSnapshot(definition),
+        afterAssertion: executionInputSnapshot(definition),
+      },
     }],
+  };
+}
+
+function executionInputSnapshot(
+  definition: Extract<TaskContract['verificationPlan'], { mode: 'checks' }>['definitions'][number],
+) {
+  const projection = { definitionId: definition.definitionId, inputs: [] };
+  return {
+    ...projection,
+    fingerprint: fingerprint(projection),
   };
 }
 
 function handoffFor(
   contract: TaskContract,
   facts: FactBundle,
-  challenges: IndependentChallenge[],
   status: ConclusionStatus = 'supported',
 ): CognitiveHandoff {
-  const challengeByObligation = new Map(challenges.flatMap((challenge) =>
-    challenge.obligationIds.map((id) => [id, challenge] as const)));
   const obligations = contract.adoptionConditions.flatMap((condition) => condition.evidenceObligations);
   const projection = {
     ...envelope,
@@ -882,16 +887,32 @@ function handoffFor(
     effectiveContractId: contract.effectiveContractId,
     attemptId: facts.attemptId,
     factCollectionId: facts.factCollectionId,
-    summary: 'The implementation updates the requested behavior.',
+    actualChange: {
+      behavior: 'The implementation updates the requested behavior.',
+      mechanism: ['The new branch reuses the existing compatibility path.'],
+      preservedInvariants: ['Existing callers retain their public behavior.'],
+      failureAndRecovery: [],
+      importantEffects: ['Public behavior changes only at the requested boundary.'],
+      materialTradeoffs: [],
+    },
     obligationConclusions: obligations.map((obligation) => {
-      const challenge = challengeByObligation.get(obligation.id);
+      const condition = contract.adoptionConditions.find((item) => item.id === obligation.conditionId)!;
       return {
         obligationId: obligation.id,
         status,
+        reviewDecisionIds: [`review:${condition.key}`],
         evidence: [
           ...facts.checks.map((check) => ({ kind: 'check' as const, id: check.definitionId })),
-          ...(challenge ? [{ kind: 'challenge' as const, id: challenge.id }] : []),
         ],
+        evidenceCoverage: status === 'supported' ? {
+          status: 'sufficient' as const,
+          rationale: 'The selected evidence covers the bounded conclusion.',
+          gaps: [],
+        } : {
+          status: 'insufficient' as const,
+          rationale: 'The current evidence leaves an adoption-relevant aspect uncovered.',
+          gaps: ['The bounded conclusion is not fully observed.'],
+        },
         falsification: {
           attempt: 'Exercised the legacy path and inspected the most plausible bypass.',
           observedResult: 'The legacy path retained the expected behavior.',
@@ -904,24 +925,26 @@ function handoffFor(
     conditionConclusions: contract.adoptionConditions.map((condition) => ({
       conditionId: condition.id,
       status,
+      reviewDecisionIds: [`review:${condition.key}`],
       summary: status === 'supported'
         ? 'All declared evidence obligations are supported.' : 'Evidence remains unresolved.',
     })),
-    importantSystemEffects: ['Public behavior changes only at the requested boundary.'],
     residualUnknowns: status === 'supported' ? [] : [{
-      conditionIds: contract.adoptionConditions.map((item) => item.id),
-      obligationIds: obligations.map((item) => item.id),
+      target: {
+        kind: 'condition' as const,
+        conditionId: contract.adoptionConditions[0].id,
+      },
       statement: 'The environment prevented a conclusive observation.',
-      adoptionImpact: 'Compatibility is not established.',
-      nextAction: 'Review the failure and rerun in a working environment.',
       evidence: facts.checks.map((check) => ({ kind: 'check' as const, id: check.definitionId })),
+      reviewDecisionIds: contract.adoptionConditions.map((condition) => `review:${condition.key}`),
     }],
-    reviewQuestions: contract.adoptionConditions.map((condition) => ({
+    reviewDecisions: contract.adoptionConditions.map((condition) => ({
       id: `review:${condition.key}`,
       conditionIds: [condition.id],
       obligationIds: condition.evidenceObligations.map((item) => item.id),
       question: 'Does the changed path preserve the required behavior?',
       adoptionImpact: 'A mismatch breaks compatibility.',
+      nextAction: 'Inspect the cited evidence and decide whether correction is required.',
       evidence: facts.checks.map((check) => ({ kind: 'check' as const, id: check.definitionId })),
     })),
     recommendation: {
@@ -933,41 +956,6 @@ function handoffFor(
   return { ...projection, handoffFingerprint: fingerprint(projection) };
 }
 
-function supportedChallenges(contract: TaskContract, facts: FactBundle): IndependentChallenge[] {
-  const obligations = contract.adoptionConditions.flatMap((condition) =>
-    condition.evidenceObligations.filter((obligation) => obligation.strategies.some((strategy) =>
-      strategy.kind === 'independent-challenge' && strategy.policy === 'required')));
-  return obligations.map((obligation, index) => ({
-    ...envelope,
-    id: `challenge:${index + 1}`,
-    effectiveContractId: contract.effectiveContractId,
-    attemptId: facts.attemptId,
-    factCollectionId: facts.factCollectionId,
-    obligationIds: [obligation.id],
-    conditionIds: [obligation.conditionId],
-    independence: 'host-attested',
-    implementerContextId: 'context:implementer',
-    challengerContextId: `context:challenger-${index + 1}`,
-    attestationId: `attestation:${index + 1}`,
-    falsification: obligation.falsification,
-    evidence: {
-      changedFiles: [],
-      checks: facts.checks.map((item) => item.definitionId),
-      repositoryEvidence: [],
-      humanEvents: [],
-      patch: false,
-    },
-    falsificationAttempt: 'Inspected and exercised the compatibility path independently.',
-    observedResult: 'The compatibility path retained the expected behavior.',
-    supportingEvidence: [{
-      statement: 'The frozen check exercises the compatibility path.',
-      references: facts.checks.map((item) => ({ kind: 'check' as const, id: item.definitionId })),
-    }],
-    counterEvidence: [],
-    outcome: 'supported',
-    conclusion: 'The failure hypothesis was not observed.',
-  }));
-}
 
 function decisionFor(
   contract: TaskContract,
@@ -982,16 +970,19 @@ function decisionFor(
     humanEvent: {
       id: 'event:decision', kind: 'decision', content, contentFingerprint: digest(content),
     },
-    action: 'accepted',
+    interpretation: {
+      basisHumanEventId: 'event:decision',
+      action: 'accepted',
+      reason: content,
+      exceptions: attentionIds.map((attentionId) => ({
+        attentionId, rationale: 'Accepted knowingly.',
+      })),
+    },
     effectiveContractId: contract.effectiveContractId,
     attemptId: facts.attemptId,
     factCollectionId: facts.factCollectionId,
     handoffId: handoff.handoffId,
     handoffFingerprint: handoff.handoffFingerprint,
-    reason: content,
-    exceptions: attentionIds.map((attentionId) => ({
-      attentionId, rationale: 'Accepted knowingly.',
-    })),
   };
 }
 
@@ -1005,7 +996,6 @@ function worktree(seed: string) {
     head: null,
     fingerprint: digest(seed),
     entryCount: 0,
-    capturedAt: '2026-08-11T00:00:00.000Z',
   };
 }
 

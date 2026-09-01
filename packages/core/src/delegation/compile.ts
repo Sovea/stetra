@@ -17,14 +17,14 @@ import {
 import type {
   AdoptionCondition,
   AdoptionConditionInput,
+  AssuranceDeclaration,
   CompileDelegationInput,
   DelegationCompileResult,
-  DeliveryPlan,
+  ExecutionBudget,
   EvidenceObligation,
   EvidenceObligationStrategy,
   HostPolicyRequirement,
   HostPolicyRequirementInput,
-  LogicalVerifier,
   MaterialDecisionFork,
   MaterialDecisionForkInput,
   RepositoryEvidenceInput,
@@ -73,7 +73,7 @@ export function compileDelegation(
   const issues: ValidationIssue[] = [];
   rejectExtraKeys(source, [
     'protocol', 'schemaVersion', 'developerEvents', 'task', 'materialDecisionForks', 'repositoryEvidence',
-    'conditions', 'hostPolicyRequirements', 'delivery', 'checks', 'noCommandRationale',
+    'assurance', 'hostPolicyRequirements', 'executionBudget', 'checks', 'noCommandRationale',
   ], '', issues);
 
   const developerEvents = validateDeveloperEvents(source.developerEvents, issues);
@@ -90,14 +90,15 @@ export function compileDelegation(
   );
   const checkDrafts = validateCheckDrafts(source.checks ?? [], issues);
   const checksByKey = new Map(checkDrafts.map((item) => [item.key, item]));
-  const conditions = validateConditions(
-    source.conditions,
+  const assurance = validateAssurance(
+    source.assurance,
     eventsByKey,
     evidenceByKey,
     checksByKey,
     task?.understanding.desiredOutcome.basis,
     issues,
   );
+  const conditions = assurance?.conditions ?? [];
   const obligationsByKey = new Map(conditions.flatMap((condition) =>
     condition.evidenceObligations.map((obligation) => [
       obligationKey(condition.key, obligation.key), obligation,
@@ -110,7 +111,7 @@ export function compileDelegation(
     task?.understanding.desiredOutcome.basis,
     issues,
   );
-  const plan = validateDelivery(source.delivery, issues);
+  const executionBudget = validateExecutionBudget(source.executionBudget, issues);
   const noCommandRationale = source.noCommandRationale;
   if (noCommandRationale !== undefined && !isNonEmptyString(noCommandRationale)) {
     issues.push(issue(
@@ -125,7 +126,7 @@ export function compileDelegation(
     ));
   }
 
-  if (issues.length || !developerEvents.length || !task || !materialDecisions || !plan) {
+  if (issues.length || !developerEvents.length || !task || !materialDecisions || !assurance || !executionBudget) {
     return { ...ENVELOPE, status: 'authority-invalid', issues };
   }
   if (materialDecisions.unresolved.length) {
@@ -144,44 +145,31 @@ export function compileDelegation(
     };
   }
 
-  const authorization = {
-    standingAuthorization: 'Necessary local reversible inspection, edits, verification, diagnosis, and bounded repair inside the compiled task meaning.',
-    escalationBoundary: [
-      'A material choice changes the desired outcome, a constraint, compatibility, ownership, public behavior, or another long-lived tradeoff.',
-      'An external or irreversible effect is required.',
-      'An exact exception or verification relaxation is required.',
-      'Collected evidence indicates material semantic drift.',
-    ],
-    focusPathsArePermissions: false as const,
-  };
   const semanticProjection = {
     ...ENVELOPE,
-    authority: {
-      developerEvents: developerEvents.map((item) => item.event),
-      providerTrustBoundary: 'host-supplied-event-not-runtime-authenticated' as const,
-    },
+    humanEvents: developerEvents.map((item) => item.event),
     understanding: task.understanding,
     repositoryEvidence: evidence.map(({ key: _key, ...item }) => item),
     materialDecisions: materialDecisions.resolved,
+    assurance: assurance.declaration,
     adoptionConditions: conditions,
     hostPolicyRequirements,
-    authorization,
   };
   const semanticContractId = stableFingerprint(semanticProjection);
   const verificationPlan = buildVerificationPlan(definitions, noCommandRationale);
+  const verificationPlanId = stableFingerprint(verificationPlan);
   const effectiveContractId = stableFingerprint({
     semanticContractId,
-    verificationPlanId: verificationPlan.verificationPlanId,
+    verificationPlanId,
   });
   const contract: TaskContract = {
     ...semanticProjection,
     semanticContractId,
-    verificationPlanId: verificationPlan.verificationPlanId,
+    verificationPlanId,
     effectiveContractId,
-    plan,
     verificationPlan,
   };
-  return { ...ENVELOPE, status: 'delegation-compiled', contract };
+  return { ...ENVELOPE, status: 'delegation-compiled', contract, executionBudget };
 }
 
 function compileVerificationRevision(input: VerificationRevisionInput): DelegationCompileResult {
@@ -278,7 +266,8 @@ function compileVerificationRevision(input: VerificationRevisionInput): Delegati
   if (issues.length) return { ...ENVELOPE, status: 'authority-invalid', issues };
 
   const verificationPlan = buildVerificationPlan(definitions, input.revision.noCommandRationale);
-  if (verificationPlan.verificationPlanId === input.priorContract.verificationPlanId) {
+  const verificationPlanId = stableFingerprint(verificationPlan);
+  if (verificationPlanId === input.priorContract.verificationPlanId) {
     return {
       ...ENVELOPE,
       status: 'authority-invalid',
@@ -287,14 +276,14 @@ function compileVerificationRevision(input: VerificationRevisionInput): Delegati
   }
   const effectiveContractId = stableFingerprint({
     semanticContractId: input.priorContract.semanticContractId,
-    verificationPlanId: verificationPlan.verificationPlanId,
+    verificationPlanId,
   });
   return {
     ...ENVELOPE,
     status: 'delegation-compiled',
     contract: {
       ...input.priorContract,
-      verificationPlanId: verificationPlan.verificationPlanId,
+      verificationPlanId,
       effectiveContractId,
       verificationPlan,
     },
@@ -311,20 +300,18 @@ export function validateCompiledContract(contract: TaskContract): void {
   const semanticProjection = {
     protocol: contract.protocol,
     schemaVersion: contract.schemaVersion,
-    authority: contract.authority,
+    humanEvents: contract.humanEvents,
     understanding: contract.understanding,
     repositoryEvidence: contract.repositoryEvidence,
     materialDecisions: contract.materialDecisions,
+    assurance: contract.assurance,
     adoptionConditions: contract.adoptionConditions,
     hostPolicyRequirements: contract.hostPolicyRequirements,
-    authorization: contract.authorization,
   };
   if (contract.semanticContractId !== stableFingerprint(semanticProjection)) {
     throw new Error('evaluateHandoff Semantic Contract fingerprint does not match its content.');
   }
-  const { verificationPlanId: _ignored, ...verificationProjection } = contract.verificationPlan;
-  if (contract.verificationPlanId !== stableFingerprint(verificationProjection)
-    || contract.verificationPlanId !== contract.verificationPlan.verificationPlanId) {
+  if (contract.verificationPlanId !== stableFingerprint(contract.verificationPlan)) {
     throw new Error('evaluateHandoff Verification Plan fingerprint does not match its content.');
   }
   if (contract.effectiveContractId !== stableFingerprint({
@@ -333,6 +320,72 @@ export function validateCompiledContract(contract: TaskContract): void {
   })) {
     throw new Error('evaluateHandoff effective contract fingerprint does not match its identities.');
   }
+}
+
+function validateAssurance(
+  value: unknown,
+  eventsByKey: Map<string, KeyedDeveloperEvent>,
+  evidenceByKey: Map<string, RepositoryEvidenceInput & { id: string }>,
+  checksByKey: Map<string, CheckDraft>,
+  defaultBasis: InterpretationBasis | undefined,
+  issues: ValidationIssue[],
+): { declaration: AssuranceDeclaration; conditions: AdoptionCondition[] } | undefined {
+  const path = 'assurance';
+  if (!isRecord(value)) {
+    issues.push(issue(
+      'assurance-declaration-required',
+      path,
+      'Assurance must explicitly declare routine work or supply adoption Conditions.',
+    ));
+    return undefined;
+  }
+  if (value.kind === 'routine') {
+    rejectExtraKeys(value, ['kind', 'rationale', 'basis'], path, issues);
+    const before = issues.length;
+    const rationale = normalized(value.rationale, `${path}.rationale`, issues);
+    const basis = validateBasis(
+      value.basis,
+      eventsByKey,
+      evidenceByKey,
+      `${path}.basis`,
+      issues,
+      defaultBasis,
+    );
+    if (issues.length !== before || !rationale || !basis) return undefined;
+    return {
+      declaration: { kind: 'routine', rationale, basis },
+      conditions: [],
+    };
+  }
+  if (value.kind === 'conditioned') {
+    rejectExtraKeys(value, ['kind', 'conditions'], path, issues);
+    if (!Array.isArray(value.conditions) || value.conditions.length === 0) {
+      issues.push(issue(
+        'assurance-conditions-required',
+        `${path}.conditions`,
+        'Conditioned assurance requires at least one Adoption Condition.',
+      ));
+      return undefined;
+    }
+    const before = issues.length;
+    const conditions = validateConditions(
+      value.conditions,
+      eventsByKey,
+      evidenceByKey,
+      checksByKey,
+      defaultBasis,
+      issues,
+      `${path}.conditions`,
+    );
+    if (issues.length !== before || !conditions.length) return undefined;
+    return { declaration: { kind: 'conditioned' }, conditions };
+  }
+  issues.push(issue(
+    'assurance-kind-invalid',
+    `${path}.kind`,
+    'Assurance kind must be routine or conditioned.',
+  ));
+  return undefined;
 }
 
 function validateDeveloperEvents(value: unknown, issues: ValidationIssue[]): KeyedDeveloperEvent[] {
@@ -467,27 +520,143 @@ function validateCheckDrafts(value: unknown, issues: ValidationIssue[]): CheckDr
       issues.push(issue('verification-check-invalid', path, 'Check must be an object.'));
       continue;
     }
-    rejectExtraKeys(candidate, ['key', 'rationale', 'argv', 'baseline', 'verifierSelectors'], path, issues);
+    rejectExtraKeys(candidate, [
+      'key', 'rationale', 'execution', 'executionInputs', 'baseline', 'verifierSelectors',
+    ], path, issues);
     const key = uniqueKey(candidate.key, keys, `${path}.key`, issues);
     const rationale = normalized(candidate.rationale, `${path}.rationale`, issues);
-    if (!Array.isArray(candidate.argv) || !candidate.argv.length
-      || candidate.argv.some((item) => typeof item !== 'string' || !item)) {
-      issues.push(issue('verification-check-argv-invalid', `${path}.argv`, 'Check argv must contain non-empty arguments.'));
-    }
+    const execution = validateCheckExecution(candidate.execution, `${path}.execution`, issues);
+    const executionInputs = repositoryPathSelectors(
+      candidate.executionInputs,
+      `${path}.executionInputs`,
+      issues,
+    );
     const baselineSource = validateBaseline(candidate.baseline, `${path}.baseline`, issues);
     const verifierRefs = repositorySelectors(candidate.verifierSelectors, `${path}.verifierSelectors`, issues);
-    if (issues.length !== before || !key || !rationale || !baselineSource || !verifierRefs) continue;
+    if (issues.length !== before || !key || !rationale || !execution
+      || !executionInputs || !baselineSource || !verifierRefs) continue;
     output.push({
       verifierId: generatedId('verifier', { key }),
       revision: 1,
       key,
       rationale,
-      argv: [...candidate.argv as string[]],
+      execution,
+      executionInputs: executionInputs.map(({ kind, path }) => ({ kind, path })),
       baselineSource,
       verifierRefs,
     });
   }
   return output.sort((left, right) => left.verifierId.localeCompare(right.verifierId));
+}
+
+function repositoryPathSelectors(
+  value: unknown,
+  path: string,
+  issues: ValidationIssue[],
+): VerificationDefinition['executionInputs'] | undefined {
+  if (!Array.isArray(value)) {
+    issues.push(issue(
+      'execution-inputs-invalid', path,
+      'Execution inputs must be an array; use an empty array when no generated or ignored input is relevant.',
+    ));
+    return undefined;
+  }
+  const output: VerificationDefinition['executionInputs'] = value.flatMap((item, index) => {
+    const itemPath = `${path}[${index}]`;
+    if (!isRecord(item)) {
+      issues.push(issue('execution-input-invalid', itemPath, 'Execution input must be an object.'));
+      return [];
+    }
+    rejectExtraKeys(item, ['kind', 'path'], itemPath, issues);
+    const kind: VerificationDefinition['executionInputs'][number]['kind'] | undefined =
+      item.kind === 'file' || item.kind === 'tree' ? item.kind : undefined;
+    if (!kind) {
+      issues.push(issue('execution-input-kind-invalid', `${itemPath}.kind`, 'Execution input kind must be file or tree.'));
+    }
+    if (!isSafeRepositoryPath(item.path)) {
+      issues.push(issue('execution-input-path-invalid', `${itemPath}.path`, 'Execution input path must be repository-relative.'));
+    }
+    return kind && isSafeRepositoryPath(item.path)
+      ? [{ kind, path: item.path as string }]
+      : [];
+  });
+  const identities = output.map((item) => stableFingerprint(item));
+  if (new Set(identities).size !== identities.length) {
+    issues.push(issue('execution-inputs-duplicate', path, 'Execution inputs must not contain duplicates.'));
+  }
+  return output.sort((left, right) => left.kind.localeCompare(right.kind)
+    || left.path.localeCompare(right.path));
+}
+
+function validateCheckExecution(
+  value: unknown,
+  path: string,
+  issues: ValidationIssue[],
+): CheckDraft['execution'] | undefined {
+  const before = issues.length;
+  if (!isRecord(value)) {
+    issues.push(issue('verification-execution-invalid', path, 'Check execution must be an object.'));
+    return undefined;
+  }
+  rejectExtraKeys(value, ['preparation', 'assertion'], path, issues);
+  const preparation: CheckDraft['execution']['preparation'] = [];
+  const preparationKeys = new Set<string>();
+  if (!Array.isArray(value.preparation)) {
+    issues.push(issue(
+      'verification-preparation-invalid', `${path}.preparation`,
+      'Check preparation must be an array; use an empty array when none is required.',
+    ));
+  } else {
+    for (const [index, raw] of value.preparation.entries()) {
+      const stepPath = `${path}.preparation[${index}]`;
+      const stepBefore = issues.length;
+      if (!isRecord(raw)) {
+        issues.push(issue('verification-preparation-step-invalid', stepPath, 'Preparation step must be an object.'));
+        continue;
+      }
+      rejectExtraKeys(raw, ['key', 'argv'], stepPath, issues);
+      const stepKey = uniqueKey(raw.key, preparationKeys, `${stepPath}.key`, issues);
+      const argv = commandArgv(raw.argv, `${stepPath}.argv`, issues);
+      if (issues.length === stepBefore && stepKey && argv) {
+        const projection = { role: 'preparation' as const, key: stepKey, argv };
+        preparation.push({
+          stepId: stableFingerprint(projection),
+          key: stepKey,
+          argv,
+        });
+      }
+    }
+  }
+  let assertion: CheckDraft['execution']['assertion'] | undefined;
+  if (!isRecord(value.assertion)) {
+    issues.push(issue('verification-assertion-invalid', `${path}.assertion`, 'Check assertion must be an object.'));
+  } else {
+    rejectExtraKeys(value.assertion, ['argv'], `${path}.assertion`, issues);
+    const argv = commandArgv(value.assertion.argv, `${path}.assertion.argv`, issues);
+    if (argv) {
+      assertion = {
+        stepId: stableFingerprint({ role: 'assertion', argv }),
+        argv,
+      };
+    }
+  }
+  return issues.length === before && assertion ? { preparation, assertion } : undefined;
+}
+
+function commandArgv(
+  value: unknown,
+  path: string,
+  issues: ValidationIssue[],
+): string[] | undefined {
+  if (!Array.isArray(value) || !value.length
+    || value.some((item) => typeof item !== 'string' || !item)) {
+    issues.push(issue(
+      'verification-command-argv-invalid', path,
+      'Verification command argv must contain non-empty arguments.',
+    ));
+    return undefined;
+  }
+  return [...value] as string[];
 }
 
 function validateBaseline(value: unknown, path: string, issues: ValidationIssue[]): CheckDraft['baselineSource'] | undefined {
@@ -563,45 +732,40 @@ function validateConditions(
   checksByKey: Map<string, CheckDraft>,
   defaultBasis: InterpretationBasis | undefined,
   issues: ValidationIssue[],
+  path = 'conditions',
 ): AdoptionCondition[] {
   if (!Array.isArray(value)) {
-    issues.push(issue('adoption-conditions-invalid', 'conditions', 'Conditions must be an array.'));
+    issues.push(issue('adoption-conditions-invalid', path, 'Conditions must be an array.'));
     return [];
   }
   const keys = new Set<string>();
   const output: AdoptionCondition[] = [];
   for (const [index, candidate] of value.entries()) {
-    const path = `conditions[${index}]`;
+    const itemPath = `${path}[${index}]`;
     const before = issues.length;
     if (!isRecord(candidate)) {
-      issues.push(issue('adoption-condition-invalid', path, 'Condition must be an object.'));
+      issues.push(issue('adoption-condition-invalid', itemPath, 'Condition must be an object.'));
       continue;
     }
-    rejectExtraKeys(candidate, ['key', 'statement', 'rationale', 'criticality', 'basis', 'evidenceObligations'], path, issues);
-    const key = uniqueKey(candidate.key, keys, `${path}.key`, issues);
-    const statement = normalized(candidate.statement, `${path}.statement`, issues);
-    const rationale = normalized(candidate.rationale, `${path}.rationale`, issues);
+    rejectExtraKeys(candidate, ['key', 'statement', 'rationale', 'criticality', 'basis', 'evidenceObligations'], itemPath, issues);
+    const key = uniqueKey(candidate.key, keys, `${itemPath}.key`, issues);
+    const statement = normalized(candidate.statement, `${itemPath}.statement`, issues);
+    const rationale = normalized(candidate.rationale, `${itemPath}.rationale`, issues);
     const criticality = ['material', 'adoption-critical'].includes(String(candidate.criticality))
       ? candidate.criticality as AdoptionConditionInput['criticality'] : undefined;
-    if (!criticality) issues.push(issue('adoption-condition-criticality-invalid', `${path}.criticality`, 'Criticality must be material or adoption-critical.'));
+    if (!criticality) issues.push(issue('adoption-condition-criticality-invalid', `${itemPath}.criticality`, 'Criticality must be material or adoption-critical.'));
     const basis = validateBasis(
       candidate.basis,
       eventsByKey,
       evidenceByKey,
-      `${path}.basis`,
+      `${itemPath}.basis`,
       issues,
       defaultBasis,
     );
     const conditionId = key ? generatedId('condition', { key }) : undefined;
     const obligations = conditionId && key
-      ? validateObligations(candidate.evidenceObligations, key, conditionId, evidenceByKey, checksByKey, `${path}.evidenceObligations`, issues)
+      ? validateObligations(candidate.evidenceObligations, key, conditionId, evidenceByKey, checksByKey, `${itemPath}.evidenceObligations`, issues)
       : [];
-    if (criticality === 'adoption-critical' && obligations.length
-      && !obligations.some((obligation) => obligation.strategies.some((strategy) =>
-        (strategy.kind === 'independent-challenge' && strategy.policy === 'required')
-        || strategy.kind === 'human-review'))) {
-      issues.push(issue('critical-condition-review-required', `${path}.evidenceObligations`, 'Adoption-critical conditions require a required independent challenge or direct Human review strategy.'));
-    }
     if (issues.length !== before || !key || !conditionId || !statement || !rationale || !criticality || !basis || !obligations.length) continue;
     output.push({
       id: conditionId,
@@ -752,11 +916,6 @@ function validateObligationStrategies(
       }
       continue;
     }
-    if (candidate.kind === 'human-review') {
-      rejectExtraKeys(candidate, ['kind'], itemPath, issues);
-      if (issues.length === before) output.push({ kind: 'human-review' });
-      continue;
-    }
     issues.push(issue('evidence-strategy-kind-invalid', `${itemPath}.kind`, 'Evidence strategy kind is invalid.'));
   }
   const identities = output.map((item) => stableFingerprint(item));
@@ -806,7 +965,8 @@ function verificationDefinitionContent(definition: VerificationDefinition) {
     verifierId: definition.verifierId,
     key: definition.key,
     rationale: definition.rationale,
-    argv: definition.argv,
+    execution: definition.execution,
+    executionInputs: definition.executionInputs,
     baseline: definition.baseline,
     verifierRefs: definition.verifierRefs,
   };
@@ -830,25 +990,26 @@ function validateExecutionRebinding(
     ));
     return;
   }
-  let argvChanged = false;
+  let executionChanged = false;
   for (const [verifierId, before] of priorByVerifier) {
     const after = currentByVerifier.get(verifierId)!;
-    if (stableFingerprint(before.argv) !== stableFingerprint(after.argv)) argvChanged = true;
+    if (stableFingerprint(before.execution) !== stableFingerprint(after.execution)) executionChanged = true;
     if (before.rationale !== after.rationale
       || stableFingerprint(before.baseline) !== stableFingerprint(after.baseline)
+      || stableFingerprint(before.executionInputs) !== stableFingerprint(after.executionInputs)
       || stableFingerprint(before.verifierRefs) !== stableFingerprint(after.verifierRefs)) {
       issues.push(issue(
         'execution-rebinding-semantic-surface-changed',
         'revision.checks',
-        `Execution rebinding for ${verifierId} may change argv only; use verification-plan for other changes.`,
+        `Execution rebinding for ${verifierId} may change execution commands only; use verification-plan for other changes.`,
       ));
     }
   }
-  if (!argvChanged) {
+  if (!executionChanged) {
     issues.push(issue(
-      'execution-rebinding-argv-unchanged',
+      'execution-rebinding-execution-unchanged',
       'revision.checks',
-      'Execution rebinding must change at least one argv definition.',
+      'Execution rebinding must change at least one execution command.',
     ));
   }
 }
@@ -879,16 +1040,22 @@ function validateRevisionHumanAuthorization(
 ): void {
   const path = 'revision.humanAuthorization';
   if (!isRecord(value)) {
-    issues.push(issue('verification-revision-human-authorization-invalid', path, 'Human authorization must be an exact event object.'));
+    issues.push(issue('verification-revision-human-authorization-invalid', path, 'Human authorization must bind an exact event to an explicit interpretation.'));
     return;
   }
-  rejectExtraKeys(value, ['content', 'provider', 'nativeId'], path, issues);
-  normalized(value.content, `${path}.content`, issues);
-  if (value.provider !== undefined && !isNonEmptyString(value.provider)) {
-    issues.push(issue('verification-revision-human-provider-invalid', `${path}.provider`, 'Provider must be non-empty.'));
+  rejectExtraKeys(value, ['humanEvent', 'interpretation'], path, issues);
+  normalized(value.interpretation, `${path}.interpretation`, issues);
+  if (!isRecord(value.humanEvent)) {
+    issues.push(issue('verification-revision-human-event-invalid', `${path}.humanEvent`, 'Human event must be an exact event object.'));
+    return;
   }
-  if (value.nativeId !== undefined && !isNonEmptyString(value.nativeId)) {
-    issues.push(issue('verification-revision-human-native-id-invalid', `${path}.nativeId`, 'Native id must be non-empty.'));
+  rejectExtraKeys(value.humanEvent, ['content', 'provider', 'nativeId'], `${path}.humanEvent`, issues);
+  normalized(value.humanEvent.content, `${path}.humanEvent.content`, issues);
+  if (value.humanEvent.provider !== undefined && !isNonEmptyString(value.humanEvent.provider)) {
+    issues.push(issue('verification-revision-human-provider-invalid', `${path}.humanEvent.provider`, 'Provider must be non-empty.'));
+  }
+  if (value.humanEvent.nativeId !== undefined && !isNonEmptyString(value.humanEvent.nativeId)) {
+    issues.push(issue('verification-revision-human-native-id-invalid', `${path}.humanEvent.nativeId`, 'Native id must be non-empty.'));
   }
 }
 
@@ -985,40 +1152,83 @@ function validateBasis(
   } : undefined;
 }
 
-function validateDelivery(value: unknown, issues: ValidationIssue[]): DeliveryPlan | undefined {
+function validateExecutionBudget(value: unknown, issues: ValidationIssue[]): ExecutionBudget | undefined {
   const before = issues.length;
   if (!isRecord(value)) {
-    issues.push(issue('delivery-invalid', 'delivery', 'Delivery settings must be an object.'));
+    issues.push(issue('execution-budget-invalid', 'executionBudget', 'Execution budget must be an object.'));
     return undefined;
   }
-  rejectExtraKeys(value, ['maxRepairAttempts'], 'delivery', issues);
-  if (!Number.isInteger(value.maxRepairAttempts) || Number(value.maxRepairAttempts) < 0
-    || Number(value.maxRepairAttempts) > 5) {
-    issues.push(issue('repair-budget-invalid', 'delivery.maxRepairAttempts', 'Maximum repair attempts must be an integer from 0 through 5.'));
+  rejectExtraKeys(value, ['checkTimeoutMs', 'maxDeliveryRepairs', 'timeoutRetry'], 'executionBudget', issues);
+  if (!Number.isInteger(value.checkTimeoutMs) || Number(value.checkTimeoutMs) < 1_000
+    || Number(value.checkTimeoutMs) > 3_600_000) {
+    issues.push(issue('check-timeout-budget-invalid', 'executionBudget.checkTimeoutMs', 'Check timeout must be an integer from 1000 through 3600000 milliseconds.'));
+  }
+  if (!Number.isInteger(value.maxDeliveryRepairs) || Number(value.maxDeliveryRepairs) < 0
+    || Number(value.maxDeliveryRepairs) > 5) {
+    issues.push(issue('repair-budget-invalid', 'executionBudget.maxDeliveryRepairs', 'Maximum delivery repairs must be an integer from 0 through 5.'));
+  }
+  let timeoutRetry: ExecutionBudget['timeoutRetry'] | undefined;
+  if (!isRecord(value.timeoutRetry)) {
+    issues.push(issue('timeout-retry-budget-invalid', 'executionBudget.timeoutRetry', 'Timeout retry budget must be an object.'));
+  } else if (value.timeoutRetry.mode === 'disabled') {
+    rejectExtraKeys(value.timeoutRetry, ['mode'], 'executionBudget.timeoutRetry', issues);
+    timeoutRetry = { mode: 'disabled' };
+  } else if (value.timeoutRetry.mode === 'bounded') {
+    rejectExtraKeys(
+      value.timeoutRetry,
+      ['mode', 'maxRetriesPerVerifier', 'maxTimeoutMs'],
+      'executionBudget.timeoutRetry',
+      issues,
+    );
+    if (!Number.isInteger(value.timeoutRetry.maxRetriesPerVerifier)
+      || Number(value.timeoutRetry.maxRetriesPerVerifier) < 1
+      || Number(value.timeoutRetry.maxRetriesPerVerifier) > 5) {
+      issues.push(issue(
+        'timeout-retry-count-invalid',
+        'executionBudget.timeoutRetry.maxRetriesPerVerifier',
+        'Maximum timeout retries per logical verifier must be an integer from 1 through 5.',
+      ));
+    }
+    if (!Number.isInteger(value.timeoutRetry.maxTimeoutMs)
+      || Number(value.timeoutRetry.maxTimeoutMs) < 1_000
+      || Number(value.timeoutRetry.maxTimeoutMs) > 3_600_000
+      || Number(value.timeoutRetry.maxTimeoutMs) <= Number(value.checkTimeoutMs)) {
+      issues.push(issue(
+        'timeout-retry-maximum-invalid',
+        'executionBudget.timeoutRetry.maxTimeoutMs',
+        'Maximum timeout retry duration must be an integer greater than the initial check timeout and no more than 3600000 milliseconds.',
+      ));
+    }
+    timeoutRetry = {
+      mode: 'bounded',
+      maxRetriesPerVerifier: Number(value.timeoutRetry.maxRetriesPerVerifier),
+      maxTimeoutMs: Number(value.timeoutRetry.maxTimeoutMs),
+    };
+  } else {
+    issues.push(issue(
+      'timeout-retry-mode-invalid',
+      'executionBudget.timeoutRetry.mode',
+      'Timeout retry mode must be disabled or bounded.',
+    ));
   }
   if (issues.length !== before) return undefined;
-  const projection = {
-    maxRepairAttempts: Number(value.maxRepairAttempts),
-    lifecycle: ['implement', 'collect', 'judge-evidence', 'resolve', 'handoff', 'decide'] as const,
+  return {
+    checkTimeoutMs: Number(value.checkTimeoutMs),
+    maxDeliveryRepairs: Number(value.maxDeliveryRepairs),
+    timeoutRetry: timeoutRetry!,
   };
-  return { planId: stableFingerprint(projection), ...projection };
 }
 
 function buildVerificationPlan(
   definitions: VerificationDefinition[],
   noCommandRationale: unknown,
 ): VerificationPlan {
-  const projection = definitions.length
+  return definitions.length
     ? {
         mode: 'checks' as const,
-        verifiers: definitions.map((definition): LogicalVerifier => ({
-          verifierId: definition.verifierId,
-          key: definition.key,
-        })),
         definitions,
       }
     : { mode: 'no-command' as const, rationale: String(noCommandRationale).trim() };
-  return { verificationPlanId: stableFingerprint(projection), ...projection };
 }
 
 function interpretation(

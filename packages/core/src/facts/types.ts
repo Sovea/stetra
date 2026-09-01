@@ -21,7 +21,6 @@ export interface WorktreeSummary {
   head: string | null;
   fingerprint: string;
   entryCount: number;
-  capturedAt: string;
 }
 
 export interface FileContentFact {
@@ -49,15 +48,41 @@ export interface CheckStreamFact {
   logPath?: string;
 }
 
+export interface VerificationInputEntryFact {
+  path: string;
+  kind: 'file' | 'symlink';
+  contentDigest: string;
+  mode: string;
+  byteLength: number;
+}
+
+export interface VerificationInputSelectorFact {
+  selector: {
+    kind: 'file' | 'tree';
+    path: string;
+  };
+  state: 'missing' | 'present';
+  entries: VerificationInputEntryFact[];
+  fingerprint: string;
+}
+
+export interface VerificationInputSnapshot {
+  definitionId: string;
+  inputs: VerificationInputSelectorFact[];
+  fingerprint: string;
+}
+
 export type CheckTermination =
   | { kind: 'exit'; exitCode: number }
   | { kind: 'signal'; signal: string }
   | { kind: 'timeout'; signal?: string }
   | { kind: 'spawn-error'; code?: string };
 
-export interface CheckAttemptFact {
-  attempt: number;
-  startedAt: string;
+export interface CheckStepAttemptFact {
+  stepId: string;
+  role: 'preparation' | 'assertion';
+  key?: string;
+  argv: string[];
   durationMs: number;
   timeoutMs: number;
   status: CheckStatus;
@@ -68,10 +93,29 @@ export interface CheckAttemptFact {
   reason?: string;
 }
 
+export interface CheckAttemptFact {
+  attempt: number;
+  durationMs: number;
+  timeoutMs: number;
+  status: CheckStatus;
+  observedPhase: 'preparation' | 'assertion';
+  termination: CheckTermination;
+  outcomeFingerprint: string;
+  stdout: CheckStreamFact;
+  stderr: CheckStreamFact;
+  steps: CheckStepAttemptFact[];
+  executionInputs: {
+    beforePreparation: VerificationInputSnapshot;
+    readyForAssertion: VerificationInputSnapshot;
+    afterAssertion: VerificationInputSnapshot;
+  };
+  reason?: string;
+}
+
 export interface CheckFact {
   verifierId: string;
   definitionId: string;
-  argv: string[];
+  assertionArgv: string[];
   definitionFingerprint: string;
   attempts: CheckAttemptFact[];
 }
@@ -84,9 +128,10 @@ export interface BaselineCheckFact {
 
 export interface BaselineVerificationFact {
   fingerprint: string;
-  capturedAt: string;
   preCheck: WorktreeSummary;
   postCheck: WorktreeSummary;
+  preCheckExecutionInputs: VerificationInputSnapshot[];
+  postCheckExecutionInputs: VerificationInputSnapshot[];
   checkInducedChanges: ChangedFileFact[];
   checks: BaselineCheckFact[];
 }
@@ -98,16 +143,23 @@ export interface CheckComparisonFact {
 
 export type EvidenceCause = 'implementation' | 'environment' | 'verification' | 'unknown';
 
-export type EvidenceConcernSource =
-  | { kind: 'check'; definitionId: string }
-  | { kind: 'challenge'; challengeId: string };
+export type CheckEvidenceConcernObservation =
+  | 'current-nonpassing'
+  | 'baseline-expectation-mismatch';
+
+export interface EvidenceConcernSource {
+  kind: 'check';
+  definitionId: string;
+  observation: CheckEvidenceConcernObservation;
+}
 
 export interface EvidenceDispositionEntry {
   source: EvidenceConcernSource;
   cause: EvidenceCause;
   diagnosis: string;
   falsificationAttempt: string;
-  codeChangeCanAlterObservation: boolean;
+  repositoryChangeCanAlterObservation: boolean;
+  changeSurface: 'production' | 'verification-surface' | 'none';
   expectedDifferentObservation: string;
   intendedChanges: string[];
 }
@@ -119,17 +171,15 @@ export interface EvidenceDisposition extends ProtocolEnvelope {
   factCollectionId: string;
   semanticImpact: 'none' | 'material';
   proposedRoute:
-    | 'repair-implementation'
+    | 'repair-delivery'
     | 'revise-verification'
-    | 'challenge'
     | 'handoff'
     | 'ask-human';
   routeRationale: string;
   entries: EvidenceDispositionEntry[];
   route:
-    | 'repair-implementation'
+    | 'repair-delivery'
     | 'revise-verification'
-    | 'challenge'
     | 'handoff'
     | 'ask-human';
 }
@@ -156,44 +206,30 @@ export interface PatchFact {
 export interface ExecutableEnvironmentFact {
   command: string;
   resolvedPath: string | null;
-  version: string | null;
-}
-
-export interface ToolchainEnvironmentFact {
-  name: string;
-  version: string;
-}
-
-export interface LockfileEnvironmentFact {
-  path: string;
-  digest: string;
 }
 
 export interface ExecutionEnvironment {
   platform: string;
   architecture: string;
-  cwdFingerprint: string;
   executables: ExecutableEnvironmentFact[];
-  toolchains: ToolchainEnvironmentFact[];
-  lockfiles: LockfileEnvironmentFact[];
-  environmentVariableNames: string[];
 }
 
 export interface FactBundle extends ProtocolEnvelope {
   factCollectionId: string;
-  bundleFingerprint: string;
   effectiveContractId: string;
   attemptId: string;
-  collectedAt: string;
   baseline: WorktreeSummary;
   preCheck: WorktreeSummary;
   current: WorktreeSummary;
+  preCheckExecutionInputs: VerificationInputSnapshot[];
+  currentExecutionInputs: VerificationInputSnapshot[];
   baselineVerification: BaselineVerificationFact;
   changeFingerprint: string;
   changedFiles: ChangedFileFact[];
   checkInducedChanges: ChangedFileFact[];
   checks: CheckFact[];
   checkComparisons: CheckComparisonFact[];
+  evidenceConcerns: Array<Extract<EvidenceConcernSource, { kind: 'check' }>>;
   verifierMutations: VerifierMutation[];
   environment: ExecutionEnvironment;
   patch?: PatchFact;
