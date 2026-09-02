@@ -6,6 +6,8 @@ import type {
 } from '@sovea/stetra-core';
 import { z } from 'zod';
 
+import { VerificationRevisionAuthoringDocumentSchema } from '../schemas/authoring.ts';
+
 import {
   CONCLUSION_STATUSES,
   EVIDENCE_COVERAGE_STATUSES,
@@ -13,9 +15,9 @@ import {
   HumanDecisionDocumentSchema,
   HumanResolutionDocumentSchema,
   RECOMMENDATION_ACTIONS,
+  taskSpecificCognitiveHandoffAuthoringSchema,
   taskSpecificCognitiveHandoffDocumentSchema,
   type TaskProjection,
-  VerificationRevisionDocumentSchema,
 } from '../schemas/delegation.ts';
 import { stableFingerprint } from '../protocol.ts';
 
@@ -200,33 +202,6 @@ export function verificationRevisionAuthoringPacket(input: {
   contract: TaskContract;
   facts: FactBundle;
 }): AuthoringPacket {
-  const obligationKeys = new Map(input.contract.adoptionConditions.flatMap((condition) =>
-    condition.evidenceObligations.map((obligation) => [
-      obligation.id,
-      { conditionKey: condition.key, obligationKey: obligation.key },
-    ] as const)));
-  const checks = input.contract.verificationPlan.mode === 'checks'
-      ? input.contract.verificationPlan.definitions.map((definition) => ({
-        key: definition.key,
-        rationale: definition.rationale,
-        execution: {
-          preparation: definition.execution.preparation.map((step) => ({
-            argv: step.argv,
-          })),
-          assertion: { argv: definition.execution.assertion.argv },
-        },
-        executionInputs: definition.executionInputs,
-        baseline: definition.baseline.mode === 'task-start'
-          ? {
-              mode: 'task-start',
-              rationale: definition.baseline.rationale,
-              expectation: definition.baseline.expectation,
-              obligationKeys: definition.baseline.obligationIds.map((id) =>
-                obligationKeys.get(id)!),
-            }
-          : { mode: 'unknown' },
-        verifierSelectors: definition.verifierRefs,
-      })) : undefined;
   return packetBase(
     input.task,
     input.contract,
@@ -237,15 +212,12 @@ export function verificationRevisionAuthoringPacket(input: {
       inputKind: 'verification-revision',
       constraints: {},
       draft: {
-        kind: '',
+        kind: 'execution-rebinding',
         rationale: '',
         equivalenceClaim: '',
-        ...(checks ? { checks } : {
-          noCommandRationale: input.contract.verificationPlan.mode === 'no-command'
-            ? input.contract.verificationPlan.rationale : '',
-        }),
+        rebindings: [],
       },
-      inputSchema: jsonSchema(VerificationRevisionDocumentSchema),
+      inputSchema: jsonSchema(VerificationRevisionAuthoringDocumentSchema),
     },
   );
 }
@@ -269,7 +241,6 @@ export function handoffAuthoringPacket(input: {
       || condition.evidenceObligations.some((obligation) =>
         !constraints.conclusionValuesByObligation.get(obligation.id)!.includes('supported')))
     .map((condition) => condition.id));
-  const documentSchema = handoffDocumentSchema(input);
   const constraintsDocument = {
     conditions: input.contract.adoptionConditions.map((condition) => ({
       key: condition.key,
@@ -300,45 +271,47 @@ export function handoffAuthoringPacket(input: {
           importantEffects: [],
           materialTradeoffs: [],
         },
-        conditions: input.contract.adoptionConditions.map((condition) => ({
-          conditionKey: condition.key,
-          status: '',
-          summary: '',
-          reviewDecisionKeys: prefilledReviewConditionIds.has(condition.id)
-            ? [`review-${condition.key}`]
-            : [],
-          obligations: condition.evidenceObligations.map((obligation) => ({
-            obligationKey: obligation.key,
+        conditions: Object.fromEntries(input.contract.adoptionConditions.map((condition) => [
+          condition.key,
+          {
             status: '',
-            reviewDecisionKeys: prefilledReviewConditionIds.has(condition.id)
-              ? [`review-${condition.key}`]
-              : [],
-            evidence: [
-              ...currentDefinitionIds(obligation, input.contract)
-                .filter((id) => checkStatusByDefinition.get(id) === 'passed')
-                .map((id) => ({ kind: 'check', key: checkKeyByDefinition.get(id)! })),
-              ...repositoryEvidenceIds(obligation).map((id) => ({ kind: 'repository-evidence', id })),
-            ],
-            evidenceCoverage: { status: '', rationale: '', gaps: [] },
-            falsification: { attempt: '', observedResult: '' },
-            counterEvidence: [
-              ...currentDefinitionIds(obligation, input.contract)
-                .filter((id) => checkStatusByDefinition.get(id) !== 'passed')
-                .map((id) => ({ kind: 'check', key: checkKeyByDefinition.get(id)! })),
-            ],
-            conclusion: '',
-          })),
-        })),
+            summary: '',
+            obligations: Object.fromEntries(condition.evidenceObligations.map((obligation) => [
+              obligation.key,
+              {
+                status: '',
+                evidence: [
+                  ...currentDefinitionIds(obligation, input.contract)
+                    .filter((id) => checkStatusByDefinition.get(id) === 'passed')
+                    .map((id) => ({ kind: 'check', key: checkKeyByDefinition.get(id)! })),
+                  ...repositoryEvidenceIds(obligation)
+                    .map((id) => ({ kind: 'repository-evidence', id })),
+                ],
+                evidenceCoverage: { status: '', rationale: '', gaps: [] },
+                falsification: { attempt: '', observedResult: '' },
+                counterEvidence: [
+                  ...currentDefinitionIds(obligation, input.contract)
+                    .filter((id) => checkStatusByDefinition.get(id) !== 'passed')
+                    .map((id) => ({ kind: 'check', key: checkKeyByDefinition.get(id)! })),
+                ],
+                conclusion: '',
+              },
+            ])),
+          },
+        ])),
         residualUnknowns: [],
         reviewDecisions: input.contract.adoptionConditions
           .filter((condition) => prefilledReviewConditionIds.has(condition.id))
           .map((condition) => ({
             key: `review-${condition.key}`,
-            conditionKeys: [condition.key],
-            obligationKeys: condition.evidenceObligations.map((obligation) => ({
-              conditionKey: condition.key,
-              obligationKey: obligation.key,
-            })),
+            targets: [
+              { kind: 'condition', conditionKey: condition.key },
+              ...condition.evidenceObligations.map((obligation) => ({
+                kind: 'obligation',
+                conditionKey: condition.key,
+                obligationKey: obligation.key,
+              })),
+            ],
             question: '',
             adoptionImpact: condition.adoptionRationale,
             nextAction: '',
@@ -346,7 +319,7 @@ export function handoffAuthoringPacket(input: {
           })),
         recommendation: { action: '', rationale: '', caveats: [] },
       },
-      inputSchema: jsonSchema(documentSchema),
+      inputSchema: jsonSchema(handoffAuthoringDocumentSchema(input)),
     },
   );
 }
@@ -618,17 +591,34 @@ function supportedConclusionAllowed(
 export function handoffDocumentSchema(input: Parameters<typeof handoffAuthoringPacket>[0]) {
   const constraints = deriveHandoffAuthoringConstraints(input);
   return taskSpecificCognitiveHandoffDocumentSchema({
-    conditions: input.contract.adoptionConditions.map((condition) => ({
-      key: condition.key,
-      critical: condition.criticality === 'adoption-critical',
-      allowedStatuses: constraints.conclusionValuesByCondition.get(condition.id)!,
-      obligations: condition.evidenceObligations.map((obligation) => ({
-        key: obligation.key,
-        allowedStatuses: constraints.conclusionValuesByObligation.get(obligation.id)!,
-      })),
-    })),
+    conditions: handoffConditionSpecs(input, constraints),
     recommendationActions: constraints.recommendationActions,
   });
+}
+
+export function handoffAuthoringDocumentSchema(
+  input: Parameters<typeof handoffAuthoringPacket>[0],
+) {
+  const constraints = deriveHandoffAuthoringConstraints(input);
+  return taskSpecificCognitiveHandoffAuthoringSchema({
+    conditions: handoffConditionSpecs(input, constraints),
+    recommendationActions: constraints.recommendationActions,
+  });
+}
+
+function handoffConditionSpecs(
+  input: Parameters<typeof handoffAuthoringPacket>[0],
+  constraints: ReturnType<typeof deriveHandoffAuthoringConstraints>,
+) {
+  return input.contract.adoptionConditions.map((condition) => ({
+    key: condition.key,
+    critical: condition.criticality === 'adoption-critical',
+    allowedStatuses: constraints.conclusionValuesByCondition.get(condition.id)!,
+    obligations: condition.evidenceObligations.map((obligation) => ({
+      key: obligation.key,
+      allowedStatuses: constraints.conclusionValuesByObligation.get(obligation.id)!,
+    })),
+  }));
 }
 
 function jsonSchema(schema: z.ZodType): Record<string, unknown> {

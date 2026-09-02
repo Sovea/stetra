@@ -116,6 +116,7 @@ test('Host-bound Prepare survives schema correction without another begin or Tas
     await assert.rejects(
       prepareDelegationTask({
         projectRoot: root,
+        prepareRequestId: begun.prepareRequestId,
         inputPath: begun.reservation.path,
         productVersion: PRODUCT_VERSION,
       }),
@@ -136,8 +137,7 @@ test('Host-bound Prepare survives schema correction without another begin or Tas
     }), /already consumed/);
 
     const corrected = JSON.parse(readFileSync(documentPath, 'utf8')) as Record<string, unknown>;
-    corrected.schemaVersion = '1';
-    corrected.repositoryEvidence = [];
+    delete corrected.schemaVersion;
     corrected.assurance = {
       kind: 'routine',
       rationale: 'No material adoption condition is needed for this Hook recovery fixture.',
@@ -145,11 +145,14 @@ test('Host-bound Prepare survives schema correction without another begin or Tas
     };
     (corrected.developerEvents as Array<{ content: string }>)[0].content = 'Exercise Hook recovery.';
     (corrected.task as { desiredOutcome: string }).desiredOutcome = 'Exercise Hook recovery.';
-    delete corrected.checks;
-    corrected.noCommandRationale = 'This Hook recovery fixture needs only repository-diff collection.';
+    corrected.verification = {
+      mode: 'no-command',
+      rationale: 'This Hook recovery fixture needs only repository-diff collection.',
+    };
     writeFileSync(documentPath, `${JSON.stringify(corrected)}\n`, 'utf8');
     const prepared = await prepareDelegationTask({
       projectRoot: root,
+      prepareRequestId: begun.prepareRequestId,
       inputPath: begun.reservation.path,
       productVersion: PRODUCT_VERSION,
     });
@@ -200,7 +203,6 @@ test('Stop delivers each exact pending action once without scanning another task
 
     const documentPath = join(root, begun.reservation.path);
     const document = JSON.parse(readFileSync(documentPath, 'utf8')) as Record<string, unknown>;
-    document.repositoryEvidence = [];
     document.assurance = {
       kind: 'routine',
       rationale: 'No material adoption condition is needed for this lifecycle fixture.',
@@ -208,11 +210,14 @@ test('Stop delivers each exact pending action once without scanning another task
     };
     (document.developerEvents as Array<{ content: string }>)[0].content = 'Exercise Hook lifecycle continuity.';
     (document.task as { desiredOutcome: string }).desiredOutcome = 'Exercise Hook lifecycle continuity.';
-    delete document.checks;
-    document.noCommandRationale = 'This lifecycle fixture needs only repository-diff collection.';
+    document.verification = {
+      mode: 'no-command',
+      rationale: 'This lifecycle fixture needs only repository-diff collection.',
+    };
     writeFileSync(documentPath, `${JSON.stringify(document)}\n`, 'utf8');
     const prepared = await prepareDelegationTask({
       projectRoot: root,
+      prepareRequestId: begun.prepareRequestId,
       inputPath: begun.reservation.path,
       productVersion: PRODUCT_VERSION,
     });
@@ -263,7 +268,6 @@ test('Stop allows one final decision brief to return control without another Age
     });
     const preparePath = join(root, begun.reservation.path);
     const prepareDocument = JSON.parse(readFileSync(preparePath, 'utf8')) as Record<string, any>;
-    prepareDocument.repositoryEvidence = [];
     prepareDocument.assurance = {
       kind: 'routine',
       rationale: 'No material adoption condition is needed for this final-response fixture.',
@@ -271,11 +275,14 @@ test('Stop allows one final decision brief to return control without another Age
     };
     prepareDocument.developerEvents[0].content = 'Exercise final decision presentation.';
     prepareDocument.task.desiredOutcome = 'Exercise final decision presentation.';
-    delete prepareDocument.checks;
-    prepareDocument.noCommandRationale = 'This fixture needs only repository-diff collection.';
+    prepareDocument.verification = {
+      mode: 'no-command',
+      rationale: 'This fixture needs only repository-diff collection.',
+    };
     writeFileSync(preparePath, `${JSON.stringify(prepareDocument)}\n`, 'utf8');
     const prepared = await prepareDelegationTask({
       projectRoot: root,
+      prepareRequestId: begun.prepareRequestId,
       inputPath: begun.reservation.path,
       productVersion: PRODUCT_VERSION,
     });

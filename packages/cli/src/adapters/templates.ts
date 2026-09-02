@@ -82,33 +82,24 @@ For production coding changes, follow [the generated Stetra skill](${skillPath})
 ${markers.end}`;
 }
 
-export function delegationPrepareDraft(prepareRequestId = 'prepare:host-generated-once') {
+export function delegationPrepareDraft() {
   return {
-    protocol: 'cognitive-adoption',
-    schemaVersion: '1',
-    prepareRequestId,
     developerEvents: [{ key: 'request', content: '', provider: 'host' }],
-    repositoryEvidence: [],
     task: {
-      basis: { developerEventKeys: ['request'], repositoryEvidenceKeys: [] },
       desiredOutcome: '',
       constraints: [],
       nonGoals: [],
       focus: [],
+      repositoryEvidenceKeys: [],
     },
-    materialDecisionForks: [],
     assurance: {
       kind: 'routine',
       rationale: '',
-      basis: { developerEventKeys: ['request'], repositoryEvidenceKeys: [] },
     },
-    hostPolicyRequirements: [],
-    executionBudget: {
-      checkTimeoutMs: 300000,
-      maxDeliveryRepairs: 2,
-      timeoutRetry: { mode: 'bounded', maxRetriesPerVerifier: 1, maxTimeoutMs: 900000 },
+    verification: {
+      mode: 'checks',
+      checks: [],
     },
-    checks: [],
   } as const;
 }
 
@@ -125,13 +116,14 @@ export function delegationPrepareGuide() {
         'Use conditioned with one or more falsifiable Conditions when a bounded claim can change adoption.',
       ],
       verification: [
-        'Populate checks with exact repository-valid argv definitions.',
-        'Or remove checks and provide a concrete noCommandRationale.',
+        'Use verification.mode checks with exact repository-valid argv definitions.',
+        'Or use verification.mode no-command with a concrete rationale.',
       ],
     },
     exactConstraints: [
-      'Preserve every prefilled identity and structural key; edit only semantic values and explicit verification definitions.',
-      'Keep the valid default execution budget unless the task requires another bound; inspect the exact schema before changing a prefilled structural choice.',
+      'The exact Prepare transport identity is bound by submit.argv and is not editable in this Draft.',
+      'Every developerEvents entry is an exact Human Event; preserve its wording and use a stable readable key.',
+      'Use executionBudgetOverride only when the task requires bounds different from the Runtime defaults.',
       'Execution inputs name only required ignored or generated files or trees; do not use the repository root as an input path.',
     ],
     schema: {

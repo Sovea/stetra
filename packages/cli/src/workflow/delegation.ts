@@ -63,10 +63,8 @@ import {
   taskIdForPrepareRequest,
 } from '../protocol.ts';
 import {
-  DelegationPrepareDocumentSchema,
   HumanDecisionDocumentSchema,
   HumanResolutionDocumentSchema,
-  VerificationRevisionDocumentSchema,
   EvidenceDispositionDocumentSchema,
   type CognitiveHandoffDocument,
   type DelegationPrepareDocument,
@@ -77,6 +75,10 @@ import {
   type DerivedTaskState,
   type TaskProjection,
 } from '../schemas/delegation.ts';
+import {
+  PrepareAuthoringDocumentSchema,
+  VerificationRevisionAuthoringDocumentSchema,
+} from '../schemas/authoring.ts';
 import {
   hostEnvironmentDisclosure,
 } from '../runtime-context.ts';
@@ -106,11 +108,18 @@ import {
   decisionAuthoringPacket,
   diagnosisAuthoringPacket,
   handoffAuthoringPacket,
+  handoffAuthoringDocumentSchema,
   handoffDocumentSchema,
   resolutionAuthoringPacket,
   verificationRevisionAuthoringPacket,
   type AuthoringPacket,
 } from './authoring.ts';
+import {
+  compilePrepareAuthoring,
+  compileHandoffAuthoring,
+  compileVerificationRevisionAuthoring,
+  type HandoffAuthoringSource,
+} from './authoring-compiler.ts';
 import { buildDeveloperDecisionBrief } from './decision-brief.ts';
 import {
   boundedExplainView,
@@ -149,23 +158,46 @@ export interface CheckTimeoutRetry {
 
 export async function prepareDelegationTask(options: {
   projectRoot: string;
+  prepareRequestId: string;
   inputPath: string;
   input?: Readable;
   productVersion: string;
 }) {
   const projectRoot = canonicalProjectRoot(options.projectRoot);
   let prepareInputClaim: OwnedInputClaim | undefined;
-  const source = await readInputDocument({
+  const authored = await readInputDocument({
     projectRoot,
     pathInput: options.inputPath,
     input: options.input,
-    schema: DelegationPrepareDocumentSchema,
-    label: 'Task Contract input',
+    schema: PrepareAuthoringDocumentSchema,
+    label: 'Prepare semantic input',
     retryCommand: {
-      argv: ['stetra', 'change', 'prepare', '.', '--input', options.inputPath, '--json'],
+      argv: [
+        'stetra', 'change', 'prepare', '.',
+        '--prepare-request', options.prepareRequestId,
+        '--input', options.inputPath, '--json',
+      ],
     },
     onOwnedClaim: (claim) => { prepareInputClaim = claim; },
   });
+  let source: DelegationPrepareDocument;
+  try {
+    source = compilePrepareAuthoring({
+      prepareRequestId: options.prepareRequestId,
+      source: authored,
+    });
+  } catch (error) {
+    if (prepareInputClaim) {
+      const retry = reissuePrepareInput(
+        projectRoot,
+        prepareInputClaim,
+        options.prepareRequestId,
+        options.inputPath,
+      ).retry;
+      throw attachProtocolInputRetry(error, retry);
+    }
+    throw error;
+  }
   const prepareInputFingerprint = stableFingerprint(source);
   const preparation = withWorktreeLease({ projectRoot, operation: 'prepare' }, async () => {
   const existingTask = findTaskByPrepareRequestId(projectRoot, source.prepareRequestId);
@@ -378,6 +410,7 @@ export async function prepareDelegationTask(options: {
       const retry = reissuePrepareInput(
         projectRoot,
         prepareInputClaim,
+        source.prepareRequestId,
         options.inputPath,
       ).retry;
       throw attachProtocolInputRetry(error, retry);
@@ -387,7 +420,12 @@ export async function prepareDelegationTask(options: {
   if (result.status === 'prepared' || result.status === 'prepare-replayed' || !prepareInputClaim) {
     return result;
   }
-  const continued = reissuePrepareInput(projectRoot, prepareInputClaim, options.inputPath);
+  const continued = reissuePrepareInput(
+    projectRoot,
+    prepareInputClaim,
+    source.prepareRequestId,
+    options.inputPath,
+  );
   result.hostAction.prepareContinuation = {
     prepareRequestId: source.prepareRequestId,
     taskId: taskIdForPrepareRequest(source.prepareRequestId),
@@ -813,6 +851,7 @@ export async function diagnoseCollectedEvidence(options: {
       argv: ['stetra', 'change', 'diagnose', '.', '--task', options.taskId,
         '--input', options.inputPath, '--json'],
     },
+    currentBinding: { taskId: options.taskId, stage: 'diagnose' },
     onOwnedClaim: (claim) => { ownedClaim = claim; },
   });
   let route: EvidenceDisposition['route'] | undefined;
@@ -954,11 +993,11 @@ export async function evaluateDelegationHandoff(options: {
   }
   const contract = readContract(loaded);
   let ownedClaim: OwnedInputClaim | undefined;
-  const source = await readInputDocument({
+  const authoredSource = await readInputDocument({
     projectRoot,
     pathInput: options.inputPath,
     input: options.input,
-    schema: handoffDocumentSchema({
+    schema: handoffAuthoringDocumentSchema({
       task: loaded.projection,
       contract,
       facts,
@@ -969,6 +1008,7 @@ export async function evaluateDelegationHandoff(options: {
       argv: ['stetra', 'change', 'handoff', '.', '--task', options.taskId,
         '--input', options.inputPath, '--json'],
     },
+    currentBinding: { taskId: options.taskId, stage: 'handoff' },
     onOwnedClaim: (claim) => { ownedClaim = claim; },
   });
   let handoff: CognitiveHandoff | undefined;
@@ -991,6 +1031,20 @@ export async function evaluateDelegationHandoff(options: {
       const currentFacts = readCurrentFacts(task);
       if (await currentFactsAreStale(task, currentFacts)) {
         throw usageError('Facts changed while handoff was being authored; collect again.');
+      }
+      let source: CognitiveHandoffDocument;
+      try {
+        source = handoffDocumentSchema({
+          task: task.projection,
+          contract,
+          facts: currentFacts,
+          requiredObligationIds: requiredChallengeObligationIds(contract, currentFacts),
+        }).parse(compileHandoffAuthoring({
+          contract,
+          source: authoredSource as HandoffAuthoringSource,
+        }));
+      } catch (error) {
+        throw handoffInputError(error, contract);
       }
       handoff = materializeHandoff(source, contract, currentFacts);
       try {
@@ -1097,6 +1151,7 @@ export async function recordHumanDecision(options: {
       argv: ['stetra', 'change', 'decide', '.', '--task', options.taskId,
         '--input', options.inputPath, '--json'],
     },
+    currentBinding: { taskId: options.taskId, stage: 'decide' },
     onOwnedClaim: (claim) => { ownedClaim = claim; },
   });
   let decision: HumanDecision | undefined;
@@ -1218,6 +1273,7 @@ export async function resolveHumanChoice(options: {
       argv: ['stetra', 'change', 'resolve', '.', '--task', options.taskId,
         '--input', options.inputPath, '--json'],
     },
+    currentBinding: { taskId: options.taskId, stage: 'resolve' },
     onOwnedClaim: (claim) => { ownedClaim = claim; },
   });
   let resolution: ReturnType<typeof materializeResolution> | undefined;
@@ -1330,16 +1386,17 @@ export async function reviseVerificationPlan(options: {
 }) {
   const projectRoot = canonicalProjectRoot(options.projectRoot);
   let ownedClaim: OwnedInputClaim | undefined;
-  const source = await readInputDocument({
+  const authoredSource = await readInputDocument({
     projectRoot,
     pathInput: options.inputPath,
     input: options.input,
-    schema: VerificationRevisionDocumentSchema,
+    schema: VerificationRevisionAuthoringDocumentSchema,
     label: 'Verification Revision input',
     retryCommand: {
       argv: ['stetra', 'change', 'revise-verification', '.', '--task', options.taskId,
         '--input', options.inputPath, '--json'],
     },
+    currentBinding: { taskId: options.taskId, stage: 'revise-verification' },
     onOwnedClaim: (claim) => { ownedClaim = claim; },
   });
   let revisionRecord: ReturnType<typeof materializeVerificationRevision> | undefined;
@@ -1365,6 +1422,10 @@ export async function reviseVerificationPlan(options: {
         throw usageError(`Task ${task.taskId} is already ${deriveTaskState(task).decisionStatus}.`);
       }
       const priorContract = readContract(task);
+      const source = compileVerificationRevisionAuthoring({
+        contract: priorContract,
+        source: authoredSource,
+      });
       const { checks: authoredChecks, ...revisionSource } = source;
       const revision: VerificationRevisionInput['revision'] = {
         ...revisionSource,
@@ -2187,9 +2248,20 @@ async function readInputDocument<Schema extends Parameters<typeof parseArtifact>
   schema: Schema;
   label: string;
   retryCommand: { argv: string[] };
+  currentBinding?: {
+    taskId: string;
+    stage: 'diagnose' | 'revise-verification' | 'handoff' | 'decide' | 'resolve';
+  };
   onOwnedClaim?: (claim: OwnedInputClaim) => void;
 }): Promise<ReturnType<typeof parseArtifact<Schema>>> {
   const { projectRoot, pathInput, input, schema, label } = options;
+  if (options.currentBinding) {
+    assertCurrentOwnedInputBinding({
+      projectRoot,
+      inputPath: pathInput,
+      ...options.currentBinding,
+    });
+  }
   const ownedClaim = pathInput === '-'
     ? undefined
     : claimOwnedInput(projectRoot, pathInput, label);
@@ -2244,6 +2316,32 @@ async function readInputDocument<Schema extends Parameters<typeof parseArtifact>
   }
 }
 
+function assertCurrentOwnedInputBinding(input: {
+  projectRoot: string;
+  taskId: string;
+  stage: 'diagnose' | 'revise-verification' | 'handoff' | 'decide' | 'resolve';
+  inputPath: string;
+}): void {
+  if (input.inputPath === '-' || !input.inputPath.replaceAll('\\', '/').startsWith('.stetra/inbox/')) {
+    return;
+  }
+  const task = loadTask(input.projectRoot, input.taskId);
+  const current = currentTaskHostAction(task);
+  if (!current) throw usageError('The task has no current input-bearing Host Action.');
+  const candidates: Array<HostAction | NonNullable<HostAction['decisionContinuation']>> = [current];
+  if (current.decisionContinuation) candidates.push(current.decisionContinuation);
+  const selected = candidates.find((candidate) => candidate.command?.argv[2] === input.stage);
+  if (!selected?.inputBinding || selected.inputBinding.draftPath !== input.inputPath) {
+    throw usageError(
+      `The owned input is not the current ${input.stage} Authoring Projection for task ${input.taskId}.`,
+    );
+  }
+  const packet = hostActionAuthoringPacket(selected);
+  if (!packet || stableFingerprint(packet) !== selected.inputBinding.projectionFingerprint) {
+    throw new Error('The current Authoring Projection does not match its projected fingerprint.');
+  }
+}
+
 async function recoverOwnedInputOnFailure<T>(
   input: {
     projectRoot: string;
@@ -2280,13 +2378,18 @@ function reissueCorrectionInput(
 function reissuePrepareInput(
   projectRoot: string,
   claim: OwnedInputClaim,
+  prepareRequestId: string,
   inputPath: string,
 ) {
   const reservation = reissueOwnedInput(projectRoot, claim);
   return {
     reservation,
     retry: inputRetry(reservation, {
-      argv: ['stetra', 'change', 'prepare', '.', '--input', inputPath, '--json'],
+      argv: [
+        'stetra', 'change', 'prepare', '.',
+        '--prepare-request', prepareRequestId,
+        '--input', inputPath, '--json',
+      ],
     }),
   };
 }
@@ -3467,20 +3570,11 @@ function exactHandoffIssuePaths(
       ...obligationKeys.map((key) =>
         `obligationKey=${key.condition.key}/${key.obligation.key}`),
     ].join(', ');
-    const firstObligation = obligationKeys[0];
-    const firstCondition = (issue.references.conditionIds ?? [])
-      .map((id) => conditionById.get(id))
-      .find(Boolean);
-    const path = firstObligation
-      ? `conditions[${firstObligation.conditionIndex}].obligations[${firstObligation.obligationIndex}].reviewDecisionKeys`
-      : firstCondition
-        ? `conditions[${firstCondition.index}].reviewDecisionKeys`
-        : issue.path;
     return {
       code: issue.code,
-      path,
+      path: 'reviewDecisions',
       message: issue.message,
-      remediation: `Create or reuse one shared reviewDecisions entry for ${exactTargets}, then reference its key here.`,
+      remediation: `Create or reuse one shared reviewDecisions entry and add targets for ${exactTargets}.`,
     };
   });
 }

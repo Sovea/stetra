@@ -29,13 +29,13 @@ export const SafeRepositoryPathSchema = z.string().min(1).refine((value) =>
   message: 'must be a safe repository-relative path',
 });
 
-const HumanEventInputSchema = z.strictObject({
+export const HumanEventInputSchema = z.strictObject({
   content: NonEmptyStringSchema,
   provider: NonEmptyStringSchema.optional(),
   nativeId: NonEmptyStringSchema.optional(),
 });
 
-const DeveloperEventInputSchema = z.strictObject({
+export const DeveloperEventInputSchema = z.strictObject({
   key: StableIdSchema,
   content: NonEmptyStringSchema,
   provider: NonEmptyStringSchema.optional(),
@@ -67,14 +67,14 @@ const WholeFileEvidenceSchema = z.strictObject({
   wholeFile: z.literal(true),
 });
 
-const EvidenceWindowSchema = z.union([EvidenceRangeSchema, WholeFileEvidenceSchema]);
+export const EvidenceWindowSchema = z.union([EvidenceRangeSchema, WholeFileEvidenceSchema]);
 
 const CompactBasisSchema = z.strictObject({
   developerEventKeys: z.array(StableIdSchema),
   repositoryEvidenceKeys: z.array(StableIdSchema),
 });
 
-const MaterialDecisionForkSchema = z.strictObject({
+export const MaterialDecisionForkSchema = z.strictObject({
   key: StableIdSchema,
   basis: CompactBasisSchema,
   question: NonEmptyStringSchema,
@@ -159,7 +159,7 @@ export const AuthoredVerificationDefinitionSchema = VerificationDefinitionSchema
   }),
 });
 
-const PrepareVerificationDefinitionSchema = AuthoredVerificationDefinitionSchema.extend({
+export const PrepareVerificationDefinitionSchema = AuthoredVerificationDefinitionSchema.extend({
   baseline: AuthoredVerificationBaselineSchema,
 });
 
@@ -199,7 +199,7 @@ const AdoptionConditionSchema = z.strictObject({
   })).min(1),
 });
 
-const AssuranceDeclarationSchema = z.discriminatedUnion('kind', [
+export const AssuranceDeclarationSchema = z.discriminatedUnion('kind', [
   z.strictObject({
     kind: z.literal('routine'),
     rationale: NonEmptyStringSchema,
@@ -211,7 +211,7 @@ const AssuranceDeclarationSchema = z.discriminatedUnion('kind', [
   }),
 ]);
 
-const HostPolicyRequirementSchema = z.strictObject({
+export const HostPolicyRequirementSchema = z.strictObject({
   key: StableIdSchema,
   capability: z.enum(['web-search', 'network', 'external-mutation', 'fresh-context']),
   requiredState: z.enum(['disabled', 'enabled', 'isolated']),
@@ -229,7 +229,7 @@ const TimeoutRetryBudgetSchema = z.discriminatedUnion('mode', [
   }),
 ]);
 
-const ExecutionBudgetSchema = z.strictObject({
+export const ExecutionBudgetSchema = z.strictObject({
   checkTimeoutMs: z.number().int().min(1_000).max(3_600_000),
   maxDeliveryRepairs: z.number().int().min(0).max(5),
   timeoutRetry: TimeoutRetryBudgetSchema,
@@ -334,7 +334,7 @@ export const EvidenceDispositionDocumentSchema = z.discriminatedUnion('contractI
   }),
 ]);
 
-const HandoffEvidenceReferenceSchema = z.union([
+export const HandoffEvidenceReferenceSchema = z.union([
   z.strictObject({ kind: z.literal('patch') }),
   z.strictObject({
     kind: z.literal('changed-file'),
@@ -503,6 +503,97 @@ export function taskSpecificCognitiveHandoffDocumentSchema(input: {
       caveats: z.array(NonEmptyStringSchema),
     }),
   }) as z.ZodType<CognitiveHandoffDocument>;
+}
+
+const HandoffReviewTargetSchema = z.discriminatedUnion('kind', [
+  z.strictObject({
+    kind: z.literal('condition'),
+    conditionKey: StableIdSchema,
+  }),
+  z.strictObject({
+    kind: z.literal('obligation'),
+    conditionKey: StableIdSchema,
+    obligationKey: StableIdSchema,
+  }),
+]);
+
+const HandoffReviewDecisionAuthoringSchema = z.strictObject({
+  key: StableIdSchema,
+  targets: z.array(HandoffReviewTargetSchema),
+  question: NonEmptyStringSchema,
+  adoptionImpact: NonEmptyStringSchema,
+  nextAction: NonEmptyStringSchema,
+  evidence: z.array(HandoffEvidenceReferenceSchema),
+});
+
+export function taskSpecificCognitiveHandoffAuthoringSchema(input: {
+  conditions: TaskSpecificHandoffCondition[];
+  recommendationActions: readonly (typeof RECOMMENDATION_ACTIONS)[number][];
+}): z.ZodType {
+  const conditions = Object.fromEntries(input.conditions.map((condition) => [
+    condition.key,
+    authoringConditionFindingSchema(condition),
+  ]));
+  return z.strictObject({
+    actualChange: CognitiveHandoffDocumentSchema.shape.actualChange,
+    conditions: z.strictObject(conditions),
+    residualUnknowns: CognitiveHandoffDocumentSchema.shape.residualUnknowns,
+    reviewDecisions: z.array(HandoffReviewDecisionAuthoringSchema),
+    recommendation: z.strictObject({
+      action: z.enum(input.recommendationActions as [string, ...string[]]),
+      rationale: NonEmptyStringSchema,
+      caveats: z.array(NonEmptyStringSchema),
+    }),
+  });
+}
+
+function authoringConditionFindingSchema(condition: TaskSpecificHandoffCondition): z.ZodType {
+  const obligations = Object.fromEntries(condition.obligations.map((obligation) => [
+    obligation.key,
+    authoringObligationFindingSchema(obligation.allowedStatuses),
+  ]));
+  const variants = condition.allowedStatuses.map((status) => z.strictObject({
+    status: z.literal(status),
+    summary: NonEmptyStringSchema,
+    obligations: z.strictObject(obligations),
+  }));
+  return z.discriminatedUnion(
+    'status',
+    variants as unknown as Parameters<typeof z.discriminatedUnion>[1],
+  );
+}
+
+function authoringObligationFindingSchema(
+  allowedStatuses: readonly (typeof CONCLUSION_STATUSES)[number][],
+): z.ZodType {
+  const base = {
+    evidence: z.array(HandoffEvidenceReferenceSchema),
+    falsification: z.strictObject({
+      attempt: NonEmptyStringSchema,
+      observedResult: NonEmptyStringSchema,
+    }),
+    counterEvidence: z.array(HandoffEvidenceReferenceSchema),
+    conclusion: NonEmptyStringSchema,
+  };
+  const variants = allowedStatuses.map((status) => status === 'supported'
+    ? z.strictObject({
+        ...base,
+        status: z.literal(status),
+        evidenceCoverage: z.strictObject({
+          status: z.literal('sufficient'),
+          rationale: NonEmptyStringSchema,
+          gaps: z.array(z.never()).length(0),
+        }),
+      })
+    : z.strictObject({
+        ...base,
+        status: z.literal(status),
+        evidenceCoverage: EvidenceCoverageAssessmentSchema,
+      }));
+  return z.discriminatedUnion(
+    'status',
+    variants as unknown as Parameters<typeof z.discriminatedUnion>[1],
+  );
 }
 
 function obligationFindingSchema(

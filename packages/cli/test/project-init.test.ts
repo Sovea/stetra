@@ -20,17 +20,19 @@ import {
   inspectProjectInstallation,
 } from '../src/project/init.ts';
 import {
-  DelegationPrepareDocumentSchema,
-  type DelegationPrepareDocument,
-} from '../src/schemas/delegation.ts';
+  PrepareAuthoringDocumentSchema,
+  type PrepareAuthoringDocument,
+} from '../src/schemas/authoring.ts';
+import { DEFAULT_EXECUTION_BUDGET } from '../src/workflow/authoring-compiler.ts';
 
 test('generated Prepare draft requires explicit assurance and verification authoring', () => {
   const draft = delegationPrepareDraft();
-  const parsed = DelegationPrepareDocumentSchema.safeParse(draft);
+  const parsed = PrepareAuthoringDocumentSchema.safeParse(draft);
   assert.equal(parsed.success, false);
-  assert.deepEqual(draft.repositoryEvidence, []);
+  assert.equal('protocol' in draft, false);
+  assert.equal('prepareRequestId' in draft, false);
   assert.equal(draft.assurance.kind, 'routine');
-  assert.deepEqual(draft.checks, []);
+  assert.deepEqual(draft.verification.checks, []);
   assert.equal(delegationPrepareGuide().schema.included, false);
   assert.equal('inputSchema' in delegationPrepareGuide(), false);
   assert.ok(Buffer.byteLength(JSON.stringify(delegationPrepareGuide())) < 4 * 1024);
@@ -38,7 +40,7 @@ test('generated Prepare draft requires explicit assurance and verification autho
 
 test('prepare rejects a bounded timeout retry that cannot increase the attempt budget', () => {
   const draft = delegationPrepareDraft();
-  const input: DelegationPrepareDocument = DelegationPrepareDocumentSchema.parse({
+  const input: PrepareAuthoringDocument = PrepareAuthoringDocumentSchema.parse({
     ...draft,
     developerEvents: [{ key: 'request', content: 'Exercise timeout validation.' }],
     task: { ...draft.task, desiredOutcome: 'Exercise timeout validation.' },
@@ -46,15 +48,19 @@ test('prepare rejects a bounded timeout retry that cannot increase the attempt b
       ...draft.assurance,
       rationale: 'No material adoption condition is needed for this validation fixture.',
     },
-    noCommandRationale: 'This validation fixture has no executable behavior.',
+    verification: {
+      mode: 'no-command',
+      rationale: 'This validation fixture has no executable behavior.',
+    },
+    executionBudgetOverride: structuredClone(DEFAULT_EXECUTION_BUDGET),
   });
-  if (input.executionBudget.timeoutRetry.mode !== 'bounded') return;
-  input.executionBudget.timeoutRetry.maxTimeoutMs = input.executionBudget.checkTimeoutMs;
-  const parsed = DelegationPrepareDocumentSchema.safeParse(input);
+  if (input.executionBudgetOverride?.timeoutRetry.mode !== 'bounded') return;
+  input.executionBudgetOverride.timeoutRetry.maxTimeoutMs = input.executionBudgetOverride.checkTimeoutMs;
+  const parsed = PrepareAuthoringDocumentSchema.safeParse(input);
   assert.equal(parsed.success, false);
   if (parsed.success) return;
   assert.ok(parsed.error.issues.some((issue) =>
-    issue.path.join('.') === 'executionBudget.timeoutRetry.maxTimeoutMs'
+    issue.path.join('.') === 'executionBudgetOverride.timeoutRetry.maxTimeoutMs'
     && /must allow more time/.test(issue.message)));
 });
 

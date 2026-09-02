@@ -11,6 +11,8 @@ import { stableFingerprint, taskIdForPrepareRequest } from '../src/protocol.ts';
 import { hostEnvironmentDisclosure } from '../src/runtime-context.ts';
 import type { HostAction } from '../src/workflow/host-action.ts';
 
+const CLI_PREPARE_REQUEST_ID = 'prepare:cli-test';
+
 test('Commander exposes the initial lifecycle without obsolete repair/finalize commands', async () => {
   const rootHelp = String((await runCli(['--help'])).output);
   assert.match(rootHelp, /\bstatus\b/);
@@ -52,13 +54,17 @@ test('owned input carries a large prepare document once without stdin or task st
     writeFileSync(inputPath, JSON.stringify(document), 'utf8');
 
     const execution = await runCli([
-      'change', 'prepare', root, '--input', `.stetra/inbox/${token}.json`, '--json',
+      'change', 'prepare', root, '--prepare-request', CLI_PREPARE_REQUEST_ID,
+      '--input', `.stetra/inbox/${token}.json`, '--json',
     ]);
     assert.equal((execution.output as { status: string }).status, 'prepared');
     assert.equal(existsSync(inputPath), false);
 
     await assert.rejects(
-      runCli(['change', 'prepare', root, '--input', `.stetra/inbox/${token}.json`, '--json']),
+      runCli([
+        'change', 'prepare', root, '--prepare-request', CLI_PREPARE_REQUEST_ID,
+        '--input', `.stetra/inbox/${token}.json`, '--json',
+      ]),
       (error: unknown) => (error as { code?: string }).code === 'INVALID_INPUT',
     );
   } finally {
@@ -84,15 +90,15 @@ test('prepare reservation materializes an explicit incomplete Draft and exact Gu
     assert.equal(output.hostEnvironment.independentChallenge.availability, 'unavailable');
     assert.equal(output.hostEnvironment.verificationExecution.trigger, 'change-collect');
     const draft = JSON.parse(readFileSync(join(root, output.path), 'utf8')) as ReturnType<typeof prepareDocument>;
-    assert.equal(draft.protocol, 'cognitive-adoption');
-    assert.equal(draft.prepareRequestId, output.prepareRequestId);
+    assert.equal('protocol' in draft, false);
+    assert.equal('prepareRequestId' in draft, false);
     assert.deepEqual(output.submit.argv.slice(0, 4), ['stetra', 'change', 'prepare', '.']);
     assert.deepEqual(output.resume.argv.slice(0, 4), ['stetra', 'change', 'resume', '.']);
     const notCreated = await runCli([
       'change', 'resume', root, '--prepare-request', output.prepareRequestId, '--json',
     ]);
     assert.equal((notCreated.output as { status: string }).status, 'prepare-not-created');
-    assert.deepEqual(draft.checks, []);
+    assert.deepEqual(draft.verification.checks, []);
     assert.equal(draft.assurance.kind, 'routine');
     const guide = JSON.parse(readFileSync(join(root, output.guide.path), 'utf8')) as {
       inputKind: string;
@@ -124,7 +130,10 @@ test('owned input reissues invalid JSON at the same one-shot path and rejects un
     const inputPath = join(root, `.stetra/inbox/${token}.json`);
     writeFileSync(inputPath, '{invalid', 'utf8');
     await assert.rejects(
-      runCli(['change', 'prepare', root, '--input', `.stetra/inbox/${token}.json`, '--json']),
+      runCli([
+        'change', 'prepare', root, '--prepare-request', 'prepare:invalid-json',
+        '--input', `.stetra/inbox/${token}.json`, '--json',
+      ]),
       (error: unknown) => {
         const candidate = error as {
           code?: string;
@@ -146,7 +155,8 @@ test('owned input reissues invalid JSON at the same one-shot path and rejects un
     assert.equal(existsSync(inputPath), true);
     writeFileSync(inputPath, JSON.stringify(prepareDocument()), 'utf8');
     const prepared = await runCli([
-      'change', 'prepare', root, '--input', `.stetra/inbox/${token}.json`, '--json',
+      'change', 'prepare', root, '--prepare-request', CLI_PREPARE_REQUEST_ID,
+      '--input', `.stetra/inbox/${token}.json`, '--json',
     ]);
     assert.equal((prepared.output as { status: string }).status, 'prepared');
     assert.equal(existsSync(inputPath), false);
@@ -167,7 +177,10 @@ test('owned Prepare schema correction keeps its request identity and writes no t
     writeFileSync(inputPath, `${JSON.stringify(document)}\n`, 'utf8');
 
     await assert.rejects(
-      runCli(['change', 'prepare', root, '--input', reserved.path, '--json']),
+      runCli([
+        'change', 'prepare', root, '--prepare-request', reserved.prepareRequestId,
+        '--input', reserved.path, '--json',
+      ]),
       (error: unknown) => {
         const candidate = error as {
           inputCorrection?: {
@@ -184,9 +197,8 @@ test('owned Prepare schema correction keeps its request identity and writes no t
     assert.equal(existsSync(join(root, '.stetra', 'tasks')), false);
 
     const retried = JSON.parse(readFileSync(inputPath, 'utf8')) as Record<string, unknown>;
-    assert.equal(retried.prepareRequestId, reserved.prepareRequestId);
-    retried.schemaVersion = '1';
-    retried.repositoryEvidence = [];
+    assert.equal('prepareRequestId' in retried, false);
+    delete retried.schemaVersion;
     retried.assurance = {
       kind: 'routine',
       rationale: 'No material adoption condition is needed for this transport fixture.',
@@ -194,11 +206,14 @@ test('owned Prepare schema correction keeps its request identity and writes no t
     };
     (retried.developerEvents as Array<{ content: string }>)[0].content = 'Exercise owned Prepare recovery.';
     (retried.task as { desiredOutcome: string }).desiredOutcome = 'Exercise owned Prepare recovery.';
-    delete retried.checks;
-    retried.noCommandRationale = 'This transport fixture needs only repository-diff collection.';
+    retried.verification = {
+      mode: 'no-command',
+      rationale: 'This transport fixture needs only repository-diff collection.',
+    };
     writeFileSync(inputPath, `${JSON.stringify(retried)}\n`, 'utf8');
     const prepared = (await runCli([
-      'change', 'prepare', root, '--input', reserved.path, '--json',
+      'change', 'prepare', root, '--prepare-request', reserved.prepareRequestId,
+      '--input', reserved.path, '--json',
     ])).output as { status: string; taskId: string };
     assert.equal(prepared.status, 'prepared');
     assert.equal(prepared.taskId, taskIdForPrepareRequest(reserved.prepareRequestId));
@@ -214,16 +229,14 @@ test('owned Prepare preflight rejection reissues the exact continuation before T
       'input', 'reserve', root, '--kind', 'prepare', '--json',
     ])).output as { path: string; prepareRequestId: string };
     const inputPath = join(root, reserved.path);
-    const document = prepareDocument() as {
-      prepareRequestId: string;
-      checks: Array<{ execution: { assertion: { argv: string[] } } }>;
-    };
-    document.prepareRequestId = reserved.prepareRequestId;
-    document.checks[0].execution.assertion.argv[0] = 'stetra-deliberately-unavailable';
+    const document = prepareDocument();
+    if (document.verification.mode !== 'checks') throw new Error('Expected checks fixture.');
+    document.verification.checks[0].execution.assertion.argv[0] = 'stetra-deliberately-unavailable';
     writeFileSync(inputPath, `${JSON.stringify(document)}\n`, 'utf8');
 
     const rejected = (await runCli([
-      'change', 'prepare', root, '--input', reserved.path, '--json',
+      'change', 'prepare', root, '--prepare-request', reserved.prepareRequestId,
+      '--input', reserved.path, '--json',
     ])).output as {
       status: string;
       taskCreated: boolean;
@@ -249,12 +262,13 @@ test('owned Prepare preflight rejection reissues the exact continuation before T
     assert.equal(existsSync(join(root, '.stetra', 'tasks')), false);
 
     const retried = JSON.parse(readFileSync(inputPath, 'utf8')) as {
-      checks: Array<{ execution: { assertion: { argv: string[] } } }>;
+      verification: { checks: Array<{ execution: { assertion: { argv: string[] } } }> };
     };
-    retried.checks[0].execution.assertion.argv = [process.execPath, '-e', 'process.exit(0)'];
+    retried.verification.checks[0].execution.assertion.argv = [process.execPath, '-e', 'process.exit(0)'];
     writeFileSync(inputPath, `${JSON.stringify(retried)}\n`, 'utf8');
     const prepared = (await runCli([
-      'change', 'prepare', root, '--input', reserved.path, '--json',
+      'change', 'prepare', root, '--prepare-request', reserved.prepareRequestId,
+      '--input', reserved.path, '--json',
     ])).output as { status: string; taskId: string };
     assert.equal(prepared.status, 'prepared');
     assert.equal(prepared.taskId, rejected.hostAction.prepareContinuation?.taskId);
@@ -270,7 +284,6 @@ test('owned Prepare clarification preserves the exact Draft until a new Human ev
       'input', 'reserve', root, '--kind', 'prepare', '--json',
     ])).output as { path: string; prepareRequestId: string };
     const document: any = prepareDocument();
-    document.prepareRequestId = reserved.prepareRequestId;
     document.materialDecisionForks = [{
       key: 'compatibility-policy',
       basis: { developerEventKeys: ['request'], repositoryEvidenceKeys: [] },
@@ -288,7 +301,8 @@ test('owned Prepare clarification preserves the exact Draft until a new Human ev
     writeFileSync(inputPath, `${JSON.stringify(document)}\n`, 'utf8');
 
     const blocked = (await runCli([
-      'change', 'prepare', root, '--input', reserved.path, '--json',
+      'change', 'prepare', root, '--prepare-request', reserved.prepareRequestId,
+      '--input', reserved.path, '--json',
     ])).output as {
       status: string;
       hostAction: {
@@ -365,8 +379,9 @@ test('default Prepare output does not expand the repository baseline', async () 
     execFileSync('git', ['add', '.'], { cwd: root });
     execFileSync('git', ['commit', '-m', 'large baseline fixture'], { cwd: root });
     const execution = await runCli([
-      'change', 'prepare', root, '--input', '-', '--json',
-    ], { input: jsonStream({ ...prepareDocument(), prepareRequestId: 'prepare:large-baseline' }) });
+      'change', 'prepare', root, '--prepare-request', 'prepare:large-baseline',
+      '--input', '-', '--json',
+    ], { input: jsonStream(prepareDocument()) });
     const output = execution.output as {
       taskId: string;
       summary: { baseline: { entryCount: number } };
@@ -398,7 +413,8 @@ test('CLI JSON mode executes compact prepare, baseline-aware collect, layered ha
   const root = createRepository();
   try {
     const prepareExecution = await runCli([
-      'change', 'prepare', root, '--input', '-', '--json',
+      'change', 'prepare', root, '--prepare-request', CLI_PREPARE_REQUEST_ID,
+      '--input', '-', '--json',
     ], { input: jsonStream(prepareDocument()) });
     const prepared = prepareExecution.output as {
       status: string;
@@ -462,7 +478,7 @@ test('CLI JSON mode executes compact prepare, baseline-aware collect, layered ha
       /requires --attempt <attempt-id-or-baseline> and --definition <id>/,
     );
     const resumed = await runCli([
-      'change', 'resume', root, '--prepare-request', prepareDocument().prepareRequestId, '--json',
+      'change', 'resume', root, '--prepare-request', CLI_PREPARE_REQUEST_ID, '--json',
     ]);
     assert.equal((resumed.output as { taskId: string }).taskId, prepared.taskId);
 
@@ -672,7 +688,10 @@ test('unsupported input is rejected without migration or compatibility state', a
   const root = createRepository();
   try {
     await assert.rejects(
-      runCli(['change', 'prepare', root, '--input', '-', '--json'], {
+      runCli([
+        'change', 'prepare', root, '--prepare-request', CLI_PREPARE_REQUEST_ID,
+        '--input', '-', '--json',
+      ], {
         input: jsonStream({ ...prepareDocument(), schemaVersion: 'unsupported' }),
       }),
       (error: unknown) => {
@@ -700,16 +719,10 @@ test('unsupported input is rejected without migration or compatibility state', a
         assert.equal(candidate.inputCorrection?.submittedInput.preview.kind, 'object');
         assert.ok(candidate.inputCorrection?.submittedInput.preview.keys?.includes('schemaVersion'));
         assert.deepEqual(candidate.inputCorrection?.issueContexts[0], {
-          path: 'schemaVersion',
-          value: {
-            kind: 'string', value: 'unsupported', length: 11, truncated: false,
-          },
-          parent: {
-            path: '$',
-            preview: candidate.inputCorrection?.submittedInput.preview,
-          },
+          path: '$',
+          value: candidate.inputCorrection?.submittedInput.preview,
         });
-        assert.equal(candidate.inputCorrection?.issues[0].path, 'schemaVersion');
+        assert.equal(candidate.inputCorrection?.issues[0].path, '$');
         assert.equal(candidate.inputCorrection?.stateWritten, false);
         assert.equal(candidate.inputCorrection?.retry, undefined);
         return candidate.code === 'INVALID_INPUT';
@@ -733,16 +746,12 @@ function createRepository(): string {
 
 function prepareDocument() {
   return {
-    protocol: 'cognitive-adoption', schemaVersion: '1',
-    prepareRequestId: 'prepare:cli-test',
     developerEvents: [{ key: 'request', content: 'Change the CLI fixture.' }],
-    repositoryEvidence: [],
     task: {
-      basis: { developerEventKeys: ['request'], repositoryEvidenceKeys: [] },
       desiredOutcome: 'Change the CLI fixture.',
       constraints: ['Keep Human adoption explicit.'], nonGoals: [], focus: ['source.txt'],
+      repositoryEvidenceKeys: [],
     },
-    materialDecisionForks: [],
     assurance: { kind: 'conditioned', conditions: [{
       key: 'test', statement: 'The fixture check passes.',
       rationale: 'Failure changes adoption.', criticality: 'material',
@@ -760,22 +769,24 @@ function prepareDocument() {
         }],
       }],
     }] },
-    hostPolicyRequirements: [],
-    executionBudget: {
+    executionBudgetOverride: {
       checkTimeoutMs: 300_000,
       maxDeliveryRepairs: 1,
       timeoutRetry: { mode: 'bounded', maxRetriesPerVerifier: 1, maxTimeoutMs: 900_000 },
     },
-    checks: [{
-      key: 'test', rationale: 'Exercise the fixture.',
-      execution: {
-        preparation: [],
-        assertion: { argv: [process.execPath, '-e', 'console.log("check-ok")'] },
-      },
-      executionInputs: [],
-      baseline: { mode: 'unknown' },
-      verifierSelectors: [],
-    }],
+    verification: {
+      mode: 'checks' as const,
+      checks: [{
+        key: 'test', rationale: 'Exercise the fixture.',
+        execution: {
+          preparation: [],
+          assertion: { argv: [process.execPath, '-e', 'console.log("check-ok")'] },
+        },
+        executionInputs: [],
+        baseline: { mode: 'unknown' as const },
+        verifierSelectors: [],
+      }],
+    },
   };
 }
 
@@ -789,29 +800,29 @@ function handoffDocument(conditionKey: string, obligationKey: string, checkKey: 
       importantEffects: ['Fixture behavior changed.'],
       materialTradeoffs: [],
     },
-    conditions: [{
-      conditionKey,
-      status: 'supported',
-      summary: 'The check passed.',
-      reviewDecisionKeys: [],
-      obligations: [{
-        obligationKey,
+    conditions: {
+      [conditionKey]: {
         status: 'supported',
-        reviewDecisionKeys: [],
-        evidence: [{ kind: 'check', key: checkKey }],
-        evidenceCoverage: {
-          status: 'sufficient',
-          rationale: 'The exact frozen check covers the bounded fixture conclusion.',
-          gaps: [],
+        summary: 'The check passed.',
+        obligations: {
+          [obligationKey]: {
+            status: 'supported',
+            evidence: [{ kind: 'check', key: checkKey }],
+            evidenceCoverage: {
+              status: 'sufficient',
+              rationale: 'The exact frozen check covers the bounded fixture conclusion.',
+              gaps: [],
+            },
+            falsification: {
+              attempt: 'Checked whether the frozen command misses the changed fixture path.',
+              observedResult: 'The frozen command completed against the current fixture.',
+            },
+            counterEvidence: [],
+            conclusion: 'The bounded observation supports the obligation.',
+          },
         },
-        falsification: {
-          attempt: 'Checked whether the frozen command misses the changed fixture path.',
-          observedResult: 'The frozen command completed against the current fixture.',
-        },
-        counterEvidence: [],
-        conclusion: 'The bounded observation supports the obligation.',
-      }],
-    }],
+      },
+    },
     residualUnknowns: [],
     reviewDecisions: [],
     recommendation: { action: 'accept', rationale: 'Evidence is current.', caveats: [] },

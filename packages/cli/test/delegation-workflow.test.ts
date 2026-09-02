@@ -16,10 +16,8 @@ import { Readable } from 'node:stream';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 
-import type {
-  DelegationPrepareDocument,
-  EvidenceDispositionDocument,
-} from '../src/schemas/delegation.ts';
+import type { PrepareAuthoringDocument } from '../src/schemas/authoring.ts';
+import type { EvidenceDispositionDocument } from '../src/schemas/delegation.ts';
 import { sha256, taskIdForPrepareRequest } from '../src/protocol.ts';
 import { hostActionAuthoringPacket } from '../src/workflow/host-action.ts';
 import { summarizeVerifierSurfaces } from '../src/presentation/verifiers.ts';
@@ -111,7 +109,6 @@ test('prepare consolidates material decisions and recompiles exact Human clarifi
       key: 'compatibility-choice',
       content: 'Preserve strict compatibility.',
     });
-    document.task.basis.developerEventKeys.push('compatibility-choice');
     document.materialDecisionForks[0].resolution = {
       humanEventKey: 'compatibility-choice',
       selectedAlternativeKey: 'strict',
@@ -218,8 +215,9 @@ test('collect publishes timeout facts, continues later checks, and releases its 
       baseline: 'unknown',
       argv: [process.execPath, hangingDescendantFixture, pidPath],
     });
-    document.executionBudget.checkTimeoutMs = 1_000;
-    document.checks!.push({
+    document.executionBudgetOverride!.checkTimeoutMs = 1_000;
+    if (document.verification.mode !== 'checks') throw new Error('Expected checks fixture.');
+    document.verification.checks.push({
       key: 'after-timeout',
       rationale: 'Prove that collection continues after recording a timeout.',
       execution: {
@@ -403,7 +401,8 @@ test('declared ignored execution inputs participate in fact currency', async () 
       baseline: 'unknown',
       argv: [process.execPath, '-e', 'process.exit(0)'],
     });
-    document.checks![0].executionInputs = [{ kind: 'file', path: 'generated-input.txt' }];
+    if (document.verification.mode !== 'checks') throw new Error('Expected checks fixture.');
+    document.verification.checks[0].executionInputs = [{ kind: 'file', path: 'generated-input.txt' }];
     const prepared = await prepare(root, document);
     writeFileSync(join(root, 'generated-input.txt'), 'first\n', 'utf8');
     const first = await collect(root, prepared.taskId);
@@ -799,7 +798,8 @@ test('mixed implementation and environment failures may repair the bounded deliv
     const document = prepareDocument({
       baseline: 'unknown', argv: [process.execPath, '-e', 'process.exit(1)'],
     });
-    document.checks!.push({
+    if (document.verification.mode !== 'checks') throw new Error('Expected checks fixture.');
+    document.verification.checks.push({
       key: 'environment-check',
       rationale: 'Keep an unrelated environment failure visible during repair.',
       execution: {
@@ -922,8 +922,11 @@ test('environment diagnosis may hand off uncertainty without hiding the failed C
     assert.equal(challenged.disposition.route, 'handoff');
     assert.equal(challenged.hostAction.kind, 'author-handoff');
     assert.equal(collected.checks[0].status, 'failed');
-    assert.ok((projectedPacket(challenged.hostAction).draft as any).conditions[0].reviewDecisionKeys.length);
-    assert.ok((projectedPacket(challenged.hostAction).draft as any).conditions[0].obligations[0].reviewDecisionKeys.length);
+    const challengedDraft = projectedPacket(challenged.hostAction).draft as any;
+    assert.ok(challengedDraft.reviewDecisions[0].targets.some(
+      (target: any) => target.kind === 'condition'));
+    assert.ok(challengedDraft.reviewDecisions[0].targets.some(
+      (target: any) => target.kind === 'obligation'));
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -1075,7 +1078,7 @@ test('a Human correction creates a successor Attempt and preserves the prior dec
     unknownKeyInput.conditions[0].conditionKey = 'unknown-condition';
     await assert.rejects(
       handoff(root, prepared.taskId, unknownKeyInput),
-      /Cognitive Handoff input is invalid: conditions\[0\]/,
+      /Cognitive Handoff input is invalid: conditions/,
     );
     const handedOff = await handoff(root, prepared.taskId, handoffInput);
     assert.equal(handedOff.status, 'handoff-ready');
@@ -1184,8 +1187,7 @@ test('routine handoff can disclose a task-wide residual unknown without a fake C
     }];
     draft.reviewDecisions = [{
       key: 'review-task-environment',
-      conditionKeys: [],
-      obligationKeys: [],
+      targets: [],
       question: 'Is the unobserved downstream environment acceptable for adoption?',
       adoptionImpact: 'The change may behave differently outside the observed repository environment.',
       nextAction: 'Inspect or defer adoption until the environment is observed.',
@@ -1232,26 +1234,26 @@ test('a thin Host bypasses Challenge execution and receives a direct bounded Han
       ['request-correction', 'reject', 'defer'],
     );
     assert.deepEqual(projectedPacket(collected.hostAction).detailCommands, []);
-    assert.deepEqual((projectedPacket(collected.hostAction).draft as any).conditions[0], {
-      conditionKey: condition.key,
+    assert.deepEqual((projectedPacket(collected.hostAction).draft as any).conditions[condition.key], {
       status: '',
       summary: '',
-      reviewDecisionKeys: [`review-${condition.key}`],
-      obligations: [{
-        obligationKey: obligation.key,
+      obligations: {
+        [obligation.key]: {
         status: '',
-        reviewDecisionKeys: [`review-${condition.key}`],
         evidence: [{ kind: 'check', key: 'test' }],
         evidenceCoverage: { status: '', rationale: '', gaps: [] },
         falsification: { attempt: '', observedResult: '' },
         counterEvidence: [],
         conclusion: '',
-      }],
+        },
+      },
     });
     assert.deepEqual((projectedPacket(collected.hostAction).draft as any).reviewDecisions, [{
       key: `review-${condition.key}`,
-      conditionKeys: [condition.key],
-      obligationKeys: [{ conditionKey: condition.key, obligationKey: obligation.key }],
+      targets: [
+        { kind: 'condition', conditionKey: condition.key },
+        { kind: 'obligation', conditionKey: condition.key, obligationKey: obligation.key },
+      ],
       question: '',
       adoptionImpact: condition.adoptionRationale,
       nextAction: '',
@@ -1273,8 +1275,8 @@ test('a thin Host bypasses Challenge execution and receives a direct bounded Han
     draft.actualChange.behavior =
       'The implementation passes its changed verifier, while independent Challenge is unavailable.';
     draft.actualChange.mechanism = ['The implementation and verifier surface change together.'];
-    const conditionFinding = draft.conditions[0];
-    const obligationFinding = conditionFinding.obligations[0];
+    const conditionFinding = draft.conditions[condition.key];
+    const obligationFinding = conditionFinding.obligations[obligation.key];
     obligationFinding.status = 'unknown';
     obligationFinding.evidenceCoverage = {
       status: 'insufficient',
@@ -1300,10 +1302,11 @@ test('a thin Host bypasses Challenge execution and receives a direct bounded Han
     };
 
     const missingReview = structuredClone(draft);
-    missingReview.conditions[0].obligations[0].reviewDecisionKeys = [];
+    missingReview.reviewDecisions[0].targets = missingReview.reviewDecisions[0].targets
+      .filter((target: any) => target.kind !== 'obligation');
     await assert.rejects(
       handoff(root, prepared.taskId, missingReview),
-      /Cognitive Handoff input is invalid: conditions\[0\]/,
+      /Cognitive Handoff input is invalid|Too small|requires at least one Review Decision/,
     );
 
     const handedOff = await handoff(root, prepared.taskId, draft);
@@ -1368,15 +1371,21 @@ test('Handoff projection prebinds shared Review Decisions to exact findings in C
     const packet = projectedPacket(collected.hostAction);
 
     assert.deepEqual(
-      packet.draft.conditions.map((finding: any) => finding.conditionKey),
+      Object.keys(packet.draft.conditions),
       prepared.taskContract.adoptionConditions.map((condition: any) => condition.key),
     );
-    for (const finding of packet.draft.conditions) {
-      assert.deepEqual(finding.reviewDecisionKeys, [`review-${finding.conditionKey}`]);
-      assert.ok(finding.obligations.every((obligation: any) =>
-        obligation.reviewDecisionKeys[0] === `review-${finding.conditionKey}`));
+    for (const condition of prepared.taskContract.adoptionConditions) {
+      const decision = packet.draft.reviewDecisions.find(
+        (candidate: any) => candidate.key === `review-${condition.key}`,
+      );
+      assert.ok(decision.targets.some((target: any) =>
+        target.kind === 'condition' && target.conditionKey === condition.key));
+      assert.ok(condition.evidenceObligations.every((obligation: any) =>
+        decision.targets.some((target: any) => target.kind === 'obligation'
+          && target.conditionKey === condition.key
+          && target.obligationKey === obligation.key)));
     }
-    assert.equal(packet.draft.reviewDecisions.length, packet.draft.conditions.length);
+    assert.equal(packet.draft.reviewDecisions.length, Object.keys(packet.draft.conditions).length);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -1394,12 +1403,14 @@ test('a material Condition with missing required Challenge can share one Review 
     const condition = prepared.taskContract.adoptionConditions[0];
     const obligation = condition.evidenceObligations[0];
 
-    const finding = (projectedPacket(collected.hostAction).draft as any).conditions[0];
-    assert.equal(finding.conditionKey, condition.key);
-    assert.deepEqual(finding.reviewDecisionKeys, [`review-${condition.key}`]);
-    assert.deepEqual(finding.obligations[0].reviewDecisionKeys, [`review-${condition.key}`]);
-    assert.equal(finding.obligations[0].obligationKey, obligation.key);
-    assert.equal((projectedPacket(collected.hostAction).draft as any).reviewDecisions.length, 1);
+    const projected = projectedPacket(collected.hostAction).draft as any;
+    assert.ok(projected.conditions[condition.key]);
+    assert.ok(projected.conditions[condition.key].obligations[obligation.key]);
+    assert.equal(projected.reviewDecisions.length, 1);
+    assert.deepEqual(projected.reviewDecisions[0].targets, [
+      { kind: 'condition', conditionKey: condition.key },
+      { kind: 'obligation', conditionKey: condition.key, obligationKey: obligation.key },
+    ]);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -1416,15 +1427,17 @@ test('missing independent execution remains explicit in a direct bounded handoff
     const collected = await collect(root, prepared.taskId);
     assert.equal(collected.hostAction.kind, 'author-handoff');
     const fallbackDraft = projectedPacket(collected.hostAction).draft as any;
-    assert.ok(fallbackDraft.conditions[0].reviewDecisionKeys.length);
-    assert.ok(fallbackDraft.conditions[0].obligations[0].reviewDecisionKeys.length);
     const handoffDraft = structuredClone(fallbackDraft) as any;
     const condition = prepared.taskContract.adoptionConditions[0];
     const obligation = condition.evidenceObligations[0];
+    assert.ok(fallbackDraft.reviewDecisions[0].targets.some(
+      (target: any) => target.kind === 'condition'));
+    assert.ok(fallbackDraft.reviewDecisions[0].targets.some(
+      (target: any) => target.kind === 'obligation'));
     handoffDraft.actualChange.behavior = 'Runtime facts are current, while the independent Challenge remains unavailable.';
     handoffDraft.actualChange.mechanism = ['The implementation follows the changed fixture path.'];
-    const conditionFinding = handoffDraft.conditions[0];
-    const obligationFinding = conditionFinding.obligations[0];
+    const conditionFinding = handoffDraft.conditions[condition.key];
+    const obligationFinding = conditionFinding.obligations[obligation.key];
     obligationFinding.status = 'unknown';
     obligationFinding.evidenceCoverage = {
       status: 'insufficient',
@@ -1523,7 +1536,13 @@ test('verification revision preserves history and completes handoff against curr
     draft.kind = 'execution-rebinding';
     draft.rationale = 'The original command selected the wrong executable behavior.';
     draft.equivalenceClaim = 'The rebound argv uses the same Node executable and intended fixture boundary.';
-    draft.checks[0].execution.assertion.argv = [process.execPath, '-e', 'process.exit(0)'];
+    draft.rebindings = [{
+      checkKey: 'test',
+      execution: {
+        preparation: [],
+        assertion: { argv: [process.execPath, '-e', 'process.exit(0)'] },
+      },
+    }];
     const revised = await reviseVerification(root, prepared.taskId, draft);
     assert.equal(revised.status, 'verification-revised');
     assert.equal(revised.semanticContractId, semanticContractId);
@@ -1544,10 +1563,10 @@ test('verification revision preserves history and completes handoff against curr
     const handoffDraft = structuredClone(projectedPacket(second.hostAction).draft);
     handoffDraft.actualChange.behavior = 'The rebound verification passed against the current implementation.';
     handoffDraft.actualChange.mechanism = ['The revised command executes the same bounded fixture assertion.'];
-    for (const conditionFinding of handoffDraft.conditions) {
+    for (const conditionFinding of Object.values(handoffDraft.conditions) as any[]) {
       conditionFinding.status = 'supported';
       conditionFinding.summary = 'Every current evidence obligation is supported.';
-      for (const obligationFinding of conditionFinding.obligations) {
+      for (const obligationFinding of Object.values(conditionFinding.obligations) as any[]) {
         obligationFinding.status = 'supported';
         obligationFinding.evidenceCoverage = {
           status: 'sufficient',
@@ -1608,18 +1627,17 @@ function prepareDocument(options: {
   argv: string[];
   prepareRequestId?: string;
   maxRepairAttempts?: number;
-  timeoutRetry?: DelegationPrepareDocument['executionBudget']['timeoutRetry'];
+  timeoutRetry?: NonNullable<PrepareAuthoringDocument['executionBudgetOverride']>['timeoutRetry'];
   critical?: boolean;
   challengePolicy?: 'required' | 'fact-triggered';
   acceptanceSurfaceSelectors?: Array<{ kind: 'file' | 'tree'; path: string }>;
-}): DelegationPrepareDocument {
+}): PrepareAuthoringDocument & { prepareRequestId: string } {
   return {
-    protocol: 'cognitive-adoption', schemaVersion: '1',
     prepareRequestId: options.prepareRequestId ?? `prepare:${randomUUID()}`,
     developerEvents: [{ key: 'request', content: 'Change the workflow fixture.' }],
     task: {
-      basis: { developerEventKeys: ['request'], repositoryEvidenceKeys: [] },
       desiredOutcome: 'Change the workflow fixture.', constraints: [], nonGoals: [], focus: ['source.txt'],
+      repositoryEvidenceKeys: [],
     },
     materialDecisionForks: [],
     repositoryEvidence: [],
@@ -1648,7 +1666,7 @@ function prepareDocument(options: {
       }],
     }] },
     hostPolicyRequirements: [],
-    executionBudget: {
+    executionBudgetOverride: {
       checkTimeoutMs: 300_000,
       maxDeliveryRepairs: options.maxRepairAttempts ?? 2,
       timeoutRetry: options.timeoutRetry ?? {
@@ -1657,23 +1675,26 @@ function prepareDocument(options: {
         maxTimeoutMs: 900_000,
       },
     },
-    checks: [{
-      key: 'test', rationale: 'Observe the fixture.',
-      execution: {
-        preparation: [],
-        assertion: { argv: options.argv },
-      },
-      executionInputs: [],
-      baseline: options.baseline === 'task-start' ? {
-        mode: 'task-start',
-        rationale: 'The before/after observation distinguishes a regression.',
-        expectation: { baselineStatus: 'passed', currentStatus: 'passed' },
-      } : { mode: 'unknown' },
-      verifierSelectors: (options.acceptanceSurfaceSelectors ?? []).map((selector) => ({
-        ...selector,
-        role: 'acceptance-surface' as const,
-      })),
-    }],
+    verification: {
+      mode: 'checks',
+      checks: [{
+        key: 'test', rationale: 'Observe the fixture.',
+        execution: {
+          preparation: [],
+          assertion: { argv: options.argv },
+        },
+        executionInputs: [],
+        baseline: options.baseline === 'task-start' ? {
+          mode: 'task-start',
+          rationale: 'The before/after observation distinguishes a regression.',
+          expectation: { baselineStatus: 'passed', currentStatus: 'passed' },
+        } : { mode: 'unknown' },
+        verifierSelectors: (options.acceptanceSurfaceSelectors ?? []).map((selector) => ({
+          ...selector,
+          role: 'acceptance-surface' as const,
+        })),
+      }],
+    },
   };
 }
 
@@ -1717,8 +1738,13 @@ function disposition(
 }
 
 async function prepare(root: string, document: ReturnType<typeof prepareDocument>) {
+  const { prepareRequestId, ...source } = document;
   const result = await prepareDelegationTask({
-    projectRoot: root, inputPath: '-', input: jsonStream(document), productVersion: '0.0.1',
+    projectRoot: root,
+    prepareRequestId,
+    inputPath: '-',
+    input: jsonStream(source),
+    productVersion: '0.0.1',
   }) as any;
   if (!result.taskId || !['prepared', 'prepare-replayed'].includes(result.status)) return result;
   const projection = readDelegationTask(root, result.taskId).projection;
@@ -1809,11 +1835,56 @@ function storedJson(root: string, taskId: string, relativePath: string): any {
 }
 
 async function handoff(root: string, taskId: string, document: unknown) {
+  const input = semanticHandoffFixture(document);
   const result = await evaluateDelegationHandoff({
-    projectRoot: root, taskId, inputPath: '-', input: jsonStream(document),
+    projectRoot: root, taskId, inputPath: '-', input: jsonStream(input),
   }) as any;
   const detail = explainDelegationTask({ projectRoot: root, taskId, section: 'decision-packet' }) as any;
   return { ...result, decisionPacket: detail.decisionPacket };
+}
+
+function semanticHandoffFixture(document: unknown): unknown {
+  const source = document as any;
+  return {
+    ...source,
+    conditions: Array.isArray(source?.conditions)
+      ? Object.fromEntries(source.conditions.map((condition: any) => [
+          condition.conditionKey,
+          {
+            status: condition.status,
+            summary: condition.summary,
+            obligations: Object.fromEntries(condition.obligations.map((obligation: any) => [
+              obligation.obligationKey,
+              {
+                status: obligation.status,
+                evidence: obligation.evidence,
+                evidenceCoverage: obligation.evidenceCoverage,
+                falsification: obligation.falsification,
+                counterEvidence: obligation.counterEvidence,
+                conclusion: obligation.conclusion,
+              },
+            ])),
+          },
+        ]))
+      : source.conditions,
+    reviewDecisions: source.reviewDecisions.map((decision: any) => decision.targets
+      ? decision
+      : {
+          key: decision.key,
+          targets: [
+            ...(decision.conditionKeys ?? []).map((conditionKey: string) => ({
+              kind: 'condition', conditionKey,
+            })),
+            ...(decision.obligationKeys ?? []).map((target: any) => ({
+              kind: 'obligation', ...target,
+            })),
+          ],
+          question: decision.question,
+          adoptionImpact: decision.adoptionImpact,
+          nextAction: decision.nextAction,
+          evidence: decision.evidence,
+        }),
+  };
 }
 
 async function decide(root: string, taskId: string, document: unknown) {

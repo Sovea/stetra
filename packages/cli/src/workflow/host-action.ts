@@ -35,6 +35,7 @@ export interface HostAction {
   command?: { argv: string[] };
   finalResponseGuard?: { argv: string[] };
   inputBinding?: {
+    format: 'semantic-authoring';
     inputKind: AuthoringPacket['inputKind'];
     projectionFingerprint: string;
     bindsTo: AuthoringPacket['bindsTo'];
@@ -292,6 +293,7 @@ function inputBinding(
   }));
   const reservation = ownedInputReservation('.', token);
   return {
+    format: 'semantic-authoring',
     inputKind,
     projectionFingerprint,
     bindsTo,

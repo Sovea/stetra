@@ -239,7 +239,7 @@ function reservePrepare(
   projectRoot: string,
   session: PreparingHostSession,
 ): HostPrepareReservation {
-  const document = delegationPrepareDraft(session.prepareRequestId);
+  const document = delegationPrepareDraft();
   return prepareReservation(
     session,
     reserveOwnedInput(projectRoot, session.inputToken, document, delegationPrepareGuide()),
@@ -256,7 +256,11 @@ function prepareReservation(
     prepareRequestId: session.prepareRequestId,
     taskId: session.taskId,
     submit: {
-      argv: ['stetra', 'change', 'prepare', '.', '--input', reservation.path, '--json'],
+      argv: [
+        'stetra', 'change', 'prepare', '.',
+        '--prepare-request', session.prepareRequestId,
+        '--input', reservation.path, '--json',
+      ],
     },
     resume: {
       argv: [

@@ -72,17 +72,12 @@ try {
   git(project, ['commit', '-qm', 'initial']);
   const task = 'Change the packed fixture behavior and preserve the Human adoption decision.';
   const prepareDocument = {
-    protocol: 'cognitive-adoption', schemaVersion: '1',
-    prepareRequestId: 'prepare:cli-release-smoke',
     developerEvents: [{ key: 'request', content: task }],
-    repositoryEvidence: [],
     task: {
-      basis: { developerEventKeys: ['request'], repositoryEvidenceKeys: [] },
       desiredOutcome: 'Change the exported fixture value with current facts.',
       constraints: ['Human adoption remains explicit.', `Preserve the large Host input: ${'x'.repeat(40_000)}`],
-      nonGoals: [], focus: ['src/example.ts'],
+      nonGoals: [], focus: ['src/example.ts'], repositoryEvidenceKeys: [],
     },
-    materialDecisionForks: [],
     assurance: { kind: 'conditioned', conditions: [{
       key: 'export', statement: 'The packed fixture exports value 2 and its check passes.',
       rationale: 'Consumers observe this exported value.', criticality: 'adoption-critical',
@@ -102,36 +97,41 @@ try {
         ],
       }],
     }] },
-    hostPolicyRequirements: [],
-    executionBudget: {
+    executionBudgetOverride: {
       checkTimeoutMs: 300_000,
       maxDeliveryRepairs: 1,
       timeoutRetry: { mode: 'disabled' },
     },
-    checks: [{
-      key: 'fixture-check', rationale: 'Exercise the packed CLI check runner.',
-      execution: {
-        preparation: [],
-        assertion: { argv: [
-          process.execPath,
-          '-e',
-          "const ok=require('node:fs').readFileSync('src/example.ts','utf8').includes('value = 2');process.stdout.write('fixture-check-stdout\\n');process.stderr.write('fixture-check-stderr\\n');process.exit(ok ? 0 : 1)",
-        ] },
-      },
-      executionInputs: [],
-      baseline: { mode: 'unknown' },
-      verifierSelectors: [
-        { kind: 'file', path: 'package.json', role: 'command-definition' },
-        { kind: 'file', path: 'src/example.ts', role: 'acceptance-surface' },
-      ],
-    }],
+    verification: {
+      mode: 'checks',
+      checks: [{
+        key: 'fixture-check', rationale: 'Exercise the packed CLI check runner.',
+        execution: {
+          preparation: [],
+          assertion: { argv: [
+            process.execPath,
+            '-e',
+            "const ok=require('node:fs').readFileSync('src/example.ts','utf8').includes('value = 2');process.stdout.write('fixture-check-stdout\\n');process.stderr.write('fixture-check-stderr\\n');process.exit(ok ? 0 : 1)",
+          ] },
+        },
+        executionInputs: [],
+        baseline: { mode: 'unknown' },
+        verifierSelectors: [
+          { kind: 'file', path: 'package.json', role: 'command-definition' },
+          { kind: 'file', path: 'src/example.ts', role: 'acceptance-surface' },
+        ],
+      }],
+    },
   };
-  const prepareReservation = runInstalledCli(['input', 'reserve', project, '--json']);
+  const prepareReservation = runInstalledCli([
+    'input', 'reserve', project, '--kind', 'prepare', '--json',
+  ]);
   assert.equal(prepareReservation.transport, 'owned-file');
   const preparePath = join(project, prepareReservation.path);
   writeFileSync(preparePath, `${JSON.stringify(prepareDocument, null, 2)}\n`, 'utf8');
   const prepared = runInstalledCli([
-    'change', 'prepare', project, '--input', prepareReservation.path, '--json',
+    'change', 'prepare', project, '--prepare-request', prepareReservation.prepareRequestId,
+    '--input', prepareReservation.path, '--json',
   ]);
   assert.equal(prepared.status, 'prepared');
   assert.equal(existsSync(preparePath), false);
@@ -210,8 +210,12 @@ try {
   assert.equal(collected.hostAction.kind, 'author-handoff');
   assert.equal('authoringPacket' in collected.hostAction, false);
   const collectedInput = reserveActionInput(collected.hostAction);
-  assert.ok(collectedInput.draft.conditions[0].reviewDecisionKeys.length);
-  assert.ok(collectedInput.draft.conditions[0].obligations[0].reviewDecisionKeys.length);
+  assert.ok(collectedInput.draft.conditions.export);
+  assert.ok(collectedInput.draft.conditions.export.obligations['fixture-value']);
+  assert.ok(collectedInput.draft.reviewDecisions[0].targets.some(
+    (target) => target.kind === 'condition'));
+  assert.ok(collectedInput.draft.reviewDecisions[0].targets.some(
+    (target) => target.kind === 'obligation'));
   assert.equal(collectedInput.draft.reviewDecisions.length, 1);
   assert.equal(collectedInput.guide.schema.included, false);
   assert.equal('inputSchema' in collectedInput.guide, false);
@@ -232,10 +236,10 @@ try {
     importantEffects: ['Consumers now observe the value 2.'],
     materialTradeoffs: [],
   };
-  for (const condition of handoffDraft.conditions) {
+  for (const condition of Object.values(handoffDraft.conditions)) {
     condition.status = 'unknown';
     condition.summary = 'The Runtime check passed, but required independent evidence is unavailable.';
-    for (const obligation of condition.obligations) {
+    for (const obligation of Object.values(condition.obligations)) {
       obligation.status = 'unknown';
       obligation.falsification = {
         attempt: 'Inspected whether the passing command observes the changed export boundary.',

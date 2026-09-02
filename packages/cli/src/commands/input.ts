@@ -4,7 +4,7 @@ import { z } from 'zod';
 import { delegationPrepareDraft, delegationPrepareGuide } from '../adapters/templates.ts';
 import { inputError } from '../errors.ts';
 import { createOwnedInputToken, reserveOwnedInput } from '../host/owned-input.ts';
-import { DelegationPrepareDocumentSchema } from '../schemas/delegation.ts';
+import { PrepareAuthoringDocumentSchema } from '../schemas/authoring.ts';
 import { reserveProjectedHostInput } from '../workflow/delegation.ts';
 import type { CommandEnvironment } from './shared.ts';
 
@@ -38,7 +38,7 @@ export function registerInputCommands(
         }
         const token = options.token ?? createOwnedInputToken();
         const prepareRequestId = `prepare:${token}`;
-        const document = delegationPrepareDraft(prepareRequestId);
+        const document = delegationPrepareDraft();
         const reservation = reserveOwnedInput(
           projectRoot,
           token,
@@ -53,6 +53,7 @@ export function registerInputCommands(
           submit: {
             argv: [
               'stetra', 'change', 'prepare', '.',
+              '--prepare-request', prepareRequestId,
               '--input', reservation.path, '--json',
             ],
           },
@@ -92,7 +93,7 @@ export function registerInputCommands(
       environment.emit('input schema', {
         status: 'input-schema',
         inputKind: 'prepare',
-        inputSchema: z.toJSONSchema(DelegationPrepareDocumentSchema, { reused: 'ref' }),
+        inputSchema: z.toJSONSchema(PrepareAuthoringDocumentSchema, { reused: 'ref' }),
         stateWritten: false,
       }, command);
     });

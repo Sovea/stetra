@@ -20,6 +20,10 @@ interface InputOptions {
   input: string;
 }
 
+interface PrepareOptions extends InputOptions {
+  prepareRequest: string;
+}
+
 interface TaskOptions {
   task: string;
 }
@@ -72,10 +76,12 @@ export function registerChangeCommands(
     .command('prepare')
     .description('Compile the Task Contract, first Attempt, and Git baseline')
     .argument('[project-root]', 'Git worktree root', '.')
+    .requiredOption('--prepare-request <id>', 'prepareRequestId returned by input reserve')
     .option('--input <path>', 'Task Contract input JSON path, or - for stdin', '-')
-    .action(async (projectRoot: string, options: InputOptions, command: Command) => {
+    .action(async (projectRoot: string, options: PrepareOptions, command: Command) => {
       environment.emit('change prepare', await prepareDelegationTask({
         projectRoot,
+        prepareRequestId: options.prepareRequest,
         inputPath: options.input,
         input: environment.runtime.input,
         productVersion,
