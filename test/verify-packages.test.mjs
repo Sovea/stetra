@@ -74,7 +74,6 @@ for (const file of [
   'docs/architecture.md',
   'docs/change-workflow.md',
   'evaluation/paired-agent/PROTOCOL.md',
-  'evaluation/paired-agent/ledger.json',
 ]) {
   assert.ok(existsSync(resolve(root, file)), `Missing project artifact ${file}.`);
 }

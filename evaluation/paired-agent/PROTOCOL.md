@@ -7,12 +7,20 @@ a developer request to a confidently adoptable change without degrading the
 developer's system understanding or decision quality.
 
 It is this repository's effectiveness-test contract. It is not Runtime, a
-distributable benchmark harness, or a registry of candidate tasks.
+distributable benchmark harness, a registry of candidate tasks, or an archive
+of evaluation runs.
+
+This directory contains only the protocol and reusable record templates. Active
+preregistrations, run ledgers, observations, results, source workspaces, sealed
+material, and raw evidence remain in an evaluator-owned workspace outside the
+source tree. Their digests and ordering must be frozen there before either
+condition starts.
 
 Deterministic tests establish protocol consistency, not product effectiveness.
-No measured-effectiveness claim is allowed until `ledger.json` references at
-least three preregistered, protocol-conformant pairs across at least two task
-types and a Human product owner accepts a scoped conclusion from the raw data.
+No measured-effectiveness claim is allowed until an immutable evidence manifest
+references at least three preregistered, protocol-conformant pairs across at
+least two task types and a Human product owner accepts a scoped conclusion from
+the raw data.
 
 ## Pair
 
@@ -65,13 +73,16 @@ adoptability. Patch similarity may be reported descriptively but cannot be an
 acceptance criterion. Historical results should be paired with prospective
 work before supporting a broad production-effectiveness conclusion.
 
-Candidate pools, source checkouts, dependency trees, raw transcripts, and
-sealed oracles are not part of this protocol. A selected preregistration and a
-compact completed result may be committed when the ledger uses them as
-inspectable claim evidence; raw working data remains outside the source tree.
+Candidate pools, active preregistrations, run ledgers, source checkouts,
+dependency trees, observations, results, raw transcripts, and sealed oracles do
+not belong in this protocol directory. After a Human product owner accepts a
+scoped conclusion, a compact immutable evidence bundle may be published outside
+`paired-agent/` when it is needed as inspectable claim evidence. Raw working
+data remains outside the source tree.
 
-Committed preregistrations contain the digest and expected baseline/oracle
-exit behavior of each sealed acceptance fixture, but not the fixture content.
+Published evidence bundles contain the preregistration digest and expected
+baseline/oracle exit behavior of each sealed acceptance fixture, but not the
+fixture content.
 The evaluator materializes source checkouts, dependencies, fixtures, patches,
 logs, and Agent transcripts outside this repository. A fixture is injected
 only into an archived copy after both Agent outputs are frozen. Its path in the
@@ -111,7 +122,8 @@ Before either condition, create a task record from `task.template.json` with:
 
 The task record has a canonical registration fingerprint. Changing any field
 after registration changes that fingerprint and invalidates the pair. The
-ledger lists every registered task even before a corresponding result exists.
+external run ledger lists every registered task even before a corresponding
+result exists.
 
 Do not select tasks after seeing either solution. Alternate or randomly assign
 condition order. Never rerun only the weaker condition.
@@ -235,12 +247,12 @@ A narrative conclusion must cite individual pairs, state its repository/Agent/
 task/reviewer scope, preserve contrary results, and avoid a composite score.
 Inconclusive or adverse results return the MVP to iteration.
 
-An interrupted or protocol-incomplete pilot may retain a compact observation
-record when it exposes reproducible product behavior. Such a record must name
-the missing protocol evidence, remain excluded from completed-pair gates, and
-cannot support an effectiveness claim. It may contain patch fingerprints and
-bounded findings, but never raw workspaces, transcripts, logs, patches, or
-sealed fixture contents.
+An interrupted or protocol-incomplete pilot may retain a compact observation in
+the external run archive when it exposes reproducible product behavior. Such a
+record must name the missing protocol evidence, remain excluded from
+completed-pair gates, and cannot support an effectiveness claim. It may contain
+patch fingerprints and bounded findings, but never raw workspaces, transcripts,
+logs, patches, or sealed fixture contents.
 
 ## Human acceptance boundary
 
