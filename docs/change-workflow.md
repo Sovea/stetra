@@ -39,7 +39,7 @@ stetra input reserve . --kind prepare --json
 stetra input schema . --kind prepare --json
 stetra host begin . --adapter <codex|claude> --binding-token <projected-token> --json
 stetra host hook --adapter <codex|claude> --event <session-start|stop> --json
-stetra change prepare . --input <returned-owned-input-path> --json
+stetra change prepare . --prepare-request <returned-prepare-request-id> --input <returned-owned-input-path> --json
 stetra change resume . --prepare-request <returned-prepare-request-id> --json
 stetra change collect . --task <task-id> --json
 stetra change diagnose . --task <task-id> --input <projected-owned-input-path> --json
@@ -76,10 +76,12 @@ every Guide. The Guide and executable Host Action use the same exact CLI stage
 binding; semantic input names are never reused as guessed command verbs. There
 is no separately maintained partial field-rule description that can drift from
 validation. Runtime supplies boilerplate identity; the Agent supplies
-interpretation and judgment. Handoff uses readable Condition and
-Obligation keys in its input and resolves them to canonical IDs before
-persistence. Draft, Guide, and Schema are transient projection, not authority,
-an artifact, or lifecycle state.
+interpretation and judgment. Prepare transport identity is bound only by the
+exact submit command, not by an editable Draft field. Handoff fixes readable
+Condition and Obligation keys as task-specific object properties, and Review
+Decisions declare targets once; CLI resolves them to canonical IDs and reverse
+references before persistence. Draft, Guide, and Schema are transient
+projection, not authority, an artifact, or lifecycle state.
 
 Handoff input is task-specific. It fixes Condition and Obligation order and
 keys, removes conclusions that unavailable evidence paths cannot support, and
@@ -178,15 +180,17 @@ Prepare input supplies:
 
 - one or more exact developer messages;
 - an Agent interpretation of desired outcome, constraints, non-goals, and focus;
-- the exact Human-event and Repository-evidence basis for that interpretation;
+- every exact Human Event and the explicitly selected Repository-evidence basis
+  for the task interpretation;
 - unresolved or resolved material decision forks;
 - one explicit assurance declaration: either basis-bearing `routine` with a
   concrete rationale, or `conditioned` with one or more Adoption Conditions and
   falsifiable Evidence Obligations;
 - explicit Host-policy requirements;
-- explicit verification commands or a concrete no-command rationale; and
-- `executionBudget.checkTimeoutMs`, `executionBudget.maxDeliveryRepairs`, and an
-  explicit disabled or bounded `executionBudget.timeoutRetry` policy.
+- an explicit `verification.mode` containing commands or a concrete no-command
+  rationale; and
+- an optional `executionBudgetOverride`; otherwise CLI binds the deterministic
+  default Check, delivery-repair, and timeout-retry budgets.
 
 A bounded timeout retry must permit a strictly longer attempt than the initial
 Check budget; equal durations are rejected because they add no execution
@@ -258,11 +262,12 @@ conversation and submit the already resolved result once; Stetra does not run a
 second generic clarification dialogue.
 
 `prepareRequestId` gives one concrete submission transport identity. Thin Host
-reservation generates and pre-fills it and returns exact submit and resume
-commands. Exact replay returns the existing task without rerunning baseline
-checks; different input under the same ID is rejected. `change resume` performs
-only an exact lookup by this identity and writes no state. Runtime never
-deduplicates by semantic similarity or chooses a recent task.
+reservation generates it, binds it only in the exact submit and resume commands,
+and leaves it out of the editable Draft. Exact replay returns the existing task
+without rerunning baseline checks; different input under the same ID is
+rejected. `change resume` performs only an exact lookup by this identity and
+writes no state. Runtime never deduplicates by semantic similarity or chooses a
+recent task.
 
 Prepare captures the complete dirty and non-ignored untracked Git baseline,
 runs only selected baseline Checks, includes their side effects in the frozen

@@ -592,15 +592,16 @@ It already includes:
 - append-only task events, rebuildable projection, staged publication, revision
   checks, and process-identity-based lease recovery.
 
-The current implementation now keeps full validation schemas on demand, groups
+The current implementation keeps full validation schemas on demand, groups
 required Host-policy gaps into one Human resolution surface, derives task-start
 baseline bindings from exact Check strategies, exposes baseline/current facts
 and detail selectors in Handoff authoring, and invalidates obsolete task-owned
-inbox generations on every transition. Existing Drafts still mirror more of the
-canonical semantic document than the target boundary requires. Further
-semantic-input compilation must remove only structure that CLI can bind
-exactly; it must not replace schema complexity with prose parsing or
-hand-written field rules.
+inbox generations on every transition. Prepare uses a request-bound semantic
+payload, Verification Revision expands explicit keyed deltas, and Handoff fixes
+task-specific Condition and Obligation properties while deriving canonical
+Review Decision reverse references. Further semantic-input compilation may
+remove only structure that CLI can bind exactly; it must not replace schema
+complexity with prose parsing or hand-written field rules.
 
 It does not implement and should not currently pursue:
 
