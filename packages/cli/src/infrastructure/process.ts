@@ -1,4 +1,4 @@
-import type { Writable } from 'node:stream';
+import type { Readable, Writable } from 'node:stream';
 import { finished } from 'node:stream/promises';
 
 import { execa } from 'execa';
@@ -76,15 +76,9 @@ export async function runStreamingCommand(input: {
   stdout: Writable;
   timeoutMs: number;
 }): Promise<CommandResult> {
-  const outputFinished = Promise.all([
-    finished(input.stdout),
-    finished(input.stderr),
-  ]);
   const resolution = resolveExecutable(input.file, input.cwd);
   if (resolution.status === 'unavailable') {
-    input.stdout.end();
-    input.stderr.end();
-    await outputFinished;
+    await Promise.all([endWritable(input.stdout), endWritable(input.stderr)]);
     return unavailableCommandResult(resolution.error);
   }
   const subprocess = execa(resolution.path, input.args, {
@@ -105,10 +99,13 @@ export async function runStreamingCommand(input: {
     throw new Error('Command runner failed to create stdout/stderr pipes.');
   }
   if (input.stdin !== undefined) subprocess.stdin?.end(input.stdin);
-  subprocess.stdout.on('data', (chunk: Buffer) => input.onStdout?.(chunk));
-  subprocess.stderr.on('data', (chunk: Buffer) => input.onStderr?.(chunk));
-  subprocess.stdout.pipe(input.stdout);
-  subprocess.stderr.pipe(input.stderr);
+  const outputFinished = Promise.all([
+    pumpOutput(subprocess.stdout, input.stdout, input.onStdout),
+    pumpOutput(subprocess.stderr, input.stderr, input.onStderr),
+  ]);
+  // The subprocess is awaited first so timeout supervision can act on it. Mark
+  // an early sink failure as observed until the exact failure is rethrown below.
+  void outputFinished.catch(() => undefined);
   const pid = subprocess.pid;
   if (pid === undefined) {
     const result = await subprocess;
@@ -130,12 +127,8 @@ export async function runStreamingCommand(input: {
         resolve();
         drainTimer = setTimeout(() => {
           outputDrainForced = true;
-          subprocess.stdout?.unpipe(input.stdout);
-          subprocess.stderr?.unpipe(input.stderr);
           subprocess.stdout?.destroy();
           subprocess.stderr?.destroy();
-          if (!input.stdout.writableEnded) input.stdout.end();
-          if (!input.stderr.writableEnded) input.stderr.end();
         }, PROCESS_OUTPUT_DRAIN_MS);
       }, PROCESS_TERMINATION_GRACE_MS);
     });
@@ -163,6 +156,29 @@ export async function runStreamingCommand(input: {
     if (drainTimer) clearTimeout(drainTimer);
     removeSignalForwarding();
   }
+}
+
+async function pumpOutput(
+  source: Readable,
+  destination: Writable,
+  observe: ((chunk: Buffer) => void) | undefined,
+): Promise<void> {
+  try {
+    for await (const value of source) {
+      const chunk = Buffer.isBuffer(value) ? value : Buffer.from(value);
+      observe?.(chunk);
+      await new Promise<void>((resolve, reject) => {
+        destination.write(chunk, (error) => error ? reject(error) : resolve());
+      });
+    }
+  } finally {
+    await endWritable(destination);
+  }
+}
+
+async function endWritable(destination: Writable): Promise<void> {
+  if (!destination.writableEnded) destination.end();
+  await finished(destination);
 }
 
 function unavailableCommandResult(

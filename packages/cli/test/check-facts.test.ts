@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
@@ -32,6 +32,31 @@ test('check facts preserve stdout, stderr, exact exit termination, and an outcom
     assert.match(attempt.outcomeFingerprint, /^sha256:[a-f0-9]{64}$/);
     assert.equal(readFileSync(join(root, attempt.stdout.logPath!), 'utf8'), 'out\n');
     assert.equal(readFileSync(join(root, attempt.stderr.logPath!), 'utf8'), 'err\n');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('check facts preserve package-manager lifecycle output from a failed script', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'stetra-check-package-manager-'));
+  try {
+    writeFileSync(join(root, 'package.json'), JSON.stringify({
+      private: true,
+      scripts: {
+        verify: `${JSON.stringify(process.execPath)} -e "process.stdout.write('script-out\\n');process.stderr.write('script-err\\n');process.exit(2)"`,
+      },
+    }));
+    const check = await run(
+      root,
+      ['pnpm', 'run', 'verify'],
+      NON_TIMEOUT_CHECK_BUDGET_MS,
+      'package-manager-output',
+    );
+    const attempt = check.attempts[0];
+    assert.equal(attempt.status, 'failed');
+    assert.deepEqual(attempt.termination, { kind: 'exit', exitCode: 2 });
+    assert.match(readFileSync(join(root, attempt.stdout.logPath!), 'utf8'), /script-out/);
+    assert.match(readFileSync(join(root, attempt.stderr.logPath!), 'utf8'), /script-err/);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
