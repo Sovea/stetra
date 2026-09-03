@@ -44,6 +44,13 @@ export function appendHostAction(
       typeof argument === 'string');
     lines.push(`${colors.bold('Command argv:')} ${JSON.stringify(argv)}`);
   }
+  if (isRecord(value.humanResolutionRequest)) {
+    const request = value.humanResolutionRequest;
+    lines.push(
+      `${colors.bold('Developer resolution required:')} ${JSON.stringify(request.target ?? {})}`,
+      'Wait for a new developer message before using the resolution continuation.',
+    );
+  }
 }
 
 export function countValues(values: string[]): Map<string, number> {

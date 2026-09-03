@@ -189,7 +189,7 @@ function appendDeveloperDecisionBrief(
     for (const condition of brief.conditions) {
       if (!isRecord(condition) || !isRecord(condition.finding)) continue;
       lines.push(
-        `${colors.cyan('•')} ${String(condition.statement ?? '')} — ${String(condition.finding.status ?? 'unknown')}`,
+        `${colors.cyan('•')} ${String(condition.statement ?? '')} — ${String(condition.finding.status ?? 'unknown')} (Agent judgment over declared evidence; independent challenge not attested by the current Host)`,
         `  ${String(condition.finding.summary ?? '')}`,
       );
       if (!Array.isArray(condition.evidence)) continue;

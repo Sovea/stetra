@@ -1686,8 +1686,9 @@ export function explainDelegationTask(options: {
     }
     const action = currentTaskHostAction(task);
     if (!action) throw usageError('The task has no current Host Action.');
-    const candidates: Array<HostAction | NonNullable<HostAction['decisionContinuation']>> = [action];
+    const candidates: Array<Parameters<typeof hostActionAuthoringPacket>[0]> = [action];
     if (action.decisionContinuation) candidates.push(action.decisionContinuation);
+    if (action.resolutionContinuation) candidates.push(action.resolutionContinuation);
     const selected = candidates.find((candidate) =>
       candidate.command?.argv[2] === options.stage
       && candidate.inputBinding);
@@ -2097,8 +2098,9 @@ export function reserveProjectedHostInput(options: {
   const task = loadTask(options.projectRoot, options.taskId);
   const current = currentTaskHostAction(task);
   if (!current) throw usageError('The task has no current input-bearing Host Action.');
-  const candidates: Array<HostAction | NonNullable<HostAction['decisionContinuation']>> = [current];
+  const candidates: Array<Parameters<typeof hostActionAuthoringPacket>[0]> = [current];
   if (current.decisionContinuation) candidates.push(current.decisionContinuation);
+  if (current.resolutionContinuation) candidates.push(current.resolutionContinuation);
   const selected = candidates.find((candidate) =>
     candidate.command?.argv[2] === options.stage);
   if (!selected?.command || !selected.inputBinding) {
@@ -2328,8 +2330,9 @@ function assertCurrentOwnedInputBinding(input: {
   const task = loadTask(input.projectRoot, input.taskId);
   const current = currentTaskHostAction(task);
   if (!current) throw usageError('The task has no current input-bearing Host Action.');
-  const candidates: Array<HostAction | NonNullable<HostAction['decisionContinuation']>> = [current];
+  const candidates: Array<Parameters<typeof hostActionAuthoringPacket>[0]> = [current];
   if (current.decisionContinuation) candidates.push(current.decisionContinuation);
+  if (current.resolutionContinuation) candidates.push(current.resolutionContinuation);
   const selected = candidates.find((candidate) => candidate.command?.argv[2] === input.stage);
   if (!selected?.inputBinding || selected.inputBinding.draftPath !== input.inputPath) {
     throw usageError(

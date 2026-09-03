@@ -8,6 +8,10 @@ import type {
 import { authoringStage, type AuthoringPacket } from './authoring.ts';
 import type { DeveloperDecisionBrief } from './decision-brief.ts';
 import type { HostEnvironmentDisclosure } from '../runtime-context.ts';
+import {
+  HUMAN_RESOLUTION_ACTIONS,
+  type HumanResolutionDocument,
+} from '../schemas/delegation.ts';
 import { stableFingerprint } from '../protocol.ts';
 import {
   ownedInputReservation,
@@ -56,6 +60,16 @@ export interface HostAction {
     command: { argv: string[] };
     inputBinding: NonNullable<HostAction['inputBinding']>;
   };
+  resolutionContinuation?: {
+    requiresNewHumanEvent: true;
+    command: { argv: string[] };
+    inputBinding: NonNullable<HostAction['inputBinding']>;
+  };
+  humanResolutionRequest?: {
+    authority: 'human-decision';
+    target: HumanResolutionDocument['target'];
+    actions: [...typeof HUMAN_RESOLUTION_ACTIONS];
+  };
   clarificationBrief?: ClarificationBrief;
   clarificationContinuation?: {
     kind: 'reprepare';
@@ -74,7 +88,10 @@ export interface HostAction {
 const authoringPackets = new WeakMap<object, AuthoringPacket>();
 
 export function hostActionAuthoringPacket(
-  action: HostAction | NonNullable<HostAction['decisionContinuation']>,
+  action:
+    | HostAction
+    | NonNullable<HostAction['decisionContinuation']>
+    | NonNullable<HostAction['resolutionContinuation']>,
 ): AuthoringPacket | undefined {
   return authoringPackets.get(action);
 }
@@ -199,7 +216,35 @@ export function diagnosisHostAction(
 }
 
 export function resolutionHostAction(taskId: string, packet: AuthoringPacket): HostAction {
-  return inputAction('resolve-evidence-decision', 'recovery', taskId, packet);
+  const continuation = inputAction('resolve-evidence-decision', 'recovery', taskId, packet);
+  const resolutionContinuation = {
+    requiresNewHumanEvent: true as const,
+    command: continuation.command!,
+    inputBinding: continuation.inputBinding!,
+  };
+  authoringPackets.set(resolutionContinuation, packet);
+  return {
+    kind: 'resolve-evidence-decision',
+    reference: 'recovery',
+    finalResponseGuard: guardCommand(taskId),
+    humanResolutionRequest: {
+      authority: 'human-decision',
+      target: resolutionTarget(packet),
+      actions: [...HUMAN_RESOLUTION_ACTIONS],
+    },
+    resolutionContinuation,
+  };
+}
+
+function resolutionTarget(packet: AuthoringPacket): HumanResolutionDocument['target'] {
+  if (packet.inputKind !== 'resolution') {
+    throw new Error('Human resolution action requires a resolution Authoring Projection.');
+  }
+  const target = (packet.draft as { target?: unknown }).target;
+  if (!target || typeof target !== 'object' || Array.isArray(target)) {
+    throw new Error('Human resolution Authoring Projection requires one pending target.');
+  }
+  return structuredClone(target) as HumanResolutionDocument['target'];
 }
 
 export function staleFactsHostAction(taskId: string): HostAction {

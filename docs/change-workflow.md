@@ -369,6 +369,16 @@ one exact Human Event while retaining every requirement identity. A recorded
 resolution is part of the final Decision Packet and compact developer brief when
 it affects the task.
 
+The projected `resolve-evidence-decision` action is a Human stop, not an
+Agent-executable authoring action. Its top level exposes the exact pending target
+and available Human actions but no command or input binding. The exact
+`change resolve` binding exists only under a `resolutionContinuation` marked
+`requiresNewHumanEvent: true`. The Host presents the target and stops; only a
+later developer message may supply the Human Event and authorize use of that
+continuation. A thin instruction-only adapter cannot cryptographically attest
+message authorship, so it states this limitation honestly and never permits an
+earlier task event to be relabelled as the new resolution.
+
 ## Independent Challenge
 
 Independent Challenge remains an explicit evidence strategy, but the current
@@ -416,6 +426,12 @@ remain separate from the Agent's semantic finding. They add Attention, block an
 Agent `accept` recommendation where applicable, and require direct review; they
 do not become semantic contradictions merely because a Host boundary was
 unavailable.
+
+The Developer Decision Brief never presents a bare Condition conclusion. Each
+status is locally qualified as Agent judgment over declared evidence, with
+Independent Challenge explicitly not attested by the current thin Host. This
+does not rewrite `supported` to `partial`; missing independent evidence remains
+a separate evidence-path and review issue.
 
 Edits after collection return `facts-stale` before Handoff validation.
 

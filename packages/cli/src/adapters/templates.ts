@@ -59,6 +59,13 @@ plain text in the final response and then stop. Do not invoke an interactive
 input tool for the adoption decision; only the developer's next message can
 authorize it.
 
+Apply the same authority boundary to **resolve-evidence-decision**. It is not an
+Agent-executable input action. Present the unresolved target and ask the
+developer for an exact resolution in the final response, then stop. Only after
+a new developer message supplies that resolution may you use
+**resolutionContinuation**. Never derive its Human Event from an earlier task
+request, constraint, or other existing event.
+
 Never invent Runtime facts, hide a failed check, infer assurance from repository
 shape, or claim that this thin adapter created an independent Agent context.
 `;
@@ -144,8 +151,10 @@ Follow the current \`hostAction.kind\` and exact \`command.argv\`.
 - \`revise-verification\`: revise the projected verifier definition without
   overwriting its history or claiming an unobserved baseline.
 - \`recollect-stale-facts\`: collect again before authoring a handoff.
-- \`resolve-evidence-decision\`: preserve the evidence gap and record the exact
-  developer resolution requested by the Draft.
+- \`resolve-evidence-decision\`: preserve the evidence gap, present the pending
+  resolution to the developer, and stop. It has no top-level executable command.
+  Use \`resolutionContinuation\` only after a new developer message supplies the
+  exact resolution; never synthesize it from an existing Human Event.
 - \`correct-protocol-input\`, \`configure-verification\`, or
   \`resolve-human-choice\`: correct only the named missing input or authority.
 

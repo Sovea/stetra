@@ -368,6 +368,12 @@ with delivery, evidence, recommendation, and adoption state, then communicates:
 
 Opaque IDs, full logs, patches, and history stay in exact on-demand detail.
 
+Every Condition status in the brief is shown with its local authority and
+evidence boundary: Agent judgment over declared evidence, with Independent
+Challenge not attested by the current thin Host. Canonical conclusion status and
+missing-evidence Attention remain separate rather than collapsing uncertainty
+into a false semantic contradiction.
+
 ## Human Resolution and Decision
 
 Human Resolution closes a material mid-task choice such as semantic impact,
@@ -375,6 +381,14 @@ verification relaxation, an exception, a Host-policy gap, or correction
 continuation. Multiple pending requirements caused by one exact Human choice
 should be presented and resolved as one decision surface while retaining their
 individual identities.
+
+Resolution projection follows the same authority stop as adoption. The Agent
+receives the pending target and available choices, but no top-level executable
+command. A task-bound continuation is marked as requiring a new Human Event;
+the Host must present the choice and stop before that continuation is used.
+Existing task requests and constraints cannot be relabelled as a new Human
+Resolution. Current thin adapters enforce this as an explicit Host protocol
+boundary and do not claim provider-level authorship attestation.
 
 Human Decision records `accepted`, `correction-requested`, `rejected`, or
 `deferred` for the exact current Handoff and facts. Acceptance with unresolved

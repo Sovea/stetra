@@ -950,7 +950,10 @@ test('environment diagnosis may hand off uncertainty without hiding the failed C
     const diagnosed = await diagnose(materialRoot, prepared.taskId, input);
     assert.equal(diagnosed.disposition.route, 'ask-human');
     assert.equal(diagnosed.hostAction.kind, 'resolve-evidence-decision');
-    assert.deepEqual(diagnosed.hostAction.command.argv.slice(0, 4), [
+    assert.equal(diagnosed.hostAction.command, undefined);
+    assert.equal(diagnosed.hostAction.inputBinding, undefined);
+    assert.equal(diagnosed.hostAction.resolutionContinuation.requiresNewHumanEvent, true);
+    assert.deepEqual(diagnosed.hostAction.resolutionContinuation.command.argv.slice(0, 4), [
       'stetra', 'change', 'resolve', '.',
     ]);
     const resolved = await resolve(materialRoot, prepared.taskId, {
@@ -1010,11 +1013,18 @@ test('required Host policies share one exact Human resolution surface', async ()
       part: 'schema',
     }) as any;
     assert.ok(Object.keys(resolutionSchema.inputSchema).length > 0);
-    const resolutionInputSchema = JSON.stringify(projectedPacket(prepared.hostAction).inputSchema);
+    assert.equal(prepared.hostAction.command, undefined);
+    assert.equal(prepared.hostAction.inputBinding, undefined);
+    assert.equal(prepared.hostAction.resolutionContinuation.requiresNewHumanEvent, true);
+    const resolutionInputSchema = JSON.stringify(
+      projectedPacket(prepared.hostAction.resolutionContinuation).inputSchema,
+    );
     for (const action of ['continue-current-contract', 'request-correction', 'abort']) {
       assert.match(resolutionInputSchema, new RegExp(action));
     }
-    const target = (projectedPacket(prepared.hostAction).draft as any).target;
+    const target = (
+      projectedPacket(prepared.hostAction.resolutionContinuation).draft as any
+    ).target;
     assert.equal(target.kind, 'host-policy');
     assert.equal(target.requirementIds.length, 2);
     const resolved = await resolve(root, prepared.taskId, {
@@ -1120,6 +1130,11 @@ test('a Human correction creates a successor Attempt and preserves the prior dec
     assert.equal(handedOff.hostAction.developerDecisionBrief.primary.runtimeEvidence.authority, 'runtime-fact');
     assert.equal(handedOff.hostAction.developerDecisionBrief.primary.requestedDecision.authority, 'human-decision');
     assert.equal(handedOff.hostAction.developerDecisionBrief.primary.conditions[0].finding.status, 'supported');
+    assert.deepEqual(handedOff.hostAction.developerDecisionBrief.primary.conditions[0].finding.basis, {
+      authority: 'agent-judgment',
+      evidenceScope: 'declared-evidence',
+      independentChallenge: 'not-attested-by-current-host',
+    });
     assert.deepEqual(handedOff.hostAction.developerDecisionBrief.primary.blockers, []);
     assert.deepEqual(handedOff.hostAction.developerDecisionBrief.details.command.argv, [
       'stetra', 'change', 'explain', '.', '--task', prepared.taskId,
@@ -1140,6 +1155,8 @@ test('a Human correction creates a successor Attempt and preserves the prior dec
     });
     assert.equal(decided.decisionStatus, 'correction-requested');
     assert.equal(decided.hostAction.kind, 'resolve-evidence-decision');
+    assert.equal(decided.hostAction.command, undefined);
+    assert.equal(decided.hostAction.resolutionContinuation.requiresNewHumanEvent, true);
     const decisionId = decided.decisionPacket.decision.humanDecision.decisionId;
     const resolved = await resolve(root, prepared.taskId, {
       humanEvent: { content: 'Proceed with that correction under the current contract.' },

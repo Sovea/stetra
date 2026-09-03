@@ -85,12 +85,31 @@ test('host actions route the lifecycle with compact executable bindings', () => 
   assert.equal(diagnosisHostAction('handoff', 'task-id', packet('handoff')).kind, 'author-handoff');
   const resolution = diagnosisHostAction('ask-human', 'task-id', packet('resolution'));
   assert.equal(resolution.kind, 'resolve-evidence-decision');
-  assert.deepEqual(resolution.command?.argv.slice(0, 4), ['stetra', 'change', 'resolve', '.']);
-  assert.match(resolution.inputBinding?.draftPath ?? '', /^\.stetra\/inbox\/[a-f0-9]{64}\.json$/);
-  assert.match(resolution.inputBinding?.guidePath ?? '', /^\.stetra\/inbox\/[a-f0-9]{64}\.guide\.json$/);
-  assert.match(resolution.inputBinding?.projectionFingerprint ?? '', /^sha256:[0-9a-f]{64}$/);
-  assert.deepEqual(resolution.command?.argv.slice(6, 8), [
-    '--input', resolution.inputBinding?.draftPath,
+  assert.equal(resolution.command, undefined);
+  assert.equal(resolution.inputBinding, undefined);
+  assert.deepEqual(resolution.humanResolutionRequest, {
+    authority: 'human-decision',
+    target: { kind: 'semantic-impact', dispositionId: digest('r') },
+    actions: ['continue-current-contract', 'request-correction', 'abort'],
+  });
+  assert.equal(resolution.resolutionContinuation?.requiresNewHumanEvent, true);
+  assert.deepEqual(resolution.resolutionContinuation?.command.argv.slice(0, 4), [
+    'stetra', 'change', 'resolve', '.',
+  ]);
+  assert.match(
+    resolution.resolutionContinuation?.inputBinding.draftPath ?? '',
+    /^\.stetra\/inbox\/[a-f0-9]{64}\.json$/,
+  );
+  assert.match(
+    resolution.resolutionContinuation?.inputBinding.guidePath ?? '',
+    /^\.stetra\/inbox\/[a-f0-9]{64}\.guide\.json$/,
+  );
+  assert.match(
+    resolution.resolutionContinuation?.inputBinding.projectionFingerprint ?? '',
+    /^sha256:[0-9a-f]{64}$/,
+  );
+  assert.deepEqual(resolution.resolutionContinuation?.command.argv.slice(6, 8), [
+    '--input', resolution.resolutionContinuation.inputBinding.draftPath,
   ]);
   assert.equal(staleFactsHostAction('task-id').kind, 'recollect-stale-facts');
   assert.doesNotMatch(JSON.stringify(resolution), /authoringPacket|inputSchema|semanticContext/);
@@ -113,7 +132,9 @@ test('host actions route the lifecycle with compact executable bindings', () => 
     prohibitImpliedAdoption: true,
   });
   assert.equal(
-    hostActionAuthoringPacket(resolutionHostAction('task-id', packet('resolution')))?.inputKind,
+    hostActionAuthoringPacket(
+      resolutionHostAction('task-id', packet('resolution')).resolutionContinuation!,
+    )?.inputKind,
     'resolution',
   );
 });
@@ -144,7 +165,9 @@ test('every semantic authoring kind uses one exact CLI action in its Guide and H
     'revise-verification', 'task-id', packet('verification-revision'),
   );
   const handoff = diagnosisHostAction('handoff', 'task-id', packet('handoff'));
-  const resolution = resolutionHostAction('task-id', packet('resolution'));
+  const resolution = resolutionHostAction(
+    'task-id', packet('resolution'),
+  ).resolutionContinuation!;
   const decision = handoffHostAction(
     'needs-attention', 'task-id', brief(), packet('decision'),
   ).decisionContinuation!;
@@ -153,7 +176,7 @@ test('every semantic authoring kind uses one exact CLI action in its Guide and H
     revision.command?.argv[2],
     handoff.command?.argv[2],
     decision.command.argv[2],
-    resolution.command?.argv[2],
+    resolution.command.argv[2],
   ], expectedStages.map(([, stage]) => stage));
 });
 
@@ -279,7 +302,9 @@ function packet(inputKind: AuthoringPacket['inputKind']): AuthoringPacket {
         constraints: [], nonGoals: [], focus: [],
       },
     },
-    draft: {},
+    draft: inputKind === 'resolution'
+      ? { target: { kind: 'semantic-impact', dispositionId: digest('r') } }
+      : {},
     inputSchema: {},
     constraints: {},
     detailCommands: [],
@@ -309,7 +334,14 @@ function brief(): DeveloperDecisionBrief {
       priorHumanResolutions: [],
       conditions: [{
         statement: 'Condition.', criticality: 'material',
-        finding: { status: 'partial', summary: 'Partially supported.' }, evidence: [],
+        finding: {
+          status: 'partial', summary: 'Partially supported.',
+          basis: {
+            authority: 'agent-judgment', evidenceScope: 'declared-evidence',
+            independentChallenge: 'not-attested-by-current-host',
+          },
+        },
+        evidence: [],
       }],
       blockers: [{
         group: 'verification', codes: ['verification-nonpassing'], resolutions: ['inspect'],

@@ -39,6 +39,11 @@ export interface DeveloperDecisionPrimary {
     finding: {
       status: DecisionPacket['conditions'][number]['agentFinding']['status'];
       summary: string;
+      basis: {
+        authority: 'agent-judgment';
+        evidenceScope: 'declared-evidence';
+        independentChallenge: 'not-attested-by-current-host';
+      };
     };
     evidence: Array<{
       statement: string;
@@ -357,7 +362,15 @@ function primaryBrief(details: DeveloperDecisionDetails): DeveloperDecisionPrima
     conditions: details.conditions.map((condition) => ({
       statement: condition.statement,
       criticality: condition.criticality,
-      finding: { status: condition.status, summary: condition.summary },
+      finding: {
+        status: condition.status,
+        summary: condition.summary,
+        basis: {
+          authority: 'agent-judgment',
+          evidenceScope: 'declared-evidence',
+          independentChallenge: 'not-attested-by-current-host',
+        },
+      },
       evidence: condition.obligations.map((obligation) => ({
         statement: obligation.statement,
         finding: obligation.status,
