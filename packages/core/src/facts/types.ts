@@ -4,18 +4,6 @@ export type FileKind = 'file' | 'symlink' | 'gitlink';
 export type FileOperation = 'added' | 'modified' | 'deleted' | 'renamed';
 export type ChangeRepresentation = 'text' | 'binary' | 'metadata-only' | 'unrepresentable';
 export type CheckStatus = 'passed' | 'failed' | 'unavailable';
-export type CheckBaselineRelation =
-  | 'baseline-unknown'
-  | 'baseline-unknown-after-revision'
-  | 'passed-before-passed-now'
-  | 'passed-before-failed-now'
-  | 'passed-before-unavailable-now'
-  | 'failed-before-passed-now'
-  | 'failed-before-failed-now'
-  | 'failed-before-unavailable-now'
-  | 'unavailable-before-passed-now'
-  | 'unavailable-before-failed-now'
-  | 'unavailable-before-unavailable-now';
 
 export interface WorktreeSummary {
   head: string | null;
@@ -57,10 +45,7 @@ export interface VerificationInputEntryFact {
 }
 
 export interface VerificationInputSelectorFact {
-  selector: {
-    kind: 'file' | 'tree';
-    path: string;
-  };
+  selector: { kind: 'file' | 'tree'; path: string };
   state: 'missing' | 'present';
   entries: VerificationInputEntryFact[];
   fingerprint: string;
@@ -120,70 +105,6 @@ export interface CheckFact {
   attempts: CheckAttemptFact[];
 }
 
-export interface BaselineCheckFact {
-  definitionId: string;
-  mode: 'task-start' | 'unknown' | 'unknown-after-revision' | 'isolated-original';
-  observation: CheckFact | null;
-}
-
-export interface BaselineVerificationFact {
-  fingerprint: string;
-  preCheck: WorktreeSummary;
-  postCheck: WorktreeSummary;
-  preCheckExecutionInputs: VerificationInputSnapshot[];
-  postCheckExecutionInputs: VerificationInputSnapshot[];
-  checkInducedChanges: ChangedFileFact[];
-  checks: BaselineCheckFact[];
-}
-
-export interface CheckComparisonFact {
-  definitionId: string;
-  relation: CheckBaselineRelation;
-}
-
-export type EvidenceCause = 'implementation' | 'environment' | 'verification' | 'unknown';
-
-export type CheckEvidenceConcernObservation =
-  | 'current-nonpassing'
-  | 'baseline-expectation-mismatch';
-
-export interface EvidenceConcernSource {
-  kind: 'check';
-  definitionId: string;
-  observation: CheckEvidenceConcernObservation;
-}
-
-export interface EvidenceDispositionEntry {
-  source: EvidenceConcernSource;
-  cause: EvidenceCause;
-  diagnosis: string;
-  falsificationAttempt: string;
-  repositoryChangeCanAlterObservation: boolean;
-  changeSurface: 'production' | 'verification-surface' | 'none';
-  expectedDifferentObservation: string;
-  intendedChanges: string[];
-}
-
-export interface EvidenceDisposition extends ProtocolEnvelope {
-  dispositionId: string;
-  effectiveContractId: string;
-  attemptId: string;
-  factCollectionId: string;
-  semanticImpact: 'none' | 'material';
-  proposedRoute:
-    | 'repair-delivery'
-    | 'revise-verification'
-    | 'handoff'
-    | 'ask-human';
-  routeRationale: string;
-  entries: EvidenceDispositionEntry[];
-  route:
-    | 'repair-delivery'
-    | 'revise-verification'
-    | 'handoff'
-    | 'ask-human';
-}
-
 export interface VerifierMutation {
   verifierId: string;
   definitionId: string;
@@ -223,13 +144,10 @@ export interface FactBundle extends ProtocolEnvelope {
   current: WorktreeSummary;
   preCheckExecutionInputs: VerificationInputSnapshot[];
   currentExecutionInputs: VerificationInputSnapshot[];
-  baselineVerification: BaselineVerificationFact;
   changeFingerprint: string;
   changedFiles: ChangedFileFact[];
   checkInducedChanges: ChangedFileFact[];
   checks: CheckFact[];
-  checkComparisons: CheckComparisonFact[];
-  evidenceConcerns: Array<Extract<EvidenceConcernSource, { kind: 'check' }>>;
   verifierMutations: VerifierMutation[];
   environment: ExecutionEnvironment;
   patch?: PatchFact;

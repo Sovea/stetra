@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 
 export const SEMANTIC_DELEGATION_PROTOCOL = 'cognitive-adoption' as const;
-export const SEMANTIC_DELEGATION_SCHEMA_VERSION = '1' as const;
+export const SEMANTIC_DELEGATION_SCHEMA_VERSION = '2' as const;
 
 export type SemanticDelegationProtocol = typeof SEMANTIC_DELEGATION_PROTOCOL;
 export type SemanticDelegationSchemaVersion = typeof SEMANTIC_DELEGATION_SCHEMA_VERSION;

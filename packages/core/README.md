@@ -1,29 +1,24 @@
 # @sovea/stetra-core
 
-Deterministic Semantic Contract, Fact Spine, and Cognitive Handoff kernel for
-the task-scoped Stetra engineering loop.
+Deterministic contract and handoff kernel for the embedded Stetra coding-change
+harness.
 
 ```ts
-import {
-  compileDelegation,
-  evaluateHandoff,
-} from '@sovea/stetra-core';
+import { compileDelegation, evaluateHandoff } from '@sovea/stetra-core';
 ```
 
-`compileDelegation` validates one pre-change Task Contract or immutable
-Verification Revision. It keeps exact developer events separate from Agent
-interpretations, requires a falsifiable Evidence Obligation for every declared
-Condition, separates semantic/verification/effective identities, and requires
-explicit checks or a concrete no-command rationale.
+`compileDelegation` binds one exact submitted Human task event to the Agent's compact
+interpretation, explicit assurance, verification choice, and execution policy.
+The current portable input is explicitly unattested; Host provenance is never
+invented.
+Routine tasks do not carry consequence machinery. Consequential tasks declare
+only adoption-changing concerns and their evidence requirements.
 
-`evaluateHandoff` binds Obligation and Condition conclusions, independent
-Challenges, and an optional exact Human Decision to one Attempt and Fact
-Bundle. It keeps Runtime facts, Agent conclusions, actionable Attention,
-recommendation, and Human adoption authority separate. Stale facts stop
-evaluation first, and acceptance with Attention requires an exact exception for
-every item.
+`evaluateHandoff` checks that a compact Agent explanation is bound to the
+current Runtime Fact Collection. It derives mechanical Attention, prevents an
+acceptance recommendation from exceeding blocking evidence, and keeps the
+later Human adoption decision separate.
 
-The package exports these two runtime values plus their public TypeScript types.
-It does not read repositories, execute commands, format CLI output, or call an
-LLM. Normal coding-agent workflows should use the `@sovea/stetra` CLI,
-which collects facts and supplies them to Core.
+The package exports exactly those two runtime values plus public TypeScript
+types. It does not inspect repositories, execute commands, format output, know
+Host files, or call an LLM.

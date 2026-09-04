@@ -1,6 +1,6 @@
 import type { HumanEvent } from '../authority/types.ts';
-import type { EvidenceObligation, TaskContract } from '../delegation/types.ts';
-import type { EvidenceDisposition, FactBundle } from '../facts/types.ts';
+import type { AdoptionConcern, TaskContract } from '../delegation/types.ts';
+import type { FactBundle } from '../facts/types.ts';
 import type { ProtocolEnvelope } from '../shared/protocol.ts';
 
 export type ConclusionStatus = 'supported' | 'partial' | 'contradicted' | 'unknown';
@@ -8,59 +8,26 @@ export type RecommendationAction = 'accept' | 'request-correction' | 'reject' | 
 export type HumanDecisionAction = 'accepted' | 'correction-requested' | 'rejected' | 'deferred';
 export type HandoffStatus = 'handoff-ready' | 'needs-attention' | 'facts-stale';
 
-export type HandoffEvidenceKind =
-  | 'changed-file'
-  | 'check'
-  | 'repository-evidence'
-  | 'human-event'
-  | 'patch';
+export type HandoffEvidenceReference =
+  | { kind: 'changed-file'; id: string }
+  | { kind: 'check'; id: string }
+  | { kind: 'patch' };
 
-export interface HandoffEvidenceReference {
-  kind: HandoffEvidenceKind;
-  id?: string;
-}
-
-export interface EvidenceCoverageAssessment {
-  status: 'sufficient' | 'insufficient';
-  rationale: string;
+export interface ConcernFinding {
+  concernId: string;
+  status: ConclusionStatus;
+  summary: string;
+  evidence: HandoffEvidenceReference[];
   gaps: string[];
 }
 
-export interface EvidenceObligationConclusion {
-  obligationId: string;
-  status: ConclusionStatus;
-  reviewDecisionIds: string[];
-  evidence: HandoffEvidenceReference[];
-  evidenceCoverage: EvidenceCoverageAssessment;
-  falsification: {
-    attempt: string;
-    observedResult: string;
-  };
-  counterEvidence: HandoffEvidenceReference[];
-  conclusion: string;
-}
-
-export interface AdoptionConditionConclusion {
-  conditionId: string;
-  status: ConclusionStatus;
-  summary: string;
-  reviewDecisionIds: string[];
-}
-
 export interface ResidualUnknown {
-  target:
-    | { kind: 'task' }
-    | { kind: 'condition'; conditionId: string }
-    | { kind: 'obligation'; conditionId: string; obligationId: string };
   statement: string;
+  nextAction?: string;
   evidence: HandoffEvidenceReference[];
-  reviewDecisionIds: string[];
 }
 
-export interface ReviewDecision {
-  id: string;
-  conditionIds: string[];
-  obligationIds: string[];
+export interface ReviewFocus {
   question: string;
   adoptionImpact: string;
   nextAction: string;
@@ -87,27 +54,40 @@ export interface CognitiveHandoff extends ProtocolEnvelope {
     importantEffects: string[];
     materialTradeoffs: string[];
   };
-  obligationConclusions: EvidenceObligationConclusion[];
-  conditionConclusions: AdoptionConditionConclusion[];
+  concernFindings: ConcernFinding[];
   residualUnknowns: ResidualUnknown[];
-  reviewDecisions: ReviewDecision[];
+  reviewFocus: ReviewFocus[];
   recommendation: AgentRecommendation;
 }
 
-export interface HumanDecisionException {
-  attentionId: string;
-  rationale: string;
+export type HandoffAttentionCode =
+  | 'verification-nonpassing'
+  | 'verifier-surface-changed'
+  | 'check-induced-change'
+  | 'change-unrepresentable'
+  | 'residual-unknown'
+  | 'concern-evidence-missing'
+  | 'concern-not-supported';
+
+export interface HandoffAttentionItem {
+  id: string;
+  code: HandoffAttentionCode;
+  message: string;
+  blockingRecommendation: boolean;
+  references: {
+    changedFileIds?: string[];
+    definitionIds?: string[];
+    concernIds?: string[];
+  };
+  resolution: 'repair' | 'inspect' | 'human-review' | 'acknowledge';
 }
 
 export interface HumanDecision extends ProtocolEnvelope {
   decisionId: string;
   humanEvent: HumanEvent;
-  interpretation: {
-    basisHumanEventId: string;
-    action: HumanDecisionAction;
-    reason: string;
-    exceptions: HumanDecisionException[];
-  };
+  action: HumanDecisionAction;
+  reason: string;
+  acknowledgedAttentionIds: string[];
   effectiveContractId: string;
   attemptId: string;
   factCollectionId: string;
@@ -115,97 +95,10 @@ export interface HumanDecision extends ProtocolEnvelope {
   handoffFingerprint: string;
 }
 
-export interface HumanResolution extends ProtocolEnvelope {
-  resolutionId: string;
-  effectiveContractId: string;
-  humanEvent: HumanEvent;
-  interpretation: {
-    basisHumanEventId: string;
-    target:
-      | { kind: 'semantic-impact'; dispositionId: string }
-      | { kind: 'correction'; decisionId: string }
-      | { kind: 'host-policy'; requirementIds: string[] };
-    action: 'continue-current-contract' | 'request-correction' | 'abort';
-    reason: string;
-  };
-}
-
-export type HandoffAttentionCode =
-  | 'verification-nonpassing'
-  | 'baseline-expectation-mismatch'
-  | 'baseline-unknown-after-revision'
-  | 'verifier-surface-changed'
-  | 'verification-revised'
-  | 'check-induced-change'
-  | 'baseline-check-induced-change'
-  | 'change-unrepresentable'
-  | 'challenge-missing'
-  | 'evidence-coverage-insufficient'
-  | 'residual-unknown'
-  | 'host-policy-unverified'
-  | 'evidence-disposition-missing'
-  | 'repair-route-exhausted';
-
-export interface HandoffAttentionReferences {
-  changedFiles?: string[];
-  checks?: string[];
-  conditions?: string[];
-  obligations?: string[];
-  hostPolicies?: string[];
-}
-
-export interface HandoffAttentionItem {
-  id: string;
-  group: 'verification' | 'change-integrity' | 'challenge' | 'obligation' | 'condition' | 'delivery' | 'host-policy';
-  codes: HandoffAttentionCode[];
-  references: HandoffAttentionReferences;
-  resolution: {
-    kind: 'inspect' | 'repair' | 'challenge' | 'resolve' | 'decide-exception';
-  };
-}
-
-export interface HandoffValidationIssue {
-  code: string;
-  path: string;
-  message: string;
-  remediation: string;
-  references?: {
-    conditionIds?: string[];
-    obligationIds?: string[];
-  };
-}
-
-export type EvidencePathStatus =
-  | 'completed'
-  | 'unavailable'
-  | 'not-triggered';
-
-export interface EvidencePathState {
-  strategyIndex: number;
-  kind: EvidenceObligation['strategies'][number]['kind'];
-  status: EvidencePathStatus;
-  reason:
-    | 'current-check-observed'
-    | 'check-unavailable'
-    | 'repository-evidence-cited'
-    | 'challenge-not-triggered'
-    | 'challenge-unavailable';
-  references: HandoffEvidenceReference[];
-}
-
-export interface ObligationEvidencePaths {
-  obligationId: string;
-  status: 'completed' | 'unavailable';
-  strategies: EvidencePathState[];
-}
-
 export interface EvaluateHandoffInput extends ProtocolEnvelope {
   contract: TaskContract;
   factBundle: FactBundle;
   currentWorktreeFingerprint: string;
-  currentEvidenceDisposition?: EvidenceDisposition;
-  deliveryExhausted: boolean;
-  verificationRevised: boolean;
   handoff: CognitiveHandoff;
   decision?: HumanDecision;
 }
@@ -215,9 +108,12 @@ export interface HandoffEvaluation extends ProtocolEnvelope {
   effectiveContractId: string;
   attemptId: string;
   factCollectionId: string;
-  requiredChallengeObligationIds: string[];
-  evidencePaths: ObligationEvidencePaths[];
   attention: HandoffAttentionItem[];
+  concernEvidence: Array<{
+    concernId: string;
+    complete: boolean;
+    missing: AdoptionConcern['evidenceRequirements'];
+  }>;
   adoption: {
     authority: 'human';
     status: 'pending' | HumanDecisionAction;
@@ -226,61 +122,59 @@ export interface HandoffEvaluation extends ProtocolEnvelope {
 }
 
 export interface DecisionPacket extends ProtocolEnvelope {
-  humanEvents: TaskContract['humanEvents'];
-  semanticContract: {
-    semanticContractId: string;
+  task: {
+    contractId: string;
     effectiveContractId: string;
-    desiredOutcome: string;
+    humanEvents: TaskContract['humanEvents'];
+    intendedOutcome: string;
     constraints: string[];
     nonGoals: string[];
-    focusPaths: string[];
   };
-  decision: {
-    recommendation: AgentRecommendation;
+  state: {
+    delivery: 'implemented';
+    evidence: HandoffStatus;
+    recommendation: RecommendationAction;
     adoption: HandoffEvaluation['adoption'];
-    humanDecision?: HumanDecision;
-    resolutions: HumanResolution[];
   };
   actualChange: CognitiveHandoff['actualChange'];
-  residualUnknowns: ResidualUnknown[];
-  conditions: Array<{
-    id: string;
-    key: string;
-    statement: string;
-    criticality: 'material' | 'adoption-critical';
-    agentFinding: AdoptionConditionConclusion;
-    obligations: Array<{
-      id: string;
-      key: string;
-      statement: string;
-      falsification: EvidenceObligation['falsification'];
-      agentFinding: EvidenceObligationConclusion;
-      evidencePath: ObligationEvidencePaths;
-    }>;
+  concernFindings: Array<{
+    concern: AdoptionConcern;
+    finding: ConcernFinding;
+    evidenceComplete: boolean;
   }>;
+  residualUnknowns: ResidualUnknown[];
+  reviewFocus: ReviewFocus[];
   attention: HandoffAttentionItem[];
-  reviewDecisions: ReviewDecision[];
+  recommendation: AgentRecommendation;
   runtimeFacts: {
     attemptId: string;
     factCollectionId: string;
     changeFingerprint: string;
-    changedFiles: Array<Pick<FactBundle['changedFiles'][number], 'id' | 'path' | 'previousPath' | 'operation' | 'representation'>>;
+    changedFiles: Array<Pick<FactBundle['changedFiles'][number],
+      'id' | 'path' | 'previousPath' | 'operation' | 'representation'>>;
     checks: Array<{
       verifierId: string;
       definitionId: string;
       argv: string[];
       latestAttempt: FactBundle['checks'][number]['attempts'][number];
       attemptCount: number;
-      baselineRelation: FactBundle['checkComparisons'][number]['relation'];
     }>;
     verifierMutations: FactBundle['verifierMutations'];
-    checkInducedChanges: Array<Pick<FactBundle['checkInducedChanges'][number], 'id' | 'path' | 'operation'>>;
+    checkInducedChanges: Array<Pick<FactBundle['checkInducedChanges'][number],
+      'id' | 'path' | 'operation'>>;
   };
-  evidenceJudgments: {
-    dispositions: Array<Pick<EvidenceDisposition,
-      'dispositionId' | 'attemptId' | 'semanticImpact' | 'proposedRoute' | 'routeRationale' | 'route' | 'entries'>>;
-  };
-  detailSections: Array<'contract' | 'attempts' | 'handoff' | 'events'>;
+  humanDecision?: HumanDecision;
+  detailSections: Array<
+    'contract' | 'baseline' | 'collections' | 'collection' | 'check' | 'log'
+    | 'handoff' | 'decision' | 'events'
+  >;
+}
+
+export interface HandoffValidationIssue {
+  code: string;
+  path: string;
+  message: string;
+  remediation: string;
 }
 
 export class HandoffValidationError extends Error {

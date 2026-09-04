@@ -1,3 +1,5 @@
+/** Authority-bearing and Agent-authored task meaning stay physically separate. */
+
 export type HumanEventKind = 'task' | 'correction' | 'exception' | 'decision';
 
 export interface HumanEvent {
@@ -5,34 +7,13 @@ export interface HumanEvent {
   kind: HumanEventKind;
   content: string;
   contentFingerprint: string;
-  provider?: string;
-  nativeId?: string;
-}
-
-export type InterpretationField =
-  | 'desired-outcome'
-  | 'constraint'
-  | 'non-goal'
-  | 'focus-path'
-  | 'material-decision';
-
-export interface InterpretationBasis {
-  humanEventIds: string[];
-  repositoryEvidenceIds: string[];
+  capture: 'unattested-input';
 }
 
 export interface AgentInterpretation {
-  id: string;
-  field: InterpretationField;
-  value: string;
-  basis: InterpretationBasis;
-}
-
-export interface RepositoryEvidence {
-  id: string;
-  path: string;
-  startLine: number;
-  endLine: number;
-  text: string;
-  digest: string;
+  authority: 'agent-judgment';
+  basisHumanEventIds: string[];
+  desiredOutcome: string;
+  constraints: string[];
+  nonGoals: string[];
 }
