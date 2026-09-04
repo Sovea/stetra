@@ -1,6 +1,6 @@
 {
   "protocol": "cognitive-adoption-paired-evaluation",
-  "schemaVersion": "1",
+  "schemaVersion": "2",
   "registrationFingerprint": "sha256",
   "taskId": "task-kebab-case",
   "taskType": "bugfix",
@@ -25,6 +25,7 @@
     ]
   },
   "taskPrompt": "Exact prompt shown in both conditions.",
+  "controlHandoffPrompt": "Explain actual behavior, mechanism, material invariants, failure paths, effects, tradeoffs, unknowns, review focus, and an adoption recommendation after implementation.",
   "interactionPolicy": {
     "mode": "initial-prompt-only",
     "registeredClarifications": []

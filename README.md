@@ -27,6 +27,8 @@ stetra status .
 Review and trust the generated project hooks when Codex or Claude Code prompts
 you to do so.
 
-Then give the coding task to your Agent as usual. The generated Host adapter
-guides the task from preparation and implementation through collected evidence,
-handoff, and your final decision.
+Then give the coding task to your Agent as usual. Project admission policy,
+generated Host hooks, and one compact Skill apply Stetra only to admitted coding
+changes. The visible path is `Align -> Work -> Decide`: the Agent implements
+normally, Stetra collects exact Git and Check facts, the Agent explains the
+actual change, and you accept, correct, reject, or defer it.

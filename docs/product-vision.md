@@ -1,369 +1,159 @@
 # Product vision
 
-This document defines the product Stetra should become, the developer problem
-it exists to solve, and the observable picture of success. It is a long-term
-direction, not a claim that every capability described here is implemented or
-effective today.
-
-The authoritative system boundaries and target design live in
-[Architecture](architecture.md). Current executable behavior lives in
-[Change workflow](change-workflow.md). Product effectiveness remains
-unverified until measured against a strong simpler baseline.
-
 ## The problem
 
-Coding Agents can investigate, design, and generate changes much faster than a
-developer can reconstruct and evaluate them. Their work also produces a large
-volume of transient plans, analysis, repair notes, review prose, and completion
-summaries. Reading all of it is unrealistic. Skipping it can leave the
-developer with only the Agent's conclusion that the task is complete.
+Coding Agents can investigate and implement changes faster than a developer can
+reconstruct what they actually did. The developer is often left with a diff,
+green checks, and an Agent completion story, but not a reliable understanding
+of changed behavior, ownership, invariants, failure paths, or evidence gaps.
 
-This creates an engineering-control gap:
+The resulting control gap is:
 
 ```text
-developer intent
-  -> rapidly generated investigation and implementation
-  -> rapidly generated explanation
-  -> developer sees the conclusion but loses the actual system change
+developer request
+  -> rapid Agent implementation
+  -> persuasive completion summary
+  -> adoption without an equally rapid recovery of engineering understanding
 ```
 
-The implementation may compile and pass self-authored tests while still:
-
-- solving a symptom instead of the intended invariant;
-- silently changing compatibility, ownership, or failure behavior;
-- redefining acceptance through a modified verifier;
-- omitting concurrency, recovery, or operational paths;
-- relying on stale or incomplete evidence;
-- leaving the developer unable to explain or maintain the change after the
-  Agent context disappears.
-
-The failure is not simply low code quality. It is the loss of the control loop
-between developer intent, engineering reality, evidence, understanding, and
-adoption.
+The implementation can be correct while the developer loses the ability to
+explain or maintain it. It can also pass self-modified verification, solve a
+symptom instead of an invariant, or leave unsupported compatibility and
+recovery claims hidden in prose.
 
 ## Product thesis
 
-Stetra should let developers delegate implementation without delegating away
-their understanding or engineering authority.
+Stetra lets developers delegate implementation without delegating away
+engineering understanding or adoption authority.
 
-It is an engineering control harness around Coding Agents. The Agent
-investigates, designs, implements, diagnoses, and recommends. Stetra keeps the
-engineering thread intact by binding:
+It binds:
 
 ```text
 what the developer authorized
-  -> what the workflow actually observed
-  -> what the Agent concludes from that evidence
+  -> what the Runtime observed
+  -> what the Agent concludes
   -> what remains unsupported or unknown
-  -> what the developer finally decides
+  -> what the developer decides
 ```
 
-Stetra should protect five first-class developer rights throughout a delegated
-change:
+Stetra is a task-scoped project layer embedded in existing Coding Agent Hosts.
+It does not replace their conversation, planning, execution, tools, or
+subagents.
 
-1. **Direction.** The developer owns desired outcomes, constraints, non-goals,
-   and long-lived tradeoffs.
-2. **Visibility.** The developer can inspect what actually changed and which
-   checks actually ran, independently of Agent prose.
-3. **Intervention.** Control returns when continuing requires a semantic
-   change, verification relaxation, exception, irreversible effect, or
-   material long-lived choice.
-4. **Understanding.** The developer can recover the behavior, mechanism,
-   invariants, ownership, failure paths, and important effects of the actual
-   result without replaying the full Agent process.
-5. **Adoption.** Implementation completion, evidence sufficiency, Agent
-   recommendation, and Human acceptance remain different states.
+## Primary job
 
-The product is successful when the Agent can do more execution work while the
-developer remains the person who can explain, steer, challenge, and responsibly
-adopt the resulting system change.
+For one admitted Agent-authored change, help the developer answer:
 
-## The durable value proposition
+1. Did the implementation remain connected to my request and corrections?
+2. What behavior and mechanism actually changed?
+3. What verification actually ran, and did the verification surface change?
+4. What is unsupported, stale, unrepresentable, or still unknown?
+5. Where will direct review most affect adoption?
+6. Do I accept, request correction, reject, or defer this exact result?
 
-Stetra should not compete on making a model intrinsically smarter or improving
-its first-draft benchmark score. Model and Host improvements will keep moving
-that frontier.
+Everything Stetra persists or asks the Agent to author must change one of those
+answers.
 
-Its durable value is a lower-cost engineering control loop for delegated
-changes:
+## Product experience
 
-- **Semantic steering before implementation.** The Agent's bounded
-  interpretation remains connected to exact developer authority.
-- **Independent visibility during delivery.** Actual changes, verification,
-  Attempts, and fact freshness come from the workflow rather than a completion
-  story.
-- **Evidence-directed convergence.** Concrete adverse facts and bounded
-  evidence gaps route to investigation, local correction, recollection, or a
-  Human-owned decision.
-- **Cognitive reconstruction after implementation.** The final surface models
-  the actual system change instead of preserving a stale plan or transcript.
-- **Explicit ownership.** The developer accepts, requests correction, rejects,
-  or defers the exact current result.
+The developer continues to talk naturally to Codex, Claude Code, Pi, or another
+Host. Stetra creates no state for ordinary conversation. A coding task enters
+Stetra only through an explicit developer choice or project admission policy.
 
-This is not a guarantee of correct code. It is a control surface for moving an
-Agent-authored implementation into an engineering outcome a developer can
-understand and own.
-
-## Role in implementation quality
-
-Implementation and technical design quality are too important to abandon, but
-too broad for Stetra to own as a code-generation promise.
+The visible workflow is:
 
 ```text
-investigation, planning, first-draft generation, local implementation repair
-  -> model, Coding Agent, execution Host, and implementation harness
+Align
+  Confirm the outcome, constraints, and verification boundary.
 
-quality convergence of the result considered for adoption
-  -> Stetra supplies semantic boundaries, facts, evidence feedback,
-     decision forks, and recollection
+Work
+  The Agent implements through its normal Host. Stetra independently records
+  only baseline, current change, and verification facts at task boundaries.
+
+Decide
+  The Agent explains the actual current change. Stetra combines that judgment
+  with Runtime facts and presents one compact Human decision surface.
 ```
 
-Stetra can influence the quality distribution of adopted changes through:
+Routine work stays close to ordinary Agent use. Consequential assurance appears
+only because of an explicit Human choice, project policy, or concrete adverse
+fact. Stetra never assigns scalar trust, readiness, confidence, complexity,
+risk, or quality scores.
 
-- **Selection:** unsupported work does not acquire the status of a sufficiently
-  supported change merely because its author says it is complete.
-- **Feedback:** review and correction target an explicit claim, fact, or
-  plausible failure rather than generic commentary.
-- **Iteration:** a local reversible defect can drive a bounded successor
-  Attempt and new facts; semantic drift or verification relaxation returns to
-  the developer.
+## Durable differentiation
 
-Stetra does not choose the best implementation or operate the Agent's coding
-loop. It makes concrete weaknesses easier to expose and route, and makes it
-harder for a persuasive explanation to collapse facts, judgment, and authority.
+A strong Markdown Skill and Trellis-style finish flow are decisive simpler
+baselines. Stetra has no value if it only produces better prose.
 
-## The product control loop
+Its Runtime must justify itself by mechanically providing capabilities text
+instructions cannot:
 
-### 1. Set direction
+- bind an exact Human request to a pre-change Git baseline;
+- freeze and execute exact argv checks without a shell;
+- preserve failed, timed-out, and superseded observations;
+- detect check-induced and verifier-surface changes;
+- reject a Handoff built on stale facts;
+- keep Runtime facts separate from Agent judgment;
+- bind Human adoption to one exact current Handoff and Fact Collection.
 
-Before implementation, the Agent records a compact interpretation of the
-desired outcome, constraints, non-goals, and any adoption-changing conditions.
-Repository-discoverable questions remain Agent work. Only unresolved product
-meaning, long-lived tradeoffs, exceptions, or external effects interrupt the
-developer.
+The differentiated product is not a larger workflow. It is a lower-cost Human
+control loop over probabilistic Agent work.
 
-The developer confirms what the change must mean, not a brittle implementation
-plan.
+## Relationship to Trellis and execution harnesses
 
-### 2. Delegate execution
-
-The Agent uses its Host's normal repository, shell, session, and optional
-subagent capabilities. Stetra does not replace that execution loop. It freezes
-the task and verification boundary needed for later evidence and captures
-ordered Attempts.
-
-Routine work should remain close to ordinary Agent use. Additional ceremony is
-justified only by an explicit semantic requirement, observed fact, evidence
-gap, Host limitation, or Human-owned choice.
-
-### 3. Observe engineering reality
-
-The Runtime collects the complete baseline-to-current change, exact verifier
-definitions and attempts, verifier-surface changes, bounded logs, and fact
-currency. A passing command is one observation, not a semantic conclusion.
-
-The developer need not watch every edit. Stetra must make the state of the
-actual change inspectable when it matters.
-
-### 4. Converge through evidence
-
-A concrete non-passing fact, changed verifier surface, failed falsification, or
-bounded unknown can route to:
+Execution harnesses may own repository context, project specs, task planning,
+model selection, subagents, implementation, tests, and repair.
 
 ```text
-Agent investigation
-local reversible correction and recollection
-verification revision with preserved history
-direct Human review
-exact Human resolution
-```
-
-Stetra structures the gap and preserves provenance. The Agent still owns the
-engineering diagnosis and repair. Runtime does not infer semantic cause from
-filenames, dependencies, diff size, keywords, or test output.
-
-### 5. Reconstruct the actual system change
-
-After implementation, the Agent reconstructs a compact model from the current
-change and current facts rather than copying a pre-implementation plan. It
-answers:
-
-- **Behavior:** what a caller, user, operator, or adjacent subsystem observes
-  differently;
-- **Mechanism:** which state transitions, ownership boundaries, data flows, or
-  control paths implement that behavior;
-- **Invariants:** what important behavior is intended to remain unchanged;
-- **Failure behavior:** what happens on error, interruption, retry, rollback,
-  or partial completion;
-- **System effects:** what changed in interfaces, persistence, concurrency,
-  performance, security, or operations;
-- **Tradeoffs:** which materially different alternative was rejected and why;
-- **Unknowns:** what current evidence cannot establish.
-
-These remain evidence-bounded Agent judgments. Structure does not promote them
-into Runtime facts.
-
-### 6. Return the decision
-
-The developer receives a compact decision surface that leads with:
-
-```text
-implementation state
-evidence state
-Agent recommendation
-Human decision state
-```
-
-It explains the actual solution, the mechanical verification change, the few
-unknowns that can change adoption, and the direct inspections or decisions with
-the highest consequence. Raw logs, IDs, and complete history remain available
-for drill-down.
-
-The developer then accepts, requests correction, rejects, or defers the exact
-Handoff and facts. Acceptance cannot erase contradictory evidence.
-
-## Relationship to Coding Agents and execution harnesses
-
-Coding Agents, Trellis, GSD, and provider-native harnesses may own repository
-context, planning, task decomposition, model selection, tool use, subagents,
-worktrees, and implementation repair.
-
-```text
-Coding Agent / execution harness
-  investigate -> design -> implement -> test -> repair
+Coding Agent / Trellis / execution Host
+  investigate -> plan -> implement -> test -> repair
 
 Stetra
-  preserve intent -> bind facts -> expose evidence gaps and material forks
+  preserve authority -> observe facts -> expose evidence boundaries
   -> reconstruct system meaning -> protect Human adoption
 ```
 
-Stetra may influence the execution loop through a concrete evidence gap or
-Human decision, but it does not reproduce or schedule that loop. Once the
-decision surface exists, an ordinary completion summary must not replace or
-precede it in a way that implies unsupported success.
+Stetra must compose with those systems. It should be possible to admit a task
+after another harness finishes planning and to use the Stetra Decision Brief
+inside that harness's finish flow without changing Core.
 
-## Why this is more than a Markdown Skill
+## North Star
 
-A strong Markdown Skill is the decisive simpler baseline. It can request goals,
-unknowns, falsification, and an excellent final format. Stetra has no
-differentiated value if it only standardizes that prose.
+> More Agent-authored production changes confidently adopted per active
+> developer hour, without degrading implementation outcomes, developer
+> understanding, evidence honesty, or Human authority.
 
-The Runtime must justify itself through capabilities text instructions cannot
-mechanically provide:
+The success criteria remain separate rather than collapsing into a score:
 
-- freeze the task and verification boundary used by one Attempt;
-- observe the actual baseline-to-current change independently of Agent prose;
-- execute and preserve exact check outcomes, budgets, and logs;
-- detect verifier-surface changes and stale post-check facts;
-- retain adverse evidence and superseded Attempts;
-- prevent conclusions from exceeding declared evidence coverage;
-- bind correction and Human adoption to an exact Handoff and fact collection.
+- implementation outcome;
+- task and Agent overhead;
+- time to a confident adoption decision;
+- correctness of behavior, invariant, ownership, and failure-path
+  understanding;
+- useful correction rounds;
+- evidence integrity;
+- explicit adoption result.
 
-These mechanisms do not prove natural-language truth. Their narrower value is
-that, when the workflow is used, facts, judgments, unknowns, and authority
-cannot be collapsed merely because the Agent writes a persuasive explanation.
+## Evidence status
 
-## Product boundaries
+Product effectiveness is unverified. Unit tests, type checks, package builds,
+and black-box CLI tests establish engineering integrity and usability
+prerequisites, not adoption value.
 
-Stetra should own:
+Evaluation order is:
 
-- exact task semantics and material-fork handling;
-- Runtime-observed repository and verification facts;
-- evidence coverage, contradiction ceilings, and bounded correction lineage;
-- the actual-change model, cognitive handoff, and Human adoption boundary;
-- thin, honest integration with execution Hosts.
+1. packed-package black-box usability with natural task prompts;
+2. paired comparison with an ordinary Agent and strong Handoff Skill;
+3. paired comparison with a Trellis-style managed task;
+4. composition of Trellis plus Stetra;
+5. only then, explicit product-owner acceptance of a scoped claim.
 
-Stetra should not become:
-
-- a Coding Agent, model router, generic planner, or execution scheduler;
-- an Adaptive Delivery Plane or another implementation harness;
-- a replacement for Trellis, GSD, repository tools, or provider-native
-  orchestration;
-- a generic code-review bot or library of universal reviewer prompts;
-- a repository wiki, transcript archive, specification warehouse, or broad
-  project-memory system;
-- a heuristic quality system based on filenames, dependencies, diff size,
-  token overlap, or generic risk keywords;
-- a scalar trust, readiness, confidence, cognition, or code-quality score;
-- an automated approver or unbounded multi-Agent debate loop.
-
-Independent Challenge is an optional evidence strategy backed only by a Host
-that can attest a genuinely separate context. It is not a Stetra-owned Agent
-role or mandatory lifecycle stage.
-
-## A concrete success picture
-
-For a consequential Agent-authored change:
-
-```text
-Direction
-  The developer can confirm the intended behavior and constraints before the
-  implementation silently diverges.
-
-Execution
-  The Agent works without continuous supervision through its normal Host.
-
-Reality
-  The workflow captures the actual diff, checks, Attempts, verifier changes,
-  and fact freshness independently of Agent prose.
-
-Convergence
-  A concrete adverse fact or plausible failure drives bounded investigation,
-  correction, new facts, or a material Human choice.
-
-Understanding
-  The developer can explain the resulting behavior, mechanism, invariants,
-  ownership, and failure entry points without replaying the transcript.
-
-Adoption
-  The developer sees what is supported, partial, contradicted, and unknown;
-  inspects the few surfaces that can change the decision; and explicitly owns
-  the result.
-```
-
-## North Star and evidence
-
-The directional North Star is:
-
-> More production changes confidently adopted per active developer hour,
-> without degrading implementation outcomes, developer understanding, evidence
-> honesty, or Human authority.
-
-Success is conjunctive. Faster review with a worse implementation is failure.
-Correct code that leaves the developer unable to understand the change is
-failure. A rigorous packet that increases total work without changing a real
-decision is also failure.
-
-Evaluation retains separate observations for implementation outcome,
-convergence, cognition, Human cost, Agent cost, evidence integrity, and
-adoption. It never collapses them into one score.
-
-The decisive baseline is a strong Markdown Skill requesting the same reasoning
-discipline and final presentation. Stetra must demonstrate that independent
-facts, evidence ceilings, lineage, and decision binding improve a real adoption
-or reduce cognitive recovery enough to justify their cost.
-
-## Evolution order
-
-1. **Prove the task-scoped control loop.** Make the current path black-box
-   usable with compact semantic authoring and a decision surface materially
-   different from an ordinary completion summary.
-2. **Prove evidence-directed convergence.** Show that at least one concrete
-   adverse finding or gap drives a useful correction, new fact, or Human choice
-   without creating an open-ended reviewer loop.
-3. **Add a narrow Host capability only for a proven consumer.** Fresh-context
-   Challenge, stronger enforcement, or isolation enters through an honest
-   provider-neutral boundary, never a simulated attestation.
-4. **Consider longitudinal continuity last.** Cross-task decisions and observed
-   outcomes require separate evidence that they improve later decisions.
-
-Planned capabilities are hypotheses, not a feature checklist. If a strong
-Markdown Skill reaches the same adoption quality and developer understanding at
-substantially lower cost, Stetra must become smaller rather than defend its
-existing complexity.
+If Stetra does not lower adoption cost or change a real review decision while
+preserving implementation and cognition, it must become smaller rather than
+defend protocol complexity.
 
 ## The product in one sentence
 
 > Stetra keeps the engineering control loop between developer intent and the
-> actual system change intact, so delegated code can be understood, challenged,
-> and explicitly owned by the developer.
+> actual Agent-authored change intact, so the result can be understood,
+> challenged, and explicitly owned by the developer.

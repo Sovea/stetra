@@ -27,10 +27,12 @@ the raw data.
 One pair runs the same task twice from the same immutable repository state:
 
 - `control`: a fresh instance of the coding agent receives the task,
-  repository instructions, and ordinary repository tools.
+  repository instructions, ordinary repository tools, and the registered
+  strong Handoff prompt. It receives no Stetra Runtime facts.
 - `treatment`: a fresh instance of the same agent receives the same inputs and
-  uses the `prepare`, `collect`, optional repair or revision, `handoff`, and
-  `decide` lifecycle under the `cognitive-adoption` protocol.
+  uses the generated Host adapter and `begin`, `collect`, optional repair or
+  timeout retry, `handoff`, and Human `decide` lifecycle under schema `2` of
+  the `cognitive-adoption` protocol.
 
 Model/build, Host surface, tool policy, reasoning settings, time limit,
 dependencies, and starting Git state must match. Context, patches, messages,
@@ -106,6 +108,7 @@ Before either condition, create a task record from `task.template.json` with:
 
 - immutable commit and submodule state;
 - exact task prompt and task type;
+- exact strong Handoff prompt used by the control;
 - expected behavior and review-relevant invariants;
 - compatibility, ownership, and failure-entry questions where applicable;
 - any clarification delivery rules and exact registered responses;
@@ -160,9 +163,9 @@ preflight blocks both conditions; it never selectively delays or replaces one.
 Before effectiveness pairs, the treatment workflow must pass a black-box
 usability gate using only packed `@sovea/stetra-core`, packed `@sovea/stetra`,
 and the generated Host Adapter. The treatment Agent may not inspect the Stetra
-source repository or tests. A routine task should require zero schema
-corrections; a conditioned, challenged, or attention-bearing task may require
-at most one. Failure is a product-usability finding, not Agent noncompliance.
+source repository or tests. A routine task should require zero input-shape
+corrections; a consequential or Attention-bearing task may require at most one.
+Failure is a product-usability finding, not Agent noncompliance.
 
 Every run preregisters one wall-clock deadline and communicates the exact
 absolute deadline to both Agents before work starts. The outer evaluator
@@ -198,7 +201,7 @@ Before review, render both conditions as `left` and `right`:
 - include the full changed-file set, complete patch, check facts, and a compact
   system explanation for each output;
 - preserve semantic differences and unknowns without polishing one condition;
-- present treatment Review Map information in a neutral review-attention form;
+- present treatment review-focus information in a neutral review-attention form;
 - commit the randomized mapping before review.
 
 The reviewer records raw judgments for each side:
@@ -239,7 +242,7 @@ pair publish:
 - provenance-separated phase durations rather than one inferred “thinking” time;
 - changed/out-of-scope files and acceptance checks;
 - raw cognition findings for behavior, invariants, ownership, and failure entry;
-- Review Map usefulness finding;
+- review-focus usefulness finding;
 - defects, unnecessary abstraction, contrary evidence, and protocol
   deviations.
 
