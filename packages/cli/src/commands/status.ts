@@ -5,6 +5,7 @@ import { Command } from 'commander';
 
 import { captureGitWorktree } from '../facts/worktree.ts';
 import { inspectProjectInstallation } from '../project/init.ts';
+import { readProjectConfig } from '../schemas/config.ts';
 import {
   DELEGATION_PROTOCOL,
   DELEGATION_SCHEMA_VERSION,
@@ -39,6 +40,15 @@ export function registerStatusCommand(
         message: 'Run `stetra init .`; use --force only for owner-modified generated content you intend to replace.',
       });
     }
+    let config: ReturnType<typeof readProjectConfig> | undefined;
+    try {
+      config = readProjectConfig(projectRoot);
+    } catch (error) {
+      issues.push({
+        code: 'project-config-invalid',
+        message: error instanceof Error ? error.message : String(error),
+      });
+    }
     let worktree: { status: 'supported' | 'unsupported'; message?: string };
     try {
       await captureGitWorktree(projectRoot);
@@ -56,6 +66,13 @@ export function registerStatusCommand(
       version: productVersion,
       issues,
       installation,
+      ...(config ? {
+        config: {
+          admission: config.admission,
+          defaultVerificationProfile: config.defaultVerificationProfile,
+          verificationProfiles: Object.keys(config.verificationProfiles).sort(),
+        },
+      } : {}),
       worktree,
       controlPlane: {
         kind: 'cli',
@@ -64,6 +81,7 @@ export function registerStatusCommand(
       },
       paths: {
         manifest: join(projectRoot, '.stetra', 'manifest.json'),
+        config: join(projectRoot, '.stetra', 'config.json'),
         tasks: join(projectRoot, '.stetra', 'tasks'),
       },
     }, source);

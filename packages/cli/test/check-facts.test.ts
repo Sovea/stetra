@@ -276,7 +276,6 @@ async function run(
   const definition: VerificationDefinition = {
     verifierId: `verifier:${key}`,
     definitionId: digest(`${key}:definition`),
-    revision: 1,
     key,
     rationale: 'Exercise streaming check facts.',
     execution: {
@@ -290,7 +289,6 @@ async function run(
       },
     },
     executionInputs,
-    baseline: { mode: 'unknown' },
     verifierRefs: [],
   };
   const checks = await runFrozenChecks({

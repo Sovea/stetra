@@ -14,10 +14,8 @@ import {
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 
 import {
-  HOST_WORKFLOW_REFERENCES,
   renderHostPointerBlock,
   renderHostSkill,
-  renderHostWorkflowReference,
   type HostAdapter,
 } from '../adapters/templates.ts';
 import { hostAdapterDefinitions } from '../adapters/definition.ts';
@@ -33,6 +31,7 @@ import {
   type ManifestArtifact,
   type ProjectManifest,
 } from '../schemas/project.ts';
+import { DEFAULT_PROJECT_CONFIG, readProjectConfig } from '../schemas/config.ts';
 import { parseArtifact } from '../validation.ts';
 import { extractHostHookFragment, upsertHostHookFragment } from './json-fragment.ts';
 
@@ -120,6 +119,11 @@ export function initializeProject(options: InitializeProjectOptions = {}) {
       || readFileSync(currentManifestPath, 'utf8') !== manifestContent) {
       writeProjectFile(projectRoot, MANIFEST_PATH, manifestContent);
     }
+    const configPath = projectPath(projectRoot, '.stetra/config.json');
+    if (!existsSync(configPath)) {
+      writeProjectFile(projectRoot, '.stetra/config.json', `${JSON.stringify(DEFAULT_PROJECT_CONFIG, null, 2)}\n`);
+    }
+    readProjectConfig(projectRoot);
   }
 
   const counts = countActions(plan);
@@ -223,9 +227,10 @@ function buildDesiredArtifacts(adapters: HostAdapter[]): DesiredArtifact[] {
     markers: GITIGNORE_MARKERS,
     content: [
       GITIGNORE_MARKERS.start,
-      '.stetra/inbox/',
       '.stetra/host-sessions/',
       '.stetra/tasks/',
+      '.stetra/staging/',
+      '.stetra/worktree-operation.lock',
       GITIGNORE_MARKERS.end,
     ].join('\n'),
   }];
@@ -245,13 +250,6 @@ function buildDesiredArtifacts(adapters: HostAdapter[]): DesiredArtifact[] {
       kind: 'file',
       content: renderHostSkill(adapter),
     });
-    for (const workflow of HOST_WORKFLOW_REFERENCES) {
-      artifacts.push({
-        path: `${skillRoot}/references/${workflow}.md`,
-        kind: 'file',
-        content: renderHostWorkflowReference(adapter, workflow),
-      });
-    }
     artifacts.push({
       path: definition.pointerDocument,
       kind: 'managed-block',

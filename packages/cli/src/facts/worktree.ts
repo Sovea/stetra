@@ -21,9 +21,9 @@ import { runBufferedCommand } from '../infrastructure/process.ts';
 import { sha256, stableFingerprint } from '../protocol.ts';
 
 const WORKFLOW_OUTPUT_PREFIXES = [
-  '.stetra/inbox/',
   '.stetra/tasks/',
   '.stetra/staging/',
+  '.stetra/host-sessions/',
 ] as const;
 const WORKFLOW_OUTPUT_FILES = new Set(['.stetra/worktree-operation.lock']);
 const GIT_OUTPUT_LIMIT = 256 * 1024 * 1024;

@@ -23,32 +23,24 @@ export interface RunCliOptions {
 }
 
 export interface HostEnvironmentDisclosure {
-  surface: 'thin-skill';
-  independentChallenge: {
-    availability: 'unavailable';
-    unavailableBehavior: 'author-handoff-preserving-gap';
-  };
+  surface: 'embedded-skill-and-hooks';
+  taskAdmission: 'project-policy';
   verificationExecution: {
     authoritativeCollector: 'stetra-runtime';
-    trigger: 'change-collect';
+    trigger: 'task-collect';
     processModel: 'frozen-argv-without-shell';
-    preparePreflightScope: 'top-level-executable-only';
     directHostExecution: 'agent-evidence-only';
   };
 }
 
 export function hostEnvironmentDisclosure(): HostEnvironmentDisclosure {
   return {
-    surface: 'thin-skill',
-    independentChallenge: {
-      availability: 'unavailable',
-      unavailableBehavior: 'author-handoff-preserving-gap',
-    },
+    surface: 'embedded-skill-and-hooks',
+    taskAdmission: 'project-policy',
     verificationExecution: {
       authoritativeCollector: 'stetra-runtime',
-      trigger: 'change-collect',
+      trigger: 'task-collect',
       processModel: 'frozen-argv-without-shell',
-      preparePreflightScope: 'top-level-executable-only',
       directHostExecution: 'agent-evidence-only',
     },
   };

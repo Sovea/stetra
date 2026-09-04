@@ -19,15 +19,16 @@ const expectedVersion = JSON.parse(
   readFileSync(resolve(workspace, 'packages', 'core', 'package.json'), 'utf8'),
 ).version;
 const temporary = mkdtempSync(join(tmpdir(), 'stetra-core-release-'));
+
 try {
   const packDirectory = join(temporary, 'pack');
   const consumer = join(temporary, 'consumer');
   mkdirSync(packDirectory, { recursive: true });
   mkdirSync(consumer, { recursive: true });
   writeFileSync(join(consumer, 'package.json'), '{"private":true}\n', 'utf8');
-
   const coreTarball = packPackage(join(workspace, 'packages', 'core'), packDirectory);
   run(npmCommand(), ['install', coreTarball, '--ignore-scripts', '--no-audit', '--no-fund'], consumer);
+
   const installedCore = join(consumer, 'node_modules', '@sovea', 'stetra-core');
   const manifest = JSON.parse(readFileSync(join(installedCore, 'package.json'), 'utf8'));
   assert.equal(manifest.name, '@sovea/stetra-core');
@@ -39,111 +40,85 @@ try {
   assert.deepEqual(Object.keys(core).sort(), ['compileDelegation', 'evaluateHandoff']);
   const compiled = core.compileDelegation({
     protocol: 'cognitive-adoption',
-    schemaVersion: '1',
-    developerEvents: [{
-      key: 'request', content: 'Deliver an inspectable Cognitive Adoption task.',
-    }],
-    task: {
-      basis: { developerEventKeys: ['request'], repositoryEvidenceKeys: [] },
-      desiredOutcome: 'Expose the Cognitive Adoption workflow.',
-      constraints: [], nonGoals: [], focus: [],
+    schemaVersion: '2',
+    humanEvent: { content: 'Deliver an inspectable change.' },
+    interpretation: {
+      desiredOutcome: 'Expose the schema 2 Core workflow.',
+      constraints: [],
+      nonGoals: [],
     },
-    materialDecisionForks: [],
-    assurance: {
-      kind: 'routine',
-      rationale: 'The isolated Core smoke has no material adoption Condition.',
-    },
-    hostPolicyRequirements: [],
-    executionBudget: {
+    assurance: { mode: 'routine' },
+    verification: { mode: 'no-command', rationale: 'The isolated fixture has no command surface.' },
+    executionPolicy: {
       checkTimeoutMs: 300_000,
-      maxDeliveryRepairs: 1,
-      timeoutRetry: { mode: 'disabled' },
+      maxTimeoutMs: 900_000,
+      maxTimeoutRetriesPerCheck: 1,
     },
-    noCommandRationale: 'The isolated Core smoke has no repository command surface.',
   });
   assert.equal(compiled.status, 'delegation-compiled');
   const contract = compiled.contract;
   const changedFile = {
-    id: 'file:example', path: 'example.ts', operation: 'modified',
+    id: 'file:example',
+    path: 'example.ts',
+    operation: 'modified',
     before: { kind: 'file', contentDigest: sha256('before'), mode: '100644' },
     after: { kind: 'file', contentDigest: sha256('after'), mode: '100644' },
     representation: 'text',
   };
-  const summary = (name) => ({
-    head: null, fingerprint: sha256(name), entryCount: 1,
-  });
+  const summary = (name) => ({ head: null, fingerprint: sha256(name), entryCount: 1 });
   const bundleBase = {
-    protocol: 'cognitive-adoption', schemaVersion: '1',
+    protocol: 'cognitive-adoption',
+    schemaVersion: '2',
     effectiveContractId: contract.effectiveContractId,
     attemptId: 'attempt:1',
-    baseline: summary('baseline'), preCheck: summary('current'), current: summary('current'),
-    baselineVerification: (() => {
-      const value = {
-        preCheck: summary('baseline'), postCheck: summary('baseline'),
-        preCheckExecutionInputs: [], postCheckExecutionInputs: [],
-        checkInducedChanges: [], checks: [],
-      };
-      return { fingerprint: stableFingerprint(value), ...value };
-    })(),
-    preCheckExecutionInputs: [], currentExecutionInputs: [],
+    baseline: summary('baseline'),
+    preCheck: summary('current'),
+    current: summary('current'),
+    preCheckExecutionInputs: [],
+    currentExecutionInputs: [],
     changeFingerprint: stableFingerprint([changedFile]),
-    changedFiles: [changedFile], checkInducedChanges: [], checks: [], checkComparisons: [],
-    evidenceConcerns: [], verifierMutations: [],
-    environment: {
-      platform: process.platform, architecture: process.arch, executables: [],
-    },
+    changedFiles: [changedFile],
+    checkInducedChanges: [],
+    checks: [],
+    verifierMutations: [],
+    environment: { platform: process.platform, architecture: process.arch, executables: [] },
     patch: { path: 'change.patch', digest: sha256('patch'), byteLength: 5 },
     provenance: { collector: 'stetra-cli', cliVersion: expectedVersion, coreVersion: expectedVersion },
   };
-  const factCollectionId = collectionFingerprint(bundleBase);
-  const factBundle = { ...bundleBase, factCollectionId };
+  const factBundle = { ...bundleBase, factCollectionId: stableFingerprint(bundleBase) };
   const handoffProjection = {
-    protocol: 'cognitive-adoption', schemaVersion: '1', handoffId: 'handoff:smoke',
+    protocol: 'cognitive-adoption',
+    schemaVersion: '2',
+    handoffId: 'handoff:smoke',
     effectiveContractId: contract.effectiveContractId,
-    attemptId: factBundle.attemptId, factCollectionId,
+    attemptId: factBundle.attemptId,
+    factCollectionId: factBundle.factCollectionId,
     actualChange: {
-      behavior: 'The isolated consumer exposes the Cognitive Adoption kernel.',
-      mechanism: ['The two public Core operations remain the complete runtime surface.'],
-      preservedInvariants: ['Human adoption remains separate from Agent recommendation.'],
+      behavior: 'The installed Core exposes the schema 2 kernel.',
+      mechanism: ['The two public runtime operations remain the complete surface.'],
+      preservedInvariants: ['Human adoption remains separate.'],
       failureAndRecovery: [],
-      importantEffects: ['Two public operations remain.'],
+      importantEffects: [],
       materialTradeoffs: [],
     },
-    obligationConclusions: [],
-    conditionConclusions: [],
-    residualUnknowns: [], reviewDecisions: [],
+    concernFindings: [],
+    residualUnknowns: [],
+    reviewFocus: [],
     recommendation: { action: 'accept', rationale: 'The installed API matches the contract.', caveats: [] },
   };
-  const handoff = {
-    ...handoffProjection,
-    handoffFingerprint: stableFingerprint(handoffProjection),
-  };
+  const handoff = { ...handoffProjection, handoffFingerprint: stableFingerprint(handoffProjection) };
   const evaluation = core.evaluateHandoff({
-    protocol: 'cognitive-adoption', schemaVersion: '1', contract, factBundle,
+    protocol: 'cognitive-adoption',
+    schemaVersion: '2',
+    contract,
+    factBundle,
     currentWorktreeFingerprint: factBundle.current.fingerprint,
-    deliveryExhausted: false, verificationRevised: false, handoff,
+    handoff,
   });
   assert.equal(evaluation.status, 'handoff-ready');
   assert.deepEqual(evaluation.adoption, { authority: 'human', status: 'pending' });
 } finally {
   rmSync(temporary, { recursive: true, force: true });
-}
-
-function collectionFingerprint(bundle) {
-  return stableFingerprint({
-    protocol: bundle.protocol, schemaVersion: bundle.schemaVersion,
-    effectiveContractId: bundle.effectiveContractId, attemptId: bundle.attemptId,
-    baseline: bundle.baseline, preCheck: bundle.preCheck, current: bundle.current,
-    preCheckExecutionInputs: bundle.preCheckExecutionInputs,
-    currentExecutionInputs: bundle.currentExecutionInputs,
-    baselineVerification: bundle.baselineVerification,
-    changeFingerprint: bundle.changeFingerprint, changedFiles: bundle.changedFiles,
-    checkInducedChanges: bundle.checkInducedChanges, checks: bundle.checks,
-    checkComparisons: bundle.checkComparisons,
-    evidenceConcerns: bundle.evidenceConcerns,
-    verifierMutations: bundle.verifierMutations, environment: bundle.environment,
-    patch: bundle.patch ?? null, provenance: bundle.provenance,
-  });
 }
 
 function sha256(value) {
@@ -174,10 +149,16 @@ function packPackage(packageDirectory, destination) {
 
 function run(command, args, cwd) {
   const result = spawnSync(command, args, {
-    cwd, encoding: 'utf8', maxBuffer: 20 * 1024 * 1024,
+    cwd,
+    encoding: 'utf8',
+    maxBuffer: 20 * 1024 * 1024,
     shell: process.platform === 'win32',
   });
-  assert.equal(result.status, 0, [`Command failed: ${command} ${args.join(' ')}`, result.stdout, result.stderr].join('\n'));
+  assert.equal(result.status, 0, [
+    `Command failed: ${command} ${args.join(' ')}`,
+    result.stdout,
+    result.stderr,
+  ].join('\n'));
   return result;
 }
 

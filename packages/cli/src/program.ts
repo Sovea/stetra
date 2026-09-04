@@ -1,18 +1,13 @@
 import { Command } from 'commander';
 
-import { registerChangeCommands } from './commands/change.ts';
 import { registerInitCommand } from './commands/init.ts';
 import { registerHostCommands } from './commands/host.ts';
-import { registerInputCommands } from './commands/input.ts';
+import { registerTaskCommands } from './commands/task.ts';
 import type { CommandEnvironment, GlobalCommandOptions } from './commands/shared.ts';
 import { globalOptions } from './commands/shared.ts';
 import { registerStatusCommand } from './commands/status.ts';
 import type { CliExecution } from './presentation/output.ts';
-import {
-  hostEnvironmentDisclosure,
-  type CliRuntimeContext,
-} from './runtime-context.ts';
-import { stableFingerprint } from './protocol.ts';
+import type { CliRuntimeContext } from './runtime-context.ts';
 import { PRODUCT_VERSION } from './version.ts';
 
 export interface ProgramState {
@@ -32,9 +27,9 @@ export function createProgram(
   const program = new Command();
   program
     .name('stetra')
-    .description('CLI-first control plane for the Stetra change harness')
+    .description('Portable runtime for the embedded Stetra change harness')
     .version(PRODUCT_VERSION)
-    .option('--json', 'emit a deterministic machine-readable decision packet')
+    .option('--json', 'emit deterministic machine-readable output')
     .option('--no-interactive', 'disable all human prompts')
     .option('--no-color', 'disable ANSI formatting in human output')
     .showHelpAfterError('(add --help for command details)')
@@ -46,9 +41,8 @@ export function createProgram(
     })
     .addHelpText('after', `
 The CLI never calls an LLM. Humans own semantic and adoption authority; Host
-agents interpret and execute the contract. Runtime validates bounded authority
-inputs and machine facts without presenting Agent judgment as human intent or
-deterministic fact.
+agents implement and explain the change. Runtime validates authority inputs,
+collects machine facts, and keeps Agent judgment separate from Human adoption.
 
 Machine callers should always pass --json. JSON mode never prompts and never
 contains ANSI formatting.`);
@@ -59,7 +53,7 @@ contains ANSI formatting.`);
       const options = globalOptions(source);
       const json = Boolean(options.json);
       state.execution = {
-        output: withActionFingerprint(withHostEnvironment(result)),
+        output: result,
         json,
         exitCode: resultExitCode(command, result),
         command,
@@ -76,29 +70,9 @@ contains ANSI formatting.`);
 
   registerInitCommand(program, environment);
   registerHostCommands(program, environment);
-  registerInputCommands(program, environment);
   registerStatusCommand(program, environment, PRODUCT_VERSION);
-  registerChangeCommands(program, environment, PRODUCT_VERSION);
+  registerTaskCommands(program, environment, PRODUCT_VERSION);
   return program;
-}
-
-function withHostEnvironment(result: unknown): unknown {
-  if (!isRecord(result)) return result;
-  if (!isRecord(result.hostAction)
-    && result.transport !== 'owned-file'
-    && result.status !== 'final-response-guarded') return result;
-  return {
-    ...result,
-    hostEnvironment: hostEnvironmentDisclosure(),
-  };
-}
-
-function withActionFingerprint(result: unknown): unknown {
-  if (!isRecord(result) || !isRecord(result.hostAction)) return result;
-  return {
-    ...result,
-    actionFingerprint: stableFingerprint(result.hostAction),
-  };
 }
 
 function resultExitCode(command: string, output: unknown): number {
