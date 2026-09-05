@@ -50,6 +50,12 @@ try {
   const entrypoint = resolve(installedCli, cliManifest.bin.stetra);
   const binary = join(consumer, 'node_modules/.bin', process.platform === 'win32' ? 'stetra.cmd' : 'stetra');
   assert.equal(run(binary, ['--version'], consumer).stdout.trim(), expectedVersion);
+  for (const stage of ['begin', 'handoff', 'decide']) {
+    const schema = runJson(entrypoint, ['--json', 'task', stage, '--input-schema'], consumer);
+    assert.equal(schema.status, 'input-schema');
+    assert.equal(schema.inputSchema.additionalProperties, false);
+    assert.ok(schema.example);
+  }
 
   const initialized = runJson(entrypoint, ['--json', 'init', project, '--adapter', 'codex'], consumer);
   assert.equal(initialized.status, 'initialized');
@@ -148,6 +154,15 @@ try {
   assert.equal(handedOff.status, 'needs-attention');
   assert.equal(handedOff.decisionBrief.decisionState.adoption.status, 'pending');
   assert.deepEqual(handedOff.decisionBrief.attention.map((item) => item.code), ['verifier-surface-changed']);
+  const restored = runJson(entrypoint, [
+    '--json', 'task', 'inspect', project, '--task', began.taskId, '--section', 'handoff',
+  ], consumer);
+  assert.deepEqual(restored.decisionBrief, handedOff.decisionBrief);
+  const humanBrief = run(process.execPath, [
+    entrypoint, 'task', 'inspect', project, '--task', began.taskId, '--section', 'handoff',
+  ], consumer).stdout;
+  assert.match(humanBrief, /Renaming it would break consumers/);
+  assert.match(humanBrief, /Evidence: src\/example.ts/);
 
   const decided = runJson(entrypoint, [
     '--json', 'task', 'decide', project, '--task', began.taskId, '--input', '-',
@@ -171,6 +186,16 @@ try {
     session_id: 'packed-session', cwd: project, hook_event_name: 'Stop',
   }));
   assert.deepEqual(stop, {});
+  const nextBegin = { ...beginInput, humanEvent: { content: 'Admit the next packed fixture task.' } };
+  const next = runJson(entrypoint, [
+    '--json', 'task', 'begin', project, '--binding-token', bindingToken,
+  ], consumer, JSON.stringify(nextBegin));
+  assert.notEqual(next.taskId, began.taskId);
+  const resumed = runJson(entrypoint, [
+    '--json', 'task', 'begin', project, '--binding-token', bindingToken,
+  ], consumer, JSON.stringify(nextBegin));
+  assert.equal(resumed.status, 'task-resumed');
+  assert.equal(resumed.taskId, next.taskId);
 
   const status = runJson(entrypoint, ['--json', 'status', project], consumer);
   assert.equal(status.status, 'ready');

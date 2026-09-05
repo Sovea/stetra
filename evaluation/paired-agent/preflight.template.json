@@ -60,6 +60,28 @@
       "shebangTarget": null
     }
   ],
+  "processIO": {
+    "probeArgv": [
+      "node",
+      "-e",
+      "const {spawnSync}=require('node:child_process');const child=spawnSync(process.execPath,['-e',\"console.log('stetra-preflight-stdout');console.error('stetra-preflight-stderr');process.exitCode=23\"],{encoding:'utf8'});process.stdout.write(child.stdout??'');process.stderr.write(child.stderr??'');process.exitCode=child.status??1;"
+    ],
+    "expected": {
+      "exitCode": 23,
+      "stdout": "stetra-preflight-stdout\n",
+      "stderr": "stetra-preflight-stderr\n"
+    },
+    "control": {
+      "exitCode": 23,
+      "stdout": "stetra-preflight-stdout\n",
+      "stderr": "stetra-preflight-stderr\n"
+    },
+    "treatment": {
+      "exitCode": 23,
+      "stdout": "stetra-preflight-stdout\n",
+      "stderr": "stetra-preflight-stderr\n"
+    }
+  },
   "fixtures": [
     {
       "acceptanceCheckId": "sealed-behavior",

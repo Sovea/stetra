@@ -112,10 +112,13 @@ representable patches, binary markers, exact Check Attempts, full-stream
 digests, bounded logs, execution inputs, check-induced changes, and declared
 verifier-surface mutations.
 
-Timeout is an operational budget, not semantic identity. Retry is allowed only
-after an actual timeout, with a larger bounded budget, while preserving the
-earlier Attempt. Direct Host execution is Agent evidence and never replaces a
-Runtime Check Attempt.
+Timeout is an operational budget, not semantic identity. A timeout retry
+requires an actual timeout and a larger bounded budget. After a non-timeout
+failure, one explicit refresh per unchanged worktree and declared inputs in a
+delivery Attempt may rerun every frozen check with the existing budgets. Its
+reason is Agent judgment; prior collections and Attempts remain inspectable.
+Direct Host execution is Agent evidence and never replaces a Runtime Check
+Attempt.
 
 ## Handoff and decision
 

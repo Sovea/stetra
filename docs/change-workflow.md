@@ -52,6 +52,19 @@ work | continue-work | author-handoff | await-human-decision | complete
 The directive describes the engineering next step. Internal identities and
 artifact bindings remain Runtime-owned.
 
+Discover exact authoring inputs from the installed binary, even outside a
+repository:
+
+```sh
+stetra task begin --input-schema --json
+stetra task handoff --input-schema --json
+stetra task decide --input-schema --json
+```
+
+These read-only options return the actual input validator's JSON Schema and a
+validated example. Examples illustrate structure; supply the real request and
+repository checks. Input errors point back to the corresponding schema command.
+
 ## Begin
 
 Routine input:
@@ -87,6 +100,16 @@ Agent authors only interpretation and check intent. Runtime creates Human Event,
 Contract, Verifier, Definition, step, task, and Attempt identities.
 Runtime captures the complete Git worktree before publishing the task. Routine
 Begin does not execute checks.
+
+Human content and argv arguments are preserved exactly, including surrounding
+whitespace and empty arguments after the executable. The executable must be
+non-empty; command strings cannot contain NUL.
+
+When a binding token is supplied, Begin checks the session before publishing a
+task. A session can start its next admitted task after the previous task closes.
+A repeated Begin for the same open Contract returns `task-resumed` with the
+existing identity. An interrupted publication is recovered through the exact
+pending session association; a new baseline never replaces a published one.
 
 Verification may instead select one exact project profile or declare
 `no-command` with a concrete rationale. Commands are argv-only and run without
@@ -131,6 +154,21 @@ stetra task collect . --task <task-id> \
   --retry-timeout <check-key> --timeout-ms <larger-ms> --json
 ```
 
+After a non-timeout failure and a change in external conditions, one explicit
+refresh is available per unchanged worktree and declared input set in a delivery
+Attempt:
+
+```sh
+stetra task collect . --task <task-id> --refresh-reason "The local service was restored." --json
+```
+
+Refresh requires current facts, at least one non-passing Check, and no current
+timeout. It reruns every frozen Check with its existing timeout and writes a new
+Fact Collection referencing the earlier one. The reason is labelled Agent
+judgment and does not attest that the environment was repaired. Earlier failed
+collections, ordered Check Attempts, and logs remain available. Ordinary Collect
+continues to reuse current observations; it never automatically loops on failure.
+
 ## Handoff
 
 Handoff is accepted only against current worktree and declared execution-input
@@ -166,6 +204,11 @@ The result is one compact Developer Decision Brief. Full facts, logs, patch,
 Contract, Handoff, and event history remain available through bounded
 `task inspect` sections.
 
+`task inspect --section handoff` rebuilds the same current Decision Brief,
+including exact Human corrections, material behavior and mechanism, unknowns,
+and review consequences with readable path/Check references. Terminal output
+includes these details and preserves the recorded adoption status.
+
 ## Human decision
 
 The Host presents the current Decision Brief and stops. Only a later exact
@@ -189,6 +232,11 @@ Any repository edit or declared execution-input change after Collect makes the
 facts stale. Handoff then returns `collect` without persisting Agent prose.
 Any edit after Handoff similarly requires a new collection and Handoff before a
 Human decision can be recorded.
+Summary, Handoff inspection, and Host Hooks derive their visible phase and next
+step from current facts. A stale Handoff can still be inspected as a historical
+artifact, but no current Decision Brief is emitted for it. Inspection does not
+write a lifecycle event. Exact task corrections are available in summary and
+the latest correction is included in resumed Host context.
 
 ## Host continuity
 

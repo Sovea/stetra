@@ -6,7 +6,6 @@ import {
   compileDelegation,
   evaluateHandoff,
   type CognitiveHandoff,
-  type DecisionPacket,
   type FactBundle,
   type HandoffEvidenceReference,
   type HumanDecision,
@@ -16,6 +15,7 @@ import {
 } from '@sovea/stetra-core';
 
 import { inputError, usageError } from '../errors.ts';
+import { bindHostSession, cancelHostBegin, prepareHostBegin } from '../host/session.ts';
 import { captureVerificationInputs, verificationInputSetFingerprint } from '../facts/execution-inputs.ts';
 import { collectExecutionEnvironment } from '../facts/environment.ts';
 import { runFrozenChecks } from '../facts/checks.ts';
@@ -29,6 +29,7 @@ import {
 } from '../facts/worktree.ts';
 import { DELEGATION_PROTOCOL, DELEGATION_SCHEMA_VERSION, sha256, stableFingerprint } from '../protocol.ts';
 import { readProjectConfig } from '../schemas/config.ts';
+import { createDecisionBrief } from './decision-brief.ts';
 import type {
   TaskBeginDocument,
   TaskDecisionDocument,
@@ -64,6 +65,7 @@ export async function beginTask(options: {
   projectRoot: string;
   source: TaskBeginDocument;
   productVersion: string;
+  bindingToken?: string;
 }) {
   const projectRoot = canonicalProjectRoot(options.projectRoot);
   const config = readProjectConfig(projectRoot);
@@ -80,10 +82,23 @@ export async function beginTask(options: {
   if (compiled.status !== 'delegation-compiled') {
     throw inputError('Task alignment is invalid.', undefined, compiled.issues);
   }
-  const taskId = randomUUID();
+  let taskId: string = randomUUID();
   const attemptId = `attempt:${randomUUID()}`;
   let task: LoadedTask | undefined;
+  let resumed = false;
   await withWorktreeLease({ projectRoot, operation: 'begin', taskId }, async () => {
+    if (options.bindingToken) {
+      const binding = prepareHostBegin({
+        projectRoot, bindingToken: options.bindingToken, contractId: compiled.contract.contractId,
+      });
+      taskId = binding.taskId;
+      if (binding.published) {
+        task = binding.published;
+        resumed = true;
+        bindHostSession({ projectRoot, bindingToken: options.bindingToken, taskId });
+        return;
+      }
+    }
     const workspace = createTaskWorkspace(projectRoot, taskId);
     try {
       const baseline = await captureGitWorktree(projectRoot, {
@@ -117,18 +132,23 @@ export async function beginTask(options: {
       });
     } catch (error) {
       rmSync(workspace.taskDirectory, { recursive: true, force: true });
+      if (options.bindingToken) cancelHostBegin(projectRoot, options.bindingToken, taskId);
       throw error;
     }
+    if (options.bindingToken) bindHostSession({ projectRoot, bindingToken: options.bindingToken, taskId });
   });
   if (!task) throw new Error('Task Begin completed without publishing a task.');
+  const view = await currentTaskView(task);
   return {
     protocol: DELEGATION_PROTOCOL,
     schemaVersion: DELEGATION_SCHEMA_VERSION,
-    status: 'task-begun',
+    status: resumed ? 'task-resumed' : 'task-begun',
     taskId,
-    phase: 'working',
+    phase: view.phase,
+    factsCurrency: view.factsCurrency,
+    corrections: view.corrections,
     summary: contractSummary(compiled.contract),
-    directive: directive('work', 'Implement the aligned change through the normal Host workflow.'),
+    directive: view.directive,
   };
 }
 
@@ -137,6 +157,7 @@ export async function collectTask(options: {
   taskId: string;
   productVersion: string;
   retryTimeout?: { checkKey: string; timeoutMs: number };
+  refreshReason?: string;
 }) {
   const initial = loadTask(options.projectRoot, options.taskId);
   assertTaskOpen(initial);
@@ -146,7 +167,12 @@ export async function collectTask(options: {
     ? readFacts(initial, initial.projection.currentCollectionId) : undefined;
   const existingIsCurrent = existing
     ? await factsAreCurrent(initial, contract, existing) : false;
-  if (existing && existingIsCurrent && !options.retryTimeout) {
+  if (options.retryTimeout && options.refreshReason !== undefined) {
+    throw inputError('Use either timeout retry or failure refresh, not both.');
+  }
+  const refresh = options.refreshReason !== undefined
+    ? resolveFailureRefresh(initial, existing, existingIsCurrent, options.refreshReason) : undefined;
+  if (existing && existingIsCurrent && !options.retryTimeout && !refresh) {
     return collectionOutput(initial, existing, true);
   }
   const retry = options.retryTimeout
@@ -177,10 +203,10 @@ export async function collectTask(options: {
         alternateObjectDirectories: [durableObjects],
       });
       const preCheckExecutionInputs = captureVerificationInputs(task.projectRoot, definitions);
-      if (retry && existing && (preCheck.fingerprint !== existing.current.fingerprint
+      if ((retry || refresh) && existing && (preCheck.fingerprint !== existing.current.fingerprint
         || verificationInputSetFingerprint(preCheckExecutionInputs)
           !== verificationInputSetFingerprint(existing.currentExecutionInputs))) {
-        throw usageError('The worktree or declared Check inputs changed before timeout retry; collect current facts instead.');
+        throw usageError('The worktree or declared Check inputs changed before re-execution; collect current facts instead.');
       }
       const checksRelative = `${attemptRelative}/checks`;
       const checks = await collectChecks({
@@ -189,6 +215,7 @@ export async function collectTask(options: {
         contract,
         existing,
         retry,
+        refresh: Boolean(refresh),
         outputDirectory: taskArtifactPath(artifacts, checksRelative),
         recordedOutputDirectory: taskArtifactPath(task.taskDirectory, checksRelative),
       });
@@ -223,6 +250,7 @@ export async function collectTask(options: {
         verifierMutations: collectVerifierMutations(definitions, worktree.changedFiles),
         environment: collectExecutionEnvironment(task.projectRoot, definitions),
         ...(patch ? { patch } : {}),
+        ...(refresh ? { refresh } : {}),
         provenance: {
           collector: 'stetra-cli',
           cliVersion: options.productVersion,
@@ -263,6 +291,32 @@ export async function collectTask(options: {
   return collectionOutput(transitioned, facts, false);
 }
 
+function resolveFailureRefresh(
+  task: LoadedTask,
+  facts: FactBundle | undefined,
+  isCurrent: boolean,
+  reason: string,
+): NonNullable<FactBundle['refresh']> {
+  if (!reason.trim()) throw inputError('Failure refresh requires a concrete Agent-authored reason.');
+  if (!facts || !isCurrent) throw usageError('Failure refresh requires current facts. Collect current facts first.');
+  if (!canRefreshFailure(task, facts)) {
+    throw usageError('Failure refresh requires a non-timeout failure and permits one refresh per unchanged worktree and declared inputs in this delivery Attempt.');
+  }
+  return { priorFactCollectionId: facts.factCollectionId, authority: 'agent-judgment', reason: reason.trim() };
+}
+
+function canRefreshFailure(task: LoadedTask, facts: FactBundle): boolean {
+  const nonpassing = facts.checks.filter((check) => latestCheck(check).status !== 'passed');
+  if (!nonpassing.length || nonpassing.some((check) => latestCheck(check).termination.kind === 'timeout')) return false;
+  return !task.projection.collectionIds.some((id) => {
+    const prior = readFacts(task, id);
+    return prior.attemptId === facts.attemptId && prior.refresh
+      && prior.preCheck.fingerprint === facts.current.fingerprint
+      && verificationInputSetFingerprint(prior.preCheckExecutionInputs)
+        === verificationInputSetFingerprint(facts.currentExecutionInputs);
+  });
+}
+
 function resolveTimeoutRetry(
   contract: TaskContract,
   existing: FactBundle | undefined,
@@ -299,6 +353,7 @@ async function collectChecks(input: {
   contract: TaskContract;
   existing: FactBundle | undefined;
   retry: ReturnType<typeof resolveTimeoutRetry> | undefined;
+  refresh: boolean;
   outputDirectory: string;
   recordedOutputDirectory: string;
 }): Promise<FactBundle['checks']> {
@@ -307,7 +362,9 @@ async function collectChecks(input: {
       projectRoot: input.projectRoot,
       executions: input.definitions.map((definition) => ({
         definition,
-        timeoutMs: input.contract.executionPolicy.checkTimeoutMs,
+        timeoutMs: input.refresh
+          ? latestCheck(input.existing!.checks.find((check) => check.definitionId === definition.definitionId)!).timeoutMs
+          : input.contract.executionPolicy.checkTimeoutMs,
       })),
       outputDirectory: input.outputDirectory,
       recordedOutputDirectory: input.recordedOutputDirectory,
@@ -352,7 +409,6 @@ export async function handoffTask(options: {
   }
   const handoff = materializeHandoff(options.source, contract, facts);
   const evaluation = evaluateAuthoredHandoff(contract, facts, current.worktree.fingerprint, handoff);
-  const packet = buildDecisionPacket(contract, facts, handoff, evaluation);
   const transitioned = transitionTask({
     projectRoot: task.projectRoot,
     taskId: task.taskId,
@@ -374,7 +430,7 @@ export async function handoffTask(options: {
     status: evaluation.status,
     taskId: transitioned.taskId,
     phase: transitioned.projection.phase,
-    decisionBrief: decisionBrief(packet),
+    decisionBrief: createDecisionBrief({ contract, facts, handoff, evaluation, corrections: readCorrections(task) }),
     directive: directive('await-human-decision', 'Present the Decision Brief and wait for a new developer message.'),
   };
 }
@@ -478,6 +534,9 @@ export async function decideTask(options: {
     taskId: transitioned.taskId,
     phase: transitioned.projection.phase,
     decision: evaluation.adoption,
+    ...(correction ? { corrections: readCorrections(transitioned) } : {
+      decisionBrief: createDecisionBrief({ contract, facts, handoff, evaluation, corrections: readCorrections(transitioned) }),
+    }),
     directive: correction
       ? directive('work', 'Implement the exact developer correction, then collect current facts again.')
       : directive('complete', `The Human decision is ${decision.action}.`),
@@ -496,12 +555,14 @@ export async function inspectTask(options: {
 }) {
   const task = loadTask(options.projectRoot, options.taskId);
   const contract = readContract(task);
+  const view = ['summary', 'handoff'].includes(options.section) ? await currentTaskView(task) : undefined;
   const base = {
     protocol: DELEGATION_PROTOCOL,
     schemaVersion: DELEGATION_SCHEMA_VERSION,
     status: 'task-inspected',
     taskId: task.taskId,
-    phase: task.projection.phase,
+    phase: view?.phase ?? task.projection.phase,
+    ...(view ? { factsCurrency: view.factsCurrency, corrections: view.corrections, directive: view.directive } : {}),
   };
   if (options.section === 'summary') {
     const facts = task.projection.currentCollectionId
@@ -518,7 +579,7 @@ export async function inspectTask(options: {
         ...(task.projection.terminalDecision
           ? { humanDecision: task.projection.terminalDecision } : {}),
       },
-      directive: directiveFor(task),
+      directive: view!.directive,
     };
   }
   if (options.section === 'contract') return { ...base, contract };
@@ -563,6 +624,7 @@ export async function inspectTask(options: {
   if (options.section === 'handoff') {
     return {
       ...base,
+      ...(view?.decisionBrief ? { decisionBrief: view.decisionBrief } : {}),
       handoff: task.projection.currentHandoffId
         ? readHandoff(task, task.projection.currentHandoffId) : null,
     };
@@ -614,13 +676,49 @@ function readLogTail(
   };
 }
 
-export function taskContext(projectRoot: string, taskId: string) {
+export async function taskContext(projectRoot: string, taskId: string) {
   const task = loadTask(projectRoot, taskId);
   return {
     taskId: task.taskId,
-    phase: task.projection.phase,
-    directive: directiveFor(task),
+    revision: task.projection.revision,
+    ...await currentTaskView(task),
   };
+}
+
+async function currentTaskView(task: LoadedTask) {
+  const contract = readContract(task);
+  const facts = task.projection.currentCollectionId ? readCurrentFacts(task) : undefined;
+  const isCurrent = facts ? await factsAreCurrent(task, contract, facts) : false;
+  const corrections = readCorrections(task);
+  const stale = Boolean(facts && !isCurrent);
+  const phase = stale && task.projection.phase !== 'complete' ? 'working' as const : task.projection.phase;
+  const handoff = isCurrent && task.projection.currentHandoffId
+    ? readHandoff(task, task.projection.currentHandoffId) : undefined;
+  const decision = task.projection.currentDecisionId
+    ? readDecision(task, task.projection.currentDecisionId) : undefined;
+  const brief = handoff && facts ? createDecisionBrief({
+    contract, facts, handoff, corrections,
+    evaluation: evaluateHandoff({
+      protocol: DELEGATION_PROTOCOL, schemaVersion: DELEGATION_SCHEMA_VERSION,
+      contract, factBundle: facts, handoff, currentWorktreeFingerprint: facts.current.fingerprint,
+      ...(decision ? { decision } : {}),
+    }),
+  }) : undefined;
+  return {
+    phase,
+    factsCurrency: !facts ? 'missing' as const : isCurrent ? 'current' as const : 'stale' as const,
+    corrections,
+    directive: stale && phase !== 'complete'
+      ? directive('continue-work', 'Facts changed after collection. Collect current facts before Handoff or a Human decision.')
+      : directiveFor(task),
+    ...(brief ? { decisionBrief: brief } : {}),
+  };
+}
+
+function readCorrections(task: LoadedTask): HumanDecision['humanEvent'][] {
+  return task.projection.decisionIds.map((id) => readDecision(task, id))
+    .filter((decision) => decision.action === 'correction-requested')
+    .map((decision) => decision.humanEvent);
 }
 
 function resolveVerification(
@@ -677,13 +775,16 @@ function collectionOutput(task: LoadedTask, facts: FactBundle, reused: boolean) 
     phase: task.projection.phase,
     reused,
     summary: factSummary(facts, contract),
+    ...(canRefreshFailure(task, facts) ? {
+      failureRefresh: { remaining: 1, option: '--refresh-reason', reasonAuthority: 'agent-judgment' },
+    } : {}),
     ...(retryableTimeouts.length ? { retryableTimeouts } : {}),
     directive: task.projection.phase === 'awaiting-decision'
       ? directive('await-human-decision', 'The current Handoff still matches the current facts.')
       : needsWork
         ? directive('continue-work', retryableTimeouts.length
             ? 'Inspect the non-passing Check facts. A timed-out Check may be retried explicitly with its key and a larger bounded timeout; otherwise repair normally and collect again.'
-            : 'Inspect the non-passing Check facts, repair normally, and collect again. Handoff remains available for defer or reject.')
+            : 'Inspect the non-passing Check facts and repair normally. After external conditions change, an available --refresh-reason performs one bounded recheck. Handoff remains available for defer or reject.')
         : directive('author-handoff', 'Explain the actual current change against this Fact Collection.'),
   };
 }
@@ -692,6 +793,7 @@ function factSummary(facts: FactBundle, contract: TaskContract) {
   const keys = new Map(definitionsFor(contract).map((definition) => [definition.definitionId, definition.key]));
   return {
     factCollectionId: facts.factCollectionId,
+    ...(facts.refresh ? { refresh: facts.refresh } : {}),
     changedFiles: facts.changedFiles.map((file) => ({
       path: file.path,
       operation: file.operation,
@@ -741,7 +843,9 @@ function materializeHandoff(
   });
   const concernFindings = (source.concernFindings ?? []).map((finding) => {
     const concern = concerns.get(finding.concernKey);
-    if (!concern) throw inputError(`Handoff references unknown Adoption Concern ${finding.concernKey}.`);
+    if (!concern) throw inputError(contract.assurance.mode === 'routine'
+      ? 'Routine tasks have no Adoption Concerns. Omit concernFindings from this Handoff.'
+      : `Handoff references unknown Adoption Concern ${finding.concernKey}. Use a concern key declared at Begin.`);
     return {
       concernId: concern.id,
       status: finding.status,
@@ -817,114 +921,6 @@ function materializeDecision(
     factCollectionId: facts.factCollectionId,
     handoffId: handoff.handoffId,
     handoffFingerprint: handoff.handoffFingerprint,
-  };
-}
-
-function buildDecisionPacket(
-  contract: TaskContract,
-  facts: FactBundle,
-  handoff: CognitiveHandoff,
-  evaluation: ReturnType<typeof evaluateHandoff>,
-  decision?: HumanDecision,
-): DecisionPacket {
-  const evidenceByConcern = new Map(evaluation.concernEvidence.map((item) => [item.concernId, item]));
-  const concerns = contract.assurance.mode === 'consequential' ? contract.assurance.concerns : [];
-  return {
-    protocol: DELEGATION_PROTOCOL,
-    schemaVersion: DELEGATION_SCHEMA_VERSION,
-    task: {
-      contractId: contract.contractId,
-      effectiveContractId: contract.effectiveContractId,
-      humanEvents: contract.humanEvents,
-      intendedOutcome: contract.interpretation.desiredOutcome,
-      constraints: contract.interpretation.constraints,
-      nonGoals: contract.interpretation.nonGoals,
-    },
-    state: {
-      delivery: 'implemented',
-      evidence: evaluation.status,
-      recommendation: handoff.recommendation.action,
-      adoption: evaluation.adoption,
-    },
-    actualChange: handoff.actualChange,
-    concernFindings: concerns.map((concern) => ({
-      concern,
-      finding: handoff.concernFindings.find((finding) => finding.concernId === concern.id)!,
-      evidenceComplete: evidenceByConcern.get(concern.id)?.complete ?? false,
-    })),
-    residualUnknowns: handoff.residualUnknowns,
-    reviewFocus: handoff.reviewFocus,
-    attention: evaluation.attention,
-    recommendation: handoff.recommendation,
-    runtimeFacts: {
-      attemptId: facts.attemptId,
-      factCollectionId: facts.factCollectionId,
-      changeFingerprint: facts.changeFingerprint,
-      changedFiles: facts.changedFiles.map((file) => ({
-        id: file.id,
-        path: file.path,
-        ...(file.previousPath ? { previousPath: file.previousPath } : {}),
-        operation: file.operation,
-        representation: file.representation,
-      })),
-      checks: facts.checks.map((check) => ({
-        key: definitionsFor(contract).find((definition) => definition.definitionId === check.definitionId)?.key,
-        verifierId: check.verifierId,
-        definitionId: check.definitionId,
-        argv: check.assertionArgv,
-        latestAttempt: latestCheck(check),
-        attemptCount: check.attempts.length,
-      })),
-      verifierMutations: facts.verifierMutations,
-      checkInducedChanges: facts.checkInducedChanges.map((file) => ({
-        id: file.id, path: file.path, operation: file.operation,
-      })),
-    },
-    ...(decision ? { humanDecision: decision } : {}),
-    detailSections: [
-      'contract', 'baseline', 'collections', 'collection', 'check', 'log',
-      'handoff', 'decision', 'events',
-    ],
-  };
-}
-
-function decisionBrief(packet: DecisionPacket) {
-  return {
-    decisionState: packet.state,
-    changeMeaning: {
-      authority: 'agent-judgment',
-      humanRequest: packet.task.humanEvents[0],
-      intendedOutcome: packet.task.intendedOutcome,
-      actualChange: packet.actualChange,
-    },
-    recommendation: packet.recommendation,
-    concerns: packet.concernFindings.map((item) => ({
-      statement: item.concern.statement,
-      adoptionImpact: item.concern.adoptionImpact,
-      status: item.finding.status,
-      summary: item.finding.summary,
-      evidenceComplete: item.evidenceComplete,
-    })),
-    unknowns: packet.residualUnknowns,
-    reviewFocus: packet.reviewFocus,
-    attention: packet.attention,
-    runtimeEvidence: {
-      authority: 'runtime-fact',
-      changedFiles: packet.runtimeFacts.changedFiles,
-      checks: packet.runtimeFacts.checks.map((check) => ({
-        argv: check.argv,
-        status: check.latestAttempt.status,
-        termination: check.latestAttempt.termination,
-        attemptCount: check.attemptCount,
-      })),
-      verifierMutationCount: packet.runtimeFacts.verifierMutations.length,
-      checkInducedChangeCount: packet.runtimeFacts.checkInducedChanges.length,
-    },
-    requestedDecision: {
-      authority: 'human-decision',
-      actions: ['accepted', 'correction-requested', 'rejected', 'deferred'],
-      acceptanceRequiresAttentionAcknowledgement: packet.attention.length > 0,
-    },
   };
 }
 

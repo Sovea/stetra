@@ -2,24 +2,21 @@
 
 ## Unreleased
 
-- Introduces the initial `cognitive-adoption` schema with exact Human events,
-  falsifiable Evidence Obligations, immutable verification definitions, and
-  separate semantic, verification, and effective identities.
-- Adds a task-scoped append-only ledger, crash-recoverable publication and fact
-  collection, selective task-start baselines, ordered check attempts, bounded
-  logs, and exact baseline/current relations.
-- Requires fact-bound diagnosis before acting on non-passing evidence and
-  provides executable repair, verification-revision, challenge, Human
-  resolution, handoff, correction, and adoption paths.
-- Constrains Condition conclusions by Obligation results, preserves adverse and
-  unverified evidence, and triggers review when declared verifier surfaces
-  change without inferring meaning from repository heuristics.
-- Projects task-specific Authoring Packets, exact stdin commands, compact
-  decision views, and honest Host capability provenance without persisting a
-  second workflow layer.
-- Defines paired-evaluation preflight, coverage, negative-control, timing, and
-  black-box usability gates. The retained historical pilot remains
-  inconclusive and product effectiveness remains `unverified`.
+- Embeds the schema `2` task workflow: Begin, normal implementation, Runtime
+  collection, compact Handoff, and a separate Human decision.
+- Preserves exact Human text and command arguments, including whitespace and
+  empty arguments after the executable.
+- Recovers interrupted Begin publication and supports consecutive admitted
+  tasks in one Host session without creating duplicate tasks on retry.
+- Allows one reasoned recheck after a non-timeout failure for unchanged inputs,
+  preserving earlier collections and their observed failures.
+- Exposes generated input schemas and validated examples from the installed CLI.
+- Rebuilds the current Decision Brief on inspection and Host recovery, including
+  Human corrections, verification boundaries, material unknowns, and review
+  consequences with readable evidence references. Stale facts require collection.
+- Tests process interruption, recovery, portable input discovery, and paired
+  Core/CLI archives. Product effectiveness remains `unverified` pending the
+  protocol-conformant paired evaluation and Human product-owner conclusion.
 
 ## 0.0.1
 

@@ -1,4 +1,4 @@
-import { randomBytes } from 'node:crypto';
+import { randomBytes, randomUUID } from 'node:crypto';
 import {
   closeSync,
   constants,
@@ -20,6 +20,7 @@ import type { HostAdapter } from '../adapters/definition.ts';
 import { inputError, usageError } from '../errors.ts';
 import { sha256 } from '../protocol.ts';
 import { parseArtifact } from '../validation.ts';
+import { loadTask, type LoadedTask } from '../workflow/task-store.ts';
 
 const HEX_32 = /^[a-f0-9]{32}$/;
 const HEX_64 = /^[a-f0-9]{64}$/;
@@ -31,6 +32,10 @@ const SessionSchema = z.strictObject({
   sessionKeyHash: z.string().regex(HEX_64),
   bindingToken: z.string().regex(BINDING_TOKEN),
   taskId: z.uuid().optional(),
+  pendingBegin: z.strictObject({
+    taskId: z.uuid(),
+    contractId: z.string().regex(/^sha256:[a-f0-9]{64}$/),
+  }).optional(),
 });
 
 export type HostSession = z.infer<typeof SessionSchema>;
@@ -60,7 +65,7 @@ export function ensureHostSession(input: {
 }): HostSession {
   const sessionKeyHash = hostSessionKey(input.adapter, input.sessionId);
   const existing = readSession(input.projectRoot, input.adapter, sessionKeyHash);
-  if (existing) return existing;
+  if (existing) return recoverPublishedBinding(input.projectRoot, existing);
   const session: HostSession = {
     schemaVersion: 2,
     adapter: input.adapter,
@@ -68,7 +73,8 @@ export function ensureHostSession(input: {
     bindingToken: `${input.adapter}.${sessionKeyHash}.${randomBytes(16).toString('hex')}`,
   };
   writeSession(input.projectRoot, session, true);
-  return readSession(input.projectRoot, input.adapter, sessionKeyHash) ?? session;
+  return recoverPublishedBinding(input.projectRoot,
+    readSession(input.projectRoot, input.adapter, sessionKeyHash) ?? session);
 }
 
 export function readHostSession(input: {
@@ -76,11 +82,46 @@ export function readHostSession(input: {
   adapter: HostAdapter;
   sessionId: string;
 }): HostSession | undefined {
-  return readSession(
+  const session = readSession(
     input.projectRoot,
     input.adapter,
     hostSessionKey(input.adapter, input.sessionId),
   );
+  return session ? recoverPublishedBinding(input.projectRoot, session) : undefined;
+}
+
+/** Called only under the worktree Begin lease, before baseline or task publication. */
+export function prepareHostBegin(input: {
+  projectRoot: string;
+  bindingToken: string;
+  contractId: string;
+}): { taskId: string; published?: LoadedTask } {
+  const session = sessionForToken(input.projectRoot, input.bindingToken);
+  const recovered = recoverPublishedBinding(input.projectRoot, session);
+  if (recovered.taskId) {
+    const task = loadTask(input.projectRoot, recovered.taskId);
+    if (task.projection.phase !== 'complete') {
+      if (task.projection.contractId !== input.contractId) {
+        throw usageError(`Host session is already bound to unfinished task ${task.taskId}. Resume that task before admitting another.`);
+      }
+      return { taskId: task.taskId, published: task };
+    }
+  }
+  const taskId = session.pendingBegin && !publishedBegin(input.projectRoot, session)
+    ? session.pendingBegin.taskId : randomUUID();
+  writeSession(input.projectRoot, {
+    ...session,
+    pendingBegin: { taskId, contractId: input.contractId },
+  }, false);
+  return { taskId };
+}
+
+/** A handled pre-publication failure can release its recovery association. */
+export function cancelHostBegin(projectRoot: string, bindingToken: string, taskId: string): void {
+  const session = sessionForToken(projectRoot, bindingToken);
+  if (session.pendingBegin?.taskId !== taskId || publishedBegin(projectRoot, session)) return;
+  const { pendingBegin: _ignored, ...rest } = session;
+  writeSession(projectRoot, rest, false);
 }
 
 export function bindHostSession(input: {
@@ -88,18 +129,48 @@ export function bindHostSession(input: {
   bindingToken: string;
   taskId: string;
 }): void {
-  const match = BINDING_TOKEN.exec(input.bindingToken);
+  const session = sessionForToken(input.projectRoot, input.bindingToken);
+  if (session.pendingBegin && session.pendingBegin.taskId !== input.taskId) {
+    throw usageError('Host binding must finish the pending Begin operation.');
+  }
+  const target = loadTask(input.projectRoot, input.taskId);
+  if (session.pendingBegin && target.projection.contractId !== session.pendingBegin.contractId) {
+    throw usageError('Published task does not match its pending Begin association.');
+  }
+  if (session.taskId && session.taskId !== input.taskId
+    && loadTask(input.projectRoot, session.taskId).projection.phase !== 'complete') {
+    throw usageError(`Host session is already bound to task ${session.taskId}.`);
+  }
+  const { pendingBegin: _ignored, ...rest } = session;
+  writeSession(input.projectRoot, { ...rest, taskId: input.taskId }, false);
+}
+
+function sessionForToken(projectRoot: string, bindingToken: string): HostSession {
+  const match = BINDING_TOKEN.exec(bindingToken);
   if (!match) throw inputError('Host binding token is invalid.');
   const adapter = match[1] as HostAdapter;
   const sessionKeyHash = match[2];
-  const session = readSession(input.projectRoot, adapter, sessionKeyHash);
-  if (!session || session.bindingToken !== input.bindingToken) {
+  const session = readSession(projectRoot, adapter, sessionKeyHash);
+  if (!session || session.bindingToken !== bindingToken) {
     throw usageError('Host binding token is missing or belongs to another session.');
   }
-  if (session.taskId && session.taskId !== input.taskId) {
-    throw usageError(`Host session is already bound to task ${session.taskId}.`);
+  return session;
+}
+
+function publishedBegin(projectRoot: string, session: HostSession): LoadedTask | undefined {
+  const pending = session.pendingBegin;
+  if (!pending || !existsSync(join(projectRoot, '.stetra', 'tasks', pending.taskId))) return undefined;
+  const task = loadTask(projectRoot, pending.taskId);
+  if (task.projection.contractId !== pending.contractId) {
+    throw usageError('Published task does not match its pending Begin association.');
   }
-  writeSession(input.projectRoot, { ...session, taskId: input.taskId }, false);
+  return task;
+}
+
+/** Recovery is a read projection: Hooks never create or rewrite a task. */
+function recoverPublishedBinding(projectRoot: string, session: HostSession): HostSession {
+  const task = publishedBegin(projectRoot, session);
+  return task ? { ...session, taskId: task.taskId } : session;
 }
 
 export function claimDirective(input: {

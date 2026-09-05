@@ -272,6 +272,21 @@ test('Fact and Handoff identities are enforced', () => {
   }), /fingerprint is invalid/);
 });
 
+test('refresh provenance preserves Agent judgment rather than attesting external recovery', () => {
+  const contract = routineContract();
+  for (const refresh of [
+    { priorFactCollectionId: 'invalid', authority: 'agent-judgment', reason: 'Service restored.' },
+    { priorFactCollectionId: sha256('prior'), authority: 'runtime-fact', reason: 'Service restored.' },
+    { priorFactCollectionId: sha256('prior'), authority: 'agent-judgment', reason: ' ' },
+  ]) {
+    const facts = factBundle(contract, 'passed', { refresh: refresh as FactBundle['refresh'] });
+    assert.throws(() => evaluateHandoff({
+      ...envelope, contract, factBundle: facts, handoff: handoffFor(contract, facts),
+      currentWorktreeFingerprint: facts.current.fingerprint,
+    }), /Agent-authored reason/);
+  }
+});
+
 function routineContract(): TaskContract {
   const result = compileDelegation({
     ...envelope,

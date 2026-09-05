@@ -150,6 +150,8 @@ Before either Agent starts, freeze a `preflight.template.json` record containing
 - identical sandbox argv/policy, writable-cache policy, network-stack capability,
   and a record that no other suite runs concurrently;
 - dependency, runtime, executable resolved-path, script/shebang, and worktree identity;
+- actual stdout, stderr, and nonzero exit propagation from a nested subprocess
+  under each condition's enforced sandbox, using the same fixed sentinel probe;
 - sealed fixture fingerprint plus actual baseline, oracle, and negative-control
   exit behavior;
 - equality checks for all condition-neutral configuration.
@@ -157,6 +159,9 @@ Before either Agent starts, freeze a `preflight.template.json` record containing
 Expected exit codes in a task record are declarations. Only the actual preflight
 observations establish that a fixture and negative control are usable. A failed
 preflight blocks both conditions; it never selectively delays or replaces one.
+An exit code without the expected nested stdout/stderr does not pass the IO
+probe. Archive such a Host or sandbox failure separately; do not reinterpret
+missing output as a quiet successful check or change product behavior to hide it.
 
 ## Execution
 

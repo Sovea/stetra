@@ -39,8 +39,9 @@ export async function handleHostHook(input: {
       adapter: input.adapter,
       sessionId: payload.session_id,
     });
-    return additionalContext(expected, session.taskId
-      ? boundContext(projectRoot, session.taskId)
+    const context = session.taskId ? await taskContext(projectRoot, session.taskId) : undefined;
+    return additionalContext(expected, context && context.phase !== 'complete'
+      ? boundContext(projectRoot, context)
       : admissionContext(projectRoot, session.bindingToken));
   }
   const session = readHostSession({
@@ -49,7 +50,7 @@ export async function handleHostHook(input: {
     sessionId: payload.session_id,
   });
   if (!session?.taskId) return {};
-  const context = taskContext(projectRoot, session.taskId);
+  const context = await taskContext(projectRoot, session.taskId);
   if (context.phase === 'complete') return {};
   if (context.phase === 'awaiting-decision') {
     return {
@@ -57,11 +58,13 @@ export async function handleHostHook(input: {
         `Stetra task ${context.taskId} awaits the developer's adoption decision.`,
         `Present the current brief with: stetra task inspect ${JSON.stringify(projectRoot)} --task ${context.taskId} --section handoff --json`,
         'Ask the developer to accept, request correction, reject, or defer, then stop.',
+        `Current Decision Brief: ${JSON.stringify(context.decisionBrief)}`,
       ].join('\n'),
     };
   }
-  const message = boundContext(projectRoot, context.taskId);
-  const fingerprint = stableFingerprint({ taskId: context.taskId, phase: context.phase, directive: context.directive });
+  const message = boundContext(projectRoot, context);
+  const fingerprint = stableFingerprint({ taskId: context.taskId, revision: context.revision,
+    phase: context.phase, factsCurrency: context.factsCurrency, directive: context.directive });
   const first = claimDirective({ projectRoot, session, fingerprint });
   return first
     ? { decision: 'block', reason: message }
@@ -84,16 +87,20 @@ function admissionContext(projectRoot: string, bindingToken: string): string {
   ].join('\n');
 }
 
-function boundContext(projectRoot: string, taskId: string): string {
-  const context = taskContext(projectRoot, taskId);
+function boundContext(projectRoot: string, context: Awaited<ReturnType<typeof taskContext>>): string {
+  const taskId = context.taskId;
   const command = context.phase === 'working'
     ? `stetra task collect ${JSON.stringify(projectRoot)} --task ${taskId} --json`
     : context.phase === 'awaiting-handoff'
       ? `stetra task handoff ${JSON.stringify(projectRoot)} --task ${taskId} --input - --json`
-      : `stetra task inspect ${JSON.stringify(projectRoot)} --task ${taskId} --json`;
+      : `stetra task inspect ${JSON.stringify(projectRoot)} --task ${taskId} --section handoff --json`;
   return [
     `Stetra task ${taskId} is ${context.phase}.`,
     context.directive.message,
+    ...(context.corrections.length ? [
+      `Latest exact Human correction (unattested-input): ${JSON.stringify(context.corrections.at(-1)!.content)}`,
+      'All task corrections remain available in task inspect --section summary.',
+    ] : []),
     `Portable command: ${command}`,
   ].join('\n');
 }

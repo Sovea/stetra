@@ -151,6 +151,11 @@ export interface FactBundle extends ProtocolEnvelope {
   verifierMutations: VerifierMutation[];
   environment: ExecutionEnvironment;
   patch?: PatchFact;
+  refresh?: {
+    priorFactCollectionId: string;
+    authority: 'agent-judgment';
+    reason: string;
+  };
   provenance: {
     collector: 'stetra-cli';
     cliVersion: string;

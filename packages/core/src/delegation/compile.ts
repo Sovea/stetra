@@ -456,8 +456,9 @@ function compileExecutionPolicy(
 
 function commandArgv(value: unknown, path: string, issues: ValidationIssue[]): string[] | undefined {
   if (!Array.isArray(value) || value.length === 0
-    || value.some((item) => !isNonEmptyString(item) || item.includes('\0'))) {
-    issues.push(issue('argv-invalid', path, 'Command argv must contain non-empty strings.'));
+    || !isNonEmptyString(value[0])
+    || value.some((item) => typeof item !== 'string' || item.includes('\0'))) {
+    issues.push(issue('argv-invalid', path, 'Command argv requires a non-empty executable and exact string arguments without NUL.'));
     return undefined;
   }
   return [...value] as string[];

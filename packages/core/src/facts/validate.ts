@@ -41,6 +41,14 @@ export function validateFactBundle(bundle: FactBundle, contract: TaskContract): 
   validateChecks(bundle.checks, definitions);
   validateVerifierMutations(bundle, definitions);
   validateEnvironment(bundle.environment);
+  if (bundle.refresh !== undefined && (
+    !isSha256(bundle.refresh.priorFactCollectionId)
+    || bundle.refresh.priorFactCollectionId === bundle.factCollectionId
+    || bundle.refresh.authority !== 'agent-judgment'
+    || !isNonEmptyString(bundle.refresh.reason)
+  )) {
+    throw new Error('Fact refresh requires a prior collection and an Agent-authored reason.');
+  }
   if (bundle.patch !== undefined) {
     if (!isSafeRepositoryPath(bundle.patch.path) || !isSha256(bundle.patch.digest)
       || !Number.isSafeInteger(bundle.patch.byteLength) || bundle.patch.byteLength < 0) {

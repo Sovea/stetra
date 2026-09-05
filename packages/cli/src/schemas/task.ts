@@ -4,17 +4,19 @@ import { DELEGATION_PROTOCOL, DELEGATION_SCHEMA_VERSION } from '../protocol.ts';
 
 export const StableIdSchema = z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/);
 export const Sha256Schema = z.string().regex(/^sha256:[a-f0-9]{64}$/);
-export const NonEmptyStringSchema = z.string().trim().min(1);
-export const SafeRepositoryPathSchema = z.string().min(1).refine((value) =>
-  !value.startsWith('/')
-  && !/^[A-Za-z]:[\\/]/.test(value)
-  && !value.includes('\\')
-  && !value.includes('\0')
-  && value.split('/').every((segment) => Boolean(segment) && segment !== '.' && segment !== '..'),
-{ message: 'must be a safe repository-relative path' });
+export const NonEmptyStringSchema = z.string().regex(/\S/, 'must contain non-whitespace text').trim();
+export const ExactHumanTextSchema = z.string().regex(/\S/, 'must contain non-whitespace text');
+const ExactArgumentSchema = z.string().regex(/^[^\0]*$/, 'must not contain NUL');
+export const CommandArgvSchema = z.tuple([
+  ExactArgumentSchema.regex(/\S/, 'executable must be non-empty'),
+]).rest(ExactArgumentSchema);
+export const SafeRepositoryPathSchema = z.string().min(1).regex(
+  /^(?!\/)(?![A-Za-z]:\/)(?![\s\S]*[\\\0])(?!\.{1,2}(?:\/|$))(?![\s\S]*\/\.{1,2}(?:\/|$))[^/]+(?:\/[^/]+)*$/,
+  'must be a safe repository-relative path',
+);
 
 export const ExactHumanEventInputSchema = z.strictObject({
-  content: NonEmptyStringSchema,
+  content: ExactHumanTextSchema,
 });
 
 const RepositorySelectorSchema = z.strictObject({
@@ -24,11 +26,11 @@ const RepositorySelectorSchema = z.strictObject({
 
 export const CheckDefinitionInputSchema = z.strictObject({
   key: StableIdSchema,
-  argv: z.array(NonEmptyStringSchema).min(1),
+  argv: CommandArgvSchema,
   rationale: NonEmptyStringSchema.optional(),
   preparation: z.array(z.strictObject({
     key: StableIdSchema,
-    argv: z.array(NonEmptyStringSchema).min(1),
+    argv: CommandArgvSchema,
   })).optional(),
   executionInputs: z.array(RepositorySelectorSchema).optional(),
   verifierSelectors: z.array(RepositorySelectorSchema.extend({

@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { isAbsolute, resolve } from 'node:path';
 
@@ -202,6 +203,18 @@ function validatePreflightTemplate(preflight, taskId) {
     assert.ok(isAbsolute(executable.resolvedPath));
     assert.ok(isNonEmptyString(executable.version));
     assert.ok(executable.shebangTarget === null || isAbsolute(executable.shebangTarget));
+  }
+  assert.ok(preflight.processIO.probeArgv.every(isNonEmptyString));
+  assert.notEqual(preflight.processIO.expected.exitCode, 0);
+  assert.ok(isNonEmptyString(preflight.processIO.expected.stdout));
+  assert.ok(isNonEmptyString(preflight.processIO.expected.stderr));
+  const [executable, ...args] = preflight.processIO.probeArgv;
+  const probe = spawnSync(executable, args, { encoding: 'utf8' });
+  assert.deepEqual({ exitCode: probe.status, stdout: probe.stdout, stderr: probe.stderr },
+    preflight.processIO.expected, 'The reusable IO probe must produce its declared observation.');
+  for (const side of ['control', 'treatment']) {
+    assert.deepEqual(preflight.processIO[side], preflight.processIO.expected,
+      `The ${side} sandbox must preserve nested subprocess output and termination.`);
   }
   assert.ok(Array.isArray(preflight.fixtures) && preflight.fixtures.length > 0);
   for (const fixture of preflight.fixtures) {

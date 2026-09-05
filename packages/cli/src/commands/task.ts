@@ -5,8 +5,8 @@ import type { Readable } from 'node:stream';
 import { Command } from 'commander';
 import type { z } from 'zod';
 
-import { inputError } from '../errors.ts';
-import { bindHostSession } from '../host/session.ts';
+import { CliError, inputError, usageError } from '../errors.ts';
+import { describeTaskInput } from '../schemas/task-input.ts';
 import {
   TaskBeginDocumentSchema,
   TaskDecisionDocumentSchema,
@@ -26,6 +26,7 @@ const MAX_INPUT_BYTES = 8 * 1024 * 1024;
 
 interface InputOptions {
   input: string;
+  inputSchema?: boolean;
 }
 
 interface BeginOptions extends InputOptions {
@@ -39,9 +40,10 @@ interface TaskOptions {
 interface CollectOptions extends TaskOptions {
   retryTimeout?: string;
   timeoutMs?: string;
+  refreshReason?: string;
 }
 
-interface TaskInputOptions extends TaskOptions, InputOptions {}
+interface TaskInputOptions extends InputOptions { task?: string }
 
 interface InspectOptions extends TaskOptions {
   section: string;
@@ -63,17 +65,19 @@ export function registerTaskCommands(
     .description('Align one admitted task and capture its Git baseline')
     .argument('[project-root]', 'Git worktree root', '.')
     .option('--input <path>', 'compact Begin JSON path, or - for stdin', '-')
+    .option('--input-schema', 'show the actual input schema and a validated example without creating a task')
     .option('--binding-token <token>', 'opaque Host-session token projected by a SessionStart Hook')
     .action(async (projectRoot: string, options: BeginOptions, source: Command) => {
-      const document = await readDocument(projectRoot, options.input, environment.runtime.input);
+      if (options.inputSchema) {
+        environment.emit('task begin', describeTaskInput('begin'), source);
+        return;
+      }
       const result = await beginTask({
         projectRoot,
-        source: parseArtifact(TaskBeginDocumentSchema, document, 'Task Begin input'),
+        source: await readStageDocument(projectRoot, options.input, environment.runtime.input, 'begin', TaskBeginDocumentSchema),
         productVersion,
+        bindingToken: options.bindingToken,
       });
-      if (options.bindingToken) {
-        bindHostSession({ projectRoot, bindingToken: options.bindingToken, taskId: result.taskId });
-      }
       environment.emit('task begin', result, source);
     });
 
@@ -83,12 +87,14 @@ export function registerTaskCommands(
     .requiredOption('--task <id>', 'task ID returned by task begin')
     .option('--retry-timeout <check-key>', 'retry one currently timed-out Check')
     .option('--timeout-ms <milliseconds>', 'larger bounded timeout for --retry-timeout')
+    .option('--refresh-reason <text>', 'one explicit recheck after a non-timeout failure; records Agent judgment')
     .action(async (projectRoot: string, options: CollectOptions, source: Command) => {
       const retryTimeout = parseTimeoutRetry(options);
       environment.emit('task collect', await collectTask({
         projectRoot,
         taskId: options.task,
         productVersion,
+        refreshReason: options.refreshReason,
         ...(retryTimeout ? { retryTimeout } : {}),
       }), source);
     });
@@ -171,16 +177,37 @@ function registerInputStage<Schema extends z.ZodType>(
       ? 'Bind a compact actual-change explanation to current facts'
       : 'Record a new exact Human adoption decision')
     .argument('[project-root]', 'Git worktree root', '.')
-    .requiredOption('--task <id>', 'task ID returned by task begin')
+    .option('--task <id>', 'task ID returned by task begin; required unless --input-schema')
     .option('--input <path>', `compact ${name} JSON path, or - for stdin`, '-')
+    .option('--input-schema', 'show the actual input schema and a validated example without reading task state')
     .action(async (projectRoot: string, options: TaskInputOptions, source: Command) => {
-      const document = await readDocument(projectRoot, options.input, environment.runtime.input);
+      if (options.inputSchema) {
+        environment.emit(`task ${name}`, describeTaskInput(name), source);
+        return;
+      }
+      if (!options.task) throw usageError(`task ${name} requires --task <id>. Input reference: stetra task ${name} --input-schema --json`);
       environment.emit(`task ${name}`, await operation({
         projectRoot,
         taskId: options.task,
-        source: parseArtifact(schema, document, `Task ${name} input`),
+        source: await readStageDocument(projectRoot, options.input, environment.runtime.input, name, schema),
       }), source);
     });
+}
+
+async function readStageDocument<Schema extends z.ZodType>(
+  root: string, path: string, input: Readable,
+  stage: 'begin' | 'handoff' | 'decide', schema: Schema,
+): Promise<z.output<Schema>> {
+  const reference = `stetra task ${stage} --input-schema --json`;
+  try {
+    return parseArtifact(schema, await readDocument(root, path, input), `Task ${stage} input`);
+  } catch (error) {
+    if (!(error instanceof CliError) || error.code !== 'INVALID_INPUT') throw error;
+    throw new CliError(error.code, `${error.message}\nInput reference: ${reference}`, error.exitCode, {
+      cause: error,
+      issues: error.issues?.map((issue) => ({ ...issue, remediation: `Inspect ${reference}, then correct this field and resubmit.` })),
+    });
+  }
 }
 
 async function readDocument(projectRootInput: string, path: string, input: Readable): Promise<unknown> {
@@ -199,6 +226,9 @@ async function readDocument(projectRootInput: string, path: string, input: Reada
     const bytes = readFileSync(canonical);
     if (bytes.length > MAX_INPUT_BYTES) throw inputError(`Task input exceeds ${MAX_INPUT_BYTES} bytes.`);
     text = bytes.toString('utf8');
+  }
+  if (!text.trim()) {
+    throw inputError('Task input is empty. Pipe JSON to --input - in the same command, or use --input <file> outside the project worktree.');
   }
   try {
     return JSON.parse(text);

@@ -174,6 +174,10 @@ states.
 
 Native adapters may expose typed tools. The CLI accepts the same compact inputs
 through stdin or an external file. Core and CLI never call an LLM.
+Each authoring command exposes `--input-schema` without a repository or task.
+The schema is generated from the actual CLI input validator and examples are
+validated by that same definition. Runtime reference and evidence validation
+still applies when an input is submitted.
 
 ## Fact Spine
 
@@ -195,6 +199,14 @@ consumer:
 Checks run without a shell after implementation. Schema `2` does not execute
 baseline checks; the pre-change Git snapshot establishes the actual-change
 boundary, not a claim about pre-existing behavior.
+
+Currency covers the worktree and declared local execution inputs. It does not
+attest external service availability. A non-timeout failure can be explicitly
+reobserved once per unchanged worktree and declared inputs in a delivery
+Attempt. Refresh reruns all frozen checks with their existing budgets, retains
+the preceding collection, and records the Agent-authored reason separately
+from the observed outcome. It cannot be used while a current Check is timed
+out; the existing bounded timeout-retry path applies first.
 
 Stetra does not persist Agent transcripts, every tool call, ordinary Hook
 events, repeated identical collections, prompt caches, or data without a
@@ -218,6 +230,12 @@ It then presents the intended and actual behavior, mechanism, material
 invariants and failure paths, verification results, bounded unknowns, review
 focus, and the exact pending Human choice. Raw logs, patches, IDs, and history
 remain available through bounded inspection.
+The same current-fact projection is used by Handoff, inspection, and Host
+continuity. It includes exact task corrections in order, resolves review
+references into changed paths and Check keys, and labels declared verification
+coverage. A stale stored Handoff remains historical evidence and is not
+presented as a current Decision Brief. A recorded Human decision remains bound
+to its original facts when the worktree later changes.
 
 ## Persistence
 
@@ -234,6 +252,15 @@ Persist only:
 Do not persist Drafts, Guides, Agent transcripts, ordinary context injection,
 or unchanged duplicate facts. A generated Human view may be rebuilt from
 canonical artifacts and is not authority.
+
+Host session bindings under `.stetra/host-sessions/` store opaque session and
+task identities only. During an admitted Begin they may retain the pending task
+ID and compiled Contract fingerprint to recover publication followed by a
+failed binding write. The task-directory rename is the publication point.
+Hooks can recover this exact association without scanning for a recent task or
+creating a task. Completed sessions may bind the next admitted task; an open
+task cannot be silently replaced. This is operational session recovery, not
+cross-task decision memory.
 
 Schema `2` has no schema `1` translator, dual read/write path, or migration.
 The pre-release Git history is sufficient archival access until real user data
