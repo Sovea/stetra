@@ -1,0 +1,25 @@
+{
+  "name": "stetra",
+  "version": "0.1.0",
+  "description": "Design, explore, and explain engineering work in the Host conversation with relevant project knowledge.",
+  "author": {
+    "name": "Sovea"
+  },
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Stetra",
+    "shortDescription": "Understand and influence the engineering work.",
+    "longDescription": "Connect engineering questions to investigation and current project knowledge in your coding Host conversation.",
+    "developerName": "Sovea",
+    "category": "Productivity",
+    "capabilities": [
+      "Read",
+      "Write"
+    ],
+    "defaultPrompt": [
+      "Use stetra-design to compare the important choices in this task and their consequences.",
+      "Use stetra-explore to investigate my feedback against the code.",
+      "Use stetra-explain to explain what changed and why."
+    ]
+  }
+}

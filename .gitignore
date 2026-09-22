@@ -1,6 +1,10 @@
-.claude/
 node_modules/
-**/dist/
-.entire/
+dist/
 coverage/
-.stetra/runs/
+.claude/
+.entire/
+.stetra/state.sqlite*
+.stetra/memory.lock/
+*.tgz
+.stetra/index.sqlite*
+.stetra/cache/

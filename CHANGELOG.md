@@ -2,68 +2,18 @@
 
 ## Unreleased
 
-- Embeds the schema `2` task workflow: Begin, normal implementation, Runtime
-  collection, compact Handoff, and a separate Human decision.
-- Preserves exact Human text and command arguments, including whitespace and
-  empty arguments after the executable.
-- Recovers interrupted Begin publication and supports consecutive admitted
-  tasks in one Host session without creating duplicate tasks on retry.
-- Allows one reasoned recheck after a non-timeout failure for unchanged inputs,
-  preserving earlier collections and their observed failures.
-- Exposes generated input schemas and validated examples from the installed CLI.
-- Rebuilds the current Decision Brief on inspection and Host recovery, including
-  Human corrections, verification boundaries, material unknowns, and review
-  consequences with readable evidence references. Stale facts require collection.
-- Tests process interruption, recovery, portable input discovery, and paired
-  Core/CLI archives. Product effectiveness remains `unverified` pending the
-  protocol-conformant paired evaluation and Human product-owner conclusion.
+- Keep design, exploration, and explanation in the coding Host's conversation through `stetra-design`, `stetra-explore`, and `stetra-explain`.
+- Remove the independent browser, task and entry model, feedback queue, stored results, and session bindings. The runtime no longer reads or writes `state.sqlite`; existing files are left in place.
+- **CLI change:** remove `view` and `call task`, `entry`, `feedback`, `session`, and `source`. Keep `call memory` and add `schema memory --action ACTION` for focused schema inspection.
+- Replace task-bound context with query, path, and explicit knowledge selection. Native sessions cache selected IDs, paths, and supplied revisions; calls without selectors refresh the existing collection. `--reset` clears it, and calls without a session are stateless.
+- Supply corrected current knowledge and report unavailable or unselected versions. Withdrawn and deleted bodies stop being supplied on future context reads; already-delivered conversation content is outside that guarantee.
+- Keep Markdown as authoritative knowledge, SQLite as a rebuildable search index, and session files as disposable cache. No messages, goals, query text, or interaction history are cached.
+- New knowledge writes use project scope, with explicit applicability and optional paths for local conditions. Legacy task-scoped items remain available through management operations but are excluded from active recall and runtime updates.
+- Refresh selected knowledge through supported Codex/Claude hooks and pi lifecycle events. Remove pi browser commands, feedback polling, and model-turn triggers.
+- Preserve the four-choice project-local initialization menu, portable copied runtime, and managed-artifact upgrade protections. Preview an existing installation's refresh with `init --yes --dry-run`.
 
-## 0.0.1
+These changes are on the development branch and are not a new published package release. Earlier browser and feedback-delivery trials do not validate the new conversation-and-knowledge boundary.
 
-- Renames the product to Stetra, the CLI package to `@sovea/stetra`, the Core
-  package to `@sovea/stetra-core`, and the executable to `stetra`.
-- Moves task state and generated Host adapters to the `.stetra/`,
-  `.agents/skills/stetra/`, and `.claude/skills/stetra/` namespaces without
-  adding aliases or automatic migration for the previous product identity.
-- Preserves the `semantic-delegation` protocol, three-core architecture,
-  lifecycle, authority model, and schema versions; this is a product-identity
-  cutover rather than a protocol redesign.
-- Moves release metadata and Trusted Publisher configuration to
-  `Sovea/stetra`, `@sovea/stetra-core`, and `@sovea/stetra`.
+## Earlier rewrite foundation
 
-- Adds the separately publishable, version-locked
-  `@sovea/resonant-code-core` SDK and `@sovea/resonant-code` CLI.
-- Exposes a single `resonant-code` binary, with no legacy command alias.
-- Keeps Playbook, RCCL, and Runtime as explicit Core source modules while the
-  Core root exposes only `compileChange` and `evaluateChange`; RCCL lifecycle
-  operations use the `/rccl` subpath.
-- Adds safe project initialization with a generated-artifact manifest,
-  Codex/Claude thin adapters, managed blocks, drift detection, dry-run, and
-  explicitly scoped force replacement; initialization is the sole owner of
-  generated `.gitignore` content.
-- Keeps Playbook bootstrap semantic: the host selects inspected repository
-  evidence while the CLI validates exact paths instead of maintaining a
-  framework filename heuristic.
-- Moves prepare/complete orchestration behind the CLI control plane, records
-  CLI/Core package identity in task runs, and removes repository-native plugin
-  distribution and compatibility entrypoints.
-- Stops tracking all generated `dist/` files and verifies deterministic rebuilds.
-- Verifies the real Core and CLI npm tarballs through isolated API and
-  binary-driven bootstrap, RCCL, status, and complete-change flows.
-- Provides the current two-operation change harness: `compileChange` and `evaluateChange`.
-- Makes ordinary coding tasks a compact preflight and evidence-backed postflight; Host-owned semantics expose only material unresolved alignment.
-- Defines decision-relevant RCCL observations with separate evidence currency, semantic confidence, and human review signals.
-- Bounds guidance with one configurable UTF-8 byte ceiling, requires an
-  explicit host selection when optional items overflow, never silently removes
-  mandatory guidance, and evaluates only delivered IDs.
-- Layers a user-scoped personal preference/example overlay beneath the
-  repository-committed team Playbook, with structural guards against weakening
-  shared policy.
-- Captures an exact Git worktree baseline at prepare, derives actual task
-  add/modify/delete/unique-rename facts at complete, runs explicit check
-  commands, and separates those machine facts from host semantic attestations.
-- Isolates runtime state under `.resonant-code/runs/<runId>/`, creates no run
-  until task verification is executable, bounds persisted check streams, and
-  avoids a repository-global feedback ledger without a demonstrated
-  initial-release consumer.
-- Keeps task understanding and semantic relations as bounded host inputs rather than mandatory multi-stage artifacts.
+Earlier development versions introduced the three capability Skills, shared project launchers, local installation, Markdown knowledge, and derived search. They also experimented with a task database and browser feedback interface. Those interaction and state models have been removed rather than retained as compatibility requirements. Existing user data is not automatically deleted.
