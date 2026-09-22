@@ -30,13 +30,17 @@ With a package containing this version, run `stetra init` in your project. After
 
 ## Use the Skills in the conversation
 
-| Skill | Purpose |
-| --- | --- |
-| `stetra-design` | Compare consequential choices against the developer's concerns and explain tradeoffs. |
-| `stetra-explore` | Investigate code, assumptions, and alternatives with focused checks. |
-| `stetra-explain` | Explain actual behavior, implementation changes, and their effects on callers and future extension. |
+The Agent can select these Skills during an ordinary coding task when a design choice, investigation, or explanation would help. Each capability applies to the relevant part of the work; a small mechanical edit needs no additional process.
 
-For example, invoke `$stetra-explore` in Codex, `/stetra-explore` in Claude Code, or `/skill:stetra-explore` in pi. A generic agent can read the corresponding `.agents/skills/stetra-explore/SKILL.md`.
+| Skill | Useful during ordinary coding |
+| --- | --- |
+| `stetra-design` | A feature or refactor introduces a consequential choice about APIs, responsibilities, or behavior. |
+| `stetra-explore` | A bug, unexpected behavior, or uncertain assumption needs code inspection and focused checks. |
+| `stetra-explain` | An implementation needs a clear account of what changed, caller impact, and effects on future extension. |
+
+For example, “Add retries without hiding query failures” can prompt exploration of existing error handling and an explanation of the resulting caller behavior. Use design guidance if a consequential choice arises. There is no required three-step sequence.
+
+To request a capability explicitly, invoke `$stetra-explore` in Codex, `/stetra-explore` in Claude Code, or `/skill:stetra-explore` in pi. A generic agent can read the corresponding `.agents/skills/stetra-explore/SKILL.md`. Automatic discovery and selection depend on the Host and model; installed files or a configured hook do not prove the Agent used them. See the [local checks](docs/host-integration.md#check-discovery-delivery-and-use) when Stetra appears inactive.
 
 Ask a concrete question such as “Why does a failed query become an empty result? Explain the caller impact before changing anything.” Continue the discussion in the same Host. If you later authorize a change, the Host implements it and explains what changed. Relevant knowledge can be corrected or retained without saving the conversation as a second task system.
 
@@ -44,7 +48,7 @@ Ask a concrete question such as “Why does a failed query become an empty resul
 
 Knowledge is editable Markdown with a stable ID, source, kind, applicability, optional project-relative paths, and active/withdrawn status. Kinds distinguish constraints, decisions, observations, and hypotheses. New items belong to the project; narrower applicability belongs in their explicit conditions and paths. A local correction must not become a universal preference.
 
-Search returns candidates; context and recall retrieve full current bodies. A session can remember its selected knowledge IDs and revisions. Later context reads refresh those selections from authoritative files, so corrections appear and withdrawn or deleted bodies stop being supplied. This cache contains no messages, goals, task history, or acceptance state. Without a session, retrieval is stateless.
+The first relevant use in a fresh session needs a `context` call with a query, affected paths, or known memory IDs. A refresh alone has no previous selection to load. With no selection, context reports the active project knowledge count without injecting its contents; the Agent chooses what is relevant. Search returns candidates; context and recall retrieve full current bodies. Later context reads refresh the selected IDs from authoritative files, so corrections appear and withdrawn or deleted bodies stop being supplied. This cache contains no messages, goals, task history, or acceptance state. Without a session, retrieval is stateless.
 
 The Agent remains responsible for deciding whether retrieved guidance applies. Search matches, active status, and successful loading do not establish truth, authorization, or model compliance. Existing project documents should be referenced where they already express the knowledge well.
 

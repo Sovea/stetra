@@ -55,6 +55,8 @@ Start a new Host session after setup or refresh:
 
 The equivalent design and explanation names are `stetra-design` and `stetra-explain`. They are independent capabilities, not a required sequence. Generic format compatibility is not a claim that every agent has been tested.
 
+The Agent can choose them within normal implementation work: design for a consequential choice, explore for uncertain behavior, and explain when communicating a change and its effects. Explicit invocation is useful when you want a particular capability, or to check that the Host can discover it. Installing the files and wiring an event does not guarantee that the model will select a Skill or retrieve knowledge.
+
 Host trust and command permissions still apply. If hooks are unavailable, the Skills and CLI can be used through permitted file access and command execution. Initialization does not bypass Host approval rules.
 
 ## Retrieve knowledge
@@ -71,11 +73,42 @@ Claude uses the same launcher under `.claude/skills/`. Pass `--project` only whe
 
 With a native session ID, add `--host codex --session ID` or the corresponding Host name. A session's first selection needs no setup or binding call. Query, path, or explicit memory selectors replace its previous collection. Later calls without selectors refresh only the selected IDs and paths, reporting changed or unavailable versions. They do not rerun the earlier search and expand it to new matches. `--reset` requires the Host/session pair, clears its selection, and may be combined with new selectors.
 
+In a fresh session, the Agent chooses a focused query, affected paths, or known IDs from the coding task when knowledge could help. Hooks can subsequently refresh that selection. A call without selectors and without selected IDs or paths includes `library.activeCount`: the number of valid, active project-scoped items. Its knowledge bodies remain empty. A positive count means knowledge exists, not that it applies to this task; zero means no eligible items were found, with malformed files reported separately in `knowledge.issues`.
+
+An empty selection is different from an empty library. After a focused retrieval, no matches can be a valid result: do not repeatedly search the same concern or refresh an empty selection expecting new matches. The cache does not retain search history, so the Agent uses the conversation to distinguish a completed search from one it has not yet made. Calls with query, path, or ID selectors do not include the library count.
+
 Codex and Claude obtain identity from `session_id` in supported hook input; pi uses its session manager. The cache is isolated by project, Host, and native session. A fresh session does not inherit the latest selection from another one. A generic agent without a reliable identity should use stateless retrieval instead of inventing a native session.
 
 Hooks refresh the selected knowledge on supported events. They do not extract goals from prompts, choose a task, queue messages, or start a new model turn. Pi likewise refreshes knowledge through its native lifecycle; it has no browser command or feedback polling loop. The Host decides when to search for additional knowledge and how it applies to the conversation.
 
 Context supplies current bodies within a size budget, revision changes, unavailable selections, and an omitted count. Metadata for omitted items is included when space permits; selected IDs remain available for explicit reads. The Agent should replace earlier copies with the current versions and read omitted content before relying on it. Withdrawal or deletion stops future body delivery; it cannot erase content already in a model's conversation.
+
+## Check discovery, delivery, and use
+
+Use the installed project and the Host's existing resource list and execution trace. These checks inspect different parts of the path:
+
+1. **Skill discovery:** confirm the selected Host's skill directory contains the three `SKILL.md` files and their shared resources. Start a fresh Host session and inspect its skill/resource list or try an explicit invocation from the table above. Files present on disk but absent from that list indicate a discovery or trust issue. Reading a file manually proves access, not automatic discovery.
+2. **Context delivery:** inspect the Host's record of the relevant session or prompt event. For Codex and Claude, verify that the configured Stetra command actually ran and returned `hookSpecificOutput.additionalContext`. For pi, check that its project extension loaded and its context handler ran. A configuration entry alone is not execution evidence; if the Host exposes no event trace, delivery remains unverified.
+3. **Agent use:** inspect the coding task's tool trace for an initial `context` call with query, path, or memory selectors. Later refresh calls should use the same native session identity. If discovery and delivery are confirmed but the Agent never selects relevant knowledge, ask it to use the appropriate Skill for that part of the task. Reinstalling the same files does not establish model use.
+
+To check the installed CLI independently of automatic delivery, run from the project:
+
+```sh
+node .agents/skills/stetra-explore/scripts/stetra.mjs context
+node .agents/skills/stetra-explore/scripts/stetra.mjs context --query "cache failure" --path src/cache.ts
+```
+
+Replace the query and path with the actual concern and affected code; Claude installations use `.claude/skills/`. These calls are stateless unless you pass the Host's real session identity. The first reports `library.activeCount` with no selected bodies; the second attempts a focused retrieval. They check the launcher and retrieval without proving that the Host invoked either automatically. A successful retrieval with no matching knowledge is distinct from an absent first retrieval.
+
+For Codex or Claude, the current `hook` command can also check the command/output path manually. Replace the project path below, and use `--host claude` with the Claude launcher where appropriate:
+
+```sh
+node .agents/skills/stetra-explore/scripts/stetra.mjs hook --host codex <<'JSON'
+{"hook_event_name":"SessionStart","cwd":"/absolute/path/to/project"}
+JSON
+```
+
+The expected envelope contains `hookSpecificOutput.additionalContext`; `{}` with a diagnostic on stderr signals a command-side problem. This synthetic event has no native session ID and does not test automatic Host execution or an existing session's selection. Generic Agent Skills install no hook, so their normal path is manual retrieval through the Host's command tool.
 
 ## Verification boundary
 

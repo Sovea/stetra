@@ -6,6 +6,7 @@
 - Remove the independent browser, task and entry model, feedback queue, stored results, and session bindings. The runtime no longer reads or writes `state.sqlite`; existing files are left in place.
 - **CLI change:** remove `view` and `call task`, `entry`, `feedback`, `session`, and `source`. Keep `call memory` and add `schema memory --action ACTION` for focused schema inspection.
 - Replace task-bound context with query, path, and explicit knowledge selection. Native sessions cache selected IDs, paths, and supplied revisions; calls without selectors refresh the existing collection. `--reset` clears it, and calls without a session are stateless.
+- Guide Skill use within ordinary coding work and report the active project knowledge count when context has no selection, so an empty selection is not mistaken for an empty library. Knowledge relevance and initial retrieval remain Agent decisions.
 - Supply corrected current knowledge and report unavailable or unselected versions. Withdrawn and deleted bodies stop being supplied on future context reads; already-delivered conversation content is outside that guarantee.
 - Keep Markdown as authoritative knowledge, SQLite as a rebuildable search index, and session files as disposable cache. No messages, goals, query text, or interaction history are cached.
 - New knowledge writes use project scope, with explicit applicability and optional paths for local conditions. Legacy task-scoped items remain available through management operations but are excluded from active recall and runtime updates.
