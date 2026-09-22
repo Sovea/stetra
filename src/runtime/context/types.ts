@@ -32,6 +32,7 @@ export type ContextChange = { id: string; kind: 'updated' | 'unavailable' | 'uns
 export type ContextResult = {
   projectRoot: string;
   session?: SessionKey;
+  library?: { activeCount: number };
   selection: ContextSelection;
   knowledge: MemoryRecallResult;
   changes: ContextChange[];

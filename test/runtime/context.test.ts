@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
-import { mkdtemp, mkdir, readFile, readdir, rm } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test, { type TestContext } from 'node:test';
@@ -26,13 +26,46 @@ test('an unselected session supplies no knowledge and creates no project state',
     const result = await workspace.context(input);
     assert.deepEqual(result.selection, { ids: [], paths: [] });
     assert.deepEqual(result.knowledge, { memories: [], unavailable: [], issues: [] });
+    assert.deepEqual(result.library, { activeCount: 0 });
   }
   assert.deepEqual(await readdir(root), []);
   const created = await workspace.memories.create(memory());
-  assert.deepEqual(selected(await workspace.context({ session })), []);
-  assert.deepEqual(selected(await workspace.context({ query: 'cache' })), [created.id]);
+  const fresh = await workspace.context({ session });
+  assert.deepEqual(selected(fresh), []);
+  assert.deepEqual(fresh.library, { activeCount: 1 });
+  const searched = await workspace.context({ query: 'cache' });
+  assert.deepEqual(selected(searched), [created.id]);
+  assert.equal(searched.library, undefined);
   assert.deepEqual(selected(await workspace.context({ session })), [], 'Stateless retrieval must not attach to another session.');
   await assert.rejects(readFile(join(root, '.stetra/cache/contexts')), { code: 'ENOENT' });
+});
+
+test('an empty selection reports available project knowledge without choosing or exposing its bodies', async t => {
+  const { root, workspace } = await fixture(t);
+  const relevant = await workspace.memories.create(memory());
+  const unrelated = await workspace.memories.create(memory({ title: 'Authentication', paths: ['src/auth'], body: 'A rule for another module.' }));
+  await workspace.memories.create(memory({ status: 'withdrawn' }));
+  const legacy = await workspace.memories.create(memory({ title: 'Former task direction' }));
+  const raw = await readFile(legacy.path, 'utf8');
+  await writeFile(legacy.path, raw.replace('scope:\n  kind: project', `scope:\n  kind: task\n  taskId: ${randomUUID()}`));
+  const invalid = join(root, '.stetra/memory', `${randomUUID()}.md`);
+  await writeFile(invalid, 'Missing metadata');
+
+  const context = await workspace.context({ session });
+  assert.deepEqual(context.library, { activeCount: 2 });
+  assert.deepEqual(context.selection, { ids: [], paths: [] });
+  assert.deepEqual(context.knowledge.memories, []);
+  assert.ok(context.knowledge.issues.some(issue => issue.path === invalid));
+  assert.ok(!JSON.stringify(context).includes(relevant.body));
+  assert.ok(!JSON.stringify(context).includes(unrelated.body));
+  const state = await readdir(join(root, '.stetra'));
+  assert.ok(!state.includes('cache') && !state.includes('index.sqlite'), 'Discovery must not create a selection or a search index.');
+
+  await workspace.memories.delete(relevant.id, relevant.revision);
+  assert.deepEqual((await workspace.context()).library, { activeCount: 1 });
+  const selectedContext = await workspace.context({ session, ids: [unrelated.id] });
+  assert.equal(selectedContext.library, undefined);
+  assert.equal((await workspace.context({ session })).library, undefined, 'Refresh remains limited to the existing selection.');
 });
 
 test('query and paths select matching knowledge without widening later refreshes', async t => {

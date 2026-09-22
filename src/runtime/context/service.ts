@@ -46,6 +46,12 @@ export class ContextService {
       const paths = selecting ? [...new Set(input.paths ?? [])] : previous?.selection.paths ?? [];
       let ids = selecting ? [...new Set(input.ids ?? [])] : previous?.selection.ids ?? [];
       const issues: MemoryRecallResult['issues'] = [];
+      let library: ContextResult['library'];
+      if (!selecting && !ids.length && !paths.length) {
+        const listed = await this.memories.list();
+        library = { activeCount: listed.memories.length };
+        issues.push(...listed.issues);
+      }
       if (input.query !== undefined) {
         const found = await this.memories.search({ query: input.query, paths, limit: 20 });
         ids = [...new Set([...ids, ...found.matches.map(match => match.memory.id)])];
@@ -74,7 +80,7 @@ export class ContextService {
         else if (memory.revision !== revision) changes.push({ id, kind: 'updated', previousRevision: revision, revision: memory.revision });
       }
       const selection: ContextSelection = { ids, paths };
-      const result = bounded({ projectRoot: this.root, ...(input.session ? { session: input.session } : {}), selection, knowledge, changes, omitted: [], omittedCount: excess }, maxBytes);
+      const result = bounded({ projectRoot: this.root, ...(input.session ? { session: input.session } : {}), ...(library ? { library } : {}), selection, knowledge, changes, omitted: [], omittedCount: excess }, maxBytes);
       const provided: ContextCacheData['provided'] = Object.fromEntries(Object.entries(previous?.provided ?? {}).filter(([id]) => selected.has(id)));
       for (const item of result.knowledge.memories) provided[item.id] = item.revision;
       for (const item of result.knowledge.unavailable) provided[item.id] = null;

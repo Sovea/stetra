@@ -50,6 +50,10 @@ test('both hook events refresh current selected knowledge and isolate native Hos
   assert.ok(!text.includes(codexMemory.body));
   const fork = await sessionStart({ hook_event_name: 'SessionStart', cwd: root, session_id: 'new-native-id' }, cli, root, 'codex');
   assert.ok(!JSON.stringify(fork).includes(updated.body));
+  const initial = JSON.parse((fork.hookSpecificOutput as { additionalContext: string }).additionalContext.split('\n').at(-1)!);
+  assert.deepEqual(initial.library, { activeCount: 2 });
+  assert.deepEqual(initial.selection.ids, []);
+  assert.deepEqual(initial.knowledge.memories, []);
   await workspace.context({ session: { host: 'codex', sessionId: 'same-native-id' }, reset: true });
   const reset = await sessionStart({ hook_event_name: 'UserPromptSubmit', cwd: root, session_id: 'same-native-id' }, cli, root, 'codex');
   assert.ok(!JSON.stringify(reset).includes(updated.body));
